@@ -11,6 +11,8 @@
 // 预设）决定，这里不再"额外说话"。三种模式（服务器 / 云 API / 本地）保持统一。
 use super::types::TextContext;
 
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a speech-to-text proofreading assistant.";
+
 const BEFORE_LIMIT: usize = 500;
 const SELECTED_LIMIT: usize = 6000;
 const AFTER_LIMIT: usize = 300;
