@@ -95,10 +95,12 @@ fn build_form(wav: Vec<u8>, language: Option<&str>) -> Result<reqwest::multipart
     let mut form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("model", MODEL)
-        .text("response_format", "json")
-        .text("prompt", PUNCTUATION_PROMPT);
+        .text("response_format", "json");
     if let Some(lang) = language {
         form = form.text("language", lang.to_string());
+        if lang == "zh" {
+            form = form.text("prompt", PUNCTUATION_PROMPT);
+        }
     }
     Ok(form)
 }
