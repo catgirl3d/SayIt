@@ -24,17 +24,36 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 async function bootstrap() {
-  await initRuntimeConfig()
-  // 必须在 render 之前 await：否则首帧会用默认语言画一遍再跳，冷启动能看见闪动。
-  const locale = await initLanguage()
-  await initLocaleDefaults(locale)
-  await initProviderFromStore()
-  void startWebviewKeyboardFallback()
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <HashRouter>
-      <App />
-    </HashRouter>,
-  )
+  try {
+    await initRuntimeConfig()
+  } catch (e) {
+    console.error('[bootstrap] initRuntimeConfig error:', e)
+  }
+  try {
+    const locale = await initLanguage()
+    await initLocaleDefaults(locale)
+  } catch (e) {
+    console.error('[bootstrap] initLanguage error:', e)
+  }
+  try {
+    await initProviderFromStore()
+  } catch (e) {
+    console.error('[bootstrap] initProviderFromStore error:', e)
+  }
+  try {
+    void startWebviewKeyboardFallback()
+  } catch (e) {
+    console.error('[bootstrap] startWebviewKeyboardFallback error:', e)
+  }
+
+  const rootEl = document.getElementById('root')
+  if (rootEl) {
+    ReactDOM.createRoot(rootEl).render(
+      <HashRouter>
+        <App />
+      </HashRouter>,
+    )
+  }
 }
 
 void bootstrap()
