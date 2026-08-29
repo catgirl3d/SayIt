@@ -4,12 +4,15 @@
 // deprecated-but-reliable ScriptProcessorNode.
 
 import { addRuntimeEvent } from './debugLog'
+import { DEFAULT_MIC_BOOST, resolveMicBoost } from './defaults'
+import { getSetting } from './store'
 
 let audioCtx: AudioContext | null = null
 let workletNode: AudioWorkletNode | null = null
 let scriptNode: ScriptProcessorNode | null = null
 let mediaStream: MediaStream | null = null
 let sourceNode: MediaStreamAudioSourceNode | null = null
+let gainNode: GainNode | null = null
 let onAudioData: ((buffer: ArrayBuffer) => void) | null = null
 let onVolumeChange: ((volume: number) => void) | null = null
 let onPCMFrame: ((pcm: Int16Array) => void) | null = null
@@ -41,6 +44,10 @@ if ((import.meta as unknown as Record<string, unknown>).hot) {
       try { scriptNode.onaudioprocess = null } catch { /* ignore */ }
       try { scriptNode.disconnect() } catch { /* ignore */ }
       scriptNode = null
+    }
+    if (gainNode) {
+      try { gainNode.disconnect() } catch { /* ignore */ }
+      gainNode = null
     }
     if (sourceNode) {
       try { sourceNode.disconnect() } catch { /* ignore */ }
@@ -197,6 +204,11 @@ async function teardownCapture() {
     scriptNode = null
   }
 
+  if (gainNode) {
+    try { gainNode.disconnect() } catch { /* ignore */ }
+    gainNode = null
+  }
+
   if (sourceNode) {
     try { sourceNode.disconnect() } catch { /* ignore */ }
     sourceNode = null
@@ -273,7 +285,7 @@ function resampleToInt16(input: Float32Array, inputRate: number): { pcm: Int16Ar
 }
 
 /** Wire up ScriptProcessorNode as fallback when AudioWorklet fails */
-function setupScriptProcessorFallback(ctx: AudioContext, src: MediaStreamAudioSourceNode) {
+function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
   usingFallback = true
   spnTail = new Float32Array(0)
   spnPhase = 0
@@ -397,7 +409,7 @@ async function tryLoadAudioWorklet(ctx: AudioContext): Promise<boolean> {
 }
 
 /** 创建 AudioWorkletNode 并绑定 onmessage 处理 */
-function setupAudioWorkletNode(ctx: AudioContext, src: MediaStreamAudioSourceNode): AudioWorkletNode {
+function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode): AudioWorkletNode {
   const node = new AudioWorkletNode(ctx, 'pcm-processor', {
     numberOfInputs: 1,
     numberOfOutputs: 0,
@@ -511,6 +523,10 @@ export async function startCapture(
   }
   await teardownCapture()
 
+  const boostConfig = await getSetting('micBoost', DEFAULT_MIC_BOOST)
+    .then(resolveMicBoost)
+    .catch(() => resolveMicBoost(DEFAULT_MIC_BOOST))
+
   onAudioData = onData
   onVolumeChange = onVolume ?? null
   onPCMFrame = onFrame ?? null
@@ -526,9 +542,9 @@ export async function startCapture(
       // 默认开启降噪：部分机器麦克风底噪大（低频电流声），关闭降噪会原样录入。
       // 但浏览器降噪对 ASR 是个变量——它按"人听得舒服"优化，可能削掉模型要的细节，
       // 所以做成开关，麦克风环境干净的用户可以关掉对比。
-      // 回声消除/自动增益保持关闭，避免影响 ASR 音频。
+      // Fixed gain modes keep browser AGC disabled; auto delegates level control to the browser.
       noiseSuppression,
-      autoGainControl: false,
+      autoGainControl: boostConfig.autoGainControl,
       ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     },
   }
@@ -577,12 +593,20 @@ export async function startCapture(
     })
 
     sourceNode = audioCtx.createMediaStreamSource(mediaStream)
+    gainNode = audioCtx.createGain()
+    gainNode.gain.value = boostConfig.gain
+    sourceNode.connect(gainNode)
+    addRuntimeEvent('info', 'audio', 'Microphone boost configured', {
+      setting: boostConfig.setting,
+      gain: boostConfig.gain,
+      autoGainControl: boostConfig.autoGainControl,
+    })
 
     // Try AudioWorklet, with ScriptProcessor fallback
     const fallbackCtx = audioCtx
-    const fallbackSrc = sourceNode
+    const fallbackSrc = gainNode
     const fallbackTimerId = setTimeout(() => {
-      if (!usingFallback && fallbackCtx === audioCtx && fallbackSrc === sourceNode) {
+      if (!usingFallback && fallbackCtx === audioCtx && fallbackSrc === gainNode) {
       console.warn('[audio-diag] AudioWorklet timed out (1.5s); switching to ScriptProcessorNode')
       addRuntimeEvent('warn', 'audio', 'AudioWorklet timed out; switching to ScriptProcessorNode fallback')
         setupScriptProcessorFallback(fallbackCtx, fallbackSrc)
@@ -601,7 +625,7 @@ export async function startCapture(
       clearTimeout(fallbackTimerId)
       if (!usingFallback) {
         console.log('[audio-diag] AudioWorklet unavailable, using ScriptProcessorNode directly')
-        setupScriptProcessorFallback(audioCtx, sourceNode)
+        setupScriptProcessorFallback(audioCtx, gainNode)
       }
       return activeMicrophone
     }
@@ -613,13 +637,13 @@ export async function startCapture(
     }
 
     // AudioWorklet loaded — set up node and monitor for data
-    workletNode = setupAudioWorkletNode(audioCtx, sourceNode)
+    workletNode = setupAudioWorkletNode(audioCtx, gainNode)
 
     // Secondary monitor: if worklet loaded but no data within 800ms, switch
     let gotWorkletData = false
     workletNode.addEventListener('worklet-data', () => { gotWorkletData = true }, { once: true })
     setTimeout(() => {
-      if (!gotWorkletData && !usingFallback && fallbackCtx === audioCtx && fallbackSrc === sourceNode) {
+      if (!gotWorkletData && !usingFallback && fallbackCtx === audioCtx && fallbackSrc === gainNode) {
       console.warn('[audio-diag] AudioWorklet produced no data (800ms); switching to ScriptProcessorNode')
       addRuntimeEvent('warn', 'audio', 'AudioWorklet was silent; switching to ScriptProcessorNode fallback')
         setupScriptProcessorFallback(fallbackCtx, fallbackSrc)
