@@ -18,10 +18,10 @@
         "height": 768,
         "minWidth": 800,
         "minHeight": 600,
-        "decorations": true,
+        "decorations": false,
         "dragDropEnabled": false,
         "center": true,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {
