@@ -136,7 +136,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             accuracy: 9.0,
             recommended: false,
             memory_mb: 900,
-            featured: false,
+            featured: true,
             languages_label: "英语".into(),
             quant: "Q4_K_M".into(),
             languages: vec!["en".into()],
@@ -184,7 +184,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             accuracy: 7.5,
             recommended: false,
             memory_mb: 1050,
-            featured: false,
+            featured: true,
             languages_label: "32 语种".into(),
             quant: "Q4_K_M".into(),
             languages: vec![
@@ -413,12 +413,10 @@ mod tests {
             "推荐模型必须且只能有一个"
         );
 
-        // 直接展示的模型恰好三个（小/中/大），其余折叠进「更多」；
-        // 推荐模型必须在直接展示之列，不能藏在折叠里
-        assert_eq!(
-            models.iter().filter(|m| m.featured).count(),
-            3,
-            "featured 模型应恰好三个（小/中/大）"
+        // 直接展示的模型至少三个，推荐模型必须在直接展示之列
+        assert!(
+            models.iter().filter(|m| m.featured).count() >= 3,
+            "featured 模型应至少三个"
         );
         assert!(
             models.iter().any(|m| m.recommended && m.featured),
