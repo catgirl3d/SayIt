@@ -53,6 +53,7 @@ class ASRConfig:
     batch_wait_ms: int = 60
     firered_model_dir: str = str(_PROJECT_ROOT / "pretrained_models")
     firered_use_int8: bool = True
+    gigaam_model: str = "v2_rnnt"
 
 
 @dataclass(slots=True)
@@ -482,6 +483,7 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
                 _PROJECT_ROOT / "pretrained_models",
             ),
             firered_use_int8=bool(_pick(asr_raw, "firered", "use_int8", default=defaults.asr.firered_use_int8)),
+            gigaam_model=str(_pick(asr_raw, "gigaam", "model", default=asr_raw.get("gigaam_model") or defaults.asr.gigaam_model)),
         ),
         vad=VADConfig(
             model=str(vad_raw.get("model") or defaults.vad.model),
