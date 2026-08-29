@@ -7,10 +7,15 @@ import WelcomeGuide from './components/WelcomeGuide'
 import Home from './pages/Home'
 import History from './pages/History'
 import Dictionary from './pages/Dictionary'
-import Settings from './pages/Settings'
 import VoiceEnginePage from './features/settings/VoiceEnginePage'
 import AIServicePage from './features/settings/AIServicePage'
 import AIInstructionsPage from './features/settings/AIInstructionsPage'
+import AudioSettingsPage from './features/settings/AudioSettingsPage'
+import ShortcutsSettingsPage from './features/settings/ShortcutsSettingsPage'
+import GeneralSettingsPage from './features/settings/GeneralSettingsPage'
+import AppearancePage from './features/settings/AppearancePage'
+import PersonalizationPage from './features/settings/PersonalizationPage'
+import DiagnosticsPage from './features/settings/DiagnosticsPage'
 import About from './pages/About'
 import { initRecorder, cleanup } from './services/recorder'
 import { initTheme } from './stores/theme'
@@ -94,7 +99,14 @@ export default function App() {
             <Route path="/voice-engine" element={<VoiceEnginePage />} />
             <Route path="/ai-instructions" element={<AIInstructionsPage />} />
             <Route path="/ai-service" element={<AIServicePage />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/audio" element={<AudioSettingsPage />} />
+            <Route path="/shortcuts" element={<ShortcutsSettingsPage />} />
+            <Route path="/general" element={<GeneralSettingsPage />} />
+            <Route path="/settings" element={<Navigate to="/general" replace />} />
+            <Route path="/appearance" element={<AppearancePage />} />
+            <Route path="/usage" element={<PersonalizationPage />} />
+            <Route path="/personalization" element={<Navigate to="/usage" replace />} />
+            <Route path="/diagnostics" element={<DiagnosticsPage />} />
             <Route path="/about" element={<About />} />
           </Routes>
         </main>

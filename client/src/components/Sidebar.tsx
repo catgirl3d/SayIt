@@ -1,6 +1,24 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Home, Clock, BookOpen, Settings, Info, Wifi, WifiOff, Cpu, Cloud, AudioLines, Sparkles, Wand2 } from 'lucide-react'
+import {
+  Home,
+  Clock,
+  BookOpen,
+  AudioLines,
+  Sparkles,
+  Wand2,
+  Mic,
+  Keyboard,
+  Sliders,
+  Palette,
+  BarChart3,
+  Stethoscope,
+  Info,
+  Wifi,
+  WifiOff,
+  Cpu,
+  Cloud,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip } from '@/components/ui/tooltip'
 import { useConnectionStatus } from '@/hooks/useConnectionStatus'
@@ -10,30 +28,41 @@ import { useUpdateState } from '@/features/update/useUpdateState'
 import type { TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
-// 导航项存 key 而不是文案：切语言时这些常量不会重新求值（模块级只算一次），
-// 存成中文串就会永远停在启动时那个语言。
-const dailyNavItems = [
-  { to: '/', icon: Home, labelKey: 'nav.home' },
-  { to: '/history', icon: Clock, labelKey: 'nav.history' },
-] as const satisfies readonly NavItemDef[]
-
-const configNavItems = [
-  { to: '/voice-engine', icon: AudioLines, labelKey: 'nav.voiceEngine' },
-  { to: '/hotwords', icon: BookOpen, labelKey: 'nav.hotwords' },
-  { to: '/ai-instructions', icon: Wand2, labelKey: 'nav.aiInstructions' },
-  { to: '/ai-service', icon: Sparkles, labelKey: 'nav.aiService' },
-] as const satisfies readonly NavItemDef[]
-
-const footerNavItems = [
-  { to: '/settings', icon: Settings, labelKey: 'nav.settings' },
-  { to: '/about', icon: Info, labelKey: 'nav.about' },
-] as const satisfies readonly NavItemDef[]
-
 interface NavItemDef {
   to: string
   icon: typeof Home
   labelKey: TranslationKey
 }
+
+/**
+ * Navigation items store i18n keys instead of literal text:
+ * When changing languages, module-level string constants are evaluated only once.
+ * Storing i18n translation keys ensures navigation labels react dynamically to language switches.
+ */
+const workspaceNavItems = [
+  { to: '/', icon: Home, labelKey: 'nav.home' },
+  { to: '/history', icon: Clock, labelKey: 'nav.history' },
+  { to: '/hotwords', icon: BookOpen, labelKey: 'nav.hotwords' },
+] as const satisfies readonly NavItemDef[]
+
+const aiNavItems = [
+  { to: '/voice-engine', icon: AudioLines, labelKey: 'nav.voiceEngine' },
+  { to: '/ai-service', icon: Sparkles, labelKey: 'nav.aiService' },
+  { to: '/ai-instructions', icon: Wand2, labelKey: 'nav.aiInstructions' },
+] as const satisfies readonly NavItemDef[]
+
+const systemNavItems = [
+  { to: '/audio', icon: Mic, labelKey: 'nav.audio' },
+  { to: '/shortcuts', icon: Keyboard, labelKey: 'nav.shortcuts' },
+  { to: '/general', icon: Sliders, labelKey: 'nav.general' },
+  { to: '/appearance', icon: Palette, labelKey: 'nav.appearance' },
+  { to: '/usage', icon: BarChart3, labelKey: 'nav.personalization' },
+  { to: '/diagnostics', icon: Stethoscope, labelKey: 'nav.diagnostics' },
+] as const satisfies readonly NavItemDef[]
+
+const footerNavItems = [
+  { to: '/about', icon: Info, labelKey: 'nav.about' },
+] as const satisfies readonly NavItemDef[]
 
 function NavItem({
   to,
@@ -47,15 +76,18 @@ function NavItem({
   return (
     <NavLink
       to={to}
+      end={to === '/'}
       className={({ isActive }) =>
         cn(
-          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-          isActive ? 'bg-sidebar-item-active font-medium text-sidebar-text-active' : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
+          'flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors',
+          isActive
+            ? 'bg-sidebar-item-active font-medium text-sidebar-text-active'
+            : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
         )
       }
     >
-      <Icon className="h-4 w-4" />
-      {label}
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <span className="truncate">{label}</span>
     </NavLink>
   )
 }
@@ -69,14 +101,13 @@ function IconOnlyNavItem({
   to: string
   icon: typeof Home
   label: string
-  /** 覆盖图标自身的颜色/动效（如「有更新」时的绿色闪烁） */
   iconClassName?: string
 }) {
   return (
     <Tooltip content={label}>
       <NavLink
         to={to}
-        // 这里只有图标、没有文字，不给 aria-label 的话读屏用户听到的是空按钮
+        end={to === '/'}
         aria-label={label}
         className={({ isActive }) =>
           cn(
@@ -92,17 +123,13 @@ function IconOnlyNavItem({
 }
 
 /**
- * 侧栏底部那排图标。
+ * Bottom sidebar icons.
  *
- * 有更新待安装时**不新增图标** —— 让「关于」这一枚自己变绿闪烁，悬停提示换成
- * 「新版本已下载好」。关于页就是更新所在的地方，点它正好到达能看到版本说明和
- * 「立即安装」的位置；多一枚图标既挤又需要用户先学会它是什么意思。
- *
- * 后台下载期间**故意毫无变化**：那会儿没有任何需要用户知道的事，静默才是本意。
- *
- * ⚠ 这里用绿色不违反下面 ModeIndicator 那条"不给任何好颜色"的规矩：那条针对的是
- * 我们没验证过的事（配置填完了 ≠ 真能用）。而"包已下载完、哈希校验过、随时可装"
- * 是确定的事实。别顺手把它改回中性色。
+ * When an update is ready to install, we deliberately DO NOT add an extra icon.
+ * Instead, we pulse the "About" icon in green and update its tooltip to "New version downloaded".
+ * The About page is the natural place for updates where users can read release notes and click "Install now".
+ * During background downloading, we deliberately keep the UI unchanged (silent background downloads are intentional).
+ * Using green here does not violate the ModeIndicator neutrality rule because verified package readiness is a proven fact.
  */
 function FooterIcons() {
   const t = useT()
@@ -111,30 +138,30 @@ function FooterIcons() {
   const nextVersion = update.pending?.version || ''
 
   return (
-    <div className="flex items-center gap-1">
-      {footerNavItems.map(({ to, icon, labelKey }) => {
-        const highlight = updateReady && to === '/about'
-        return (
-          <IconOnlyNavItem
-            key={to}
-            to={to}
-            icon={icon}
-            label={highlight ? t('update.aboutTooltip', { version: nextVersion }) : t(labelKey)}
-            iconClassName={highlight ? 'text-success animate-pulse' : undefined}
-          />
-        )
-      })}
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-1">
+        {footerNavItems.map(({ to, icon, labelKey }) => {
+          const highlight = updateReady && to === '/about'
+          return (
+            <IconOnlyNavItem
+              key={to}
+              to={to}
+              icon={icon}
+              label={highlight ? t('update.aboutTooltip', { version: nextVersion }) : t(labelKey)}
+              iconClassName={highlight ? 'text-success animate-pulse' : undefined}
+            />
+          )
+        })}
+      </div>
       <ModeIndicator />
     </div>
   )
 }
 
 /**
- * 服务器模式的连接状态。
- *
- * 只有这一个模式配得上"状态指示"：它有一条真在跑的连接（30s 心跳），所以图标能诚实地
- * 报出此刻通不通——信号图标 + 颜色，断线换成带斜杠的那只。
- * 本地/云 API 没有这种持续探测，见 ModeIndicator 的注释。
+ * Server mode connection state indicator.
+ * Only the server mode has an active, continuous heartbeat connection (30s interval),
+ * allowing it to report real-time status (connected/connecting/disconnected/error).
  */
 const statusConfig = {
   connected: { icon: Wifi, color: 'text-success', labelKey: 'connection.connected' },
@@ -144,16 +171,11 @@ const statusConfig = {
 } as const satisfies Record<string, { icon: typeof Wifi; color: string; labelKey: TranslationKey }>
 
 /**
- * 左下角的引擎指示：始终只占一个图标位，细节全在悬停提示里。
+ * Engine status indicator at the bottom-left of the sidebar.
  *
- * 这里和「语音引擎」页那三张模式卡**不是同一件事**，所以图标也不必事事对齐：
- * 卡片上的图标是在给模式起名（Cpu / Cloud / Server，一个静态属性）；
- * 这里报的是"此刻怎么样"。于是只有服务器模式换成信号图标——它有一条真在跑的连接可报。
- *
- * 本地 / 云 API 一律是中性单色，**不给任何"好"的颜色**：我们唯一知道的事实是
- * "配置填完了没有"，而填完 ≠ 真的能用（模型能不能加载、密钥有没有被吊销，都没验过）。
- * 所以只有确定的坏消息（缺东西）才转 warning 色，其余保持沉默——
- * 曾经在这里点过绿灯，等于替一件没测过的事作保。
+ * Local and Cloud API modes use neutral monochrome styling without falsely indicating a "green/ready" state,
+ * because configuration completeness alone does not guarantee API key validity or model loading capability.
+ * Only confirmed blocking errors transition to warning colors.
  */
 function ModeIndicator() {
   const t = useT()
@@ -176,8 +198,6 @@ function ModeIndicator() {
   const Icon = mode === 'local' ? Cpu : Cloud
   const title = mode === 'local' ? t('mode.local') : t('mode.cloudApi')
   const notReady = ready === false
-  // blockedReason 目前是 Rust/服务层给的中文串（P2-1 会改成 code 再本地化）。
-  // 这里只保证**外壳**跟随语言，不假装里面那句已经翻好了。
   const tip = notReady
     ? t('mode.tooltipNotReady', { mode: title, reason: blockedReason || t('mode.notReadyFallback') })
     : detail ? t('mode.tooltipDetail', { mode: title, detail }) : title
@@ -194,22 +214,40 @@ function ModeIndicator() {
 export default function Sidebar() {
   const t = useT()
   return (
-    <nav className="flex w-48 flex-col border-r border-sidebar-border bg-sidebar py-4">
-      <div className="flex-1 space-y-1 px-3">
-        {dailyNavItems.map(({ to, icon, labelKey }) => (
-          <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
-        ))}
-
-        <div className="px-1 py-3">
-          <div className="h-px bg-[linear-gradient(to_right,transparent_0%,hsl(var(--sidebar-border))_5%,hsl(var(--sidebar-border))_95%,transparent_100%)]" />
+    <nav className="flex w-52 flex-col border-r border-sidebar-border bg-sidebar py-3">
+      <div className="custom-scrollbar flex-1 space-y-4 overflow-y-auto px-2">
+        {/* Workspace */}
+        <div className="space-y-1">
+          <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            {t('nav.section.workspace')}
+          </div>
+          {workspaceNavItems.map(({ to, icon, labelKey }) => (
+            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
+          ))}
         </div>
-        {configNavItems.map(({ to, icon, labelKey }) => (
-          <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
-        ))}
+
+        {/* Voice & AI */}
+        <div className="space-y-1">
+          <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            {t('nav.section.ai')}
+          </div>
+          {aiNavItems.map(({ to, icon, labelKey }) => (
+            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
+          ))}
+        </div>
+
+        {/* System Settings */}
+        <div className="space-y-1">
+          <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            {t('nav.section.settings')}
+          </div>
+          {systemNavItems.map(({ to, icon, labelKey }) => (
+            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
+          ))}
+        </div>
       </div>
 
-      <div className="space-y-3 px-3 pt-4">
-        <div className="h-px bg-[linear-gradient(to_right,transparent_0%,hsl(var(--sidebar-border))_5%,hsl(var(--sidebar-border))_95%,transparent_100%)]" />
+      <div className="border-t border-sidebar-border px-3 pt-3">
         <FooterIcons />
       </div>
     </nav>
