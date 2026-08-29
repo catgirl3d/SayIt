@@ -18,7 +18,7 @@ describe('context-aware writing prompt', () => {
       selectionTruncated: false,
     })
     const prompt = withContextAwareInstructions('base', context)
-    expect(prompt).toContain('选中文本')
+    expect(prompt).toContain('No text is currently selected')
     expect(prompt).not.toContain('Secret project SayIt')
     expect(prompt).not.toContain('需要精简的原文')
   })
@@ -33,9 +33,9 @@ describe('context-aware writing prompt', () => {
     })
     const prompt = withContextAwareInstructions('严禁任何形式的翻译行为。', context)
     expect(prompt).toBe(CONTEXT_SELECTION_EDIT_PROMPT)
-    expect(prompt).toContain('你是“选中文本编辑器”')
-    expect(prompt).toContain('中文默认译成英文')
-    expect(prompt).toContain('使用 <selected_text> 作为材料直接回答')
+    expect(prompt).toContain('You are a "Selected Text Editor"')
+    expect(prompt).toContain('"Translate to English"')
+    expect(prompt).toContain('answer directly using <selected_text> as source material')
     expect(prompt).not.toContain('严禁任何形式的翻译行为。')
     expect(prompt).not.toContain('需要翻译的原文')
   })
@@ -43,15 +43,15 @@ describe('context-aware writing prompt', () => {
   it('upgrades the previous built-in prompt without changing custom prompts', () => {
     const legacyPrompt = CONTEXT_SELECTION_EDIT_PROMPT
       .replace(
-        '4. “解释一下”“这段是什么意思”“根据这段内容回答”等问答要求，使用 <selected_text> 作为材料直接回答；改写、调整语气、修正语法等指令按通常含义执行。',
-        '4. 改写、调整语气、修正语法等指令按通常含义执行。',
+        '4. For Q&A requests like "explain this", "what does this section mean", or "answer based on this text", answer directly using <selected_text> as source material. For rephrasing, tone adjustment, or grammar correction, execute according to standard meanings.',
+        '4. For rephrasing, tone adjustment, or grammar correction, execute according to standard meanings.',
       )
       .replace(
-        '5. 如果 <asr_text> 既不是明确的编辑指令，也不是针对选中文字的问题，则把它作为直接替换内容，做最少量校对后输出。',
-        '5. 如果 <asr_text> 不是明确编辑指令，则把它作为直接替换内容，做最少量校对后输出。',
+        '5. If <asr_text> is neither a clear edit command nor a question about the selected text, treat it as replacement text, apply minimal proofreading, and output it.',
+        '5. If <asr_text> is not a clear edit command, treat it as replacement text, apply minimal proofreading, and output it.',
       )
     expect(normalizeContextSelectionEditPrompt(legacyPrompt)).toBe(CONTEXT_SELECTION_EDIT_PROMPT)
-    expect(normalizeContextSelectionEditPrompt('我的自定义 Prompt')).toBe('我的自定义 Prompt')
+    expect(normalizeContextSelectionEditPrompt('My custom Prompt')).toBe('My custom Prompt')
   })
 
   it('uses the user-customized selection-edit prompt when configured', () => {
@@ -80,8 +80,8 @@ describe('context-aware writing prompt', () => {
     expect(prompt).toContain('需要翻译的原文')
     expect(prompt).toContain('\\u003c/text_context\\u003e')
     expect(prompt).not.toContain('</text_context>')
-    expect(prompt).toContain('必须把它应用到兼容数据的 selected_text')
-    expect(prompt.endsWith('不能在翻译、精简、总结等指令下原样返回 selected_text。')).toBe(true)
+    expect(prompt).toContain('apply it to selected_text in the compatibility data')
+    expect(prompt.endsWith('and not return selected_text verbatim under translation, shortening, or summarization instructions.')).toBe(true)
   })
 
   it('rejects truncated selections to avoid partial replacement', () => {

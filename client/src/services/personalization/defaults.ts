@@ -17,7 +17,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'intent',
-    promptAppend: '适合即时协作聊天。优先输出可以直接发送的短消息，语气自然、清晰、简洁，避免邮件腔。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'Suitable for instant messaging chat. Output short messages ready to send, with a natural, clear, and concise tone, avoiding an email-like style.',
     matcher: {
       processNames: ['teams.exe', 'ms-teams.exe'],
     },
@@ -29,7 +29,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'intent',
-    promptAppend: '适合工作邮件草稿。语气正式、完整，必要时自然分段，但不要编造收件人、称呼或任何事实。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'Suitable for work email drafts. Formal, complete tone with natural paragraph breaks when appropriate, without fabricating recipients, greetings, or facts.',
     matcher: {
       processNames: ['outlook.exe', 'olk.exe'],
     },
@@ -41,7 +41,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'faithful',
-    promptAppend: '面向开发工具输入。保留代码、命令、文件名、路径、英文标识符和 Markdown 结构，不要把技术词改写成普通中文。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'For developer tool input. Preserve code, commands, filenames, paths, English identifiers, and Markdown structures. Do not rewrite technical terms into plain words.',
     matcher: {
       processNames: ['kiro.exe'],
     },
@@ -53,7 +53,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'faithful',
-    promptAppend: '面向 Codex 编码工具，多为用自然语言下达编程指令。保留代码、命令、文件名、路径和英文标识符，把要做的事说清楚，不要把技术词改写成普通中文。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'For Codex coding tools, mostly programming instructions in natural language. Preserve code, commands, filenames, paths, and English identifiers; state the task clearly without rewriting technical terms.',
     matcher: {
       processNames: ['codex.exe'],
     },
@@ -65,7 +65,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'faithful',
-    promptAppend: '面向 VSCode 编辑区。保留代码、命令、文件名、API、英文术语和 Markdown 结构，不要过度润色技术内容。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'For VSCode editor. Preserve code, commands, filenames, APIs, English terminology, and Markdown structures without over-polishing technical content.',
     matcher: {
       processNames: ['code.exe'],
     },
@@ -77,7 +77,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'faithful',
-    promptAppend: '面向 Cursor 编辑区。保留代码、命令、路径、技术名词和英文标识符，不要擅自解释或补全技术内容。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'For Cursor editor. Preserve code, commands, paths, technical terms, and English identifiers without explaining or auto-completing technical content.',
     matcher: {
       processNames: ['cursor.exe'],
     },
@@ -89,7 +89,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'intent',
-    promptAppend: '面向 Windows 记事本，适合随手记录的纯文本。输出纯文本，不要使用 Markdown 标记或特殊格式符号。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'For Windows Notepad, suitable for plain text quick notes. Output plain text without Markdown formatting or special symbols.',
     matcher: {
       processNames: ['notepad.exe'],
     },
@@ -101,7 +101,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'casual',
-    promptAppend: '适合微信聊天。输出可直接发送的自然口语短消息，简洁亲切，不要用书面或邮件腔。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'Suitable for instant messaging chat. Output natural, casual short messages ready to send, concise and friendly without formal tone.',
     matcher: {
       processNames: ['weixin.exe', 'wechat.exe'],
     },
@@ -113,7 +113,7 @@ export const BUILTIN_APP_RULES: AppPromptRule[] = [
     builtin: true,
     enabled: false,
     presetId: 'casual',
-    promptAppend: '适合 QQ 聊天。输出轻松自然、可直接发送的短消息，口语化、简洁。', // i18n-allow: 中文口述整理 Prompt
+    promptAppend: 'Suitable for instant messaging chat. Output casual, natural short messages ready to send, informal and concise.',
     matcher: {
       processNames: ['qq.exe'],
     },
