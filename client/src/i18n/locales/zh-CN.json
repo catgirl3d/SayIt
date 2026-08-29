@@ -653,6 +653,7 @@
   "local.languageTitle": "识别语言",
   "local.lang.zh": "中文",
   "local.lang.en": "英文",
+  "local.lang.ru": "俄语",
   "local.languageNote": "只影响本地识别。大部分场景选「自动」；固定只说一种语言时选对应项更稳——短句上自动检测偶尔会认错语种（比如把普通话认成粤语）。",
   "local.backendTitle": "计算后端",
   "local.backendChecking": "检测中",

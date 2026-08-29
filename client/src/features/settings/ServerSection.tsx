@@ -251,6 +251,7 @@ export default function ServerSection() {
                 { value: 'auto', label: t('common.auto') },
                 { value: 'zh', label: t('local.lang.zh') },
                 { value: 'en', label: t('local.lang.en') },
+                { value: 'ru', label: t('local.lang.ru') },
               ]}
               onChange={(value) => { setAsrLanguage(value); void setSetting('server.language', value) }}
               className="shrink-0 justify-end"
