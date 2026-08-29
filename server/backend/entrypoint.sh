@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# If SAYIT_ASR_ENGINE is specified in env, apply it to /app/config.yaml
+if [ -n "$SAYIT_ASR_ENGINE" ] && [ -f /app/config.yaml ]; then
+    python -c "import yaml; p='/app/config.yaml'; c=yaml.safe_load(open(p)) or {}; c.setdefault('asr', {})['engine']='$SAYIT_ASR_ENGINE'; yaml.dump(c, open(p, 'w'))"
+fi
+
 TLS_ENABLED="${SAYIT_TLS_ENABLED:-true}"
 TLS_KEY="${SAYIT_TLS_KEY_FILE:-/app/certs/dev.key}"
 TLS_CERT="${SAYIT_TLS_CERT_FILE:-/app/certs/dev.crt}"

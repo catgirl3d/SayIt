@@ -15,7 +15,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/app/models
+    HF_HOME=/app/models \
+    TORCH_HOME=/app/models \
+    GIGAAM_CACHE_DIR=/app/models
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-venv python3-dev python3-pip \
@@ -34,17 +36,22 @@ RUN python -m pip install --upgrade pip && \
     pip install --no-build-isolation -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
-# --- Layer 3: ASR model + VAD model (cached in /app/models, readable by all users) ---
+# --- Layer 3: ASR models + VAD model (cached in /app/models, readable by all users) ---
 RUN mkdir -p /app/models && \
     python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-ASR-1.7B')" && \
     python -c "from modelscope.hub.snapshot_download import snapshot_download; snapshot_download('iic/speech_fsmn_vad_zh-cn-16k-common-pytorch')" && \
-    chmod -R a+rwX /app/models /root /root/.cache 2>/dev/null; true
+    python -c "import torch; _orig = torch.load; torch.load = lambda *a, **k: _orig(*a, **{**k, 'weights_only': False}); import gigaam; gigaam.load_model('v2_rnnt')" && \
+    mkdir -p /app/models/gigaam && \
+    cp -r /root/.cache/gigaam/* /app/models/gigaam/ && \
+    (test -s /app/models/gigaam/v2_rnnt.pt || test -s /app/models/gigaam/v2_rnnt.ckpt || (echo 'GigaAM weights missing!' && exit 1)) && \
+    chmod -R a+rwX /app/models /root /root/.cache 2>/dev/null
 
 # --- Layer 4: Application code + built-in defaults ---
 RUN useradd -m -s /bin/bash sayit && \
-    mkdir -p /app/runtime /app/certs && \
-    chown -R sayit:sayit /app/runtime && \
-    chmod -R a+rX /root/.cache 2>/dev/null; true
+    mkdir -p /app/runtime /app/certs /home/sayit/.cache && \
+    ln -sf /app/models/gigaam /home/sayit/.cache/gigaam && \
+    chown -R sayit:sayit /app /home/sayit && \
+    chmod -R a+rX /root/.cache 2>/dev/null
 COPY --chown=sayit:sayit backend/app /app/backend/app
 COPY --chown=sayit:sayit web /app/web
 COPY --chown=sayit:sayit prompts /app/prompts
