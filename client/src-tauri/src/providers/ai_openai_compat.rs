@@ -2,7 +2,7 @@
 // 覆盖所有支持 /v1/chat/completions 的服务：DeepSeek、通义、豆包（火山方舟）等
 
 use super::diag;
-use super::prompt::wrap_user_text;
+use super::prompt::{wrap_user_text, DEFAULT_SYSTEM_PROMPT};
 use super::types::{AiProviderConfig, AiResult, TestResult, TextContext};
 use std::time::Instant;
 
@@ -67,7 +67,7 @@ pub async fn polish(
     let base_url = normalize_base_url(&config.api_url);
     let url = format!("{}/chat/completions", base_url);
 
-    let sys_prompt = system_prompt.unwrap_or("You are a speech-to-text proofreading assistant.");
+    let sys_prompt = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let user_content = wrap_user_text(text, text_context);
 
     let mut body = serde_json::json!({
