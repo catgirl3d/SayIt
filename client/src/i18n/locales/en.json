@@ -650,6 +650,7 @@
   "local.languageTitle": "Recognition language",
   "local.lang.zh": "Chinese",
   "local.lang.en": "English",
+  "local.lang.ru": "Russian",
   "local.languageNote": "Affects local recognition only. Auto is right for most cases; if you only ever speak one language, picking it is more reliable — auto-detection occasionally guesses wrong on short phrases (calling Mandarin Cantonese, say).",
   "local.backendTitle": "Compute backend",
   "local.backendChecking": "Checking",
