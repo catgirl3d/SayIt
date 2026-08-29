@@ -68,7 +68,7 @@ class WebDemoMessageTests(unittest.TestCase):
 
     def test_wraps_user_text_with_default_prefix(self) -> None:
         messages = self.engine._build_messages("你好", system_prompt=None, is_web_demo=True)
-        self.assertIn("请校对以下", messages[1]["content"])
+        self.assertIn("Please proofread", messages[1]["content"])
         self.assertIn("你好", messages[1]["content"])
 
 

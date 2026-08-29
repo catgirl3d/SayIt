@@ -58,7 +58,7 @@ fn get_instructions(config: &AsrProviderConfig) -> String {
         .get("instructions")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or("你是一个语音转文字助手。请将用户的语音内容准确转写为文字，保持原意，适当添加标点符号，不要添加任何额外的解释或评论。")
+        .unwrap_or("You are a speech-to-text assistant. Accurately transcribe the user's speech into text while preserving the original meaning, adding appropriate punctuation, and without adding extra explanations or commentary.")
         .to_string()
 }
 
@@ -84,7 +84,7 @@ pub async fn transcribe(
     let mut instructions = get_instructions(config);
     // 热词上下文偏置：追加到 system instructions
     if let Some(ctx) = super::asr_qwen::build_hotword_context_text(hotwords) {
-        instructions.push_str("\n\n请特别注意以下专业术语/词汇的识别：");
+        instructions.push_str("\n\nPlease pay special attention to recognizing the following specialized terms/vocabulary: ");
         instructions.push_str(&ctx);
     }
     let url = ws_url(&model);

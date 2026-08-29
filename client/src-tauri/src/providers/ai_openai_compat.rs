@@ -67,7 +67,7 @@ pub async fn polish(
     let base_url = normalize_base_url(&config.api_url);
     let url = format!("{}/chat/completions", base_url);
 
-    let sys_prompt = system_prompt.unwrap_or("你是语音转文本的校对助手。");
+    let sys_prompt = system_prompt.unwrap_or("You are a speech-to-text proofreading assistant.");
     let user_content = wrap_user_text(text, text_context);
 
     let mut body = serde_json::json!({

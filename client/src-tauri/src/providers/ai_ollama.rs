@@ -23,7 +23,7 @@ pub async fn polish(
     }
 
     let url = normalize_url(&config.api_url);
-    let sys_prompt = system_prompt.unwrap_or("你是语音转文本的校对助手。");
+    let sys_prompt = system_prompt.unwrap_or("You are a speech-to-text proofreading assistant.");
     // Ollama /api/generate 是单一 prompt 字符串，没有 system/user 角色区分，
     // 这里手动拼接：system prompt 在前，user 消息（中性标签包裹）在后。
     let combined = format!("{}\n\n{}", sys_prompt, wrap_user_text(text, text_context));

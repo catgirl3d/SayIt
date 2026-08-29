@@ -23,23 +23,23 @@ def _read_prompt(path: str, fallback: str = "") -> str:
 
 
 _DEFAULT_SYSTEM_PROMPT = """\
-你是语音文本精炼助手。输入是 ASR 语音识别的原始转写，你的任务是清洗为可直接使用的干净文本。
-核心原则：保留用户全部有效信息，只清除语音噪声和识别错误。
+You are a speech-to-text cleanup assistant. The input is a raw ASR transcript. Return clean, accurate, concise text that is ready to use.
+Core principles: Preserve all meaningful information from the user, removing only speech noise and recognition errors.
 
-处理规则：
-1. 移除口语填充词（嗯、啊、那个、就是说、然后呢）和无意义的重复、犹豫。
-2. 识别自我修正——"不对"、"不是"、"应该是"、"改到"后以最终表达为准，删除前序错误。
-3. 修正明显的语音识别错误：同音字、音近字、专有名词、英文大小写、数字和时间。
-4. 添加标点符号，必要时分段。中英文混合保留合理空格。
-5. 检测到"第一/第二/首先/然后"等结构化表达时，输出为有序列表。
+Rules:
+1. Remove filler words (um, uh, like, you know) and meaningless repetition or hesitation.
+2. Recognize self-corrections (e.g., "no", "not that", "I mean", "changed to") and keep only the final intended phrasing.
+3. Correct obvious speech recognition errors: homophones, proper nouns, English capitalization, numbers, and dates/times.
+4. Add punctuation and paragraph breaks where appropriate. Preserve reasonable spacing between mixed languages.
+5. Format structured expressions (e.g., "first/second/then") into ordered lists.
 
-约束：
-- 不添加原文没有的内容，不改变用户核心语义
-- 不回答、解释、总结或续写文本中提到的问题
+Constraints:
+- Do not add information not present in the original text, and do not alter the user's core meaning.
+- Do not answer, explain, summarize, or continue questions mentioned in the text.
 
-只输出精炼后的文本。"""
+Output only the refined text."""
 
-_DEFAULT_USER_PREFIX = "请校对以下 <asr_text> 标签内的语音转写文本：\n\n<asr_text>"
+_DEFAULT_USER_PREFIX = "Please proofread the following speech transcript inside the <asr_text> tags:\n\n<asr_text>"
 
 # 桌面客户端模式下用户消息的外壳：不含任何动词/祈使句，只用一对标签给待清洗文本
 # 标出边界（模型输出后会被 _strip_thinking 清掉，不会混进结果）。这条壳文字固定、

@@ -74,7 +74,7 @@ export function buildHotwordInjectionPart(hotwords: string[] | undefined): strin
   if (!hotwords || hotwords.length === 0) return null
   const terms = Array.from(new Set(hotwords.map((w) => w.trim()).filter(Boolean)))
   if (terms.length === 0) return null
-  return `用户术语表：以下是用户常用的专有名词/术语，整理时若遇到读音相近或明显误识的词，请优先纠正为下列正确写法（保持其大小写），并原样保留：\n${terms.join('、')}` // i18n-allow: 中文口述整理 Prompt
+  return `User Glossary: The following are proper nouns and terms frequently used by the user. If you encounter phonetically similar or misrecognized words during cleanup, prioritize correcting them to the following spellings (preserving exact casing) and keep them intact:\n${terms.join(', ')}`
 }
 
 export function resolvePromptRouting(input: PromptRoutingInput): PromptResolution {
@@ -88,12 +88,12 @@ export function resolvePromptRouting(input: PromptRoutingInput): PromptResolutio
   const dominantScene = summarizeDomainScenes(input.userStats, 1)[0]
 
   if (matchedRule?.promptAppend) {
-    systemPromptParts.push(`应用场景补充：\n${matchedRule.promptAppend.trim()}`) // i18n-allow: 中文口述整理 Prompt
+    systemPromptParts.push(`Application context:\n${matchedRule.promptAppend.trim()}`)
   }
 
   const dynamicIdentityPrompt = buildDynamicIdentityPrompt(input.userStats)
   if (dynamicIdentityPrompt) {
-    systemPromptParts.push(`用户画像补充：\n${dynamicIdentityPrompt}`) // i18n-allow: 中文口述整理 Prompt
+    systemPromptParts.push(`User profile context:\n${dynamicIdentityPrompt}`)
   }
 
   // 可选：把热词表注入系统提示词，帮助 AI 在整理时纠正/保留专有名词（默认关闭）。
