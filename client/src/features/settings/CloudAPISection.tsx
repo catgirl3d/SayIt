@@ -55,21 +55,18 @@ const DOUBAO_CONSOLE_OPTIONS = [
 // ⚠️ 下面两段是**发给模型的 System Prompt**，不是界面文案，所以刻意保持中文、
 // 不进 locale 文件。Prompt 的语种取决于用户说什么话，不取决于界面语言 ——
 // 直译成英文会让中文口述的整理质量下降。英文 Prompt 集是独立的一件事，见
-// dev-docs/i18n-todo.md 的 P2-5。只有下面 PRESETS 的 label 是界面文案，要翻。
-// i18n-allow-start: 发给中文语音模型的产品 Prompt，不随界面语言切换
-const DEFAULT_OMNI_PROMPT = '你是一个语音转文字助手。请将用户的语音内容准确转写为文字，保持原意，适当添加标点符号，不要添加任何额外的解释或评论。'
+const DEFAULT_OMNI_PROMPT = 'You are a speech-to-text transcription assistant. Accurately transcribe the user speech, maintaining the original meaning and spoken language with proper punctuation. Do not add extra explanations or commentary.'
 
-const OMNI_PROMPT_POLISH = `你是语音文本精炼助手。输入是 ASR 语音识别的原始转写，你的任务是清洗为可直接使用的干净文本。
-核心原则：保留用户全部有效信息，只清除语音噪声和识别错误。
-处理规则：
-1. 移除口语填充词（嗯、啊、那个、就是说、然后呢）和无意义的重复、犹豫。
-2. 识别自我修正——"不对"、"不是"、"应该是"、"改到"后以最终表达为准，删除前序错误。
-3. 修正明显的语音识别错误：同音字、音近字、专有名词、英文大小写、数字和时间。
-4. 添加标点符号，必要时分段。中英文混合保留合理空格。
-5. 检测到"第一/第二/首先/然后"等结构化表达时，输出为有序列表。
-约束：不添加原文没有的内容，不改变用户核心语义；不回答、解释、总结或续写文本中提到的问题。
-只输出精炼后的文本。`
-// i18n-allow-end
+const OMNI_PROMPT_POLISH = `You are a speech-to-text refinement assistant. The input is raw ASR transcription. Your task is to clean it into clear, accurate, and concise text.
+Core principles: Preserve all user information and intent, remove speech fillers, and fix recognition typos.
+Rules:
+1. Remove meaningless speech fillers and stuttering.
+2. Recognize speech self-corrections and output only the final intended version.
+3. Fix obvious recognition errors in technical terms, names, and capitalization.
+4. Add accurate punctuation.
+5. If structured points (first, second, next) are present, format as an ordered list.
+Constraints: Do not alter the core meaning. Do not answer, explain, or continue the user's statements.
+Output ONLY the refined text.`
 
 const OMNI_PROMPT_PRESETS = [
   { value: DEFAULT_OMNI_PROMPT, labelKey: 'asr.omniPreset.faithful' },
