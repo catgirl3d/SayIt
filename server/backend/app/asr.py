@@ -35,11 +35,14 @@ def _load_hotwords(path: str) -> list[str]:
 
 
 class ASREngine:
-    """ASR engine supporting Qwen3-ASR (vLLM) and FireRedASR2-LLM backends."""
+    """ASR engine supporting Qwen3-ASR (vLLM), FireRedASR2-LLM, and Sber GigaAM backends."""
 
     def __init__(self, config: Config) -> None:
-        self._engine_type = config.asr.engine  # "qwen3" or "firered"
+        self._engine_type = config.asr.engine  # "qwen3", "firered", or "gigaam"
         self._firered_backend = None
+        self._gigaam_backend = None
+        self._lang_map = {"中文": "Chinese", "英文": "English", "日文": "Japanese", "ru": "Russian"}
+        self._language = self._lang_map.get(config.asr.language, config.asr.language)
 
         if self._engine_type == "firered":
             from .asr_firered import FireRedASRBackend
@@ -50,11 +53,16 @@ class ASREngine:
                 use_int8=config.asr.firered_use_int8,
             )
             self._backend = "firered"
+        elif self._engine_type == "gigaam":
+            from .asr_gigaam import GigaAMASRBackend
+            logger.info("Initializing Sber GigaAM engine (model=%s, device=%s)", config.asr.gigaam_model, config.asr.device)
+            self._gigaam_backend = GigaAMASRBackend(
+                model_name=config.asr.gigaam_model,
+                device=config.asr.device,
+            )
+            self._backend = "gigaam"
         else:
             from qwen_asr import Qwen3ASRModel
-
-            self._lang_map = {"中文": "Chinese", "英文": "English", "日文": "Japanese"}
-            self._language = self._lang_map.get(config.asr.language, config.asr.language)
 
             logger.info("Loading Qwen3-ASR model=%s backend=vllm", config.asr.model)
             try:
@@ -235,12 +243,15 @@ class ASREngine:
                 job_text_parts[idx] = []
                 continue
 
-            if duration <= 60.0:
-                # ≤ 1min: send whole audio, no split — accuracy first.
+            max_direct = 25.0 if self._engine_type == "gigaam" else 60.0
+            if duration <= max_direct:
+                # Direct transcribe without split
                 segs = [(audio, duration)]
             else:
-                # > 1min: safe split at silence gaps
-                segs = self._safe_split(audio)
+                # Split long audio at silence gaps
+                max_seg = 25.0 if self._engine_type == "gigaam" else 100.0
+                min_seg = 5.0 if self._engine_type == "gigaam" else 10.0
+                segs = self._safe_split(audio, min_seg=min_seg, max_seg=max_seg)
                 # Merge segments with very low speech ratio into adjacent segments
                 # to avoid batch inference failure from near-silent segments.
                 if len(segs) > 1:
@@ -281,6 +292,20 @@ class ASREngine:
                         job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int(infer_ms * (seg_cnt / seg_total))
                     for (job_idx, seg_idx, _), text in zip(entries, texts):
                         job_text_parts[job_idx][seg_idx] = text
+                elif self._engine_type == "gigaam":
+                    # GigaAM: transcribe one segment at a time
+                    texts = []
+                    for _, _, seg_audio in entries:
+                        texts.append(self._gigaam_backend.transcribe_audio(seg_audio))
+                    infer_ms = int((time.monotonic() - t_inf) * 1000)
+                    seg_total = len(entries)
+                    seg_counter: dict[int, int] = {}
+                    for job_idx, _, _ in entries:
+                        seg_counter[job_idx] = seg_counter.get(job_idx, 0) + 1
+                    for job_idx, seg_cnt in seg_counter.items():
+                        job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int(infer_ms * (seg_cnt / seg_total))
+                    for (job_idx, seg_idx, _), text in zip(entries, texts):
+                        job_text_parts[job_idx][seg_idx] = text
                 else:
                     if len(audio_list) == 1:
                         results = self._model.transcribe(
@@ -307,6 +332,8 @@ class ASREngine:
                     t_inf = time.monotonic()
                     if self._engine_type == "firered":
                         text = self._firered_backend.transcribe_audio(seg_audio)
+                    elif self._engine_type == "gigaam":
+                        text = self._gigaam_backend.transcribe_audio(seg_audio)
                     else:
                         res = self._model.transcribe(
                             audio=(seg_audio, 16000), language=lang, context=ctx,
@@ -321,7 +348,8 @@ class ASREngine:
                 "infer_ms": job_infer_ms.get(idx, 0),
                 "seg_count": len(job_text_parts.get(idx, [])),
             }
-            outputs[idx] = ("".join(job_text_parts[idx]), debug)
+            sep = " " if self._engine_type == "gigaam" else ""
+            outputs[idx] = (sep.join(t.strip() for t in job_text_parts[idx] if t and t.strip()), debug)
 
         return outputs
 
@@ -368,8 +396,13 @@ class ASREngine:
         Segments still longer than MAX_CHUNK after VAD merging are sub-split at
         low-energy points so that no single segment exceeds ~15s.
         """
+        dur = len(audio) / 16000.0
         if self._vad is None:
-            return [(audio, len(audio) / 16000.0)] if fallback_to_full else []
+            if not fallback_to_full or dur <= 25.0:
+                return [(audio, dur)] if fallback_to_full else []
+            # When VAD is absent and audio > 25s, fallback to energy subsplit
+            parts = self._energy_subsplit(audio, max_chunk=15.0)
+            return [(part, len(part) / 16000.0) for part in parts]
         try:
             import torch
             res = self._vad.generate(input=torch.tensor(audio, dtype=torch.float32), cache={}, is_final=True)
@@ -463,8 +496,13 @@ class ASREngine:
         Unlike _vad_split which discards silence, this preserves the full audio
         and only uses VAD to find natural pause points for splitting.
         """
+        dur = len(audio) / 16000.0
         if self._vad is None:
-            return [(audio, len(audio) / 16000.0)]
+            if dur <= max_seg:
+                return [(audio, dur)]
+            # When VAD is absent, fallback to energy-based split
+            parts = self._energy_subsplit(audio, max_chunk=min(20.0, max_seg))
+            return [(part, len(part) / 16000.0) for part in parts]
         try:
             import torch
             res = self._vad.generate(input=torch.tensor(audio, dtype=torch.float32), cache={}, is_final=True)
@@ -492,9 +530,9 @@ class ASREngine:
                 if all(d >= min_seg for d in seg_durs) and all(d <= max_seg for d in seg_durs):
                     cuts.append(mid)
 
-            if not cuts and dur > 100.0:
+            if not cuts and dur > max_seg:
                 # Fallback: force split at lowest energy point near ideal boundaries
-                ideal_seg = 60.0  # target segment length
+                ideal_seg = min(20.0, max_seg)  # target segment length
                 n_cuts_needed = max(1, int(dur / ideal_seg) - 1)
                 frame_len = int(0.05 * 16000)  # 50ms frames
                 hop = frame_len // 2
@@ -559,6 +597,17 @@ class ASREngine:
             ]
             texts = [self._firered_backend.transcribe_audio(seg) for seg, _ in segments]
             return "".join(texts), debug
+
+        if self._engine_type == "gigaam":
+            if duration <= 25.0:
+                debug["vad_segments"] = [{"index": 0, "duration_sec": round(duration, 1)}]
+                return self._gigaam_backend.transcribe_audio(audio), debug
+            segments = self._vad_split(audio)
+            debug["vad_segments"] = [
+                {"index": i, "duration_sec": round(d, 1)} for i, (_, d) in enumerate(segments)
+            ]
+            texts = [self._gigaam_backend.transcribe_audio(seg) for seg, _ in segments]
+            return " ".join(t for t in texts if t), debug
 
         # Qwen3-ASR path
         # ≤ 2min: direct, no split — accuracy first

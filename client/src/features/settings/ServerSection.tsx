@@ -58,16 +58,23 @@ export default function ServerSection() {
     setEngineDraftDirty(normalize(value) !== normalize(savedBaseUrl))
   }
 
-  /** 探一次 /healthz。成功返回后端上报的 ASR/LLM 开关，失败抛出原始异常。 */
-  async function probeHealth(url: string): Promise<{ asr?: boolean; llm?: boolean }> {
-    const response = await fetch(`${url}/healthz`, { cache: 'no-store' })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    return await response.json() as { asr?: boolean; llm?: boolean }
+  interface HealthPayload {
+    asr?: boolean
+    asr_engine?: string
+    asr_model?: string
+    llm?: boolean
   }
 
-  /** 把 /healthz 的 asr/llm 布尔量翻译成人话。原来直接显示「ASR=on，LLM=off」，
-   *  那是把后端的 JSON 字段原样贴给用户。 */
-  function describeHealth(payload: { asr?: boolean; llm?: boolean }, prefix: string): ServiceResult {
+  /** 探一次 /healthz。成功返回后端上报的 ASR/LLM 开关及模型信息，失败抛出原始异常。 */
+  async function probeHealth(url: string): Promise<HealthPayload> {
+    const response = await fetch(`${url}/healthz`, { cache: 'no-store' })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return await response.json() as HealthPayload
+  }
+
+  /** 把 /healthz 的 asr/llm 及模型信息翻译成人话。 */
+  function describeHealth(payload: HealthPayload, prefix: string): ServiceResult {
+    const modelDetail = payload.asr_model ? ` · ASR: ${payload.asr_model}` : ''
     if (payload.asr === false) {
       return {
         tone: 'warning',
@@ -77,10 +84,10 @@ export default function ServerSection() {
     if (payload.llm === false) {
       return {
         tone: 'success',
-        message: t('server.noAi', { prefix }),
+        message: t('server.noAi', { prefix }) + modelDetail,
       }
     }
-    return { tone: 'success', message: t('server.allGood', { prefix }) }
+    return { tone: 'success', message: t('server.allGood', { prefix }) + modelDetail }
   }
 
   /**

@@ -124,7 +124,7 @@ async def _lifespan(app: FastAPI):
         "  │ Demo:  %-34s │\n"
         "  │ HTTP:  %-34s │\n"
         "  └──────────────────────────────────────────┘",
-        f"{cfg.asr.engine} ({cfg.asr.model})",
+        f"gigaam ({cfg.asr.gigaam_model})" if cfg.asr.engine == "gigaam" else f"{cfg.asr.engine} ({cfg.asr.model})",
         llm_status,
         demo_status,
         f":{cfg.server.port}",
@@ -495,7 +495,24 @@ async def _run_asr_llm(
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok", "asr": asr_engine is not None, "llm": cfg.llm.enabled and llm_engine is not None}
+    asr_ready = asr_engine is not None
+    engine_name = cfg.asr.engine if asr_ready else None
+    if engine_name == "gigaam":
+        model_name = f"Sber GigaAM ({cfg.asr.gigaam_model})"
+    elif engine_name == "firered":
+        model_name = "FireRedASR2"
+    elif engine_name == "qwen3":
+        model_name = cfg.asr.model
+    else:
+        model_name = engine_name
+
+    return {
+        "status": "ok",
+        "asr": asr_ready,
+        "asr_engine": engine_name,
+        "asr_model": model_name,
+        "llm": cfg.llm.enabled and llm_engine is not None,
+    }
 
 
 # ── Feedback ──────────────────────────────────────────────────────────────────
@@ -805,12 +822,25 @@ async def ws_transcribe(ws: WebSocket):
         llm_debug = result.get("llm_debug", {}) if isinstance(result.get("llm_debug"), dict) else {}
 
         if telemetry:
+            if cfg.asr.engine == "gigaam":
+                resolved_asr_provider = "gigaam"
+                resolved_asr_model = f"Sber GigaAM ({cfg.asr.gigaam_model})"
+                resolved_asr_lang = "ru"
+            elif cfg.asr.engine == "firered":
+                resolved_asr_provider = "firered"
+                resolved_asr_model = "FireRedASR2-AED-TensorRT"
+                resolved_asr_lang = "zh"
+            else:
+                resolved_asr_provider = "qwen3-asr"
+                resolved_asr_model = cfg.asr.model
+                resolved_asr_lang = cfg.asr.language
+
             telemetry.record_pipeline_result(
                 current_session_id,
                 cid,
-                asr_provider="qwen3-asr",
-                asr_model=cfg.asr.model,
-                asr_lang=cfg.asr.language,
+                asr_provider=resolved_asr_provider,
+                asr_model=resolved_asr_model,
+                asr_lang=resolved_asr_lang,
                 asr_ms=int(result.get("asr_ms", 0) or 0),
                 asr_debug=result.get("asr_debug", {}) if isinstance(result.get("asr_debug"), dict) else {},
                 llm_enabled=bool(result.get("asr_text"))
@@ -838,7 +868,7 @@ async def ws_transcribe(ws: WebSocket):
             "asr_debug": result.get("asr_debug", {}),
             "llm_debug": result.get("llm_debug", {}),
             "asr_engine": cfg.asr.engine,
-            "asr_model": "FireRedASR2-AED-TensorRT" if cfg.asr.engine == "firered" else cfg.asr.model,
+            "asr_model": f"Sber GigaAM ({cfg.asr.gigaam_model})" if cfg.asr.engine == "gigaam" else ("FireRedASR2-AED-TensorRT" if cfg.asr.engine == "firered" else cfg.asr.model),
             "context_applied": result.get("context_applied"),
         }
         # Audit log: metadata only (no transcript text persisted)
