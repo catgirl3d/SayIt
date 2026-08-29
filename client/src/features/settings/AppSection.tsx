@@ -3,10 +3,11 @@ import { Switch } from '@/components/ui/switch'
 import { useT } from '@/i18n/useT'
 
 /**
- * 这里曾经还有一个「自动检测更新」开关。撤掉了：更新现在是必走的 ——
- * 后台静默下载，用户点左下角图标、或下次关闭应用时装上。
- * 底层设置项 autoCheckUpdate 仍然被读取（见 features/update/autoUpdate.ts），
- * 只是不再暴露给用户，留作更新链路自身出故障时的远程止血开关。
+ * The "check for updates" toggle used to live here. It was removed because updates are now
+ * mandatory: they download silently in the background and install when the user opens the
+ * update indicator or closes the app. The underlying autoCheckUpdate setting is still read by
+ * features/update/autoUpdate.ts, but is no longer exposed as a user control and remains a remote
+ * kill switch if the update pipeline itself fails.
  */
 export default function AppSection({
   autoLaunch,
@@ -26,10 +27,10 @@ export default function AppSection({
         <h2 className="mb-4 text-lg font-semibold">{t('settings.app.title')}</h2>
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">{t('settings.app.autoLaunch')}</p>
+            <p id="auto-launch-label" className="text-sm font-medium">{t('settings.app.autoLaunch')}</p>
             <p className="text-xs text-muted-foreground">{t('settings.app.autoLaunchDesc')}</p>
           </div>
-          <Switch checked={autoLaunch} onChange={onToggleAutoLaunch} noAnimation={!animate} hidden={!ready} />
+          <Switch labelledBy="auto-launch-label" checked={autoLaunch} onChange={onToggleAutoLaunch} noAnimation={!animate} hidden={!ready} />
         </div>
       </CardContent>
     </Card>

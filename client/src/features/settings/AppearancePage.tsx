@@ -255,7 +255,7 @@ export default function AppearancePage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-8">
+    <div className="mx-auto max-w-4xl">
       <h1 className="mb-6 text-2xl font-bold">{t('appearance.title')}</h1>
 
       <div className="space-y-6">

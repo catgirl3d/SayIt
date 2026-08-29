@@ -241,7 +241,7 @@ export default function PersonalizationPage() {
   const usageDays = userStats.firstUsedAt ? daysBetween(userStats.firstUsedAt, Date.now()) : 0
 
   return (
-    <div className="mx-auto max-w-4xl p-8">
+    <div className="mx-auto max-w-4xl">
       <div className="mb-6">
         <h1 className="text-2xl font-bold">{t('stats.title')}</h1>
         <div className="mt-3 inline-flex gap-1 rounded-lg border border-border p-0.5">
