@@ -10,7 +10,12 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { listMicrophones } from '@/services/audio'
 import { refreshRecorderSettings } from '@/services/recorder'
 import { getPresetShortcuts, getSetting, setSetting } from '@/services/store'
-import { getDefault } from '@/services/defaults'
+import {
+  DEFAULT_MIC_BOOST,
+  getDefault,
+  resolveMicBoost,
+  type MicBoostSetting,
+} from '@/services/defaults'
 import { drawBars, resetWaveform } from '@/services/waveform'
 import { Switch } from '@/components/ui/switch'
 import { Segmented } from '@/components/ui/segmented'
@@ -58,6 +63,9 @@ export default function GeneralSettingsPage() {
   const [autoLaunch, setAutoLaunch] = useState(false)
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
   const [selectedMic, setSelectedMic] = useState('')
+  const [micBoost, setMicBoost] = useState<MicBoostSetting>(() => (
+    getDefault<MicBoostSetting>('micBoost', DEFAULT_MIC_BOOST)
+  ))
   const [testing, setTesting] = useState(false)
   const [volumeLevel, setVolumeLevel] = useState<MicVolumeLevel>('idle')
   const [micError, setMicError] = useState('')
@@ -95,7 +103,10 @@ export default function GeneralSettingsPage() {
     // 每项自带 catch 兜底：Promise.all 是 fail-fast，只要一项 reject 就会在其余项
     // 还没回来时提前放行 ready。也不用 rAF，避免 setReady 与赋值分到不同批次。
     void (async () => {
-      const [launch, mute, clip, contextAware, history, retention, readySound, audioDays, logDays] = await Promise.all([
+      const [
+        launch, mute, clip, contextAware, history, retention, readySound,
+        audioDays, logDays, storedMicBoost,
+      ] = await Promise.all([
         bridge.getAutoLaunch().catch(() => false),
         getSetting('muteSystemAudioWhileRecording', false).catch(() => false),
         getSetting('protectClipboard', true).catch(() => true),
@@ -105,6 +116,7 @@ export default function GeneralSettingsPage() {
         getSetting('readySoundEnabled', true).catch(() => true),
         getSetting('audioRetentionDays', -1).catch(() => -1),
         getSetting('logRetentionDays', 30).catch(() => 30),
+        getSetting('micBoost', DEFAULT_MIC_BOOST).catch(() => DEFAULT_MIC_BOOST),
       ])
       if (cancelled) return
       setAutoLaunch(Boolean(launch))
@@ -118,6 +130,7 @@ export default function GeneralSettingsPage() {
       if (ad === 7 || ad === 30 || ad === 90 || ad === -1) setAudioRetentionDays(ad)
       const ld = Number(logDays)
       if (ld === 7 || ld === 15 || ld === 30 || ld === 90) setLogRetentionDays(ld)
+      setMicBoost(resolveMicBoost(storedMicBoost).setting)
       setReady(true)
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (!cancelled) setAnimate(true)
@@ -153,6 +166,11 @@ export default function GeneralSettingsPage() {
   }
   const toggleAutoLaunch = async () => { const next = !autoLaunch; setAutoLaunch(next); await bridge.setAutoLaunch(next) }
   const handleMicChange = async (deviceId: string) => { setSelectedMic(deviceId); await setSetting('selectedMic', deviceId); await refreshRecorderSettings() }
+  const handleMicBoostChange = async (value: MicBoostSetting) => {
+    const next = resolveMicBoost(value).setting
+    setMicBoost(next)
+    await setSetting('micBoost', next)
+  }
   const toggleMuteSystemAudio = async () => { const next = !muteSystemAudio; setMuteSystemAudio(next); await setSetting('muteSystemAudioWhileRecording', next); await refreshRecorderSettings() }
   const toggleProtectClipboard = async () => { const next = !protectClipboard; setProtectClipboard(next); await setSetting('protectClipboard', next); await refreshRecorderSettings() }
   const toggleContextAwareWriting = async () => { const next = !contextAwareWriting; setContextAwareWriting(next); await setSetting('contextAwareWritingEnabled', next); await refreshRecorderSettings() }
@@ -332,7 +350,9 @@ export default function GeneralSettingsPage() {
         {/* 麦克风排在「偏好设置」前面：它是录音链路的入口，选错设备什么都录不到；
             而下面那三个开关（提示音、静音外放、剪贴板保护）都是可选的锦上添花。 */}
         <MicrophoneSection mics={mics} selectedMic={selectedMic} testing={testing} volumeLevel={volumeLevel}
-          onCanvasRef={(node) => { canvasRef.current = node }} onMicChange={handleMicChange} onTestMic={testMic} errorMessage={micError} />
+          micBoost={micBoost} ready={ready} animate={animate} onCanvasRef={(node) => { canvasRef.current = node }}
+          onMicChange={handleMicChange} onTestMic={testMic}
+          onMicBoostChange={(value) => { void handleMicBoostChange(value) }} errorMessage={micError} />
 
         <Card>
           <CardContent className="space-y-4 p-6">

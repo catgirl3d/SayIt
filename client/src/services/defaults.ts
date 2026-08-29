@@ -9,6 +9,33 @@
  *   - 应用 Prompt 规则 → src/services/personalization/defaults.ts 的 BUILTIN_APP_RULES
  */
 
+export const MIC_BOOST_VALUES = ['1', '2', '3', '5', 'auto'] as const
+export type MicBoostSetting = (typeof MIC_BOOST_VALUES)[number]
+export const DEFAULT_MIC_BOOST: MicBoostSetting = '3'
+
+export interface MicBoostConfig {
+  setting: MicBoostSetting
+  gain: number
+  autoGainControl: boolean
+}
+
+export function resolveMicBoost(value: unknown): MicBoostConfig {
+  const setting: MicBoostSetting = typeof value === 'string'
+    && (MIC_BOOST_VALUES as readonly string[]).includes(value)
+    ? value as MicBoostSetting
+    : DEFAULT_MIC_BOOST
+
+  return {
+    setting,
+    gain: setting === '2'
+      ? 2
+      : setting === '3'
+        ? 3
+        : setting === '5' ? 5 : 1,
+    autoGainControl: setting === 'auto',
+  }
+}
+
 export const DEFAULTS: Record<string, unknown> = {
 
   // ── 界面语言 ──
@@ -39,6 +66,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // 浏览器降噪。默认开（底噪大的机器需要）；降噪按"人听得舒服"优化，
   // 可能削掉 ASR 要的细节，麦克风环境干净时可以关掉对比准确度。
   micNoiseSuppression: true,
+  micBoost: DEFAULT_MIC_BOOST, // '1' = off; '2', '3', '5' = fixed gain; 'auto' = browser AGC
 
   // ── 文本插入 ──
   protectClipboard: true, // 插入文本后自动还原剪贴板为插入前内容，避免占用用户剪贴板。默认开启
