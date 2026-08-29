@@ -1,4 +1,4 @@
-﻿import { startWebviewKeyboardFallback } from './services/webviewKeyboardFallback'
+import { startWebviewKeyboardFallback } from './services/webviewKeyboardFallback'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { HashRouter } from 'react-router-dom'
