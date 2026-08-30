@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DEFAULT_BUILTIN_PROMPT_LANGUAGE } from '@/services/defaults'
 import { BUILTIN_APP_RULES } from '@/services/personalization/defaults'
 import {
   getAppPromptRules,
@@ -38,7 +39,7 @@ import { useT } from '@/i18n/useT'
 export default function AIInstructionsPage() {
   const t = useT()
   const [presets, setPresets] = useState<PromptPreset[]>([])
-  const [promptLanguage, setPromptLanguage] = useState<BuiltinPromptLanguage>('zh-CN')
+  const [promptLanguage, setPromptLanguage] = useState<BuiltinPromptLanguage>(DEFAULT_BUILTIN_PROMPT_LANGUAGE)
   const [promptLanguageChanging, setPromptLanguageChanging] = useState(false)
   const activePreset = useActivePreset()
   const activePresetId = activePreset.id

@@ -12,6 +12,8 @@
 export const MIC_BOOST_VALUES = ['1', '2', '3', '5', 'auto'] as const
 export type MicBoostSetting = (typeof MIC_BOOST_VALUES)[number]
 export const DEFAULT_MIC_BOOST: MicBoostSetting = '3'
+export const DEFAULT_BUILTIN_PROMPT_LANGUAGE = 'en'
+export const LEGACY_BUILTIN_PROMPT_LANGUAGE = 'zh-CN'
 
 export interface MicBoostConfig {
   setting: MicBoostSetting
@@ -78,7 +80,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // 读取光标附近文字/选区并交给 AI，用于上下文续写与语音编辑。涉及正文读取，默认关闭。
   contextAwareWritingEnabled: false,
   aiPromptAppend: '', // 全局附加 prompt
-  'ai.builtinPromptLanguage': 'zh-CN', // 内置 Prompt 内容语言；与界面语言相互独立
+  'ai.builtinPromptLanguage': DEFAULT_BUILTIN_PROMPT_LANGUAGE, // Built-in prompt language is independent of the UI locale.
 
   // ── AI 供应商 ──
   // 下面这四个是**运行时生效的那一份**，录音链路、历史重跑、诊断页、反馈上报都只认它们。

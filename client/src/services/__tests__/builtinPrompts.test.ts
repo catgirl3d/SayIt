@@ -15,6 +15,7 @@ import { getDefault } from '../defaults'
 import {
   BUILTIN_PRESETS,
   builtinPromptContentHash,
+  getBuiltinPromptLanguage,
   getBuiltinPromptPresets,
   getPromptPresets,
   normalizeBuiltinPromptLanguage,
@@ -23,16 +24,20 @@ import {
   type PromptPreset,
 } from '../store'
 
-describe('内置 Prompt 语言', () => {
+describe('Built-in prompt language', () => {
   beforeEach(() => bridgeState.values.clear())
 
-  it('默认使用中文，非法持久化值也安全回落到中文', () => {
-    expect(getDefault('ai.builtinPromptLanguage')).toBe('zh-CN')
+  it('defaults to English while preserving an explicit Chinese choice', async () => {
+    expect(getDefault('ai.builtinPromptLanguage')).toBe('en')
     expect(normalizeBuiltinPromptLanguage('zh-CN')).toBe('zh-CN')
     expect(normalizeBuiltinPromptLanguage('en')).toBe('en')
     for (const value of ['', 'zh', 'en-US', null, undefined, 1]) {
-      expect(normalizeBuiltinPromptLanguage(value), String(value)).toBe('zh-CN')
+      expect(normalizeBuiltinPromptLanguage(value), String(value)).toBe('en')
     }
+    expect(await getBuiltinPromptLanguage()).toBe('en')
+
+    bridgeState.values.set('ai.builtinPromptLanguage', 'zh-CN')
+    expect(await getBuiltinPromptLanguage()).toBe('zh-CN')
   })
 
   it('中英文定义的 id 和顺序一致，且四份英文 Prompt 均已提供', () => {

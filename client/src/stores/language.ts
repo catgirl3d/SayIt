@@ -6,7 +6,15 @@
  * server.language、Preset 的输出语种），改语言不动它们，也不要在这里联动。
  */
 import * as bridge from '@/services/bridge'
-import { getSetting, setSetting } from '@/services/store'
+import {
+  DEFAULT_BUILTIN_PROMPT_LANGUAGE,
+  LEGACY_BUILTIN_PROMPT_LANGUAGE,
+} from '@/services/defaults'
+import {
+  BUILTIN_PRESETS,
+  getSetting,
+  setSetting,
+} from '@/services/store'
 import {
   getLocale,
   normalizePreference,
@@ -56,10 +64,26 @@ export async function initLanguage(): Promise<Locale> {
  * 这一步必须在 initLanguage 之后调用，不能用尚未解析的 `auto` 偏好来猜地区。
  */
 export async function initLocaleDefaults(locale: Locale): Promise<void> {
+  let promptLanguageDefault = DEFAULT_BUILTIN_PROMPT_LANGUAGE
+  const storedPromptLanguage = await bridge.storeGet('ai.builtinPromptLanguage')
+  if (storedPromptLanguage === null || storedPromptLanguage === undefined) {
+    const storedPresets = await bridge.storeGet('promptPresets')
+    const hasLegacyBuiltinOverride = Array.isArray(storedPresets) && storedPresets.some((preset) => {
+      if (!preset || typeof preset !== 'object') return false
+      const candidate = preset as { id?: unknown; builtinPromptLanguage?: unknown }
+      return candidate.builtinPromptLanguage === undefined
+        && typeof candidate.id === 'string'
+        && BUILTIN_PRESETS.some((builtin) => builtin.id === candidate.id)
+    })
+
+    // Legacy built-in overrides predate the language setting and were always Chinese.
+    if (hasLegacyBuiltinOverride) promptLanguageDefault = LEGACY_BUILTIN_PROMPT_LANGUAGE
+  }
+
   const defaults: Record<string, string> = {
     'localAsr.downloadSource': locale === 'en' ? 'HuggingFace' : 'HuggingFace Mirror',
     'cloudAi.provider': locale === 'en' ? 'openai_compat' : 'deepseek',
-    'ai.builtinPromptLanguage': locale === 'en' ? 'en' : 'zh-CN',
+    'ai.builtinPromptLanguage': promptLanguageDefault,
   }
   await Promise.all(Object.entries(defaults).map(async ([key, value]) => {
     const existing = await bridge.storeGet(key)

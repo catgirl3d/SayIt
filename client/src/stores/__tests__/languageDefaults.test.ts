@@ -23,11 +23,28 @@ describe('首次运行的地区默认值', () => {
     expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('en')
   })
 
-  it('中文环境保持国内镜像与 DeepSeek', async () => {
+  it('Chinese environments keep domestic services while defaulting prompts to English', async () => {
     await initLocaleDefaults('zh-CN')
     expect(bridgeState.values.get('localAsr.downloadSource')).toBe('HuggingFace Mirror')
     expect(bridgeState.values.get('cloudAi.provider')).toBe('deepseek')
+    expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('en')
+  })
+
+  it('keeps a legacy Chinese built-in override associated with Chinese prompts', async () => {
+    bridgeState.values.set('promptPresets', [{ id: 'intent', systemPrompt: 'Legacy Chinese prompt' }])
+
+    await initLocaleDefaults('en')
+
     expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('zh-CN')
+  })
+
+  it('keeps an explicit English choice when a legacy Chinese override exists', async () => {
+    bridgeState.values.set('ai.builtinPromptLanguage', 'en')
+    bridgeState.values.set('promptPresets', [{ id: 'intent', systemPrompt: 'Legacy Chinese prompt' }])
+
+    await initLocaleDefaults('zh-CN')
+
+    expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('en')
   })
 
   it('已有设置不会被界面语言覆盖', async () => {
