@@ -202,6 +202,26 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             sources: NEMOTRON_STREAMING_Q4.sources(),
             archive_url: None,
         },
+        // ── Sber GigaAM v3 e2e RNN-T GGUF (ggml engine, transcribe.cpp) ──
+        // 220M parameter Conformer-RNNT model for Russian speech recognition.
+        // Provides native end-to-end punctuation and capitalization (e2e), high accuracy (WER ~5.36% on Fleurs RU).
+        ModelInfo {
+            id: "gigaam-v3-e2e-rnnt-gguf".into(),
+            name: "GigaAM v3".into(),
+            description: "俄语识别最准，自带标点与大小写".into(),
+            model_type: "gigaam-gguf".into(),
+            total_size_bytes: GIGAAM_V3_E2E_RNNT_Q8.size,
+            speed: 8.0,
+            accuracy: 9.0,
+            recommended: false,
+            memory_mb: 650,
+            featured: true,
+            languages_label: "俄语".into(),
+            quant: "Q8_0".into(),
+            languages: vec!["ru".into()],
+            sources: GIGAAM_V3_E2E_RNNT_Q8.sources(),
+            archive_url: None,
+        },
         // ── Fun-ASR Nano 2512 GGUF（SenseVoice 编码器 + Qwen3 解码器）──
         // FunAudioLLM 出的，和 SenseVoice 同一个实验室，只做中/英/日三语。
         // 它在**速度和准确度上同时**优于 Qwen3-ASR 0.6B：
@@ -321,6 +341,13 @@ const NEMOTRON_STREAMING_Q4: GgufWeight = GgufWeight {
     file: "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf",
     size: 495_831_520,
     sha256: "41c99fa5fb6f3d35f68e79adc3e755eca2232a8d921178bd647b71194792b8fd",
+};
+
+const GIGAAM_V3_E2E_RNNT_Q8: GgufWeight = GgufWeight {
+    repo: "handy-computer/gigaam-v3-e2e-rnnt-gguf",
+    file: "gigaam-v3-e2e-rnnt-Q8_0.gguf",
+    size: 273_724_832,
+    sha256: "78d63b47723b7f8d78c6113a6ef983b5a86e2a86f6c273e1f5cb6967b1c4467a",
 };
 
 const SENSEVOICE: GgufWeight = GgufWeight {

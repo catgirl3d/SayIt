@@ -43,6 +43,11 @@ const LOCAL_MODEL_KEYS: Record<string, {
     description: 'localModel.nemotron.description',
     languages: 'localModel.nemotron.languages',
   },
+  'gigaam-v3-e2e-rnnt-gguf': {
+    name: 'localModel.gigaam.name',
+    description: 'localModel.gigaam.description',
+    languages: 'localModel.gigaam.languages',
+  },
   'funasr-nano-2512-gguf': {
     name: 'localModel.funasr.name',
     description: 'localModel.funasr.description',
