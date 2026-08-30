@@ -480,8 +480,9 @@ fn prune_stale_packages(dir: &std::path::Path, keep: &str) {
 /// （历史 bug：装完自动重启报「找不到 \ 文件」）。脚本文件里的引号是文件字面量，
 /// 不经过参数转义层；给 cmd /C 传单个脚本路径是 cmd 唯一能干净处理的情形。
 ///
-/// relaunch=false 专给退出路径用：用户是要关掉 SayIt，装完再把它拉起来会表现成
-/// "这软件关不掉"。
+/// relaunch=false 会装完就结束、不碰应用。目前两个调用方都传 true（用户点「立即安装」
+/// 和退出兜底安装都要让用户看到新版本的关于页），参数保留是因为"装完别拉起来"这个选项
+/// 一旦需要就必须立刻可用 —— 关机前退出那种场景下拉起应用是明确的错误行为。
 #[cfg(target_os = "windows")]
 fn spawn_installer(installer_path: &str, relaunch: bool) -> Result<(), String> {
     use std::process::Command;
@@ -553,8 +554,14 @@ pub fn install_downloaded_update(file_path: String, relaunch: bool, app: AppHand
 
 /// 退出时的兜底安装，由 main.rs 的 RunEvent::Exit 调用。
 ///
-/// 用户没点「立即更新」就直接关掉了 SayIt —— 那就在退出路径上静默装掉，
-/// 下次打开即是新版。少了这一步，"发现新版就更新"完全依赖用户去点那个图标。
+/// 用户没点「立即更新」就直接关掉了 SayIt —— 那就在退出路径上装掉。
+/// 少了这一步，"发现新版就更新"完全依赖用户去点那个图标。
+///
+/// 装完会把应用重新拉起来并跳到关于页（`relaunch=true`）。这一条 2026-08 改过方向：
+/// 原本传 false，理由是"用户是要关掉它，装完又拉起来像关不掉"。改回 true 的理由是
+/// 升级完全无声时用户根本不知道版本变了，而这个"又自己开了"每个版本最多发生一次
+/// （pendingUpdate 装完即清），代价比"永远不知道更新了什么"小。取舍记在
+/// .kiro/decisions.md。
 ///
 /// 只做存在性检查，不重算哈希：退出路径上不能卡几百毫秒，完整性在下载时已经验过。
 pub fn install_pending_update_on_exit(app: &AppHandle) {
@@ -579,8 +586,9 @@ pub fn install_pending_update_on_exit(app: &AppHandle) {
 
     #[cfg(target_os = "windows")]
     {
-        match spawn_installer(&file_path, false) {
-            Ok(()) => write_log_line("[update] pending update is being installed on exit"),
+        // relaunch=true：装完把应用拉回来并跳到关于页。见本函数上方注释里的取舍说明。
+        match spawn_installer(&file_path, true) {
+            Ok(()) => write_log_line("[update] pending update is being installed on exit (will relaunch)"),
             Err(e) => write_log_line(&format!("[update] exit-path install failed: {}", e)),
         }
     }
