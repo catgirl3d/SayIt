@@ -1258,7 +1258,7 @@
   "common.listSeparator": ", ",
   "builtinPreset.intent": "Intent cleanup",
   "builtinPreset.faithful": "Faithful cleanup",
-  "builtinPreset.zh2en": "Chinese to English",
+  "builtinPreset.zh2en": "Translate to English",
   "builtinPreset.casual": "Conversational cleanup",
   "builtinApp.teams": "Teams",
   "builtinApp.outlook": "Outlook",
