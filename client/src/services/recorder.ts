@@ -59,6 +59,11 @@ export function setHotwordsCache(words: string[]) {
   orchestrator.setHotwordsCache(words)
 }
 
+/** Update the server recognition language used by the next recording. */
+export function setServerLanguageCache(language: string) {
+  orchestrator.setServerLanguageCache(language)
+}
+
 /** 轻量：仅同步「流式实时显示」开关到录音器缓存，无 IPC，切换后立即生效 */
 export function setStreamingDisplayCache(next: boolean) {
   orchestrator.setStreamingDisplayCache(next)

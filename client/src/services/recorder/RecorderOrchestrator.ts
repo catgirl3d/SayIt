@@ -88,6 +88,10 @@ const LATE_FINAL_GRACE_MS = 15000
 const MODIFIER_PTT_RELEASE_GUARD_MS = 200
 const MIC_MUTED_AUTO_CANCEL_MS = 3000
 
+function normalizeServerLanguage(value: unknown): string {
+  return typeof value === 'string' && value !== 'auto' ? value : ''
+}
+
 function classifyHistoryProviderFailure(message: string): HistoryFailReasonCode {
   const code = describeProviderError(message).code
   switch (code) {
@@ -523,6 +527,11 @@ export class RecorderOrchestrator {
     this.cachedHotwords = Array.from(new Set(words.map((word) => word.trim()).filter(Boolean)))
   }
 
+  /** Update the server recognition language used by the next recording. */
+  setServerLanguageCache(language: string) {
+    this.cachedLanguage = normalizeServerLanguage(language)
+  }
+
   /** 仅更新「流式实时显示」开关缓存，供外观设置切换后立即生效。 */
   setStreamingDisplayCache(next: boolean) {
     this.cachedStreamingDisplay = next
@@ -615,8 +624,7 @@ export class RecorderOrchestrator {
         return composeHotwords([], setWords, setActive, themes, themeActive)
       }),
       getSetting('server.language', 'auto').then((lang) => {
-        const l = lang as string
-        return l && l !== 'auto' ? l : ''
+        return normalizeServerLanguage(lang)
       }),
     ])
 
