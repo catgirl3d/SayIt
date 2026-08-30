@@ -39,8 +39,15 @@ body {
   font-weight: 400;
   line-height: 1;
   text-align: left;
+  white-space: nowrap;
   cursor: default;
   transition: background-color 100ms ease, color 100ms ease;
+}
+
+.tray-menu-item > span:not(.tray-menu-leading):not(.tray-menu-switch) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tray-menu-item:hover,
