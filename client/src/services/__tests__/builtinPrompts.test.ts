@@ -49,7 +49,7 @@ describe('Built-in prompt language', () => {
     expect(zh.map((preset) => preset.id)).toEqual(BUILTIN_PRESETS.map((preset) => preset.id))
     expect(en.map((preset) => preset.id)).toEqual(zh.map((preset) => preset.id))
     expect(uk.map((preset) => preset.id)).toEqual(zh.map((preset) => preset.id))
-    expect(en).toHaveLength(4)
+    expect(en).toHaveLength(6)
     for (let index = 0; index < en.length; index += 1) {
       expect(en[index].systemPrompt.trim()).not.toBe('')
       expect(uk[index].systemPrompt.trim()).not.toBe('')
@@ -60,8 +60,10 @@ describe('Built-in prompt language', () => {
       expect(zh[index].builtinPromptLanguage).toBe('zh-CN')
       expect(uk[index].builtinPromptLanguage).toBe('uk')
     }
-    expect(uk.find((preset) => preset.id === 'zh2en')?.systemPrompt).toContain('перекладач на англійську мову')
-    expect(uk.find((preset) => preset.id === 'zh2en')?.systemPrompt).toContain('англійський текст')
+    expect(uk.find((preset) => preset.id === 'translate_uk')?.systemPrompt).toContain('перекладач на українську мову')
+    expect(uk.find((preset) => preset.id === 'translate_uk')?.systemPrompt).toContain('український текст')
+    expect(uk.find((preset) => preset.id === 'translate_ru')?.systemPrompt).toContain('перекладач на російську мову')
+    expect(uk.find((preset) => preset.id === 'translate_en')?.systemPrompt).toContain('перекладач на англійську мову')
   })
 
   it('loads presets according to persisted language selection', async () => {

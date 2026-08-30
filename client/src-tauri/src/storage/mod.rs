@@ -30,7 +30,14 @@ const COLLECTION_KEYS: &[&str] = &[
     "appPromptRules",
 ];
 
-pub(crate) const BUILTIN_PROMPT_IDS: &[&str] = &["intent", "faithful", "zh2en", "casual"];
+pub(crate) const BUILTIN_PROMPT_IDS: &[&str] = &[
+    "intent",
+    "faithful",
+    "translate_uk",
+    "translate_ru",
+    "translate_en",
+    "casual",
+];
 
 fn prompt_preset_storage_key(id: &str, raw_json: &str) -> String {
     if !BUILTIN_PROMPT_IDS.contains(&id) {
