@@ -18,6 +18,17 @@ pub struct AiResult {
     pub elapsed_ms: u64,
 }
 
+/// Remote model list result fetched from a provider endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelListResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// User-visible reason for a failure.
+    #[serde(default)]
+    pub message: String,
+}
+
 /// 连接测试结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {

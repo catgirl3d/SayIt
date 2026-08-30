@@ -24,6 +24,7 @@ export type FriendlyErrorCode =
   | 'provider_forbidden'
   | 'provider_rate_limit'
   | 'provider_no_model'
+  | 'provider_model_list_unavailable'
   | 'download_network'
   | 'download_busy'
   | 'download_source_mismatch'
@@ -63,6 +64,7 @@ const FRIENDLY_ERROR_CODES = new Set<FriendlyErrorCode>([
   'provider_forbidden',
   'provider_rate_limit',
   'provider_no_model',
+  'provider_model_list_unavailable',
   'download_network',
   'download_busy',
   'download_source_mismatch',
@@ -217,6 +219,14 @@ export function describeProviderError(error: unknown): FriendlyError {
       message: t('err.provider.forbidden'),
       detail: text,
       action: 'switch_source',
+    }
+  }
+  if (stableCode === 'provider_model_list_unavailable') {
+    return {
+      code: 'provider_model_list_unavailable',
+      message: t('err.provider.modelListUnavailable'),
+      detail: text,
+      action: 'none',
     }
   }
   if (stableCode === 'provider_no_model' || status === 404 || /model.*not.*(found|exist)/i.test(text)) {

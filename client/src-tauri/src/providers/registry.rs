@@ -54,6 +54,40 @@ pub async fn test_ai_connection(config: AiProviderConfig) -> Result<TestResult, 
     }
 }
 
+/// Fetch the remote model catalog (Tauri command).
+///
+/// Failures are represented by `ModelListResult.ok` rather than `Err`, matching
+/// `test_ai_connection`: network and authentication failures mean the request
+/// was unsuccessful, but it was executed. The frontend translates the error
+/// code through `describeProviderError` in the `ok` branch.
+#[tauri::command]
+pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListResult, String> {
+    let fetch = match config.provider.as_str() {
+        "openai_compat" | "deepseek" | "doubao" | "qwen" | "mimo" | "groq" => {
+            ai_openai_compat::list_models(&config).await
+        }
+        "ollama" => ai_ollama::list_models(&config).await,
+        other => {
+            return Err(error_protocol::encode(
+                "connect_failed",
+                format!("Unknown AI provider: {}", other),
+            ))
+        }
+    };
+    match fetch {
+        Ok(models) => Ok(ModelListResult {
+            ok: true,
+            models,
+            message: String::new(),
+        }),
+        Err(message) => Ok(ModelListResult {
+            ok: false,
+            models: Vec::new(),
+            message,
+        }),
+    }
+}
+
 /// 云端 ASR 转写（Tauri command）
 #[tauri::command]
 pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResult, String> {

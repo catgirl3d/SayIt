@@ -655,6 +655,7 @@ fn main() {
             providers::registry::cloud_transcribe,
             providers::registry::test_ai_connection,
             providers::registry::test_asr_connection,
+            providers::registry::list_remote_models,
             // Doubao realtime streaming ASR
             providers::asr_doubao_realtime::doubao_stream_open,
             providers::asr_doubao_realtime::doubao_stream_send,

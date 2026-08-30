@@ -91,6 +91,15 @@ describe('describeProviderError', () => {
   it('模型未开通给出换供应商的方向', () => {
     expect(describeProviderError(new Error('model not found')).message).toContain('模型')
   })
+
+  it('does not report an unavailable model-list endpoint as a missing model', () => {
+    const result = describeProviderError(
+      'sayit_error:provider_model_list_unavailable:API returned error 404',
+    )
+    expect(result.code).toBe('provider_model_list_unavailable')
+    expect(result.message).toContain('模型列表')
+    expect(result.action).toBe('none')
+  })
 })
 
 describe('describeDownloadError', () => {

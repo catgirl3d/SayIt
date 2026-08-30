@@ -219,6 +219,11 @@ export function isProfileComplete(profile: AiProfile): boolean {
   return true
 }
 
+/** Normalize remote model names before exposing them in the selector. */
+export function normalizeModelNames(models: string[]): string[] {
+  return [...new Set(models.map((model) => model.trim()).filter(Boolean))]
+}
+
 /**
  * 把存储里读回来的东西还原成服务列表。
  *

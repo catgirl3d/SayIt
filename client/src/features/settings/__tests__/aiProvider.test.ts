@@ -12,6 +12,7 @@ import {
   isCheckFresh,
   isProfileComplete,
   migrateLegacyProfiles,
+  normalizeModelNames,
   parseLegacyLatencies,
   parseProfiles,
   profileSubtitle,
@@ -381,5 +382,12 @@ describe('migrateLegacyProfiles', () => {
     const first = migrateLegacyProfiles(legacy, 'deepseek', '')
     const second = migrateLegacyProfiles(legacy, 'deepseek', '')
     expect(first.profiles.map((p) => p.id)).toEqual(second.profiles.map((p) => p.id))
+  })
+})
+
+describe('normalizeModelNames', () => {
+  it('trims, removes empty names, and de-duplicates the remote catalog', () => {
+    expect(normalizeModelNames([' model-a ', '', 'model-a', 'model-b', '  ']))
+      .toEqual(['model-a', 'model-b'])
   })
 })

@@ -52,6 +52,7 @@ import {
   gradeLatency,
   isCheckFresh,
   isProfileComplete,
+  normalizeModelNames,
   profileSubtitle,
   profileTitle,
   preferredAiProviderValue,
@@ -65,6 +66,8 @@ import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
 interface TestResult { ok: boolean; message: string; elapsed_ms: number; detail?: string }
+
+interface FetchModelsResult { ok: boolean; models: string[]; message: string }
 
 interface Notice {
   tone: FeedbackTone
@@ -276,6 +279,10 @@ export default function AIProviderSection() {
    */
   const [draftModels, setDraftModels] = useState<string[]>([])
   const [modelInput, setModelInput] = useState('')
+  /** Remote models are a temporary selector catalog, not persisted profiles. */
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  /** Whether the model catalog is being fetched from the endpoint. */
+  const [fetchingModels, setFetchingModels] = useState(false)
   /** 打开弹窗时的快照，用来判断「未保存」 */
   const [draftBaseline, setDraftBaseline] = useState('')
   const [saving, setSaving] = useState(false)
@@ -297,6 +304,10 @@ export default function AIProviderSection() {
   const draftNeedsKey = !draftProvider.keyless
   const draftUrlError = draft ? checkApiUrl(draft.apiUrl) : ''
   const draftKeyHint = draft && draftNeedsKey ? checkAiKeyFormat(draft.provider, draft.apiKey) : ''
+  const selectedModel = draft?.model.trim() ?? ''
+  const modelOptions = selectedModel && !availableModels.includes(selectedModel)
+    ? [selectedModel, ...availableModels]
+    : availableModels
   const draftSignature = draft ? draftSnapshot(draft, draftModels) : ''
   // 输入框里打了字但没按回车也算改动——保存时会自动收编它，所以现在就得算"未保存"
   const draftDirty = draft !== null && (draftSignature !== draftBaseline || modelInput.trim() !== '')
@@ -306,7 +317,7 @@ export default function AIProviderSection() {
     && draftIsNew
     && draft.apiKey.trim() !== ''
     && lastProfileOf(draft.provider)?.apiKey === draft.apiKey
-  const busy = saving || checkingId !== '' || batch !== null
+  const busy = saving || fetchingModels || checkingId !== '' || batch !== null
   /** 这个卡正在测吗 —— 单个测试和并发批量测试都要算上 */
   const isChecking = (id: string) => checkingId === id || checkingIds.includes(id)
   const pendingDelete = profiles.find((p) => p.id === pendingDeleteId) ?? null
@@ -375,16 +386,18 @@ export default function AIProviderSection() {
     setDraftIsNew(isNew)
     setDraftModels(models)
     setModelInput('')
+    setAvailableModels([])
     setDraftBaseline(draftSnapshot(profile, models))
     setNotice(null)
   }
 
   function closeEditor() {
-    if (saving) return
+    if (saving || fetchingModels) return
     setDraft(null)
     setDraftIsNew(false)
     setDraftModels([])
     setModelInput('')
+    setAvailableModels([])
     setDraftBaseline('')
     setNotice(null)
     setEngineDraftDirty(false)
@@ -401,6 +414,69 @@ export default function AIProviderSection() {
   function removeModel(name: string) {
     setDraftModels(draftModels.filter((m) => m !== name))
     setNotice(null)
+  }
+
+  function selectModel(name: string) {
+    setDraftModels(name ? [name] : [])
+    setModelInput('')
+    patchDraft({ model: name })
+  }
+
+  /**
+   * Load a temporary model catalog for the configured chat endpoint.
+   *
+   * The catalog is deliberately kept separate from draftModels: each fetched name is
+   * an option, not a new profile. Saving can therefore persist only the selected model.
+   */
+  async function handleFetchModels() {
+    if (!draft || busy) return
+    const urlError = checkApiUrl(draft.apiUrl)
+    if (urlError) {
+      setNotice({ tone: 'warning', scope: 'editor', message: urlError })
+      return
+    }
+    if (!draft.apiUrl.trim()) {
+      setNotice({
+        tone: 'warning',
+        scope: 'editor',
+        message: draftNeedsKey ? t('ai.err.apiUrlEmpty') : t('ai.err.ollamaUrlEmpty'),
+      })
+      return
+    }
+
+    setFetchingModels(true)
+    setAvailableModels([])
+    setNotice(null)
+    try {
+      const result = await invoke<FetchModelsResult>('list_remote_models', {
+        config: {
+          provider: draft.provider,
+          api_url: draft.apiUrl,
+          api_key: draft.apiKey,
+          model: '',
+        },
+      })
+      if (!result.ok) {
+        const friendly = describeProviderError(result.message)
+        setNotice({ tone: 'error', scope: 'editor', message: friendly.message, detail: friendly.detail })
+        return
+      }
+      const models = normalizeModelNames(result.models)
+      if (models.length === 0) {
+        setNotice({ tone: 'warning', scope: 'editor', message: t('ai.msg.noModels') })
+        return
+      }
+      setAvailableModels(models)
+      // Keep only the current selection; the catalog itself must never become profiles.
+      setDraftModels(selectedModel ? [selectedModel] : [])
+      setModelInput('')
+      setNotice({ tone: 'success', scope: 'editor', message: t('ai.msg.modelsLoaded', { count: models.length }) })
+    } catch (err) {
+      const friendly = describeProviderError(err)
+      setNotice({ tone: 'error', scope: 'editor', message: friendly.message, detail: friendly.detail })
+    } finally {
+      setFetchingModels(false)
+    }
   }
 
   function handleActivate(id: string) {
@@ -439,6 +515,7 @@ export default function AIProviderSection() {
     if (stillBoilerplate) {
       setDraftModels(to.defaultModels[0] ? [to.defaultModels[0]] : [])
     }
+    setAvailableModels([])
     setDraft({ ...draft, provider: value, apiUrl: url, apiKey, check: undefined })
     setNotice(null)
   }
@@ -446,6 +523,7 @@ export default function AIProviderSection() {
   /** 改了任何一格，上一次的检测结论就不再描述这份配置了，一并作废（别让卡上留着旧的「可用」） */
   function patchDraft(patch: Partial<AiProfile>) {
     if (!draft) return
+    if ('provider' in patch || 'apiUrl' in patch) setAvailableModels([])
     setDraft({ ...draft, ...patch, check: undefined })
     setNotice(null)
   }
@@ -980,7 +1058,7 @@ export default function AIProviderSection() {
         <Modal
           title={draftIsNew ? t('ai.editorNew') : t('ai.editorEdit')}
           onClose={closeEditor}
-          locked={saving}
+          locked={saving || fetchingModels}
           showCloseButton
           panelClassName="w-[520px]"
         >
@@ -1059,58 +1137,85 @@ export default function AIProviderSection() {
 
             <div>
               <label htmlFor="ai-model" className="mb-1 block text-sm text-muted-foreground">{t('ai.model')}</label>
-              {/* 原来这里是 <input list=...>：Chromium 会画一个下拉箭头，但它其实是个自由文本框，
-                  "又是下拉又要我填"两头都不像。现在拆开——输入框只管输入，推荐名做成可点的小按钮 */}
-              <div className="flex items-center gap-2">
-                <input
+              {availableModels.length > 0 ? (
+                <select
                   id="ai-model"
-                  value={modelInput}
-                  onChange={(e) => { setModelInput(e.target.value); setNotice(null) }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return
-                    e.preventDefault()
-                    addModel(modelInput)
-                  }}
-                  placeholder={draftProvider.defaultModels[0] ?? t('ai.modelPlaceholder')}
-                  className={cn(inputClass, 'flex-1')}
-                />
+                  value={selectedModel}
+                  onChange={(e) => selectModel(e.target.value)}
+                  className={selectClass}
+                >
+                  {!selectedModel && <option value="">{t('ai.selectModel')}</option>}
+                  {modelOptions.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="ai-model"
+                      value={modelInput}
+                      onChange={(e) => { setModelInput(e.target.value); setNotice(null) }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return
+                        e.preventDefault()
+                        addModel(modelInput)
+                      }}
+                      placeholder={draftProvider.defaultModels[0] ?? t('ai.modelPlaceholder')}
+                      className={cn(inputClass, 'flex-1')}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 shrink-0"
+                      onClick={() => addModel(modelInput)}
+                      disabled={!modelInput.trim()}
+                    >
+                      {t('ai.addAnother')}
+                    </Button>
+                  </div>
+
+                  {draftModels.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {draftModels.map((model) => (
+                        <span
+                          key={model}
+                          className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/50 py-0.5 pl-2 pr-1 text-xs"
+                        >
+                          {model}
+                          <button
+                            type="button"
+                            onClick={() => removeModel(model)}
+                            aria-label={t('ai.removeModel', { model })}
+                            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive-strong"
+                          >
+                            <X className="h-3 w-3" aria-hidden />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Fetch the model catalog once the endpoint is configured, so users do not
+                  have to copy model IDs from documentation. This only reads models and
+                  does not make a billable request. */}
+              <div className="mt-1.5">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-9 shrink-0"
-                  onClick={() => addModel(modelInput)}
-                  disabled={!modelInput.trim()}
+                  className="h-8"
+                  onClick={() => void handleFetchModels()}
+                  disabled={busy || fetchingModels}
                 >
-                  {t('ai.addAnother')}
+                  <RefreshCw className={cn('mr-1 h-3 w-3', fetchingModels && 'animate-spin')} aria-hidden />
+                  {fetchingModels ? t('ai.fetchingModels') : t('ai.fetchModels')}
                 </Button>
               </div>
 
-              {draftModels.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {draftModels.map((model) => (
-                    <span
-                      key={model}
-                      className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/50 py-0.5 pl-2 pr-1 text-xs"
-                    >
-                      {model}
-                      <button
-                        type="button"
-                        onClick={() => removeModel(model)}
-                        aria-label={t('ai.removeModel', { model })}
-                        className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive-strong"
-                      >
-                        <X className="h-3 w-3" aria-hidden />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* 这里原来还有一排「推荐模型」小按钮，去掉了：新建时该供应商的推荐模型
-                  已经预先躺在上面的清单里，输入框的 placeholder 也写着它，
-                  再摆一排按钮是把同一件事说第三遍。 */}
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                {t('ai.multiModelHint')}
+                {availableModels.length > 0 ? t('ai.modelSelectHint') : t('ai.multiModelHint')}
               </p>
             </div>
 

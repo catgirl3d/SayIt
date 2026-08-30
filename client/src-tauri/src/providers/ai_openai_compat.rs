@@ -64,8 +64,7 @@ pub async fn polish(
         });
     }
 
-    let base_url = normalize_base_url(&config.api_url);
-    let url = format!("{}/chat/completions", base_url);
+    let url = chat_completion_url(&config.api_url);
 
     let sys_prompt = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let user_content = wrap_user_text(text, text_context);
@@ -202,8 +201,7 @@ pub async fn polish(
 
 /// 测试 AI 连接 — 发送一个简短的聊天请求，验证地址、Key、模型是否都可用
 pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
-    let base_url = normalize_base_url(&config.api_url);
-    let url = format!("{}/chat/completions", base_url);
+    let url = chat_completion_url(&config.api_url);
 
     let system_prompt = "Reply with OK only. Do not output anything else.";
     let user_prompt = "Connection test";
@@ -304,6 +302,103 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
     }
 }
 
+/// Fetch the model catalog corresponding to the configured chat endpoint.
+///
+/// For example, `.../v1/chat/completions` maps to `.../v1/models`.
+/// The chat endpoint itself is never used for model discovery because it requires
+/// a model ID and accepts POST requests, while the catalog uses GET.
+pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<String>, String> {
+    let url = models_url(&config.api_url);
+
+    diag::log(
+        SCOPE,
+        "list_start",
+        &format!("provider={} url={}", config.provider, url),
+    );
+
+    let mut req = http()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .timeout(std::time::Duration::from_secs(30));
+    // Xiaomi MiMo requires the api-key header. Keep Bearer as well for compatibility
+    // with polish and test_connection.
+    if config.provider == "mimo" {
+        req = req.header("api-key", config.api_key.clone());
+    }
+
+    let start = Instant::now();
+
+    let resp = req.send().await.map_err(|e| {
+        diag::fail(
+            SCOPE,
+            "list_http_send",
+            format!("HTTP request failed: {}", describe_reqwest_error(&e)),
+        )
+    })?;
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let summary = diag::http_summary(status, resp.headers());
+        let body_text = resp.text().await.unwrap_or_default();
+        let message = format!(
+            "API returned error {} [{}]: {}",
+            status,
+            summary,
+            diag::truncate(&body_text, 200)
+        );
+        let failure = if status == reqwest::StatusCode::NOT_FOUND {
+            diag::fail_code(
+                SCOPE,
+                "list_http_status",
+                "provider_model_list_unavailable",
+                message,
+            )
+        } else {
+            diag::fail(SCOPE, "list_http_status", message)
+        };
+        return Err(failure);
+    }
+
+    let body_text = resp.text().await.map_err(|e| {
+        diag::fail(
+            SCOPE,
+            "list_read_body",
+            format!("Failed to read response: {}", e),
+        )
+    })?;
+    let data: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+        diag::fail(
+            SCOPE,
+            "list_parse_json",
+            format!(
+                "Failed to parse response: {} response excerpt: {}",
+                e,
+                diag::truncate(&body_text, 200)
+            ),
+        )
+    })?;
+
+    let models = extract_model_ids(&data);
+    diag::ok(SCOPE, elapsed_ms, models.len());
+    Ok(models)
+}
+
+/// Extract model IDs from an OpenAI-compatible GET /models response.
+/// Only string values in the standard `data[].id` field are accepted.
+fn extract_model_ids(data: &serde_json::Value) -> Vec<String> {
+    let Some(items) = data.get("data").and_then(|d| d.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
 /// Convert reqwest errors into concise diagnostic details.
 fn describe_reqwest_error(e: &reqwest::Error) -> String {
     let raw = format!("{}", e);
@@ -338,7 +433,46 @@ fn describe_reqwest_error(e: &reqwest::Error) -> String {
     raw
 }
 
-/// 规范化 base URL
+const CHAT_COMPLETIONS_SUFFIX: &str = "/chat/completions";
+
+/// Return the exact configured chat endpoint when it is already complete.
+/// Legacy base URLs still use the previous normalization fallback.
+fn chat_completion_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if reqwest::Url::parse(trimmed)
+        .ok()
+        .is_some_and(|parsed| is_chat_completion_endpoint(&parsed))
+    {
+        return trimmed.to_string();
+    }
+
+    format!("{}/chat/completions", normalize_base_url(trimmed))
+}
+
+/// Derive the model catalog URL from a complete chat endpoint.
+/// Only the terminal `/chat/completions` path is replaced; query and fragment
+/// components are retained by `Url::set_path`.
+fn models_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if let Ok(mut parsed) = reqwest::Url::parse(trimmed) {
+        let path = parsed.path().trim_end_matches('/');
+        if path.ends_with(CHAT_COMPLETIONS_SUFFIX) {
+            let base_path = &path[..path.len() - CHAT_COMPLETIONS_SUFFIX.len()];
+            parsed.set_path(&format!("{}/models", base_path));
+            return parsed.to_string();
+        }
+    }
+
+    format!("{}/models", normalize_base_url(trimmed))
+}
+
+fn is_chat_completion_endpoint(url: &reqwest::Url) -> bool {
+    url.path()
+        .trim_end_matches('/')
+        .ends_with(CHAT_COMPLETIONS_SUFFIX)
+}
+
+/// Normalize a legacy base URL.
 fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
     let has_version_suffix = trimmed
@@ -403,4 +537,82 @@ fn strip_thinking(text: &str) -> String {
     }
 
     cleaned.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A standard response returns every data[].id value in server order.
+    #[test]
+    fn extracts_model_ids_from_openai_list_response() {
+        let data: serde_json::Value = serde_json::json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-4o-mini", "object": "model", "created": 1700000000 },
+                { "id": "gpt-4o", "object": "model", "created": 1700000001 }
+            ]
+        });
+        assert_eq!(
+            extract_model_ids(&data),
+            vec!["gpt-4o-mini".to_string(), "gpt-4o".to_string()]
+        );
+    }
+
+    /// A missing data array (for example, an HTML gateway page, an error body,
+    /// or a non-OpenAI-compatible endpoint) returns an empty catalog.
+    #[test]
+    fn missing_data_yields_empty_list() {
+        let data: serde_json::Value = serde_json::json!({ "error": { "message": "not found" } });
+        assert!(extract_model_ids(&data).is_empty());
+    }
+
+    /// Non-string and empty IDs in data are discarded.
+    #[test]
+    fn skips_non_string_or_empty_ids() {
+        let data: serde_json::Value = serde_json::json!({
+            "data": [
+                { "id": "ok-model" },
+                { "id": 42 },
+                { "id": "" },
+                { "id": "  " },
+                { "name": "no-id-field" }
+            ]
+        });
+        assert_eq!(extract_model_ids(&data), vec!["ok-model".to_string()]);
+    }
+
+    #[test]
+    fn preserves_a_complete_chat_endpoint() {
+        let endpoint = " https://opencode.ai/zen/v1/chat/completions ";
+        assert_eq!(chat_completion_url(endpoint), endpoint.trim());
+    }
+
+    #[test]
+    fn derives_models_url_from_a_complete_chat_endpoint() {
+        assert_eq!(
+            models_url("https://opencode.ai/zen/v1/chat/completions"),
+            "https://opencode.ai/zen/v1/models"
+        );
+        assert_eq!(
+            models_url("https://opencode.ai/zen/v1/chat/completions/"),
+            "https://opencode.ai/zen/v1/models"
+        );
+        assert_eq!(
+            models_url("https://opencode.ai/zen/v1/chat/completions?region=global"),
+            "https://opencode.ai/zen/v1/models?region=global"
+        );
+    }
+
+    #[test]
+    fn retains_legacy_base_url_support() {
+        assert_eq!(
+            chat_completion_url("https://api.openai.com"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            models_url("https://api.openai.com"),
+            "https://api.openai.com/v1/models"
+        );
+    }
 }
