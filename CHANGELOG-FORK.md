@@ -16,6 +16,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 ### AI Prompts and Localization
 
 - Added English variants for built-in cleanup, translation, conversational, context-editing, provider, and application prompts.
+- Added Ukrainian interface localization with manual switching and system-language auto-detection.
 - Made English the default built-in prompt language when no saved choice or legacy Chinese override exists, while preserving existing prompt-language choices and legacy Chinese overrides.
 - Moved shared prompt and rule definitions into reusable constants.
 

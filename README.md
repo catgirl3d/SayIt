@@ -12,7 +12,7 @@ Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcr
 [![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/catgirl3d/SayIt/releases/latest)
 [![Latest release](https://img.shields.io/github/v/release/catgirl3d/SayIt?label=release)](https://github.com/catgirl3d/SayIt/releases/latest)
 
-**[Download for Windows](https://github.com/catgirl3d/SayIt/releases/latest)** · **[Try the web demo](https://sayitapp.site)** · **[简体中文](README.zh-CN.md)**
+**[Download for Windows](https://github.com/catgirl3d/SayIt/releases/latest)**
 
 </div>
 
@@ -40,7 +40,7 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 - **Editable AI cleanup** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
 - **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped.
 - **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, connect to the public trial server, or host your own backend.
-- **English and Chinese interface** — the UI follows your system language and can be switched at any time.
+- **English, Chinese, and Ukrainian interface** — the UI follows your system language and can be switched at any time.
 - **Hotwords and per-app rules** — improve names and technical terms, then change cleanup behavior automatically for different apps.
 - **Overlay feedback** — a small waveform overlay shows recording state and elapsed time, with optional live captions while you speak.
 - **Transparent data flow** — the app shows which mode is active and where audio and text are processed.
@@ -167,20 +167,3 @@ SayIt/
 ├── docs/         # User guides and images
 └── dev-docs/     # Internal development notes
 ```
-
-## Contributing
-
-Bug reports, focused pull requests, and feature discussions are welcome. Please open a [GitHub issue](https://github.com/catgirl3d/SayIt/issues) or read the [contribution guide](CONTRIBUTING.md) before submitting a larger change.
-
-## Contributors
-
-<!-- ALL-CONTRIBUTORS-LIST:START -->
-| [<img src="https://github.com/crosswk.png" width="60"><br><sub>crosswk</sub>](https://github.com/crosswk) | [<img src="https://avatars.githubusercontent.com/u/76263028" width="60"><br><sub>Claude (Anthropic)</sub>](https://claude.ai) |
-|:---:|:---:|
-<!-- ALL-CONTRIBUTORS-LIST:END -->
-
-## License
-
-[GNU Affero General Public License v3.0](./LICENSE)
-
-You may use, modify, and self-host SayIt. If you distribute a modified version or run it as a network service, the corresponding source must remain available under the same license.

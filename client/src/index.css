@@ -107,6 +107,10 @@
   html[lang="en"] body {
     font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Microsoft YaHei", sans-serif;
   }
+
+  html[lang="uk"] body {
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  }
 }
 
 /* 自定义滚动条样式 */

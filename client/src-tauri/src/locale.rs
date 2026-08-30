@@ -17,6 +17,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     ZhCn,
+    Uk,
     En,
 }
 
@@ -25,6 +26,7 @@ impl Lang {
     pub fn tag(self) -> &'static str {
         match self {
             Lang::ZhCn => "zh-CN",
+            Lang::Uk => "uk",
             Lang::En => "en",
         }
     }
@@ -32,12 +34,27 @@ impl Lang {
 
 /// Windows 主语言 ID（`PRIMARYLANGID`）→ 界面语言。
 ///
-/// 任何中文变体（简/繁/港澳台）都判为简体：他们现在看到的就是简体界面，
-/// 推到英文属于倒退。其余一律英文。
+/// Chinese variants (simplified, traditional, Hong Kong, Macao, or Taiwan)
+/// map to simplified Chinese because that is the existing interface language.
+/// Ukrainian maps to Ukrainian; all other languages fall back to English.
 fn lang_from_primary_id(primary_id: u16) -> Lang {
     const LANG_CHINESE: u16 = 0x04;
-    if primary_id == LANG_CHINESE {
+    const LANG_UKRAINIAN: u16 = 0x22;
+
+    match primary_id {
+        LANG_CHINESE => Lang::ZhCn,
+        LANG_UKRAINIAN => Lang::Uk,
+        _ => Lang::En,
+    }
+}
+
+#[cfg(not(windows))]
+fn lang_from_locale_value(value: &str) -> Lang {
+    let value = value.to_ascii_lowercase();
+    if value.starts_with("zh") {
         Lang::ZhCn
+    } else if value.starts_with("uk") {
+        Lang::Uk
     } else {
         Lang::En
     }
@@ -58,10 +75,10 @@ pub fn system_ui_lang() -> Lang {
 #[cfg(not(windows))]
 pub fn system_ui_lang() -> Lang {
     // 非 Windows 目前只有 cargo test 会走到（应用本身是 Windows 独占）。
-    match std::env::var("LANG") {
-        Ok(value) if value.to_ascii_lowercase().starts_with("zh") => Lang::ZhCn,
-        _ => Lang::En,
-    }
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .map_or(Lang::En, |value| lang_from_locale_value(&value))
 }
 
 #[cfg(test)]
@@ -74,6 +91,11 @@ mod tests {
     }
 
     #[test]
+    fn ukrainian_primary_id_maps_to_ukrainian() {
+        assert_eq!(lang_from_primary_id(0x22), Lang::Uk);
+    }
+
+    #[test]
     fn other_primary_ids_map_to_english() {
         // 0x09 = 英语，0x11 = 日语，0x12 = 韩语，0x07 = 德语
         for id in [0x09, 0x11, 0x12, 0x07, 0x00] {
@@ -81,9 +103,18 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn locale_values_map_supported_languages() {
+        assert_eq!(lang_from_locale_value("uk_UA.UTF-8"), Lang::Uk);
+        assert_eq!(lang_from_locale_value("zh_CN.UTF-8"), Lang::ZhCn);
+        assert_eq!(lang_from_locale_value("en_US.UTF-8"), Lang::En);
+    }
+
     #[test]
     fn tags_match_frontend_locale_values() {
         assert_eq!(Lang::ZhCn.tag(), "zh-CN");
+        assert_eq!(Lang::Uk.tag(), "uk");
         assert_eq!(Lang::En.tag(), "en");
     }
 }

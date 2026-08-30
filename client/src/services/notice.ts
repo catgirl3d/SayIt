@@ -75,7 +75,7 @@ function isValidNotice(v: unknown): v is RemoteNoticePayload {
     && typeof translations === 'object'
     && !Array.isArray(translations)
     && Object.entries(translations).every(([locale, value]) => (
-      (locale === 'zh-CN' || locale === 'en') && isTranslation(value)
+      (locale === 'zh-CN' || locale === 'en' || locale === 'uk') && isTranslation(value)
     ))
   )
   return typeof n.id === 'string' && n.id.length > 0

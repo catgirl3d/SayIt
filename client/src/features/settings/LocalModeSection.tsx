@@ -378,7 +378,7 @@ export default function LocalModeSection() {
   const [downloadedModels, setDownloadedModels] = useState<LocalModelInfo[]>([])
   const [selectedModelId, setSelectedModelId] = useState('')
   const [downloadSource, setDownloadSource] = useState(
-    () => getLocale() === 'en' ? 'HuggingFace' : 'HuggingFace Mirror',
+    () => getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace',
   )
   const [preloadingModelId, setPreloadingModelId] = useState('')
   const [downloading, setDownloading] = useState<Record<string, DownloadProgress>>({})
@@ -443,7 +443,7 @@ export default function LocalModeSection() {
 
     const selected = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
     setSelectedModelId(selected)
-    const defaultSource = getLocale() === 'en' ? 'HuggingFace' : 'HuggingFace Mirror'
+    const defaultSource = getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace'
     setDownloadSource(await getSetting('localAsr.downloadSource', defaultSource) as string)
 
     // 当前选中的模型在折叠区时自动展开，避免"当前模型在列表里找不到"

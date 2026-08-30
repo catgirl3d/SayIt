@@ -88,7 +88,7 @@ export const AI_PROVIDERS: AiProvider[] = [
 
 /** 新建服务时的地区默认；只影响还没选择过供应商的场景。 */
 export function preferredAiProviderValue(): string {
-  return getLocale() === 'en' ? 'openai_compat' : 'deepseek'
+  return getLocale() === 'zh-CN' ? 'deepseek' : 'openai_compat'
 }
 
 /** 英文界面优先展示可直接接海外端点的通用入口，原数组顺序保持不变供迁移逻辑使用。 */

@@ -11,9 +11,10 @@
  * 三者都不受这里影响。改这个文件时别顺手把它们串在一起。
  */
 import en from './locales/en.json'
+import uk from './locales/uk.json'
 import zhCN from './locales/zh-CN.json'
 
-export const LOCALES = ['zh-CN', 'en'] as const
+export const LOCALES = ['zh-CN', 'en', 'uk'] as const
 export type Locale = (typeof LOCALES)[number]
 
 /** 语言偏好：'auto' = 跟随系统，解析后一定落在某个具体 Locale 上。 */
@@ -29,6 +30,7 @@ export type TranslationKey = keyof typeof zhCN
 const TABLES: Record<Locale, Record<TranslationKey, string>> = {
   'zh-CN': zhCN,
   en,
+  uk,
 }
 
 const DEFAULT_LOCALE: Locale = 'zh-CN'
@@ -44,12 +46,14 @@ export function isLocale(value: unknown): value is Locale {
  * 把系统/浏览器给的 locale 串解析成受支持的界面语言。
  *
  * 任何 `zh*`（含 zh-TW / zh-HK）都落到 zh-CN：他们现在看到的就是简体界面，
- * 把他们推到英文是**倒退**。除此之外一律落到英文。
+ * 把他们推到英文是**倒退**。乌克兰语接受语言代码本身以及常见的乌克兰区域变体。
+ * 除此之外一律落到英文。
  */
 export function resolveLocale(raw: string | null | undefined): Locale {
   const tag = (raw || '').trim().toLowerCase()
   if (!tag) return 'en'
   if (tag.startsWith('zh')) return 'zh-CN'
+  if (tag === 'uk' || tag === 'uk-ua' || tag === 'uk_ua') return 'uk'
   return 'en'
 }
 
