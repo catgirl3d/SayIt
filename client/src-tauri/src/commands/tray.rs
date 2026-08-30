@@ -1,7 +1,8 @@
-//! SayIt 自定义托盘菜单窗口。
+//! SayIt custom tray menu window.
 //!
-//! Windows 原生菜单有系统级最小宽度，缩短文案也不会继续变窄；这里改用一个预创建、
-//! 隐藏的轻量 WebView 窗口。右键时只定位并显示，避免每次创建 WebView 的延迟。
+//! Windows native menus have a system-level minimum width and will not shrink even with shorter labels.
+//! We use a pre-created, hidden lightweight WebView window instead. On right-click, we only position
+//! and display it, avoiding the latency of creating a WebView on each invocation.
 
 use crate::storage::Storage;
 use serde_json::json;
@@ -11,7 +12,7 @@ use tauri::{
 };
 
 pub const TRAY_MENU_LABEL: &str = "tray-menu";
-const TRAY_MENU_WIDTH: f64 = 140.0;
+const TRAY_MENU_WIDTH: f64 = 200.0;
 const TRAY_MENU_HEIGHT: f64 = 112.0;
 
 pub fn create_tray_menu_window(app: &AppHandle) -> tauri::Result<()> {
@@ -36,7 +37,7 @@ pub fn create_tray_menu_window(app: &AppHandle) -> tauri::Result<()> {
     .visible(false)
     .build()?;
 
-    // 原生菜单点击外部会自动收起；自定义窗口用失焦还原同样的交互。
+    // Native menus automatically collapse on outside click; replicate this behavior on window blur.
     let window_to_hide = window.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Focused(false)) {
@@ -47,7 +48,7 @@ pub fn create_tray_menu_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 在托盘图标旁边显示菜单。`position` 是 Tauri 给出的全局物理坐标。
+/// Display menu adjacent to tray icon. `position` is the global physical coordinates from Tauri.
 pub fn show_tray_menu(app: &AppHandle, position: PhysicalPosition<f64>) {
     let Some(window) = app.get_webview_window(TRAY_MENU_LABEL) else {
         log::warn!("[tray-menu] window is missing");
@@ -90,8 +91,9 @@ pub fn show_tray_menu(app: &AppHandle, position: PhysicalPosition<f64>) {
     let monitor_width = right - left;
     let monitor_height = bottom - top;
 
-    // 兼容任务栏停靠在上、下、左、右。常见的底部任务栏让菜单右边缘稍微越过
-    // 光标中心，与 Windows 原生菜单从托盘图标向左展开的视觉锚点一致。
+    // Compatible with taskbars docked at top, bottom, left, or right. For the common bottom taskbar,
+    // the menu's right edge extends slightly past the cursor center, matching the visual anchor
+    // of native Windows menus expanding leftward from the tray icon.
     let (mut x, mut y) = if position.y >= top + monitor_height * 0.75 {
         (position.x - width + 22.0 * scale, position.y - height - gap)
     } else if position.y <= top + monitor_height * 0.25 {
@@ -141,7 +143,7 @@ fn show_main(app: &AppHandle) {
 
 #[tauri::command]
 pub fn set_tray_ai_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
-    // 主窗口里的开关已经负责落库；这里只把最新状态推给独立的托盘菜单 WebView。
+    // The main window toggle handles persistence; here we only push the latest state to the independent tray WebView.
     let _ = app.emit_to(
         TRAY_MENU_LABEL,
         "tray-ai-state",
@@ -165,7 +167,7 @@ pub fn toggle_tray_ai_enabled(
         .set("aiEnabled", &json!(next))
         .map_err(|error| error.to_string())?;
 
-    // 主窗口 store 会同步内存与录音器缓存；托盘窗口也立即刷新自己的图标。
+    // The main store synchronizes in-memory and recorder cache; the tray window also immediately refreshes its own UI.
     let _ = app.emit("ai-cleanup-changed", json!({ "enabled": next }));
     let _ = app.emit_to(
         TRAY_MENU_LABEL,
