@@ -64,7 +64,7 @@ describe('Built-in prompt language', () => {
     expect(uk.find((preset) => preset.id === 'zh2en')?.systemPrompt).toContain('англійський текст')
   })
 
-  it('持久化选择后按对应语言加载', async () => {
+  it('loads presets according to persisted language selection', async () => {
     await setBuiltinPromptLanguage('uk')
     const presets = await getPromptPresets()
 
@@ -99,7 +99,7 @@ describe('Built-in prompt language', () => {
     expect((await getPromptPresets('uk'))[0].systemPrompt).toBe('Custom Ukrainian prompt')
   })
 
-  it('旧版无语言字段的 override 只归入中文', async () => {
+  it('migrates legacy overrides without language field to Chinese', async () => {
     const legacyOverride: PromptPreset = {
       id: 'intent',
       name: '旧名称',
@@ -116,7 +116,7 @@ describe('Built-in prompt language', () => {
       .toBe(getBuiltinPromptPresets('uk')[0].systemPrompt)
   })
 
-  it('保存基线与当前内置定义不同时提示有更新', async () => {
+  it('indicates update available when baseline differs from current definition', async () => {
     bridgeState.values.set('promptPresets', [{
       id: 'intent',
       name: 'Intent cleanup',
@@ -130,7 +130,7 @@ describe('Built-in prompt language', () => {
     expect(preset.builtinPromptUpdateAvailable).toBe(true)
   })
 
-  it('读取时清理与当前官方内容完全相同的旧快照', async () => {
+  it('cleans up legacy snapshots identical to official definitions on read', async () => {
     const current = getBuiltinPromptPresets('zh-CN')[0]
     bridgeState.values.set('promptPresets', [{
       id: current.id,
