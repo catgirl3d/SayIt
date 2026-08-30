@@ -415,7 +415,7 @@ impl WindowState {
             .and_then(Value::as_str)
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
-        let next_layout = if state == Some("fallback") {
+        let candidate_layout = if state == Some("fallback") {
             OverlayLayout::Fallback
         } else if state == Some("listening") && streaming_on && mic_hint_on {
             OverlayLayout::StreamingWithMicHint
@@ -427,7 +427,28 @@ impl WindowState {
         } else {
             OverlayLayout::Base
         };
-        *self.overlay_layout.lock().unwrap() = next_layout;
+
+        let mut current_layout = self.overlay_layout.lock().unwrap();
+        let stable_visible_phase = matches!(
+            state,
+            Some("listening") | Some("thinking") | Some("toast") | Some("error")
+        );
+        let keep_expanded_bounds = stable_visible_phase
+            && matches!(
+                (&*current_layout, &candidate_layout),
+                (OverlayLayout::BaseWithMicHint, OverlayLayout::Base)
+                    | (OverlayLayout::StreamingWithMicHint, OverlayLayout::Streaming)
+                    | (OverlayLayout::StreamingWithMicHint, OverlayLayout::BaseWithMicHint)
+                    | (OverlayLayout::StreamingWithMicHint, OverlayLayout::Base)
+            );
+
+        // 提示文字 3 秒后会隐藏，无语音/错误也会把内容换成短 toast，但只要悬浮窗
+        // 仍可见就不能顺带收缩原生窗口：窗口按底边锚定，收缩需要重新定位，WebView2
+        // 会把两次几何更新之间的中间帧显示成下跳。保留透明上方空间，直到 hide 或
+        // 下一次 waiting 明确开始新一轮显示时再恢复基础尺寸。
+        if !keep_expanded_bounds {
+            *current_layout = candidate_layout;
+        }
     }
 
     fn latest_state_name(&self) -> String {

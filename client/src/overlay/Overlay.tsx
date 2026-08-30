@@ -7,6 +7,7 @@ import { addRuntimeEvent } from '../services/debugLog'
 import { formatRecordingTimer } from '../services/recorder/types'
 
 type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'error' | 'toast'
+type RecordingVisualPhase = 'preparing' | 'listening'
 type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
 
 interface OverlayPayload {
@@ -80,11 +81,13 @@ function getThinkingColor(theme: OverlayWaveTheme): string {
 export default function Overlay() {
   const t = useT()
   const [state, setState] = useState<OverlayState>('waiting')
+  const [recordingVisualPhase, setRecordingVisualPhase] = useState<RecordingVisualPhase>('preparing')
   const [bars, setBars] = useState<number[]>(IDLE_BARS)
   const [elapsedSec, setElapsedSec] = useState(0)
   const [theme, setTheme] = useState<OverlayWaveTheme>('black-blue')
   const [showDuration, setShowDuration] = useState(true)
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
+  const [presentationId, setPresentationId] = useState(0)
   const [fallbackText, setFallbackText] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [toastText, setToastText] = useState('')
@@ -99,6 +102,8 @@ export default function Overlay() {
   const [micSourceLabel, setMicSourceLabel] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const preparingPaintFrameRef = useRef<number | null>(null)
+  const pendingListeningVisualRef = useRef(false)
   const elapsedSecRef = useRef(0)
 
   // 根据录音时长计算预估处理时间（秒）
@@ -117,8 +122,32 @@ export default function Overlay() {
     let disposed = false
     let removeOverlayListener: (() => void) | null = null
 
+    const cancelPreparingPaint = () => {
+      if (preparingPaintFrameRef.current !== null) {
+        cancelAnimationFrame(preparingPaintFrameRef.current)
+        preparingPaintFrameRef.current = null
+      }
+    }
+
+    const beginPreparingVisual = () => {
+      cancelPreparingPaint()
+      pendingListeningVisualRef.current = false
+      setRecordingVisualPhase('preparing')
+      // listening 可能在 WebView 的首帧之前就到达。跨两个 rAF 才放行视觉切换，
+      // 保证准备胶囊至少真正绘制一帧；只延后视觉形变，不延后录音采集。
+      preparingPaintFrameRef.current = requestAnimationFrame(() => {
+        preparingPaintFrameRef.current = requestAnimationFrame(() => {
+          preparingPaintFrameRef.current = null
+          if (disposed || !pendingListeningVisualRef.current) return
+          pendingListeningVisualRef.current = false
+          setRecordingVisualPhase('listening')
+        })
+      })
+    }
+
     const handleOverlayState = (data: unknown) => {
       const payload = data as OverlayPayload
+      if (typeof payload._overlayShowId === 'number') setPresentationId(payload._overlayShowId)
       // 语言先落地再渲染本帧：悬浮窗没有自己的初始化时机，语言只能随 payload 来。
       // setLocale 对同值是空操作，所以每帧都调也不会造成额外重渲染。
       if (isLocale(payload.locale)) setLocale(payload.locale)
@@ -127,6 +156,18 @@ export default function Overlay() {
         : elapsedSecRef.current
 
       if (payload.state) {
+        if (payload.state === 'waiting') {
+          beginPreparingVisual()
+        } else if (payload.state === 'listening') {
+          if (preparingPaintFrameRef.current !== null) {
+            pendingListeningVisualRef.current = true
+          } else {
+            setRecordingVisualPhase('listening')
+          }
+        } else {
+          cancelPreparingPaint()
+          pendingListeningVisualRef.current = false
+        }
         setState(payload.state)
         if (payload.state !== 'listening') {
           setBars((prev) => Array(prev.length).fill(3))
@@ -226,6 +267,8 @@ export default function Overlay() {
 
     return () => {
       disposed = true
+      cancelPreparingPaint()
+      pendingListeningVisualRef.current = false
       removeOverlayListener?.()
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current)
@@ -234,12 +277,14 @@ export default function Overlay() {
     }
   }, [])
 
-  const showStreamingBubble = state === 'listening' && (streamingOn || streamingText.trim().length > 0)
+  const recordingPhase = state === 'waiting' || state === 'listening'
+  const visuallyListening = state === 'listening' && recordingVisualPhase === 'listening'
+  const showStreamingBubble = visuallyListening && (streamingOn || streamingText.trim().length > 0)
   const hasStreamingText = streamingText.trim().length > 0
   const showMicSourceHint = Boolean(
     micSourceMode
     && micSourceLabel.trim()
-    && (state === 'listening' || state === 'thinking'),
+    && (visuallyListening || state === 'thinking'),
   )
 
   const { text: timerText, countdown: inCountdown, remainingSec } = useMemo(
@@ -253,10 +298,17 @@ export default function Overlay() {
   //   · 同时有警告文字 + 倒计时 → 只画一半（最少 4 根，太少就不像波形了）
   //   · 只有其中一种 → 画三分之二
   // 这样波形始终是完整的整根条，不会被裁成半截。
+  const normalizedBars = barCount === bars.length
+    ? bars
+    : Array.from({ length: barCount }, (_, index) => bars[index] ?? 3)
   const barBudget = warning && inCountdown
-    ? Math.max(4, Math.floor(bars.length / 2))
-    : (warning || inCountdown ? Math.max(6, Math.floor((bars.length * 2) / 3)) : bars.length)
-  const visibleBars = barBudget >= bars.length ? bars : bars.slice(0, barBudget)
+    ? Math.max(4, Math.floor(normalizedBars.length / 2))
+    : (warning || inCountdown
+      ? Math.max(6, Math.floor((normalizedBars.length * 2) / 3))
+      : normalizedBars.length)
+  const visibleBars = barBudget >= normalizedBars.length
+    ? normalizedBars
+    : normalizedBars.slice(0, barBudget)
 
   const timerColor = inCountdown
     ? (urgent ? '#fb923c' : '#fbbf24')
@@ -342,7 +394,10 @@ export default function Overlay() {
           </div>
         </div>
       ) : (
-        <div data-overlay-content className="flex flex-col items-center gap-2">
+        <div
+          data-overlay-content
+          className="flex flex-col items-center gap-2"
+        >
           {showMicSourceHint && (
             <div
               className="pointer-events-none flex min-w-0 max-w-[calc(100vw-16px)] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full border px-3 py-1.5 font-normal"
@@ -419,117 +474,128 @@ export default function Overlay() {
               传到波形上（bars 的 min-w-0），胶囊本身始终保持完整的胶囊形状。
               用 100vw 而不是 max-w-full：父层宽度也是按内容算的，撑不出约束。 */}
           <div
-            className="flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full border px-4 py-2"
-            style={{
-              background: 'var(--overlay-bg)',
-              color: 'var(--overlay-text)',
-              borderColor: 'var(--overlay-border)',
-            }}
+            className={`relative flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}`}
+            style={{ minHeight: '38px' }}
           >
-            {state === 'waiting' && (
-              <div className="flex items-center gap-[3px]" style={{ height: '20px' }}>
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="h-[3px] w-[3px] rounded-full"
-                    style={{
-                      backgroundColor: 'var(--overlay-text-dim)',
-                      animation: `dot-pulse 1s ease-in-out ${i * 0.15}s infinite`,
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {state === 'listening' && (
-              warning && warningTone === 'error' ? (
-                // 静音高警：波形此时是平的、无意义，直接在胶囊里居中显示红字，
-                // 既更醒目、也避免波形+长文字撑破固定宽度把胶囊圆角裁掉。
-                <div
-                  className="flex items-center whitespace-nowrap px-1 text-xs font-semibold text-red-500 animate-pulse"
-                  style={{ height: '20px' }}
-                >
-                  {warning}
-                </div>
-              ) : (
-                <>
-                  {/* 有文字要占位时**少画几根**，而不是让 overflow 把波形裁一半 —— 裁出来的
-                      半根条子看着像坏了。少画是"看起来就是这么设计的"。
-                      min-w-0 仍然留着兜底：万一文字特别长，宁可裁波形也不折行。 */}
-                  <div className="flex min-w-0 items-center gap-[2px] overflow-hidden" style={{ height: '20px' }}>
-                    {visibleBars.map((height, index) => {
-                      const color = getListeningBarColor(index, bars.length, theme)
-                      return (
-                        <div
-                          key={index}
-                          className="w-[2.5px] rounded-full"
-                          style={{
-                            backgroundColor: color,
-                            boxShadow: 'none',
-                            height: `${Math.min(18, Math.max(3, height))}px`,
-                            opacity: 0.7 + (Math.min(18, height) / 18) * 0.3,
-                            transition: 'height 50ms ease-out, opacity 50ms ease-out',
-                          }}
-                        />
-                      )
-                    })}
-                  </div>
-                  {/* 计时**不再**被警告顶掉：警告是一闪而过的提示，计时是持续状态。
-                      以前条件里带 !warning，导致 4 分钟提示一出现，剩下一整分钟都看不到秒数。 */}
-                  {showDuration && (
+            <span
+              key={presentationId}
+              aria-hidden
+              className="overlay-pill-surface overlay-pill-surface-enter absolute inset-0 rounded-full border"
+              style={{
+                background: 'var(--overlay-bg)',
+                borderColor: 'var(--overlay-border)',
+              }}
+            />
+            {recordingPhase ? (
+              <div
+                className="overlay-recording-stage relative z-[1] min-w-0"
+                style={{ color: 'var(--overlay-text)' }}
+              >
+                <div className="overlay-preparing-indicator" aria-hidden>
+                  {[0, 1, 2].map((index) => (
                     <span
-                      className={`ml-1.5 shrink-0 whitespace-nowrap text-right font-mono tabular-nums text-xs${inCountdown ? ' font-semibold' : ''}${urgent ? ' animate-pulse' : ''}`}
-                      style={{ color: timerColor }}
-                    >
-                      {timerText}
-                    </span>
-                  )}
-                  {warning && (
-                    <span className="ml-2 shrink-0 whitespace-nowrap text-xs text-amber-400 animate-pulse">
-                      {warning}
-                    </span>
-                  )}
-                </>
-              )
-            )}
-
-            {state === 'thinking' && (
-              <div className="flex items-center gap-2">
-                <div className="relative h-1 w-12 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="absolute left-0 top-0 h-full rounded-full"
-                    style={{
-                      backgroundColor: thinkingColor,
-                      width: '100%',
-                      transformOrigin: 'left',
-                      animation: `progress-fill ${thinkingDuration}s cubic-bezier(0.4, 0, 0.2, 1) forwards`,
-                    }}
-                  />
+                      key={index}
+                      className="overlay-preparing-dot rounded-full"
+                      style={{ animationDelay: `${index * 110}ms` }}
+                    />
+                  ))}
                 </div>
-                <span className="text-xs whitespace-nowrap" style={{ color: thinkingColor }}>{t('overlay.processing')}</span>
-                {/* 这里**故意**不写「Esc 取消」。Esc 取消的能力照常生效（原生钩子 +
-                    escape-action，与本组件无关），只是这行提示不该出现在悬浮窗上：
-                    悬浮窗是贴在光标附近、每次口述都会闪一下的东西，越安静越好，而
-                    「按 Esc 能取消」是知道一次就一直知道的事实，不需要每次复述。
-                    这件事已在 设置 → 键盘快捷键 的说明里静态交代（见 GeneralSettingsPage）。
-                    要加回来之前先想清楚：它每次处理都出现，收益只有第一次。 */}
+                <div
+                  className="overlay-recording-content flex min-w-0 items-center"
+                  aria-hidden={recordingVisualPhase !== 'listening'}
+                >
+                  {warning && warningTone === 'error' ? (
+                    // 静音高警：波形此时是平的、无意义，直接在胶囊里居中显示红字，
+                    // 既更醒目、也避免波形+长文字撑破固定宽度把胶囊圆角裁掉。
+                    <div
+                      className="flex items-center whitespace-nowrap px-1 text-xs font-semibold text-red-500 animate-pulse"
+                      style={{ height: '20px' }}
+                    >
+                      {warning}
+                    </div>
+                  ) : (
+                    <>
+                      {/* 有文字要占位时**少画几根**，而不是让 overflow 把波形裁一半 —— 裁出来的
+                          半根条子看着像坏了。少画是"看起来就是这么设计的"。
+                          min-w-0 仍然留着兜底：万一文字特别长，宁可裁波形也不折行。 */}
+                      <div className="flex min-w-0 items-center gap-[2px] overflow-hidden" style={{ height: '20px' }}>
+                        {visibleBars.map((height, index) => {
+                          const color = getListeningBarColor(index, normalizedBars.length, theme)
+                          return (
+                            <div
+                              key={index}
+                              className="w-[2.5px] rounded-full"
+                              style={{
+                                backgroundColor: color,
+                                boxShadow: 'none',
+                                height: `${Math.min(18, Math.max(3, height))}px`,
+                                opacity: 0.7 + (Math.min(18, height) / 18) * 0.3,
+                                transition: 'height 50ms ease-out, opacity 50ms ease-out',
+                              }}
+                            />
+                          )
+                        })}
+                      </div>
+                      {/* 计时**不再**被警告顶掉：警告是一闪而过的提示，计时是持续状态。
+                          以前条件里带 !warning，导致 4 分钟提示一出现，剩下一整分钟都看不到秒数。 */}
+                      {showDuration && (
+                        <span
+                          className={`ml-1.5 shrink-0 whitespace-nowrap text-right font-mono tabular-nums text-xs${inCountdown ? ' font-semibold' : ''}${urgent ? ' animate-pulse' : ''}`}
+                          style={{ color: timerColor }}
+                        >
+                          {timerText}
+                        </span>
+                      )}
+                      {warning && (
+                        <span className="ml-2 shrink-0 whitespace-nowrap text-xs text-amber-400 animate-pulse">
+                          {warning}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
-            )}
+            ) : (
+              <div className="relative z-[1] flex min-w-0 items-center" style={{ color: 'var(--overlay-text)' }}>
+                {state === 'thinking' && (
+                  <div className="flex items-center gap-2">
+                    <div className="relative h-1 w-12 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="absolute left-0 top-0 h-full rounded-full"
+                        style={{
+                          backgroundColor: thinkingColor,
+                          width: '100%',
+                          transformOrigin: 'left',
+                          animation: `progress-fill ${thinkingDuration}s cubic-bezier(0.4, 0, 0.2, 1) forwards`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs whitespace-nowrap" style={{ color: thinkingColor }}>{t('overlay.processing')}</span>
+                    {/* 这里**故意**不写「Esc 取消」。Esc 取消的能力照常生效（原生钩子 +
+                        escape-action，与本组件无关），只是这行提示不该出现在悬浮窗上：
+                        悬浮窗是贴在光标附近、每次口述都会闪一下的东西，越安静越好，而
+                        「按 Esc 能取消」是知道一次就一直知道的事实，不需要每次复述。
+                        这件事已在 设置 → 键盘快捷键 的说明里静态交代（见 GeneralSettingsPage）。
+                        要加回来之前先想清楚：它每次处理都出现，收益只有第一次。 */}
+                  </div>
+                )}
 
-            {state === 'error' && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-red-400">{errorMessage || t('overlay.genericError')}</span>
-              </div>
-            )}
+                {state === 'error' && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-red-400">{errorMessage || t('overlay.genericError')}</span>
+                  </div>
+                )}
 
-            {state === 'toast' && (
-              <div className="flex items-center gap-2">
-                {toastTone === 'warn' ? (
-                  <span className="whitespace-nowrap text-xs text-amber-400">{toastText}</span>
-                ) : (
-                  <span className="whitespace-nowrap text-xs" style={{ color: 'var(--overlay-text)' }}>
-                    {toastText}
-                  </span>
+                {state === 'toast' && (
+                  <div className="flex items-center gap-2">
+                    {toastTone === 'warn' ? (
+                      <span className="whitespace-nowrap text-xs text-amber-400">{toastText}</span>
+                    ) : (
+                      <span className="whitespace-nowrap text-xs" style={{ color: 'var(--overlay-text)' }}>
+                        {toastText}
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             )}

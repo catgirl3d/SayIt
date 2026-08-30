@@ -529,7 +529,8 @@ export class RecorderOrchestrator {
   }
 
   /** 录音开始时实时判定是否激活流式字幕气泡（读最新的开关/供应商/WorkspaceId，避免缓存过期）。
-   *  仅 doubao_v2 与 qwen_realtime（且 qwen 需配 WorkspaceId）才激活；qwen3-asr-flash 等不激活。 */
+   *  判据统一交给 isStreamingDisplayReady：doubao_v2 与 qwen_audio_stream 直接可用，
+   *  qwen_realtime 还要配 WorkspaceId；qwen3-asr-flash 等非流式模型不激活。 */
   private async applyStreamingActive(): Promise<void> {
     try {
       const [streamOn, provider, workspaceId] = await Promise.all([
@@ -963,6 +964,8 @@ export class RecorderOrchestrator {
                 // 前者多半真没说话，后者是调用失败
                 failReason: t('recorder.noTranscript'),
                 failReasonCode: 'no_transcript',
+                aiSource: result.aiSource,
+                aiStatus: result.aiStatus,
                 audioFilePath: historyArtifact.audioFilePath,
                 ...historyMeta,
               })
@@ -2147,18 +2150,36 @@ export class RecorderOrchestrator {
   }
 
   /** 异步获取当前模式下的 ASR/AI 供应商信息 */
-  private async buildProviderMetadata(finalResult?: { asrEngine?: string; asrModel?: string }): Promise<{
+  private async buildProviderMetadata(finalResult?: FinalResult): Promise<{
     asrProvider?: string
     aiProvider?: string
     aiModel?: string
+    aiSource?: FinalResult['aiSource']
+    aiStatus?: FinalResult['aiStatus']
   }> {
     const mode = this.provider.mode
+    const executionMeta = {
+      aiSource: finalResult?.aiSource,
+      aiStatus: finalResult?.aiStatus,
+    }
     if (mode === 'server') {
       let asrProvider = finalResult?.asrModel || finalResult?.asrEngine || 'server'
       // 后端返回 HuggingFace repo 全名如 "Qwen/Qwen3-ASR-1.7B"，只取模型名
       const slashIdx = asrProvider.lastIndexOf('/')
       if (slashIdx >= 0) asrProvider = asrProvider.slice(slashIdx + 1)
-      return { asrProvider, aiProvider: 'server' }
+      if (finalResult?.aiSource === 'custom') {
+        return {
+          asrProvider,
+          aiProvider: finalResult.aiProvider,
+          aiModel: finalResult.aiModel,
+          ...executionMeta,
+        }
+      }
+      return {
+        asrProvider,
+        aiProvider: finalResult?.aiSource === 'none' ? undefined : 'server',
+        ...executionMeta,
+      }
     }
     if (mode === 'cloud_api') {
       const asrProviderKey = await getSetting('cloudAsr.provider', '') as string
@@ -2175,18 +2196,20 @@ export class RecorderOrchestrator {
         qwen_omni_plus: 'qwen3.5-omni-plus-realtime',
       }
       const asrProvider = ASR_MODEL_ID_MAP[asrProviderKey] || asrProviderKey || 'cloud'
-      const aiProvider = await getSetting('cloudAi.provider', '') as string
-      const aiModel = await getSetting('cloudAi.model', '') as string
-      return { asrProvider, aiProvider: aiProvider || undefined, aiModel: aiModel || undefined }
+      const aiProvider = finalResult?.aiProvider || await getSetting('cloudAi.provider', '') as string
+      const aiModel = finalResult?.aiModel || await getSetting('cloudAi.model', '') as string
+      return { asrProvider, aiProvider: aiProvider || undefined, aiModel: aiModel || undefined, ...executionMeta }
     }
     if (mode === 'local') {
       const modelId = await getSetting('localAsr.modelId', '') as string
       const aiEnabled = Boolean(await getSetting('aiEnabled', false))
-      const aiProvider = aiEnabled ? await getSetting('cloudAi.provider', '') as string : undefined
-      const aiModel = aiEnabled ? await getSetting('cloudAi.model', '') as string : undefined
-      return { asrProvider: modelId || 'local', aiProvider, aiModel: aiModel || undefined }
+      const aiProvider = finalResult?.aiProvider
+        || (aiEnabled ? await getSetting('cloudAi.provider', '') as string : undefined)
+      const aiModel = finalResult?.aiModel
+        || (aiEnabled ? await getSetting('cloudAi.model', '') as string : undefined)
+      return { asrProvider: modelId || 'local', aiProvider, aiModel: aiModel || undefined, ...executionMeta }
     }
-    return {}
+    return executionMeta
   }
 
   private computeProcessingTimeoutMs(audioDurationSec: number) {

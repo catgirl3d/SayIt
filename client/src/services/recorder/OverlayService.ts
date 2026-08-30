@@ -196,6 +196,9 @@ export class OverlayService {
     // 真实录音代次才开启全局 Esc；PTT Lab 等 token=0 的预览绝不吞系统按键。
     this.setEscapeMode(token > 0 ? 'cancel_recording' : 'off', token)
     this.playReadySound()
+    // 采集链路已经成功启动时立刻发布 listening；不要再为 ticker 的首个 33ms
+    // 人为保留 waiting。PCM 随后仍通过 pushListeningBars 驱动真实波形。
+    this.pushListeningBars(undefined, true)
     this.tickerId = setInterval(() => {
       void bridge.updateOverlay({
         state: 'listening',
