@@ -102,8 +102,6 @@ jobs:
         shell: pwsh
         env:
           RELEASE_SHA: ${{ github.sha }}
-          UPSTREAM_REPO: https://github.com/crosswk/SayIt.git
-          UPSTREAM_BRANCH: main
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -124,28 +122,8 @@ jobs:
           if (Test-Path -LiteralPath $forkChangelogPath) {
             $forkChangelog = (Get-Content -LiteralPath $forkChangelogPath -Raw).Trim()
           }
-
-          $upstreamRef = ''
-          $forkBase = ''
-          $forkCommits = @()
           if ([string]::IsNullOrWhiteSpace($forkChangelog)) {
-            git remote add upstream "$env:UPSTREAM_REPO"
-            git fetch upstream "$env:UPSTREAM_BRANCH" --no-tags
-            if ($LASTEXITCODE -ne 0) {
-              throw "Could not fetch upstream branch '$env:UPSTREAM_BRANCH'"
-            }
-
-            $upstreamRef = "upstream/$($env:UPSTREAM_BRANCH)"
-            $forkBase = (git merge-base $upstreamRef "$env:RELEASE_SHA").Trim()
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($forkBase)) {
-              throw "Could not find a common ancestor with '$upstreamRef'"
-            }
-
-            $forkRange = "$forkBase..$($env:RELEASE_SHA)"
-            $forkCommits = @(git log --no-merges "--format=- %s (%h)" $forkRange)
-            if ($LASTEXITCODE -ne 0) {
-              throw "Could not calculate fork changes for range '$forkRange'"
-            }
+            throw 'CHANGELOG-FORK.md is missing or empty'
           }
 
           $notes = [System.Collections.Generic.List[string]]::new()
@@ -154,30 +132,7 @@ jobs:
           $notes.Add("Built from commit $($env:RELEASE_SHA) on branch $($env:GITHUB_REF_NAME).")
           $notes.Add('')
 
-          $changelogPath = Join-Path $env:GITHUB_WORKSPACE 'CHANGELOG.md'
-          if (Test-Path -LiteralPath $changelogPath) {
-            $changelog = Get-Content -LiteralPath $changelogPath -Raw
-            $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^\r\n]*\r?\n.*?(?=^## \[|\z)"
-            $match = [regex]::Match($changelog, $pattern)
-            if ($match.Success) {
-              $notes.Add($match.Value.Trim())
-              $notes.Add('')
-            }
-          }
-
-          $notes.Add('## Fork changes')
-          if (-not [string]::IsNullOrWhiteSpace($forkChangelog)) {
-            $notes.Add($forkChangelog)
-          } else {
-            $notes.Add("Relative to $upstreamRef ($forkBase)")
-            if ($forkCommits.Count -gt 0) {
-              foreach ($commit in $forkCommits) {
-                $notes.Add($commit)
-              }
-            } else {
-              $notes.Add("No commits differ from $upstreamRef.")
-            }
-          }
+          $notes.Add($forkChangelog)
 
           $notesPath = Join-Path $env:RUNNER_TEMP 'sayit-release-notes.md'
           [System.IO.File]::WriteAllText(
@@ -194,9 +149,9 @@ jobs:
         working-directory: client
         env:
           # transcribe-cpp-sys starts several glslc processes per shader task;
-          # serializing Cargo's outer CMake build avoids nested MSBuild
+          # limiting Cargo's outer CMake build avoids excessive nested MSBuild
           # parallelism exhausting the Windows runner's process resources.
-          CARGO_BUILD_JOBS: 1
+          CARGO_BUILD_JOBS: 2
         run: npm run tauri build -- --ci --no-sign --bundles nsis --target x86_64-pc-windows-msvc
 
       - name: Locate the installer
