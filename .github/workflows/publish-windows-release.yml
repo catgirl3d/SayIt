@@ -1,0 +1,254 @@
+name: Publish SayIt Windows release
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: sayit-windows-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CL: /utf-8
+  VULKAN_VERSION: 1.4.357.0
+
+jobs:
+  publish:
+    name: Build and publish Windows installer
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout the dispatched commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust-windows-2022
+          workspaces: client/src-tauri -> target
+          cache-on-failure: false
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkRoot = Join-Path $env:RUNNER_TEMP "vulkan-sdk\$env:VULKAN_VERSION"
+          $installer = Join-Path $env:RUNNER_TEMP "vulkan-sdk-$env:VULKAN_VERSION.exe"
+          New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
+
+          curl.exe --fail --location --retry 3 `
+            --output $installer `
+            "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe?Human=true"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not download Vulkan SDK $env:VULKAN_VERSION"
+          }
+
+          & $installer --root $sdkRoot --accept-licenses --default-answer --confirm-command install
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not install Vulkan SDK $env:VULKAN_VERSION"
+          }
+
+          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$sdkRoot"
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $sdkRoot 'Bin')
+
+      - name: Verify native build toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --version
+          rustc --version
+          cargo --version
+          cmake --version
+          if (-not $env:VULKAN_SDK) {
+            throw 'VULKAN_SDK was not configured'
+          }
+          $requiredFiles = @(
+            (Join-Path $env:VULKAN_SDK 'Include\vulkan\vulkan.h'),
+            (Join-Path $env:VULKAN_SDK 'Lib\vulkan-1.lib'),
+            (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe')
+          )
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Vulkan SDK file is missing: $file"
+            }
+          }
+          glslc --version
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Determine version and release notes
+        id: meta
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          UPSTREAM_REPO: https://github.com/crosswk/SayIt.git
+          UPSTREAM_BRANCH: main
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $tauriConfig = Get-Content -LiteralPath 'client/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
+          $packageConfig = Get-Content -LiteralPath 'client/package.json' -Raw | ConvertFrom-Json
+          $version = [string]$tauriConfig.version
+
+          if ([string]::IsNullOrWhiteSpace($version) -or $version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Invalid Tauri version: '$version'"
+          }
+          if ([string]$packageConfig.version -ne $version) {
+            throw "Version mismatch: tauri.conf.json=$version, package.json=$($packageConfig.version)"
+          }
+
+          $tag = "v$version"
+          $forkChangelogPath = Join-Path $env:GITHUB_WORKSPACE 'CHANGELOG-FORK.md'
+          $forkChangelog = ''
+          if (Test-Path -LiteralPath $forkChangelogPath) {
+            $forkChangelog = (Get-Content -LiteralPath $forkChangelogPath -Raw).Trim()
+          }
+
+          $upstreamRef = ''
+          $forkBase = ''
+          $forkCommits = @()
+          if ([string]::IsNullOrWhiteSpace($forkChangelog)) {
+            git remote add upstream "$env:UPSTREAM_REPO"
+            git fetch upstream "$env:UPSTREAM_BRANCH" --no-tags
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not fetch upstream branch '$env:UPSTREAM_BRANCH'"
+            }
+
+            $upstreamRef = "upstream/$($env:UPSTREAM_BRANCH)"
+            $forkBase = (git merge-base $upstreamRef "$env:RELEASE_SHA").Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($forkBase)) {
+              throw "Could not find a common ancestor with '$upstreamRef'"
+            }
+
+            $forkRange = "$forkBase..$($env:RELEASE_SHA)"
+            $forkCommits = @(git log --no-merges "--format=- %s (%h)" $forkRange)
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not calculate fork changes for range '$forkRange'"
+            }
+          }
+
+          $notes = [System.Collections.Generic.List[string]]::new()
+          $notes.Add("# SayIt $tag (Fork)")
+          $notes.Add('')
+          $notes.Add("Built from commit $($env:RELEASE_SHA) on branch $($env:GITHUB_REF_NAME).")
+          $notes.Add('')
+
+          $changelogPath = Join-Path $env:GITHUB_WORKSPACE 'CHANGELOG.md'
+          if (Test-Path -LiteralPath $changelogPath) {
+            $changelog = Get-Content -LiteralPath $changelogPath -Raw
+            $pattern = "(?ms)^## \[$([regex]::Escape($version))\][^\r\n]*\r?\n.*?(?=^## \[|\z)"
+            $match = [regex]::Match($changelog, $pattern)
+            if ($match.Success) {
+              $notes.Add($match.Value.Trim())
+              $notes.Add('')
+            }
+          }
+
+          $notes.Add('## Fork changes')
+          if (-not [string]::IsNullOrWhiteSpace($forkChangelog)) {
+            $notes.Add($forkChangelog)
+          } else {
+            $notes.Add("Relative to $upstreamRef ($forkBase)")
+            if ($forkCommits.Count -gt 0) {
+              foreach ($commit in $forkCommits) {
+                $notes.Add($commit)
+              }
+            } else {
+              $notes.Add("No commits differ from $upstreamRef.")
+            }
+          }
+
+          $notesPath = Join-Path $env:RUNNER_TEMP 'sayit-release-notes.md'
+          [System.IO.File]::WriteAllText(
+            $notesPath,
+            (($notes -join [Environment]::NewLine) + [Environment]::NewLine),
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "notes_file=$notesPath" >> $env:GITHUB_OUTPUT
+
+      - name: Build NSIS installer
+        working-directory: client
+        env:
+          # transcribe-cpp-sys starts several glslc processes per shader task;
+          # serializing Cargo's outer CMake build avoids nested MSBuild
+          # parallelism exhausting the Windows runner's process resources.
+          CARGO_BUILD_JOBS: 1
+        run: npm run tauri build -- --ci --no-sign --bundles nsis --target x86_64-pc-windows-msvc
+
+      - name: Locate the installer
+        id: installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE 'client/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis'
+          $installers = @(Get-ChildItem -LiteralPath $bundleDir -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer in '$bundleDir', found $($installers.Count)"
+          }
+
+          "path=$($installers[0].FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($installers[0].Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Recreate the current-version GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_SHA: ${{ github.sha }}
+          NOTES_FILE: ${{ steps.meta.outputs.notes_file }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          gh release view "$env:TAG" --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete "$env:TAG" --yes --cleanup-tag --repo "$env:GITHUB_REPOSITORY"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not delete existing release '$env:TAG'"
+            }
+          }
+
+          git ls-remote --exit-code --refs origin "refs/tags/$($env:TAG)" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            git push origin ":refs/tags/$($env:TAG)"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not delete existing remote tag '$env:TAG'"
+            }
+          }
+
+          git tag --force "$env:TAG" "$env:RELEASE_SHA"
+          git push origin "refs/tags/$($env:TAG)" --force
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not push tag '$env:TAG'"
+          }
+
+          gh release create "$env:TAG" --verify-tag --target "$env:RELEASE_SHA" --title "SayIt $($env:TAG) (Fork)" --notes-file "$env:NOTES_FILE" --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not create release '$env:TAG'"
+          }
+
+          gh release upload "$env:TAG" "$env:INSTALLER_PATH" --clobber --repo "$env:GITHUB_REPOSITORY"
