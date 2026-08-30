@@ -1,0 +1,7 @@
+target/**
+**/target/**
+transcribe-libs/**
+**/transcribe-libs/**
+gen/**
+**/gen/**
+*.log

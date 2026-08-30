@@ -60,3 +60,5 @@ Thumbs.db
 # ── Logs & runtime ──
 *.log
 runtime/
+.mcp-brain/memory/issues.md
+.mcp-brain/memory/dashboard.md
