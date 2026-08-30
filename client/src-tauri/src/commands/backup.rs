@@ -16,14 +16,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::storage::Storage;
+use crate::storage::{Storage, BUILTIN_PROMPT_IDS};
 
 /// 备份文件格式版本。导入时若备份版本高于此值则拒绝。
 const FORMAT_VERSION: i64 = 1;
 /// 分项配置文件格式；完整配置与全部数据继续使用 v1，保持兼容。
 const SELECTED_CONFIG_FORMAT_VERSION: i64 = 2;
 const MAX_HOTWORDS: usize = 1000;
-const BUILTIN_PRESET_IDS: &[&str] = &["intent", "faithful", "zh2en", "casual"];
 /// 「配置」档不导出/导入的 app_settings key（使用统计属于使用数据，不属于配置）。
 const CONFIG_EXCLUDE: &[&str] = &["stats"];
 
@@ -249,7 +248,7 @@ fn build_selected_config_value(
             .filter_map(|preset| {
                 let obj = preset.as_object()?;
                 let id = obj.get("id")?.as_str()?;
-                if !selected_preset_ids.contains(id) || BUILTIN_PRESET_IDS.contains(&id) {
+                if !selected_preset_ids.contains(id) || BUILTIN_PROMPT_IDS.contains(&id) {
                     return None;
                 }
                 let name = obj.get("name")?.as_str()?.trim();
@@ -1073,14 +1072,14 @@ fn validate_config_collection(key: &str, items: &[Value]) -> Result<(), String> 
             .filter(|value| !value.is_empty())
             .ok_or_else(|| format!("Item {} in {} is missing id", index + 1, key))?;
 
-        // 内置 Prompt 的中英文自定义内容共存在 promptPresets 中，因此同一个稳定 id
-        // 可以出现两次，但同一语言仍只能有一份。旧备份没有语言字段，只能是中文。
-        let unique_id = if key == "promptPresets" && BUILTIN_PRESET_IDS.contains(&id) {
+        // Built-in prompt overrides for Chinese, English, and Ukrainian share promptPresets.
+        // The same stable ID may occur once per language; backups without the language field are legacy Chinese entries.
+        let unique_id = if key == "promptPresets" && BUILTIN_PROMPT_IDS.contains(&id) {
             let language = object
                 .get("builtinPromptLanguage")
                 .and_then(Value::as_str)
                 .unwrap_or("zh-CN");
-            if language != "zh-CN" && language != "en" {
+            if language != "zh-CN" && language != "en" && language != "uk" {
                 return Err(format!(
                     "Item {} in {} has an invalid language",
                     index + 1,
@@ -1290,6 +1289,7 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
     }
     let data: Value = serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse backup.json: {}", e))?;
     check_kind_and_version(&data, "full", FORMAT_VERSION)?;
+    full_config_preview_sections(&data)?;
 
     // 2. 释放音频文件到本机 audio 目录
     let adir = audio_dir();
@@ -1431,6 +1431,12 @@ mod tests {
                 "systemPrompt": "English custom",
                 "builtinPromptLanguage": "en",
             }),
+            json!({
+                "id": "intent",
+                "name": "Intent cleanup",
+                "systemPrompt": "Ukrainian custom",
+                "builtinPromptLanguage": "uk",
+            }),
         ];
 
         assert!(validate_config_collection("promptPresets", &items).is_ok());
@@ -1449,5 +1455,33 @@ mod tests {
         ];
 
         assert!(validate_config_collection("promptPresets", &items).is_err());
+    }
+
+    #[test]
+    fn prompt_overrides_reject_unknown_language() {
+        let items = vec![json!({
+            "id": "intent",
+            "name": "Intent cleanup",
+            "systemPrompt": "Unknown custom",
+            "builtinPromptLanguage": "fr",
+        })];
+
+        assert!(validate_config_collection("promptPresets", &items).is_err());
+    }
+
+    #[test]
+    fn full_backup_preview_rejects_unknown_prompt_language() {
+        let data = json!({
+            "appSettings": {},
+            "promptPresets": [{
+                "id": "intent",
+                "name": "Intent cleanup",
+                "systemPrompt": "Unknown custom",
+                "builtinPromptLanguage": "fr",
+            }],
+            "appPromptRules": [],
+        });
+
+        assert!(full_config_preview_sections(&data).is_err());
     }
 }

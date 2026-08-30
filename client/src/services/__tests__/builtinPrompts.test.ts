@@ -31,7 +31,8 @@ describe('Built-in prompt language', () => {
     expect(getDefault('ai.builtinPromptLanguage')).toBe('en')
     expect(normalizeBuiltinPromptLanguage('zh-CN')).toBe('zh-CN')
     expect(normalizeBuiltinPromptLanguage('en')).toBe('en')
-    for (const value of ['', 'zh', 'en-US', null, undefined, 1]) {
+    expect(normalizeBuiltinPromptLanguage('uk')).toBe('uk')
+    for (const value of ['', 'zh', 'en-US', 'uk-UA', null, undefined, 1]) {
       expect(normalizeBuiltinPromptLanguage(value), String(value)).toBe('en')
     }
     expect(await getBuiltinPromptLanguage()).toBe('en')
@@ -40,48 +41,62 @@ describe('Built-in prompt language', () => {
     expect(await getBuiltinPromptLanguage()).toBe('zh-CN')
   })
 
-  it('中英文定义的 id 和顺序一致，且四份英文 Prompt 均已提供', () => {
+  it('all built-in languages provide the same ordered preset definitions', () => {
     const zh = getBuiltinPromptPresets('zh-CN')
     const en = getBuiltinPromptPresets('en')
+    const uk = getBuiltinPromptPresets('uk')
 
     expect(zh.map((preset) => preset.id)).toEqual(BUILTIN_PRESETS.map((preset) => preset.id))
     expect(en.map((preset) => preset.id)).toEqual(zh.map((preset) => preset.id))
+    expect(uk.map((preset) => preset.id)).toEqual(zh.map((preset) => preset.id))
     expect(en).toHaveLength(4)
     for (let index = 0; index < en.length; index += 1) {
       expect(en[index].systemPrompt.trim()).not.toBe('')
+      expect(uk[index].systemPrompt.trim()).not.toBe('')
       expect(en[index].systemPrompt).not.toBe(zh[index].systemPrompt)
+      expect(uk[index].systemPrompt).not.toBe(en[index].systemPrompt)
+      expect(uk[index].systemPrompt).not.toBe(zh[index].systemPrompt)
       expect(en[index].builtinPromptLanguage).toBe('en')
       expect(zh[index].builtinPromptLanguage).toBe('zh-CN')
+      expect(uk[index].builtinPromptLanguage).toBe('uk')
     }
+    expect(uk.find((preset) => preset.id === 'zh2en')?.systemPrompt).toContain('перекладач на англійську мову')
+    expect(uk.find((preset) => preset.id === 'zh2en')?.systemPrompt).toContain('англійський текст')
   })
 
   it('持久化选择后按对应语言加载', async () => {
-    await setBuiltinPromptLanguage('en')
+    await setBuiltinPromptLanguage('uk')
     const presets = await getPromptPresets()
 
-    expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('en')
-    expect(presets.every((preset) => !preset.builtin || preset.builtinPromptLanguage === 'en')).toBe(true)
+    expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('uk')
+    expect(presets.every((preset) => !preset.builtin || preset.builtinPromptLanguage === 'uk')).toBe(true)
   })
 
-  it('中英文内置修改分开保存，恢复默认只清理当前语言', async () => {
+  it('built-in overrides remain isolated across all supported languages', async () => {
     const zhIntent = getBuiltinPromptPresets('zh-CN')[0]
     const enIntent = getBuiltinPromptPresets('en')[0]
+    const ukIntent = getBuiltinPromptPresets('uk')[0]
 
     await savePromptPreset({ ...zhIntent, systemPrompt: '中文自定义 Prompt' })
     await savePromptPreset({ ...enIntent, systemPrompt: 'Custom English prompt' })
+    await savePromptPreset({ ...ukIntent, systemPrompt: 'Custom Ukrainian prompt' })
 
     const stored = bridgeState.values.get('promptPresets') as PromptPreset[]
     expect(stored.find((preset) => preset.builtinPromptLanguage === 'zh-CN')?.builtinPromptBaseHash)
       .toBe(builtinPromptContentHash(zhIntent.systemPrompt))
     expect(stored.find((preset) => preset.builtinPromptLanguage === 'en')?.builtinPromptBaseHash)
       .toBe(builtinPromptContentHash(enIntent.systemPrompt))
+    expect(stored.find((preset) => preset.builtinPromptLanguage === 'uk')?.builtinPromptBaseHash)
+      .toBe(builtinPromptContentHash(ukIntent.systemPrompt))
 
     expect((await getPromptPresets('zh-CN'))[0].systemPrompt).toBe('中文自定义 Prompt')
     expect((await getPromptPresets('en'))[0].systemPrompt).toBe('Custom English prompt')
+    expect((await getPromptPresets('uk'))[0].systemPrompt).toBe('Custom Ukrainian prompt')
 
     await savePromptPreset(zhIntent)
     expect((await getPromptPresets('zh-CN'))[0].systemPrompt).toBe(zhIntent.systemPrompt)
     expect((await getPromptPresets('en'))[0].systemPrompt).toBe('Custom English prompt')
+    expect((await getPromptPresets('uk'))[0].systemPrompt).toBe('Custom Ukrainian prompt')
   })
 
   it('旧版无语言字段的 override 只归入中文', async () => {
@@ -97,6 +112,8 @@ describe('Built-in prompt language', () => {
     expect((await getPromptPresets('zh-CN'))[0].builtinPromptUpdateAvailable).toBe(false)
     expect((await getPromptPresets('en'))[0].systemPrompt)
       .toBe(getBuiltinPromptPresets('en')[0].systemPrompt)
+    expect((await getPromptPresets('uk'))[0].systemPrompt)
+      .toBe(getBuiltinPromptPresets('uk')[0].systemPrompt)
   })
 
   it('保存基线与当前内置定义不同时提示有更新', async () => {

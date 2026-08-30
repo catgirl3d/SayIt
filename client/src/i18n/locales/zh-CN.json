@@ -948,6 +948,7 @@
   "promptPreset.promptLanguage": "内置 Prompt 语言",
   "promptPreset.languageZh": "中文",
   "promptPreset.languageEn": "English",
+  "promptPreset.languageUk": "乌克兰语",
   "promptPreset.new": "新建",
   "promptPreset.createTitle": "新建润色模式",
   "promptPreset.editTitle": "编辑「{name}」",

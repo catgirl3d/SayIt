@@ -2,12 +2,14 @@
 
 import * as bridge from './bridge'
 import { BUILTIN_PROMPTS_EN } from './builtinPromptsEn'
+import { BUILTIN_PROMPTS_UK } from './builtinPromptsUk'
 import {
   DEFAULT_BUILTIN_PROMPT_LANGUAGE,
   getDefault,
   LEGACY_BUILTIN_PROMPT_LANGUAGE,
 } from './defaults'
 export { BUILTIN_PROMPTS_EN } from './builtinPromptsEn'
+export { BUILTIN_PROMPTS_UK } from './builtinPromptsUk'
 
 const api = () => bridge
 
@@ -108,7 +110,7 @@ export interface PromptPreset {
   builtinPromptUpdateAvailable?: boolean
 }
 
-export type BuiltinPromptLanguage = 'zh-CN' | 'en'
+export type BuiltinPromptLanguage = 'zh-CN' | 'en' | 'uk'
 
 export type FeedbackIssueType = 'asr_error' | 'llm_error' | 'duration_mismatch' | 'other'
 
@@ -152,6 +154,7 @@ export interface ManualCorrectionRecord {
 export const USER_PROMPT_PREFIX = 'Please process the following speech transcript:\n\n'
 
 // Built-in presets
+// i18n-allow-start: Chinese prompt instructions are model input, not interface text.
 export const BUILTIN_PROMPTS_ZH: Record<string, string> = {
   intent: `你是一个语音转文字润色助手。输入的文本是 ASR 语音识别的原始结果，你的任务是将其整理成清晰、准确、简洁的书面表达，同时严格保持原意和说话人的语气。
 
@@ -189,6 +192,7 @@ export const BUILTIN_PROMPTS_ZH: Record<string, string> = {
 3. 不要把口语改得过于书面化或严肃，保持原本轻松的对话风格
 4. 直接输出整理后的文本，不要输出任何解释或回复`,
 }
+// i18n-allow-end
 
 export const BUILTIN_PRESETS: PromptPreset[] = [
   {
@@ -223,7 +227,9 @@ export function getBuiltinPromptPresets(language: BuiltinPromptLanguage): Prompt
     ...preset,
     systemPrompt: language === 'zh-CN'
       ? (BUILTIN_PROMPTS_ZH[preset.id] || preset.systemPrompt)
-      : (BUILTIN_PROMPTS_EN[preset.id] || preset.systemPrompt),
+      : language === 'uk'
+        ? (BUILTIN_PROMPTS_UK[preset.id] || preset.systemPrompt)
+        : (BUILTIN_PROMPTS_EN[preset.id] || preset.systemPrompt),
     builtinPromptLanguage: language,
   }))
 }
@@ -329,7 +335,9 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
 // Prompt presets
 
 export function normalizeBuiltinPromptLanguage(value: unknown): BuiltinPromptLanguage {
-  return value === 'zh-CN' ? 'zh-CN' : DEFAULT_BUILTIN_PROMPT_LANGUAGE
+  if (value === 'zh-CN') return 'zh-CN'
+  if (value === 'uk') return 'uk'
+  return DEFAULT_BUILTIN_PROMPT_LANGUAGE
 }
 
 /** 轻量稳定指纹；不用于安全校验，只判断内置 Prompt 是否换过版本。 */
@@ -352,7 +360,10 @@ export async function setBuiltinPromptLanguage(language: BuiltinPromptLanguage):
 
 function overrideLanguage(preset: PromptPreset): BuiltinPromptLanguage {
   // Legacy overrides predate the language field, so they remain associated with Chinese prompts.
-  return preset.builtinPromptLanguage === 'en' ? 'en' : LEGACY_BUILTIN_PROMPT_LANGUAGE
+  if (preset.builtinPromptLanguage === 'en' || preset.builtinPromptLanguage === 'uk') {
+    return preset.builtinPromptLanguage
+  }
+  return LEGACY_BUILTIN_PROMPT_LANGUAGE
 }
 
 export async function getPromptPresets(languageOverride?: BuiltinPromptLanguage): Promise<PromptPreset[]> {

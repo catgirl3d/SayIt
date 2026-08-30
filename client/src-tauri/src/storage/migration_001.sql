@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS feedback_queue (
 CREATE INDEX IF NOT EXISTS idx_feedback_queue_order ON feedback_queue(list_order);
 
 CREATE TABLE IF NOT EXISTS prompt_presets (
-  id TEXT PRIMARY KEY,
+  storage_key TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   list_order INTEGER NOT NULL,
   name TEXT,
   raw_json TEXT NOT NULL
