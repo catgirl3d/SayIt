@@ -18,7 +18,7 @@ describe('context-aware writing prompt', () => {
       selectionTruncated: false,
     })
     const prompt = withContextAwareInstructions('base', context)
-    expect(prompt).toContain('No text is currently selected')
+    expect(prompt).toContain('You are a "Selected Text Editor"')
     expect(prompt).not.toContain('Secret project SayIt')
     expect(prompt).not.toContain('需要精简的原文')
   })

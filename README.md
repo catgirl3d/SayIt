@@ -9,12 +9,20 @@
 Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcribes, cleans up, and inserts polished text wherever your cursor is.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
-[![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/crosswk/SayIt/releases/latest)
-[![Latest release](https://img.shields.io/github/v/release/crosswk/SayIt?label=release)](https://github.com/crosswk/SayIt/releases/latest)
+[![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/catgirl3d/SayIt/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/catgirl3d/SayIt?label=release)](https://github.com/catgirl3d/SayIt/releases/latest)
 
-**[Download for Windows](https://github.com/crosswk/SayIt/releases/latest)** · **[Try the web demo](https://sayitapp.site)** · **[简体中文](README.zh-CN.md)**
+**[Download for Windows](https://github.com/catgirl3d/SayIt/releases/latest)** · **[Try the web demo](https://sayitapp.site)** · **[简体中文](README.zh-CN.md)**
 
 </div>
+
+## Fork Build
+
+This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG-FORK.md).
+
+**English and Russian dictation:** Chinese-oriented cleanup prompts can introduce Chinese text or formatting into processed English or Russian dictation. This fork defaults to **English** built-in prompts when no previous prompt-language choice or legacy Chinese override exists, which has tested better for that case. Existing saved choices and legacy Chinese overrides are preserved; set **AI Instructions → Built-in preset language → English** manually.
+
+This setting controls AI cleanup only. Set the ASR recognition language independently and use a model that supports the language you speak.
 
 <div align="center">
 
@@ -90,7 +98,7 @@ Local recognition ships seven GGUF models, with GPU acceleration when available:
 
 ## Get started
 
-1. Download the latest [Windows installer](https://github.com/crosswk/SayIt/releases/latest).
+1. Download the latest [Windows installer](https://github.com/catgirl3d/SayIt/releases/latest).
 2. Open SayIt and choose a voice engine. The default public server is enough for a quick trial.
 3. Press the configured shortcut in any app and speak. By default you press once to start and again to finish; hold-to-talk is available too, under a separate shortcut.
 
@@ -101,7 +109,7 @@ For regular use, choose Local mode or add your own cloud provider keys from the 
 The backend combines FastAPI, WebSocket streaming, Qwen3-ASR, and an optional OpenAI-compatible cleanup model. Docker Compose is the recommended deployment path.
 
 ```bash
-git clone https://github.com/crosswk/SayIt.git
+git clone https://github.com/catgirl3d/SayIt.git
 cd SayIt/server
 cp config.example.yaml config.yaml
 cp .env.example .env
@@ -162,7 +170,7 @@ SayIt/
 
 ## Contributing
 
-Bug reports, focused pull requests, and feature discussions are welcome. Please open a [GitHub issue](https://github.com/crosswk/SayIt/issues) or read the [contribution guide](CONTRIBUTING.md) before submitting a larger change.
+Bug reports, focused pull requests, and feature discussions are welcome. Please open a [GitHub issue](https://github.com/catgirl3d/SayIt/issues) or read the [contribution guide](CONTRIBUTING.md) before submitting a larger change.
 
 ## Contributors
 

@@ -2,6 +2,11 @@
 
 import * as bridge from './bridge'
 import { BUILTIN_PROMPTS_EN } from './builtinPromptsEn'
+import {
+  DEFAULT_BUILTIN_PROMPT_LANGUAGE,
+  getDefault,
+  LEGACY_BUILTIN_PROMPT_LANGUAGE,
+} from './defaults'
 export { BUILTIN_PROMPTS_EN } from './builtinPromptsEn'
 
 const api = () => bridge
@@ -298,8 +303,6 @@ export async function getStats(): Promise<Stats> {
   }
 }
 
-import { getDefault } from './defaults'
-
 export async function getSetting<T>(key: string, fallback?: T): Promise<T> {
   const defaultValue = getDefault(key, fallback) as T
   const client = api()
@@ -326,7 +329,7 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
 // Prompt presets
 
 export function normalizeBuiltinPromptLanguage(value: unknown): BuiltinPromptLanguage {
-  return value === 'en' ? 'en' : 'zh-CN'
+  return value === 'zh-CN' ? 'zh-CN' : DEFAULT_BUILTIN_PROMPT_LANGUAGE
 }
 
 /** 轻量稳定指纹；不用于安全校验，只判断内置 Prompt 是否换过版本。 */
@@ -340,7 +343,7 @@ export function builtinPromptContentHash(content: string): string {
 }
 
 export async function getBuiltinPromptLanguage(): Promise<BuiltinPromptLanguage> {
-  return normalizeBuiltinPromptLanguage(await getSetting('ai.builtinPromptLanguage', 'zh-CN'))
+  return normalizeBuiltinPromptLanguage(await getSetting('ai.builtinPromptLanguage', DEFAULT_BUILTIN_PROMPT_LANGUAGE))
 }
 
 export async function setBuiltinPromptLanguage(language: BuiltinPromptLanguage): Promise<void> {
@@ -348,8 +351,8 @@ export async function setBuiltinPromptLanguage(language: BuiltinPromptLanguage):
 }
 
 function overrideLanguage(preset: PromptPreset): BuiltinPromptLanguage {
-  // 旧版本没有语言字段，当时只有中文 Prompt，因此安全地归到中文。
-  return normalizeBuiltinPromptLanguage(preset.builtinPromptLanguage)
+  // Legacy overrides predate the language field, so they remain associated with Chinese prompts.
+  return preset.builtinPromptLanguage === 'en' ? 'en' : LEGACY_BUILTIN_PROMPT_LANGUAGE
 }
 
 export async function getPromptPresets(languageOverride?: BuiltinPromptLanguage): Promise<PromptPreset[]> {
@@ -494,6 +497,3 @@ export async function deletePromptPreset(id: string): Promise<void> {
     await setActivePresetId('intent')
   }
 }
-
-
-
