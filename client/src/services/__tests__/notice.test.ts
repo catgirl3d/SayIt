@@ -22,6 +22,11 @@ describe('normalizeRemoteNotice', () => {
           body: 'Maintenance tonight',
           linkLabel: 'Learn more',
         },
+        uk: {
+          title: 'Повідомлення про технічні роботи',
+          body: 'Технічні роботи сьогодні ввечері',
+          linkLabel: 'Докладніше',
+        },
       },
     }
     expect(normalizeRemoteNotice(payload, 'en')).toMatchObject({
@@ -33,6 +38,11 @@ describe('normalizeRemoteNotice', () => {
       title: '维护通知',
       body: '今晚维护',
       linkLabel: '查看详情',
+    })
+    expect(normalizeRemoteNotice(payload, 'uk')).toMatchObject({
+      title: 'Повідомлення про технічні роботи',
+      body: 'Технічні роботи сьогодні ввечері',
+      linkLabel: 'Докладніше',
     })
   })
 

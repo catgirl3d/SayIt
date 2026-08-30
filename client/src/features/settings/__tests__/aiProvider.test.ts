@@ -66,6 +66,13 @@ describe('地区相关的供应商默认值', () => {
     expect(aiProvidersForDisplay()[0].value).toBe('deepseek')
     expect(blankProfile().provider).toBe('deepseek')
   })
+
+  it('乌克兰语界面不使用中国地区默认供应商', () => {
+    setLocale('uk')
+    expect(preferredAiProviderValue()).toBe('openai_compat')
+    expect(aiProvidersForDisplay()[0].value).toBe('openai_compat')
+    expect(blankProfile().provider).toBe('openai_compat')
+  })
 })
 
 describe('checkAiKeyFormat', () => {

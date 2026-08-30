@@ -1,5 +1,6 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import en from '../locales/en.json'
+import uk from '../locales/uk.json'
 import zhCN from '../locales/zh-CN.json'
 import {
   getLocale,
@@ -26,16 +27,18 @@ import {
  * 断言里出现任何一句人类语言时都要先问：这条会不会在文案改一个字之后就挂？
  */
 describe('locale 表', () => {
-  it('en 与 zh-CN 的 key 集合完全一致', () => {
+  it('所有 locale 的 key 集合完全一致', () => {
     // 类型层面已经保证 en 不缺 key（i18n/index.ts 的 Record<TranslationKey, string>），
     // 这里补的是另一半：en 里**多出来**的 key 类型查不出来，只能靠测试。
     const zhKeys = Object.keys(zhCN).sort()
     const enKeys = Object.keys(en).sort()
+    const ukKeys = Object.keys(uk).sort()
     expect(enKeys).toEqual(zhKeys)
+    expect(ukKeys).toEqual(zhKeys)
   })
 
   it('没有空文案', () => {
-    for (const [locale, table] of [['zh-CN', zhCN], ['en', en]] as const) {
+    for (const [locale, table] of [['zh-CN', zhCN], ['en', en], ['uk', uk]] as const) {
       for (const [key, value] of Object.entries(table)) {
         expect(value.trim(), `${locale} 的 ${key} 是空的`).not.toBe('')
       }
@@ -47,6 +50,7 @@ describe('locale 表', () => {
     const placeholders = (text: string) => (text.match(/\{(\w+)\}/g) ?? []).sort()
     for (const key of Object.keys(zhCN) as (keyof typeof zhCN)[]) {
       expect(placeholders(en[key]), `key=${key}`).toEqual(placeholders(zhCN[key]))
+      expect(placeholders(uk[key]), `key=${key}`).toEqual(placeholders(zhCN[key]))
     }
   })
 })
@@ -58,8 +62,14 @@ describe('resolveLocale', () => {
     }
   })
 
+  it('resolves Ukrainian language and regional variants case-insensitively', () => {
+    for (const tag of ['uk', 'uk-UA', 'uk_UA', 'UK', 'uk-ua', 'UK_ua']) {
+      expect(resolveLocale(tag), tag).toBe('uk')
+    }
+  })
+
   it('其余语言与空值一律落到英文', () => {
-    for (const tag of ['en', 'en-US', 'ja-JP', 'ko-KR', 'de', '', null, undefined]) {
+    for (const tag of ['en', 'en-US', 'ja-JP', 'ko-KR', 'de', 'uk-GB', '', null, undefined]) {
       expect(resolveLocale(tag), String(tag)).toBe('en')
     }
   })
@@ -70,6 +80,7 @@ describe('normalizePreference', () => {
     expect(normalizePreference('auto')).toBe('auto')
     expect(normalizePreference('en')).toBe('en')
     expect(normalizePreference('zh-CN')).toBe('zh-CN')
+    expect(normalizePreference('uk')).toBe('uk')
   })
 
   it('脏数据回落 auto', () => {
@@ -90,6 +101,8 @@ describe('t', () => {
     setLocale('en')
     expect(t('nav.home')).toBe(en['nav.home'])
     expect(en['nav.home']).not.toBe(zhCN['nav.home'])
+    setLocale('uk')
+    expect(t('nav.home')).toBe(uk['nav.home'])
   })
 
   it('替换插值占位符', () => {

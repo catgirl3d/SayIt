@@ -30,6 +30,13 @@ describe('首次运行的地区默认值', () => {
     expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('en')
   })
 
+  it('Ukrainian environments do not receive China-specific defaults', async () => {
+    await initLocaleDefaults('uk')
+    expect(bridgeState.values.get('localAsr.downloadSource')).toBe('HuggingFace')
+    expect(bridgeState.values.get('cloudAi.provider')).toBe('openai_compat')
+    expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('en')
+  })
+
   it('keeps a legacy Chinese built-in override associated with Chinese prompts', async () => {
     bridgeState.values.set('promptPresets', [{ id: 'intent', systemPrompt: 'Legacy Chinese prompt' }])
 
