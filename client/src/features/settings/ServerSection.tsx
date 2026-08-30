@@ -13,7 +13,7 @@ import {
   resetBackendBaseUrl,
   setBackendBaseUrl as persistBackendBaseUrl,
 } from '@/services/runtimeConfig'
-import { reconnectProvider } from '@/services/recorder'
+import { reconnectProvider, setServerLanguageCache } from '@/services/recorder'
 import { checkForUpdateNow, discardPendingForChannelSwitch } from '@/features/update/autoUpdate'
 import { getSetting, setSetting } from '@/services/store'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
@@ -260,7 +260,11 @@ export default function ServerSection() {
                 { value: 'en', label: t('local.lang.en') },
                 { value: 'ru', label: t('local.lang.ru') },
               ]}
-              onChange={(value) => { setAsrLanguage(value); void setSetting('server.language', value) }}
+              onChange={(value) => {
+                setAsrLanguage(value)
+                setServerLanguageCache(value)
+                void setSetting('server.language', value)
+              }}
               className="shrink-0 justify-end"
             />
           </div>

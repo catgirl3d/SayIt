@@ -124,7 +124,7 @@ class ASREngine:
         low = language.strip().lower()
         if low in ("auto", ""):
             return None  # Qwen3-ASR auto-detect
-        lang_map = {"zh": "Chinese", "en": "English", "中文": "Chinese", "英文": "English"}
+        lang_map = {"zh": "Chinese", "en": "English", "ru": "Russian", "中文": "Chinese", "英文": "English"}
         return lang_map.get(low, language)
 
     def get_hotwords(self) -> list[str]:
