@@ -886,6 +886,7 @@
   "promptPreset.promptLanguage": "Built-in preset language",
   "promptPreset.languageZh": "Chinese",
   "promptPreset.languageEn": "English",
+  "promptPreset.languageUk": "Ukrainian",
   "promptPreset.new": "New",
   "promptPreset.createTitle": "New cleanup preset",
   "promptPreset.editTitle": "Edit “{name}”",

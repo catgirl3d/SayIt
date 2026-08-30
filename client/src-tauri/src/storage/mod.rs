@@ -30,6 +30,26 @@ const COLLECTION_KEYS: &[&str] = &[
     "appPromptRules",
 ];
 
+pub(crate) const BUILTIN_PROMPT_IDS: &[&str] = &["intent", "faithful", "zh2en", "casual"];
+
+fn prompt_preset_storage_key(id: &str, raw_json: &str) -> String {
+    if !BUILTIN_PROMPT_IDS.contains(&id) {
+        return format!("custom:{id}");
+    }
+
+    let language = serde_json::from_str::<Value>(raw_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("builtinPromptLanguage")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|language| matches!(language.as_str(), "zh-CN" | "en" | "uk"))
+        .unwrap_or_else(|| "zh-CN".to_owned());
+    format!("builtin:{id}:{language}")
+}
+
 fn is_collection_key(key: &str) -> bool {
     COLLECTION_KEYS.contains(&key)
 }
@@ -93,6 +113,15 @@ impl Storage {
             )?;
         }
 
+        // Migration 3: allow one built-in prompt override per language.
+        if !Self::migration_exists(&db, 3)? {
+            Self::migrate_prompt_preset_keys(&db)?;
+            db.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![3, "add-prompt-preset-language-key", chrono::Utc::now().timestamp_millis()],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -103,6 +132,38 @@ impl Storage {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    fn migrate_prompt_preset_keys(db: &Connection) -> SqlResult<()> {
+        let rows: Vec<(String, i64, Option<String>, String)> = {
+            let mut stmt = db.prepare("SELECT id, list_order, name, raw_json FROM prompt_presets ORDER BY list_order ASC")?;
+            let mapped_rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+            let collected_rows = mapped_rows.collect::<Result<Vec<_>, _>>()?;
+            collected_rows
+        };
+        let tx = db.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE prompt_presets_v3 (
+                storage_key TEXT PRIMARY KEY,
+                id TEXT NOT NULL,
+                list_order INTEGER NOT NULL,
+                name TEXT,
+                raw_json TEXT NOT NULL
+            );",
+        )?;
+        for (id, list_order, name, raw_json) in rows {
+            let storage_key = prompt_preset_storage_key(&id, &raw_json);
+            tx.execute(
+                "INSERT INTO prompt_presets_v3 (storage_key, id, list_order, name, raw_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![storage_key, id, list_order, name, raw_json],
+            )?;
+        }
+        tx.execute_batch(
+            "DROP TABLE prompt_presets;
+             ALTER TABLE prompt_presets_v3 RENAME TO prompt_presets;
+             CREATE INDEX idx_prompt_presets_order ON prompt_presets(list_order);",
+        )?;
+        tx.commit()
     }
 
     fn seed_defaults(&self) -> SqlResult<()> {
@@ -473,9 +534,10 @@ impl Storage {
                             )?;
                         }
                         "prompt_presets" => {
+                            let storage_key = prompt_preset_storage_key(&id, &raw_json);
                             db.execute(
-                                "INSERT INTO prompt_presets (id, list_order, name, raw_json) VALUES (?1,?2,?3,?4)",
-                                params![id, index as i64, name, raw_json],
+                                "INSERT INTO prompt_presets (storage_key, id, list_order, name, raw_json) VALUES (?1,?2,?3,?4,?5)",
+                                params![storage_key, id, index as i64, name, raw_json],
                             )?;
                         }
                         "app_prompt_rules" => {
@@ -504,7 +566,12 @@ impl Storage {
     }
 
     fn replace_collection(&self, key: &str, items: &[Value]) -> SqlResult<()> {
-        let db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap();
+        if key == "promptPresets" {
+            let tx = db.transaction()?;
+            Self::replace_collection_on(&tx, key, items)?;
+            return tx.commit();
+        }
         Self::replace_collection_on(&db, key, items)
     }
 
@@ -608,8 +675,7 @@ impl Storage {
         migrated_counts.push(("feedback_queue".into(), count));
 
         // 5. prompt_presets
-        let count = Self::migrate_table_generic(&src, &db, "prompt_presets",
-            "id, list_order, name, raw_json");
+        let count = Self::migrate_prompt_presets(&src, &db);
         migrated_counts.push(("prompt_presets".into(), count));
 
         // 6. app_prompt_rules
@@ -752,6 +818,48 @@ impl Storage {
         }
         count
     }
+
+    fn migrate_prompt_presets(src: &Connection, dst: &Connection) -> usize {
+        let dst_count: i64 = dst.query_row("SELECT COUNT(*) FROM prompt_presets", [], |row| row.get(0)).unwrap_or(0);
+        if dst_count > 0 {
+            return 0;
+        }
+
+        let mut stmt = match src.prepare("SELECT id, list_order, name, raw_json FROM prompt_presets ORDER BY list_order ASC") {
+            Ok(stmt) => stmt,
+            Err(error) => {
+                log::warn!("Cannot read source table prompt_presets: {}", error);
+                return 0;
+            }
+        };
+        let rows = match stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        }) {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!("Cannot read source prompt presets: {}", error);
+                return 0;
+            }
+        };
+
+        let mut count = 0;
+        for row in rows.flatten() {
+            let (id, list_order, name, raw_json) = row;
+            let storage_key = prompt_preset_storage_key(&id, &raw_json);
+            if dst.execute(
+                "INSERT OR IGNORE INTO prompt_presets (storage_key, id, list_order, name, raw_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![storage_key, id, list_order, name, raw_json],
+            ).is_ok() {
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 fn parse_stats(json: &Option<String>) -> (f64, i64) {
@@ -763,6 +871,77 @@ fn parse_stats(json: &Option<String>) -> (f64, i64) {
             (dur, chars)
         }
         None => (0.0, 0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("sayit-{name}-{}.db", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn prompt_storage_key_keeps_legacy_overrides_in_chinese() {
+        assert_eq!(prompt_preset_storage_key("intent", r#"{"id":"intent"}"#), "builtin:intent:zh-CN");
+        assert_eq!(prompt_preset_storage_key("intent", r#"{"builtinPromptLanguage":"uk"}"#), "builtin:intent:uk");
+        assert_eq!(prompt_preset_storage_key("intent", r#"{"builtinPromptLanguage":"fr"}"#), "builtin:intent:zh-CN");
+        assert_eq!(prompt_preset_storage_key("custom", r#"{"id":"custom"}"#), "custom:custom");
+    }
+
+    #[test]
+    fn prompt_preset_migration_preserves_languages_and_is_idempotent() {
+        let path = test_db_path("prompt-migration");
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(include_str!("migration_001.sql")).unwrap();
+            db.execute("DROP TABLE prompt_presets", []).unwrap();
+            db.execute_batch(
+                "CREATE TABLE prompt_presets (
+                    id TEXT PRIMARY KEY,
+                    list_order INTEGER NOT NULL,
+                    name TEXT,
+                    raw_json TEXT NOT NULL
+                )",
+            ).unwrap();
+            db.execute("INSERT INTO prompt_presets (id, list_order, name, raw_json) VALUES ('intent', 0, 'legacy', ?1)",
+                [r#"{"id":"intent","systemPrompt":"legacy"}"#]).unwrap();
+            db.execute("INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'init', 0)", []).unwrap();
+            db.execute("INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'audio', 0)", []).unwrap();
+        }
+
+        let storage = Storage::new(path.clone()).unwrap();
+        storage.set("promptPresets", &serde_json::json!([
+            { "id": "intent", "systemPrompt": "zh", "builtinPromptLanguage": "zh-CN" },
+            { "id": "intent", "systemPrompt": "uk", "builtinPromptLanguage": "uk" },
+        ])).unwrap();
+        let value = storage.get("promptPresets", None);
+        assert_eq!(value.as_array().unwrap().len(), 2);
+        assert_eq!(value[0]["id"], "intent");
+        assert!(value[0].get("storage_key").is_none());
+
+        drop(storage);
+        let storage = Storage::new(path.clone()).unwrap();
+        assert_eq!(storage.get("promptPresets", None).as_array().unwrap().len(), 2);
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn prompt_preset_replace_rolls_back_on_duplicate_key() {
+        let path = test_db_path("prompt-rollback");
+        let storage = Storage::new(path.clone()).unwrap();
+        let original = serde_json::json!([{ "id": "intent", "systemPrompt": "original", "builtinPromptLanguage": "uk" }]);
+        storage.set("promptPresets", &original).unwrap();
+        let invalid = serde_json::json!([
+            { "id": "intent", "systemPrompt": "first", "builtinPromptLanguage": "uk" },
+            { "id": "intent", "systemPrompt": "second", "builtinPromptLanguage": "uk" },
+        ]);
+        assert!(storage.set("promptPresets", &invalid).is_err());
+        assert_eq!(storage.get("promptPresets", None), original);
+        drop(storage);
+        let _ = fs::remove_file(path);
     }
 }
 
