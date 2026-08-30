@@ -21,16 +21,16 @@ describe('topUpProfiles', () => {
   it('一个平台填了密钥，就为该平台下每个服务各建一份', () => {
     const r = topUpProfiles([], { qwen: creds({ apiKey: 'sk-1' }) })
     expect(r.profiles.map((p) => p.provider)).toEqual([
-      'qwen', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_35_flash',
+      'qwen_audio_stream', 'qwen', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_35_flash',
     ])
-    expect(r.added).toHaveLength(4)
+    expect(r.added).toHaveLength(5)
   })
 
-  it('三个平台都有密钥时补出全部 6 个服务', () => {
+  it('三个平台都有密钥时补出全部 7 个服务', () => {
     const r = topUpProfiles([], {
       doubao: creds(), qwen: creds({ apiKey: 'sk-1' }), mimo: creds(),
     })
-    expect(r.profiles).toHaveLength(6)
+    expect(r.profiles).toHaveLength(7)
   })
 
   it('没填密钥的平台不建卡 —— 新用户应看到空状态引导，而不是一堆空卡', () => {
@@ -41,22 +41,22 @@ describe('topUpProfiles', () => {
 
   /**
    * 真实场景回归：第一版迁移只建了 doubao_v2 / qwen_realtime / mimo 三份，
-   * 补齐必须把千问平台下另外 3 个加上，且不动已有的那份。
+   * 补齐必须把千问平台下其余几个加上，且不动已有的那份。
    */
-  it('在第一版迁移的结果上补齐千问剩下 3 个', () => {
+  it('在第一版迁移的结果上补齐千问剩下几个', () => {
     const existing = [profile('doubao_v2'), profile('qwen_realtime'), profile('mimo')]
     const r = topUpProfiles(existing, {
       doubao: creds(), qwen: creds({ apiKey: 'sk-1' }), mimo: creds(),
     })
-    expect(r.added).toEqual(['qwen', 'qwen_omni_35_plus', 'qwen_omni_35_flash'])
-    expect(r.profiles).toHaveLength(6)
+    expect(r.added).toEqual(['qwen_audio_stream', 'qwen', 'qwen_omni_35_plus', 'qwen_omni_35_flash'])
+    expect(r.profiles).toHaveLength(7)
     expect(r.profiles.slice(0, 3)).toEqual(existing) // 原有三份原样不动
   })
 
   it('只补缺的，已有档案原样不动（对已经自己建过卡的用户幂等）', () => {
     const existing = [profile('qwen', { apiKey: 'MY-OWN' })]
     const r = topUpProfiles(existing, { qwen: creds({ apiKey: 'sk-1' }) })
-    expect(r.profiles).toHaveLength(4)
+    expect(r.profiles).toHaveLength(5)
     expect(r.profiles[0]).toBe(existing[0]) // 同一个对象，没被替换
     expect(r.profiles.filter((p) => p.provider === 'qwen')).toHaveLength(1)
   })
@@ -74,7 +74,7 @@ describe('topUpProfiles', () => {
    */
   it('已经自动补过又被删掉的服务不再重建', () => {
     const r = topUpProfiles([], { qwen: creds({ apiKey: 'sk-1' }) }, ['qwen', 'qwen_omni_35_flash'])
-    expect(r.added).toEqual(['qwen_realtime', 'qwen_omni_35_plus'])
+    expect(r.added).toEqual(['qwen_audio_stream', 'qwen_realtime', 'qwen_omni_35_plus'])
   })
 
   it('豆包的控制台代次与两代密钥都带过去', () => {

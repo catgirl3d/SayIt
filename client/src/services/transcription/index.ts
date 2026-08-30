@@ -8,7 +8,18 @@ import { CloudAPIProvider } from './CloudAPIProvider'
 import { LocalProvider } from './LocalProvider'
 import type { TranscriptionProvider, WorkMode } from './types'
 
-export type { TranscriptionProvider, TranscriptionCallbacks, StartOptions, StopOptions, FinalResult, ASRResult, WorkMode, ProviderState } from './types'
+export type {
+  TranscriptionProvider,
+  TranscriptionCallbacks,
+  StartOptions,
+  StopOptions,
+  FinalResult,
+  ASRResult,
+  WorkMode,
+  ProviderState,
+  AiExecutionSource,
+  AiExecutionStatus,
+} from './types'
 
 let currentProvider: TranscriptionProvider | null = null
 let currentMode: WorkMode = 'server'

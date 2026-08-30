@@ -68,7 +68,9 @@ export const DEFAULTS: Record<string, unknown> = {
   'cloudAi.profilesMigrated': false,
 
   // ── ASR（云 API）──
-  'cloudAsr.provider': 'doubao_v2', // 可选: 'doubao_v2' | 'qwen' | 'qwen_realtime' | 'qwen_omni' | 'qwen_omni_turbo' | 'mimo'
+  // 可选值以 features/settings/asrProviderCatalog.ts 的 ASR_PROVIDERS 为准：
+  // 'doubao_v2' | 'qwen' | 'qwen_audio_stream' | 'qwen_realtime' | 'qwen_omni_35_*' | 'mimo' | 'groq_whisper'
+  'cloudAsr.provider': 'doubao_v2',
   // 运行时读的「本次生效凭据」镜像。豆包按控制台代次算出来后写进这两个键：
   // 新版控制台只有一个 API Key、appId 必为空串（Rust 侧靠它区分两代鉴权头）。
   'cloudAsr.apiKey': '',
@@ -107,6 +109,8 @@ export const DEFAULTS: Record<string, unknown> = {
   // 映射成 Chinese / English；'auto' = 交给模型自检。
   // （注释原来写的是 'Chinese' | 'English' | 'Cantonese'，那是服务端内部的取值，
   //   客户端从来没写过这几个字符串。）
+  // 服务器模式下的 AI 来源。managed = 服务器内置；custom = 服务器只做 ASR，客户端调用当前 AI 档案。
+  'server.aiSource': 'managed', // 可选: 'managed' | 'custom'
   'server.language': 'auto',
 
   // ── 悬浮窗 ──
@@ -137,6 +141,26 @@ export const DEFAULTS: Record<string, unknown> = {
   audioRetentionEnabled: true, // 保留录音文件。可选: true | false
   audioRetentionDays: -1, // 录音保留天数。可选: 7 | 30 | 90 | -1（永久）
   logRetentionDays: 30, // 日志保留天数。可选: 7 | 15 | 30 | 90
+
+  // ── WebDAV 备份 ──
+  // 备份包一定含配置，历史与录音可选。两个都默认 false：录音库能有几个 GB，而网盘
+  // （尤其坚果云免费版）有月流量额度，默认打开等于替用户做了一个很贵的决定。
+  // ⚠️ Rust 侧 commands/webdav.rs 里也有一份默认值（setting_bool 的 unwrap_or(false)
+  // 与 DEFAULT_KEEP_COUNT），改这里要一起改 —— 两份不一致时界面显示的和实际上传的
+  // 就不是一回事了。
+  'webdav.enabled': false, // 自动定期备份。可选: true | false
+  'webdav.url': '', // 目录地址，只接受 https（Basic 认证等于明文发密码）
+  'webdav.username': '',
+  'webdav.password': '', // 坚果云要用「应用密码」，不是登录密码
+  'webdav.includeHistory': false, // 备份含历史记录
+  'webdav.includeAudio': false, // 备份含录音文件（体积大，打开时会提醒）
+  'webdav.intervalHours': 24, // 备份间隔小时数。可选: 24 | 72 | 168
+  'webdav.keepCount': 5, // 服务器上保留的份数。可选: 3 | 5 | 10
+  'webdav.lastBackupAt': 0, // 上次**成功**的时刻（ms）。间隔判定只看这个
+  'webdav.lastAttemptAt': 0, // 上次尝试的时刻（ms），失败退避用
+  // 上次备份结果 { at, ok, fileName, bytes, includeHistory, includeAudio, error }。
+  // 失败也记：静默失败几个月的备份在界面上和正常备份长得一模一样。
+  'webdav.lastResult': null,
 
   // ── 文本后处理（不依赖 AI 的客户端文本规范化）──
   textPostProcess: {

@@ -62,10 +62,23 @@ export interface AsrProviderEntry {
 }
 
 /**
- * 内置服务清单。顺序即卡片顺序：把最常用的放前面。
+ * 内置服务清单。顺序即卡片顺序，也是新建时下拉的顺序：把最推荐的放前面。
  *
  * label 刻意不带模型名后缀（模型名单独一行小字），否则卡片标题会被
  * 「千问 3.5 Omni Plus（qwen3.5-omni-plus，ASR+AI）」这种括号串撑爆。
+ *
+ * ── blurb 的口径（改文案前先读这段）──
+ * 每条只回答一件事：**什么时候该选它**，而且七条放在一起要能相互区分。
+ * 早期的文案是各写各的优点（「准确率高、速度快」同时挂在两家上），等于没给出
+ * 选择依据 —— 用户看完还是不知道该点哪一张。现在的口径：
+ *   · 准确率的结论是**有条件的**，条件要写出来。豆包只有在**关掉实时字幕**时
+ *     才是中文最准的一档，一开字幕就掉档；Audio 3.0 反过来，开着字幕也是第一档。
+ *     少了这个前提，两张卡的「最准」会互相矛盾。
+ *   · 不如别家的地方照实写（千问 realtime 不及 Audio 3.0、MiMo 准确率一般），
+ *     但用词留余地 —— 目录里留着它们是因为有人的账号/网络只有那一家能用。
+ *   · 引用别的卡一律用**产品名**（"Audio 3.0"、"Omni Plus"），不要用「上面那个」
+ *     「同上」：顺序会变，位置指代改一次顺序就错。
+ *   · 这些准确率结论来自实际使用对比，不是跑分。改结论前先真用一遍。
  */
 export const ASR_PROVIDERS: AsrProviderEntry[] = [
   {
@@ -75,6 +88,19 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     platform: 'doubao',
     availability: 'mainland_china',
     get blurb() { return t('asrProvider.doubaoBlurb') },
+  },
+  // 第二位（豆包之后）：实测**开着实时字幕**时它比豆包更准 —— 豆包最准的用法是
+  // 关掉实时字幕，一开就掉一档；这一家开着字幕也是第一档。它也不需要业务空间 ID
+  // （通用域名可用，见 providers/asr_qwen_audio_stream.rs 的文件头），
+  // 所以是"填了密钥就能用"的那张卡。
+  {
+    id: 'qwen_audio_stream',
+    get label() { return t('asrProvider.qwenAudioStream') },
+    model: 'qwen-audio-3.0-asr-flash-streaming',
+    platform: 'qwen',
+    availability: 'mainland_china',
+    get blurb() { return t('asrProvider.qwenAudioStreamBlurb') },
+    streaming: true,
   },
   {
     id: 'qwen',
@@ -134,9 +160,16 @@ export function findAsrProvider(id: string): AsrProviderEntry | undefined {
   return ASR_PROVIDERS.find((p) => p.id === id)
 }
 
+/**
+ * 地区提示，**只在需要提醒时才给字**。
+ *
+ * `mainland_china` 刻意返回空串：内置清单里绝大多数都是国内端点，那是默认情形，
+ * 每张卡上都挂一句「面向中国大陆账号」等于把噪音重复七遍，还把真正要紧的
+ * 「这个要海外网络才连得上」冲淡了。availability 字段本身保留 —— 它是数据，
+ * 只是这一条不值得占界面上的字。
+ */
 export function asrAvailabilityLabel(entry: AsrProviderEntry): string {
   switch (entry.availability) {
-    case 'mainland_china': return t('asrProvider.regionMainlandChina')
     case 'global': return t('asrProvider.regionGlobal')
     default: return ''
   }

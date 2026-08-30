@@ -637,6 +637,11 @@ fn main() {
             commands::backup::import_config,
             commands::backup::import_full,
             commands::backup::restart_app,
+            // WebDAV 备份（配置必备，历史/音频可选）
+            commands::webdav::webdav_test,
+            commands::webdav::webdav_list,
+            commands::webdav::webdav_backup_now,
+            commands::webdav::webdav_restore,
             // Diagnostics
             commands::diagnostics::collect_settings,
             commands::diagnostics::get_diagnostics_preview,
@@ -660,6 +665,11 @@ fn main() {
             providers::asr_qwen_realtime::qwen_stream_send,
             providers::asr_qwen_realtime::qwen_stream_finish,
             providers::asr_qwen_realtime::qwen_stream_close,
+            // Qwen-Audio-3.0 streaming ASR (DashScope duplex protocol)
+            providers::asr_qwen_audio_stream::qwen_audio_stream_open,
+            providers::asr_qwen_audio_stream::qwen_audio_stream_send,
+            providers::asr_qwen_audio_stream::qwen_audio_stream_finish,
+            providers::asr_qwen_audio_stream::qwen_audio_stream_close,
             // Models (local model management)
             models::registry::list_available_models,
             models::registry::list_downloaded_models,

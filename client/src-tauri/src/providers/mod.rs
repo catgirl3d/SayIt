@@ -14,6 +14,7 @@ pub mod asr_qwen_omni;
 pub mod asr_mimo;
 pub mod asr_groq;
 pub mod asr_qwen_realtime;
+pub mod asr_qwen_audio_stream;
 pub mod doubao_auth;
 pub mod doubao_protocol;
 pub mod registry;

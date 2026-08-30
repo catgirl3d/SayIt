@@ -29,10 +29,15 @@ import { Button } from '@/components/ui/button'
 import { Feedback, FormatHint, type FeedbackTone } from '@/components/ui/feedback'
 import { Modal } from '@/components/ui/modal'
 import { PasswordInput } from '@/components/ui/password-input'
+import { Switch } from '@/components/ui/switch'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { getSetting } from '@/services/store'
-import { getWorkMode } from '@/services/transcription'
+import { getSetting, setSetting } from '@/services/store'
+import {
+  SERVER_AI_SOURCE_KEY,
+  setRuntimeServerAiSource,
+  type ServerAiSource,
+} from '@/services/transcription/serverAiSource'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import { describeProviderError } from '@/lib/errorMessages'
 import {
@@ -248,8 +253,6 @@ function describeStatus(profile: AiProfile, checking: boolean): CardStatus {
 // 卡上标签的含义由标签自己和它的 tooltip 承担。
 const pickAdvice = () => t('ai.pickAdvice')
 
-const serverModeHint = () => t('ai.serverModeHint')
-
 const inputClass = 'h-9 w-full rounded-md border border-input-border bg-input-bg px-3 text-sm transition-colors focus:border-input-focus-border'
 const selectClass = 'h-9 w-full rounded-md border border-input-border bg-input-bg px-2 text-sm transition-colors focus:border-input-focus-border'
 const linkClass = 'inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2 decoration-primary/40 transition-colors hover:decoration-primary'
@@ -279,16 +282,17 @@ export default function AIProviderSection() {
   const [checkingId, setCheckingId] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
-  const [workMode, setWorkMode] = useState(getWorkMode)
+  const [serverAiSource, setServerAiSource] = useState<ServerAiSource>('managed')
+  const [savingServerAiSource, setSavingServerAiSource] = useState(false)
+  const [serverAiSourceError, setServerAiSourceError] = useState(false)
+  /** 工作模式与来源都读回后才渲染那一段（见 useEffect 里的注释） */
+  const [serverAiSourceLoaded, setServerAiSourceLoaded] = useState(false)
+  const [isServerMode, setIsServerMode] = useState(false)
   /** 「测试全部」的进度；null = 没在批量测试 */
   const [batch, setBatch] = useState<{ done: number; total: number } | null>(null)
   /** 批量测试是并发的，所以「正在测哪个」是一组而不是一个 */
   const [checkingIds, setCheckingIds] = useState<string[]>([])
 
-  // 服务器模式下本页配置不参与实际请求。曾经整页禁用过，但那样太粗暴：想提前配好、
-  // 或者只是想测一下自己的 key 通不通的人被一起挡住了。现在只提醒、不阻止 ——
-  // 提醒由标题旁那枚 warning 徽标承担（点它有完整说明），交互一概照常。
-  const configIgnored = workMode === 'server'
   const draftProvider = findProvider(draft?.provider ?? '')
   const draftNeedsKey = !draftProvider.keyless
   const draftUrlError = draft ? checkApiUrl(draft.apiUrl) : ''
@@ -308,21 +312,54 @@ export default function AIProviderSection() {
   const pendingDelete = profiles.find((p) => p.id === pendingDeleteId) ?? null
 
   useEffect(() => {
+    let cancelled = false
     void (async () => {
       const state = await loadAiProfiles()
       setProfiles(state.profiles)
       setActiveId(state.activeId)
       setLoaded(true)
     })()
-    void getSetting('workMode', 'server').then((value) => {
-      const mode = value as string
-      if (mode === 'server' || mode === 'cloud_api' || mode === 'local') setWorkMode(mode as typeof workMode)
+    // 两个值一起等（Promise.all + 各自 catch 兜底），到齐后同一批渲染。
+    // 分两次落值会出两种假象：默认是服务器模式，本地/云模式的用户会看见这一段先出现再消失；
+    // 来源默认 managed，已保存 custom 的用户会看见开关自己滑一下（pitfalls #11）。
+    // 只在值到齐后才首次渲染，两者都不存在，也就不需要 ready/animate 那套过渡开关。
+    void Promise.all([
+      getSetting('workMode', 'server').catch(() => 'server'),
+      getSetting(SERVER_AI_SOURCE_KEY, 'managed').catch(() => 'managed'),
+    ]).then(([mode, value]) => {
+      if (cancelled) return
+      const source = value === 'custom' ? 'custom' : 'managed'
+      setServerAiSource(source)
+      setRuntimeServerAiSource(source)
+      setIsServerMode(mode === 'server')
+      setServerAiSourceLoaded(true)
     })
     // 切走路由时复位「有未保存改动」，别把脏状态留给下一次进入
-    return () => setEngineDraftDirty(false)
+    return () => {
+      cancelled = true
+      setEngineDraftDirty(false)
+    }
   }, [])
 
   useEffect(() => { setEngineDraftDirty(draftDirty) }, [draftDirty])
+
+  async function handleServerAiSource(next: ServerAiSource) {
+    if (savingServerAiSource || next === serverAiSource) return
+    const previous = serverAiSource
+    setServerAiSource(next)
+    setRuntimeServerAiSource(next)
+    setSavingServerAiSource(true)
+    setServerAiSourceError(false)
+    try {
+      await setSetting(SERVER_AI_SOURCE_KEY, next)
+    } catch {
+      setServerAiSource(previous)
+      setRuntimeServerAiSource(previous)
+      setServerAiSourceError(true)
+    } finally {
+      setSavingServerAiSource(false)
+    }
+  }
 
   /** 唯一的写入点：列表 + 启用项一起落盘，并由 store 同步运行时那四个扁平键 */
   async function persist(nextProfiles: AiProfile[], nextActiveId: string) {
@@ -835,23 +872,50 @@ export default function AIProviderSection() {
   return (
     <Card>
       <CardContent className="p-6">
-        {/* 卡头留在 fieldset 外面：整块禁用时，说明"为什么禁用"的那行字必须照常可读 */}
+        {/* 只在服务器模式出现：本地/云 API 模式下 AI 整理本来就走下面选中的服务，没有第二个
+            选项可选，摆一个恒定生效的开关只会让人以为它还管着别的事。
+            形态用设置页里那 8 处同构的开关行 —— 分段控件在本应用表示页面/短枚举切换，
+            而两个短选项撑成等宽卡会留一大片空白，还会和下方真正的服务卡争层级。
+            说明文字跟着开关状态走，直接说“当前由谁整理”，比让用户从「关」反推更省事。 */}
+        {serverAiSourceLoaded && isServerMode && (
+          <section className="mb-4 border-b border-border pb-4" aria-labelledby="server-ai-source-heading">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  {/* 字号与图标间距都对齐下面的「AI 服务」标题：两者是同一层级的两块内容，
+                      标题小一号会让它看着像附属于下面那块 */}
+                  <h2 id="server-ai-source-heading" className="text-lg font-semibold">
+                    {t('ai.serverSource.title')}
+                  </h2>
+                  <Tooltip variant="light" content={t('ai.serverSource.help')}>
+                    <Info
+                      aria-label={t('settings.helpAria', { label: t('ai.serverSource.title') })}
+                      className={helpIconClass}
+                    />
+                  </Tooltip>
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {t(serverAiSource === 'custom' ? 'ai.serverSource.descCustom' : 'ai.serverSource.descManaged')}
+                </p>
+              </div>
+              <Switch
+                checked={serverAiSource === 'custom'}
+                onChange={() => void handleServerAiSource(serverAiSource === 'custom' ? 'managed' : 'custom')}
+                labelledBy="server-ai-source-heading"
+                disabled={savingServerAiSource}
+              />
+            </div>
+
+            {serverAiSourceError && (
+              <Feedback className="mt-2" tone="error" message={t('ai.err.saveFailed')} />
+            )}
+          </section>
+        )}
+
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 grow basis-[18rem]">
             <div className="flex items-center gap-2">
               <h2 id="ai-service-heading" className="text-lg font-semibold">{t('ai.title')}</h2>
-              {/* 徽标沿用工作模式卡上「待配置」那一款（同样的形状和 warning 配色），
-                  比正文亮一档 —— 服务器模式下它是本页最需要被读到的一行。
-                  完整解释挂在徽标自己的 tooltip 上，而不是塞进右边的 ⓘ：
-                  「为什么不生效」和「选哪家」是两件事，各自有各自的入口，谁也别挤占谁。 */}
-              {configIgnored && (
-                <Tooltip variant="light" content={serverModeHint()}>
-                  <span className="inline-flex cursor-help items-center gap-1.5 rounded-full bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning-strong">
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" aria-hidden />
-                    {t('ai.serverModeBadge')}
-                  </span>
-                </Tooltip>
-              )}
               <Tooltip variant="light" content={pickAdvice()}>
                 <Info aria-label={t('ai.helpAria')} className={helpIconClass} />
               </Tooltip>
@@ -887,9 +951,7 @@ export default function AIProviderSection() {
           </div>
         </div>
 
-        {/* fieldset 只当分组容器留着。服务器模式下不再禁用它：能照常新增、切换、测试，
-            配好了等切到云 API / 本地模式就直接生效。为什么不生效由上面那枚徽标说明，
-            而不是把整页涂灰 —— 涂灰会把"想提前配"和"想测 key"的人一起挡在外面。 */}
+        {/* 自定义服务始终可编辑和测试；服务器模式是否实际使用由上方来源选择决定。 */}
         <fieldset className="min-w-0">
           {!loaded ? (
             <p className="py-2 text-sm text-muted-foreground">{t('ai.loading')}</p>

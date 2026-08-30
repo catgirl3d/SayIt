@@ -9,6 +9,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getSetting } from '../store'
 import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
+import { polishWithClientAi } from './clientAiPolish'
 import type {
   TranscriptionProvider,
   TranscriptionCallbacks,
@@ -16,14 +17,6 @@ import type {
   StopOptions,
   WorkMode,
 } from './types'
-
-interface AiProviderConfig {
-  provider: string
-  api_url: string
-  api_key: string
-  model: string
-  extra?: Record<string, unknown>
-}
 
 interface AsrProviderConfig {
   provider: string
@@ -33,7 +26,39 @@ interface AsrProviderConfig {
 }
 
 interface AsrResult { text: string; elapsed_ms: number }
-interface AiResult { text: string; elapsed_ms: number }
+
+/**
+ * 千问两个流式模型各有一组原生命令。
+ *
+ * 它们是**两套 WebSocket 协议**，不是同一个接口的两个模型名：
+ *   · qwen_realtime      → OpenAI-Realtime 风格（/api-ws/v1/realtime）
+ *   · qwen_audio_stream  → DashScope duplex run-task（/api-ws/v1/inference）
+ * Rust 侧因此各有一份实现（asr_qwen_realtime.rs / asr_qwen_audio_stream.rs），
+ * 这里要记住本次会话用的是哪一组，收尾时才不会去 finish 另一条没开的会话。
+ */
+const QWEN_STREAM_COMMANDS = {
+  qwen_realtime: {
+    open: 'qwen_stream_open',
+    send: 'qwen_stream_send',
+    finish: 'qwen_stream_finish',
+    close: 'qwen_stream_close',
+  },
+  qwen_audio_stream: {
+    open: 'qwen_audio_stream_open',
+    send: 'qwen_audio_stream_send',
+    finish: 'qwen_audio_stream_finish',
+    close: 'qwen_audio_stream_close',
+  },
+} as const
+
+type QwenStreamProvider = keyof typeof QWEN_STREAM_COMMANDS
+type QwenStreamCommands = typeof QWEN_STREAM_COMMANDS[QwenStreamProvider]
+type NativeOpenCommand = 'doubao_stream_open' | QwenStreamCommands['open']
+type NativeFinishCommand = 'doubao_stream_finish' | QwenStreamCommands['finish']
+
+function isQwenStreamProvider(provider: string): provider is QwenStreamProvider {
+  return provider === 'qwen_realtime' || provider === 'qwen_audio_stream'
+}
 
 export class CloudAPIProvider implements TranscriptionProvider {
   readonly mode: WorkMode = 'cloud_api'
@@ -50,6 +75,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private isQwenStream = false
   private doubaoStreamReady = false
   private qwenStreamReady = false
+  /** 本次会话用的千问命令组；没走千问流式时为 null */
+  private qwenCommands: QwenStreamCommands | null = null
   private streamStartTime = 0
   private pendingChunks: ArrayBuffer[] = []
   private flushTimer: ReturnType<typeof setInterval> | null = null
@@ -91,6 +118,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.isQwenStream = false
     this.doubaoStreamReady = false
     this.qwenStreamReady = false
+    this.qwenCommands = null
     this.streamStartTime = performance.now()
     this.pendingChunks = []
     this.streamFinishing = false
@@ -129,6 +157,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.isQwenStream = false
     this.doubaoStreamReady = false
     this.qwenStreamReady = false
+    this.qwenCommands = null
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     this.teardownPartials()
     void this.queueNativeClose(sendLockToDrain)
@@ -143,14 +172,16 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private queueNativeClose(sendLockToDrain: Promise<void>): Promise<void> {
     return this.enqueueNativeLifecycle(async () => {
       await sendLockToDrain.catch(() => { })
+      // 逐个关：每个 close 在没有会话时都是无操作，所以不需要先判断开了哪一个。
       await invoke('doubao_stream_close').catch(() => { })
       await invoke('qwen_stream_close').catch(() => { })
+      await invoke('qwen_audio_stream_close').catch(() => { })
     })
   }
 
   private invokeNativeOpen(
     runId: number,
-    command: 'doubao_stream_open' | 'qwen_stream_open',
+    command: NativeOpenCommand,
     args: Record<string, unknown>,
   ): Promise<boolean> {
     return this.enqueueNativeLifecycle(async () => {
@@ -168,7 +199,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
   private invokeNativeFinish(
     runId: number,
-    command: 'doubao_stream_finish' | 'qwen_stream_finish',
+    command: NativeFinishCommand,
   ): Promise<string | undefined> {
     return this.enqueueNativeLifecycle(async () => {
       if (!this.isRunCurrent(runId)) return undefined
@@ -194,7 +225,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       partialCount++
       // 只记录第一条，避免刷屏；证明前端确实收到了 Rust 上抛的中间结果
       if (partialCount === 1) {
-      addRuntimeEvent('info', 'cloud_api', 'First streaming partial received', { textLen: text.length })
+        addRuntimeEvent('info', 'cloud_api', 'First streaming partial received', { textLen: text.length })
       }
       this.callbacks.onPartialASR?.(text)
     })
@@ -203,7 +234,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       return
     }
     this.partialUnlisten = unlisten
-      addRuntimeEvent('info', 'cloud_api', 'Subscribed to asr-partial events')
+    addRuntimeEvent('info', 'cloud_api', 'Subscribed to asr-partial events')
   }
 
   private teardownPartials(): void {
@@ -249,6 +280,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.isQwenStream = false
     this.doubaoStreamReady = false
     this.qwenStreamReady = false
+    this.qwenCommands = null
     this.teardownPartials()
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     void this.queueNativeClose(sendLockToDrain)
@@ -281,7 +313,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       const settingOn = Boolean(await getSetting('streamingDisplayEnabled', false))
       if (!this.isRunCurrent(runId)) return
       const realtime = (settingOn || Boolean(startOpts.streamingDisplay)) && isStreamingDisplayReady(asrProvider, qwenWorkspaceId)
-    addRuntimeEvent('info', 'cloud_api', 'Streaming display decision', { asrProvider, settingOn, startOpt: Boolean(startOpts.streamingDisplay), hasWorkspace: Boolean(qwenWorkspaceId), realtime, runId })
+      addRuntimeEvent('info', 'cloud_api', 'Streaming display decision', { asrProvider, settingOn, startOpt: Boolean(startOpts.streamingDisplay), hasWorkspace: Boolean(qwenWorkspaceId), realtime, runId })
       if (realtime) {
         // 先订阅中间结果，避免建连后、订阅前丢帧
         await this.subscribePartials(runId)
@@ -305,23 +337,26 @@ export class CloudAPIProvider implements TranscriptionProvider {
         if (!opened || !this.isRunCurrent(runId)) return
         this.doubaoStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: ready')
-      } else if (asrProvider === 'qwen_realtime' && realtime) {
-        // 千问实时（qwen3-asr-flash-realtime）：仅在开启实时显示且配置了 WorkspaceId 时才走流式 WebSocket。
-        // qwen3-asr-flash（非实时）与未配置/未开启时都不进此分支，走下面的一次性识别。
+      } else if (isQwenStreamProvider(asrProvider) && realtime) {
+        // 千问流式：只在开启实时显示、且这份配置真的就绪时才走流式 WebSocket。
+        //   · qwen_realtime      需要 WorkspaceId（isStreamingDisplayReady 已把关）
+        //   · qwen_audio_stream  不需要，填了密钥就能用
+        // qwen3-asr-flash（非实时）与未开启实时显示时都不进此分支，走下面的一次性识别。
         this.isQwenStream = true
+        this.qwenCommands = QWEN_STREAM_COMMANDS[asrProvider]
         const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
         if (!this.isRunCurrent(runId)) return
 
-        addRuntimeEvent('info', 'cloud_api', 'Qwen Realtime: connecting', { hasWorkspace: Boolean(qwenWorkspaceId) })
-        const opened = await this.invokeNativeOpen(runId, 'qwen_stream_open', {
-          config: { provider: 'qwen', api_key: asrApiKey, app_id: '' },
+        addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: connecting', { asrProvider, hasWorkspace: Boolean(qwenWorkspaceId) })
+        const opened = await this.invokeNativeOpen(runId, this.qwenCommands.open, {
+          config: { provider: asrProvider, api_key: asrApiKey, app_id: '' },
           hotwords: startOpts.hotwords ?? [],
           realtime,
           workspaceId: qwenWorkspaceId,
         })
         if (!opened || !this.isRunCurrent(runId)) return
         this.qwenStreamReady = true
-        addRuntimeEvent('info', 'cloud_api', 'Qwen Realtime: ready')
+        addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: ready', { asrProvider })
       } else {
         // 其他情况（含未配置 WorkspaceId 的千问）走录完再发的一次性识别
         this.teardownPartials()
@@ -347,6 +382,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       this.isQwenStream = false
       this.doubaoStreamReady = false
       this.qwenStreamReady = false
+      this.qwenCommands = null
       this.teardownPartials()
     }
   }
@@ -372,11 +408,11 @@ export class CloudAPIProvider implements TranscriptionProvider {
       try {
         if (this.isDoubaoStream) {
           await invoke('doubao_stream_send', { pcmB64: b64 })
-        } else if (this.isQwenStream) {
-          await invoke('qwen_stream_send', { pcmB64: b64 })
+        } else if (this.isQwenStream && this.qwenCommands) {
+          await invoke(this.qwenCommands.send, { pcmB64: b64 })
         }
       } catch (err) {
-      addRuntimeEvent('warn', 'cloud_api', 'Streaming send failed', { error: String(err) })
+        addRuntimeEvent('warn', 'cloud_api', 'Streaming send failed', { error: String(err) })
       }
     }
     // 接到发送链尾部，串行执行（无论前一个成功或失败都继续）
@@ -404,7 +440,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
       const durationSec = (totalBytes / 2) / 16000
       if (durationSec < 0.3) {
-      addRuntimeEvent('info', 'cloud_api', 'Audio too short; skipped processing', { durationSec })
+        addRuntimeEvent('info', 'cloud_api', 'Audio too short; skipped processing', { durationSec })
         this.teardownPartials()
         this.callbacks.onDone?.()
         return
@@ -428,21 +464,25 @@ export class CloudAPIProvider implements TranscriptionProvider {
         if (!this.isRunCurrent(runId)) return
 
         if (this.isDoubaoStream) {
-        addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: sending finish')
+          addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: sending finish')
           const finishStart = performance.now()
           const text = await this.invokeNativeFinish(runId, 'doubao_stream_finish')
           if (text === undefined || !this.isRunCurrent(runId)) return
           asrText = text
           asrMs = Math.round(performance.now() - finishStart)
-        addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: recognition complete', { asrMs, textLen: asrText.length })
+          addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: recognition complete', { asrMs, textLen: asrText.length })
         } else {
-        addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: sending finish')
+          // 命令组在 qwenStreamReady 之前就已赋值，这里只是让类型收窄；
+          // 真为空就抛出去，而不是悄悄返回空文本（空结果会被显示成「没听到声音」）。
+          const commands = this.qwenCommands
+          if (!commands) throw new Error('Qwen streaming session has no native command set')
+          addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: sending finish', { command: commands.finish })
           const finishStart = performance.now()
-          const text = await this.invokeNativeFinish(runId, 'qwen_stream_finish')
+          const text = await this.invokeNativeFinish(runId, commands.finish)
           if (text === undefined || !this.isRunCurrent(runId)) return
           asrText = text
           asrMs = Math.round(performance.now() - finishStart)
-        addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: recognition complete', { asrMs, textLen: asrText.length })
+          addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: recognition complete', { asrMs, textLen: asrText.length })
         }
       } else {
         // 非豆包 / 豆包建连失败：录完再发
@@ -475,7 +515,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
           }),
         }
 
-      addRuntimeEvent('info', 'cloud_api', 'ASR started', { provider: asrProvider, durationSec })
+        addRuntimeEvent('info', 'cloud_api', 'ASR started', { provider: asrProvider, durationSec })
         const asrResult = await invoke<AsrResult>('cloud_transcribe', {
           request: {
             audio_b64: audioB64,
@@ -506,71 +546,39 @@ export class CloudAPIProvider implements TranscriptionProvider {
       }
 
       // AI 校对（Qwen Omni 已内置 AI，跳过）
-      let llmText = asrText
-      let llmMs = 0
-      let aiSucceeded = false
-
-      const disableAi = startOpts.disableAi ?? false
-      const aiMinDurationSec = Math.max(0, Number(startOpts.aiMinDurationSec) || 0)
-      const shouldUseAi = !disableAi && (aiMinDurationSec === 0 || durationSec >= aiMinDurationSec)
-      if (shouldUseAi && !isQwenOmni) {
-        const aiProvider = await getSetting('cloudAi.provider', 'openai_compat') as string
-        const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
-        const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
-        const aiModel = await getSetting('cloudAi.model', '') as string
-        if (!this.isRunCurrent(runId)) return
-
-        // Ollama 是免密钥的本机服务：要求非空密钥会让配好的 Ollama 被静默跳过
-        // （测试连接通过、口述出来的文字却没被整理）。LocalProvider 一直是这个判断。
-        if (aiApiUrl && (aiApiKey || aiProvider === 'ollama') && aiModel) {
-          const aiConfig: AiProviderConfig = {
-            provider: aiProvider, api_url: aiApiUrl, api_key: aiApiKey, model: aiModel,
-          }
-        addRuntimeEvent('info', 'cloud_api', 'AI cleanup started', { provider: aiProvider, model: aiModel })
-
-          try {
-            const aiResult = await invoke<AiResult>('cloud_polish', {
-              request: {
-                text: asrText,
-                ai_config: aiConfig,
-                system_prompt: startOpts.systemPrompt || null,
-                text_context: startOpts.textContext || null,
-              },
-            })
-            if (!this.isRunCurrent(runId)) return
-            llmText = aiResult.text || asrText
-            llmMs = aiResult.elapsed_ms
-            aiSucceeded = Boolean(aiResult.text)
-          } catch (err) {
-            if (!this.isRunCurrent(runId)) return
-        addRuntimeEvent('warn', 'cloud_api', 'AI cleanup failed; using raw ASR text', { error: String(err) })
-          }
+      const polish = isQwenOmni
+        ? {
+          llmText: startOpts.textContext?.selectedText || asrText,
+          llmMs: 0,
+          contextApplied: startOpts.textContext ? false : undefined,
+          aiSource: 'none' as const,
+          aiStatus: 'skipped' as const,
         }
-      }
-
-      if (!disableAi && aiMinDurationSec > 0 && durationSec < aiMinDurationSec) {
-        addRuntimeEvent('info', 'cloud_api', 'AI cleanup skipped below duration threshold', {
+        : await polishWithClientAi({
+          asrText,
           durationSec,
-          aiMinDurationSec,
+          startOptions: startOpts,
+          logSource: 'cloud_api',
+          isCurrent: () => this.isRunCurrent(runId),
         })
-      }
+      if (!polish || !this.isRunCurrent(runId)) return
 
-      // A spoken edit command must never replace the user's selection when AI was unavailable.
-      // Re-inserting the original selection is a safe no-op for the target editor.
-      if (startOpts.textContext?.selectedText && !aiSucceeded) {
-        llmText = startOpts.textContext.selectedText
-        addRuntimeEvent('warn', 'cloud_api', 'Selected-text edit skipped because AI did not complete')
-      }
-
-      if (!this.isRunCurrent(runId)) return
       const totalMs = Math.round(performance.now() - startTime)
-    addRuntimeEvent('info', 'cloud_api', 'Processing complete', { durationSec, asrMs, llmMs, totalMs, runId })
+      addRuntimeEvent('info', 'cloud_api', 'Processing complete', {
+        durationSec,
+        asrMs,
+        llmMs: polish.llmMs,
+        totalMs,
+        runId,
+      })
 
       const omniModel = isQwenOmni ? resolveQwenOmniModel(asrProvider) : undefined
 
       this.callbacks.onFinal?.({
-        asrText, llmText, asrMs, llmMs, durationSec,
-        contextApplied: startOpts.textContext ? aiSucceeded : undefined,
+        asrText,
+        asrMs,
+        durationSec,
+        ...polish,
         ...(isQwenOmni && { asrEngine: 'qwen_omni', asrModel: omniModel }),
       })
       this.callbacks.onDone?.()

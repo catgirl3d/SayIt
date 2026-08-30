@@ -68,6 +68,8 @@ export interface HistoryRecord {
   asrProvider?: string   // 例如 "server" / "doubao" / "sensevoice-small"
   aiProvider?: string    // 例如 "server" / "openai_compat" / "ollama"
   aiModel?: string       // 例如 "deepseek-chat" / "qwen2.5:7b"
+  aiSource?: 'server' | 'custom' | 'none'
+  aiStatus?: 'applied' | 'skipped' | 'unavailable' | 'failed'
 }
 
 export type HistoryFailReasonCode =

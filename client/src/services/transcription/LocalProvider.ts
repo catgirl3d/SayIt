@@ -6,9 +6,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
 import { BufferedProvider } from './BufferedProvider'
+import { polishWithClientAi } from './clientAiPolish'
 import type { TranscriptionCallbacks } from './types'
-
-interface AiResult { text: string; elapsed_ms: number }
 
 export class LocalProvider extends BufferedProvider {
   readonly mode = 'local' as const
@@ -104,63 +103,29 @@ export class LocalProvider extends BufferedProvider {
       return
     }
 
-    let llmText = asrText
-    let llmMs = 0
-    let aiSucceeded = false
+    const polish = await polishWithClientAi({
+      asrText,
+      durationSec,
+      startOptions: startOpts,
+      logSource: 'local',
+      isCurrent: () => this.isRunCurrent(runId),
+    })
+    if (!polish || !this.isRunCurrent(runId)) return
 
-    const aiEnabled = await getSetting('aiEnabled', false)
-    if (!this.isRunCurrent(runId)) return
-    const disableAi = startOpts?.disableAi ?? false
-    const aiMinDurationSec = Math.max(0, Number(startOpts?.aiMinDurationSec) || 0)
-    const shouldUseAi = !disableAi && (aiMinDurationSec === 0 || durationSec >= aiMinDurationSec)
-
-    if (aiEnabled && shouldUseAi) {
-      const aiProvider = await getSetting('cloudAi.provider', 'openai_compat') as string
-      const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
-      const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
-      const aiModel = await getSetting('cloudAi.model', '') as string
-      if (!this.isRunCurrent(runId)) return
-
-      if (aiApiUrl && (aiApiKey || aiProvider === 'ollama')) {
-        try {
-          const aiResult = await invoke<AiResult>('cloud_polish', {
-            request: {
-              text: asrText,
-              ai_config: { provider: aiProvider, api_url: aiApiUrl, api_key: aiApiKey, model: aiModel },
-              system_prompt: startOpts?.systemPrompt || null,
-              text_context: startOpts?.textContext || null,
-            },
-          })
-          if (!this.isRunCurrent(runId)) return
-          llmText = aiResult.text || asrText
-          llmMs = aiResult.elapsed_ms
-          aiSucceeded = Boolean(aiResult.text)
-        } catch (err) {
-          if (!this.isRunCurrent(runId)) return
-        addRuntimeEvent('warn', 'local', 'AI cleanup failed; using raw ASR text', { error: String(err) })
-        }
-      }
-    }
-
-    if (aiEnabled && !disableAi && aiMinDurationSec > 0 && durationSec < aiMinDurationSec) {
-      addRuntimeEvent('info', 'local', 'AI cleanup skipped below duration threshold', {
-        durationSec,
-        aiMinDurationSec,
-      })
-    }
-
-    if (startOpts?.textContext?.selectedText && !aiSucceeded) {
-      llmText = startOpts.textContext.selectedText
-      addRuntimeEvent('warn', 'local', 'Selected-text edit skipped because AI did not complete')
-    }
-
-    if (!this.isRunCurrent(runId)) return
     const totalMs = Math.round(performance.now() - startTime)
-    addRuntimeEvent('info', 'local', 'Processing complete', { durationSec, asrMs, llmMs, totalMs, runId })
+    addRuntimeEvent('info', 'local', 'Processing complete', {
+      durationSec,
+      asrMs,
+      llmMs: polish.llmMs,
+      totalMs,
+      runId,
+    })
 
     this.callbacks.onFinal?.({
-      asrText, llmText, asrMs, llmMs, durationSec,
-      contextApplied: startOpts?.textContext ? aiSucceeded : undefined,
+      asrText,
+      asrMs,
+      durationSec,
+      ...polish,
     })
     this.callbacks.onDone?.()
   }

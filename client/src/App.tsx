@@ -18,6 +18,7 @@ import { initAiEnabled } from './stores/aiEnabled'
 import { initActivePreset } from './stores/activePreset'
 import { getSetting, setSetting } from './services/store'
 import { startUpdateService } from './features/update/autoUpdate'
+import { startWebDavBackupService } from './features/backup/autoWebdavBackup'
 import UpdateDialog from './features/update/UpdateDialog'
 import * as bridge from './services/bridge'
 
@@ -37,15 +38,16 @@ export default function App() {
     void initActivePreset()
     initRecorder()
     void startUpdateService()
+    void startWebDavBackupService()
 
-    // 检查是否需要显示欢迎向导（仅首次安装）
-    ;(async () => {
-      const onboardedVersion = await getSetting('onboardingVersion', '')
-      if (!onboardedVersion) {
-        setShowWelcome(true)
-      }
-      setOnboardingChecked(true)
-    })()
+      // 检查是否需要显示欢迎向导（仅首次安装）
+      ; (async () => {
+        const onboardedVersion = await getSetting('onboardingVersion', '')
+        if (!onboardedVersion) {
+          setShowWelcome(true)
+        }
+        setOnboardingChecked(true)
+      })()
 
     return () => {
       cleanup()

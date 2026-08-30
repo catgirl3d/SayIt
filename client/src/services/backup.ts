@@ -85,9 +85,17 @@ export async function exportConfigFile(selection: ConfigExportSelection): Promis
   return { canceled: false, filePath: path }
 }
 
-/** 导出全部数据（配置 + 历史 + 录音）为 zip，直接写入默认备份目录。 */
+/**
+ * 本地「全部数据」导出：配置 + 历史 + 录音，直接写入默认备份目录。
+ *
+ * scope 显式传全 true —— Rust 侧刻意不给这两个字段 serde 默认值，漏传就反序列化失败。
+ * 宁可报一条看得见的错，也不要让「默认全都要」在 WebDAV 自动备份那边变成
+ * 每天悄悄上传几个 GB 音频。
+ */
 export async function exportFullFile(): Promise<ExportResult> {
-  const path = await invoke<string>('export_full')
+  const path = await invoke<string>('export_full', {
+    scope: { includeHistory: true, includeAudio: true },
+  })
   return { canceled: false, filePath: path }
 }
 

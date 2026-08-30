@@ -567,6 +567,7 @@ export default function CloudAPISection() {
     const status = describeCard(profile)
     const siblings = profiles.filter((p) => p.provider === profile.provider).length
     const title = profileTitle(profile, siblings)
+    const availability = asrAvailabilityLabel(entry)
     return (
       <div
         key={profile.id}
@@ -645,7 +646,9 @@ export default function CloudAPISection() {
           </div>
         </div>
         <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground/80">
-          {entry.blurb} <span className="font-medium">{asrAvailabilityLabel(entry)}</span>
+          {entry.blurb}
+          {/* 地区提示多数供应商为空（见 asrAvailabilityLabel），条件渲染避免留一个空 span 和多余空格 */}
+          {availability !== '' && <> <span className="font-medium">{availability}</span></>}
         </p>
       </div>
     )
@@ -657,6 +660,7 @@ export default function CloudAPISection() {
     if (!draft) return null
     const platformInfo = ASR_PLATFORMS[draftPlatform]
     const draftEntry = findAsrProvider(draft.provider)
+    const draftAvailability = draftEntry ? asrAvailabilityLabel(draftEntry) : ''
     const keyLabel = draftIsDoubao ? doubaoKeyLabel(draft.console) : 'API Key'
     return (
       <Modal
@@ -680,10 +684,8 @@ export default function CloudAPISection() {
               ))}
             </select>
             <p className="mt-1 text-xs text-muted-foreground">
-              {draftEntry?.blurb}{' '}
-              {draftEntry && (
-                <span className="font-medium">{asrAvailabilityLabel(draftEntry)}</span>
-              )}
+              {draftEntry?.blurb}
+              {draftAvailability !== '' && <> <span className="font-medium">{draftAvailability}</span></>}
             </p>
           </div>
 

@@ -4032,7 +4032,7 @@ dependencies = [
 
 [[package]]
 name = "sayit"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64 0.22.1",
  "bzip2",
@@ -4065,6 +4065,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "transcribe-cpp",
  "uuid",
  "webview2-com",

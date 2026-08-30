@@ -3,7 +3,9 @@ import { cn } from '@/lib/utils'
 import { resolveAsrDisplayModel, isQwenOmniProvider, resolveQwenOmniModel } from '@/lib/asrModels'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
-import type { WorkMode } from '@/services/transcription'
+import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
+import { SERVER_AI_SOURCE_KEY } from '@/services/transcription/serverAiSource'
+import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/transcription'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Download, Search, Check, FolderOpen } from 'lucide-react'
@@ -47,6 +49,10 @@ interface ReprocessResult {
   durationSec: number
   asrEngine?: string
   asrModel?: string
+  aiSource?: AiExecutionSource
+  aiStatus?: AiExecutionStatus
+  aiProvider?: string
+  aiModel?: string
 }
 
 /** 服务器模式重新识别：通过独立 WebSocket 连接，避免干扰全局连接 */
@@ -59,8 +65,17 @@ async function reprocessViaServer(
 ): Promise<ReprocessResult> {
   const { getWSUrl } = await import('@/services/runtimeConfig')
   const wsUrl = getWSUrl()
+  const [aiSource, rawAiMinDurationSec] = await Promise.all([
+    getSetting(SERVER_AI_SOURCE_KEY, 'managed') as Promise<string>,
+    getSetting('aiMinDurationSec', 0),
+  ])
+  const audioDurationSec = (chunk.byteLength / 2) / 16000
+  const aiMinDurationSec = Math.max(0, Number(rawAiMinDurationSec) || 0)
+  const skipAiForDuration = aiEnabled && aiMinDurationSec > 0 && audioDurationSec < aiMinDurationSec
+  const useCustomAi = aiEnabled && aiSource === 'custom'
+  const useManagedAi = aiEnabled && !useCustomAi && !skipAiForDuration
 
-  return new Promise<ReprocessResult>((resolve, reject) => {
+  const serverResult = await new Promise<ReprocessResult>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       try { socket.close() } catch { /* ignore */ }
       reject(new Error('Retranscription timed out'))
@@ -75,9 +90,9 @@ async function reprocessViaServer(
       const startMsg: Record<string, unknown> = {
         cmd: 'start',
         source: 'history_reprocess',
-        disable_ai: !aiEnabled,
+        disable_ai: !useManagedAi,
       }
-      if (aiEnabled && systemPrompt) startMsg.system_prompt = systemPrompt
+      if (useManagedAi && systemPrompt) startMsg.system_prompt = systemPrompt
       if (clientMeta) {
         startMsg.client_meta = {
           user_id: clientMeta.userId,
@@ -154,6 +169,41 @@ async function reprocessViaServer(
       }
     }
   })
+
+  if (!serverResult.asrText.trim()) {
+    return {
+      ...serverResult,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+      aiProvider: undefined,
+      aiModel: undefined,
+    }
+  }
+
+  if (!useCustomAi) {
+    return {
+      ...serverResult,
+      aiSource: useManagedAi ? 'server' : 'none',
+      aiStatus: useManagedAi
+        ? serverResult.llmMs > 0 ? 'applied' : 'unavailable'
+        : 'skipped',
+      aiProvider: useManagedAi ? 'server' : undefined,
+    }
+  }
+
+  const polished = await polishWithClientAi({
+    asrText: serverResult.asrText,
+    durationSec: audioDurationSec,
+    startOptions: {
+      runId: 1,
+      systemPrompt,
+      disableAi: !aiEnabled,
+      aiMinDurationSec,
+      source: 'history_reprocess',
+    },
+    logSource: 'history',
+  })
+  return polished ? { ...serverResult, ...polished } : serverResult
 }
 
 /** 云 API 模式重新识别：调用 cloud_transcribe + 可选 cloud_polish，与 CloudAPIProvider 一致 */
@@ -278,7 +328,13 @@ async function reprocessViaLocal(
 async function buildReprocessMetadata(
   workMode: WorkMode,
   result: ReprocessResult,
-): Promise<{ asrProvider?: string; aiProvider?: string; aiModel?: string }> {
+): Promise<{
+  asrProvider?: string
+  aiProvider?: string
+  aiModel?: string
+  aiSource?: AiExecutionSource
+  aiStatus?: AiExecutionStatus
+}> {
   if (workMode === 'cloud_api') {
     const asrProviderKey = await getSetting('cloudAsr.provider', '') as string
     const aiProvider = await getSetting('cloudAi.provider', '') as string
@@ -299,7 +355,14 @@ async function buildReprocessMetadata(
   // server
   return {
     asrProvider: (result.asrModel || result.asrEngine || 'server').replace(/^.*\//, ''),
-    aiProvider: 'server',
+    aiProvider: result.aiSource === 'custom'
+      ? result.aiProvider
+      : result.aiSource === 'none'
+        ? undefined
+        : 'server',
+    aiModel: result.aiModel,
+    aiSource: result.aiSource,
+    aiStatus: result.aiStatus,
   }
 }
 
@@ -462,9 +525,10 @@ export default function History() {
       result = await reprocessViaServer(chunk, hotwords, Boolean(aiEnabled), systemPrompt, clientMeta)
     }
 
-    // llmText === asrText 说明这段没经过 AI 整理（极速模式，或后端未跑 LLM 直接回 asrText）。
-    // 纯 ASR 时「格式规范」由我们兜底；AI 整理过的文本把格式交给 AI，只做文本替换（见 applyTextTransforms）
-    const rawAsr = !result.llmText || result.llmText === result.asrText
+    // 新链路优先采用显式执行状态；旧的云/本地历史重跑尚未返回状态时才兼容文本比较。
+    const rawAsr = result.aiStatus
+      ? result.aiStatus !== 'applied'
+      : !result.llmText || result.llmText === result.asrText
     const baseText = rawAsr ? result.asrText : result.llmText
     const replacedLlm = await applyTextTransforms(baseText, { rawAsr })
 
@@ -478,6 +542,8 @@ export default function History() {
       charCount: (result.llmText || result.asrText).length,
       isEmpty: !(result.llmText || result.asrText).trim(),
       workMode,
+      aiSource: meta.aiSource,
+      aiStatus: meta.aiStatus,
       aiProvider: meta.aiProvider,
       aiModel: meta.aiModel,
       asrProvider: meta.asrProvider,

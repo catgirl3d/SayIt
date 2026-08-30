@@ -3,7 +3,7 @@
 use super::types::*;
 use super::{
     ai_ollama, ai_openai_compat, asr_doubao, asr_doubao_stream, asr_groq, asr_mimo, asr_qwen,
-    asr_qwen_omni,
+    asr_qwen_audio_stream, asr_qwen_omni,
 };
 use crate::error_protocol;
 
@@ -86,6 +86,17 @@ pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResu
             )
             .await
         }
+        // Qwen-Audio-3.0 流式：关掉实时字幕、以及设置页的识别测试都走这条一次性路径。
+        // 用的仍是同一个 duplex 协议，只是整段音频推完再收结果。
+        "qwen_audio_stream" => {
+            asr_qwen_audio_stream::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await
+        }
         "qwen_omni" => {
             asr_qwen_omni::transcribe(
                 &request.audio_b64,
@@ -127,6 +138,7 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
         "doubao" => Ok(asr_doubao::test_connection(&config).await),
         "doubao_v2" => Ok(asr_doubao_stream::test_connection(&config).await),
         "qwen" | "aliyun" | "qwen_realtime" => Ok(asr_qwen::test_connection(&config).await),
+        "qwen_audio_stream" => Ok(asr_qwen_audio_stream::test_connection(&config).await),
         "qwen_omni" => Ok(asr_qwen_omni::test_connection(&config).await),
         "mimo" => Ok(asr_mimo::test_connection(&config).await),
         "groq_whisper" => Ok(asr_groq::test_connection(&config).await),

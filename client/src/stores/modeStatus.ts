@@ -60,6 +60,7 @@ function cloudProviderShort(provider: string): string {
     case 'doubao_v2': return t('modeStatus.doubao')
     case 'qwen': return t('modeStatus.qwen')
     case 'qwen_realtime': return t('modeStatus.qwenRealtime')
+    case 'qwen_audio_stream': return t('modeStatus.qwenAudioStream')
     case 'qwen_omni_35_plus':
     case 'qwen_omni_35_flash':
     case 'qwen_omni_flash':

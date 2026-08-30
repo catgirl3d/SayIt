@@ -196,6 +196,7 @@ export default function Dictionary() {
                     <tbody>
                       {/* 模型名是品牌 + 型号，两种语言下都用官方写法，只有"支持/说明"两列走翻译 */}
                       <tr><td>Doubao Seed-ASR 2.0</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.doubao')}</td></tr>
+                      <tr><td>{t('dict.model.qwenAudio30')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.qwenAudio30')}</td></tr>
                       <tr><td>{t('dict.model.qwenRealtime')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.qwenRealtime')}</td></tr>
                       <tr><td>{t('dict.model.qwenFlash')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.qwenFlash')}</td></tr>
                       <tr><td>{t('dict.model.localQwen')}</td><td>{t('dict.support.notYet')}</td><td>{t('dict.note.localQwen')}</td></tr>

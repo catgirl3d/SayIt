@@ -34,14 +34,18 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     }
   })
 
-  // 原来这里断言的是「每一家都是 mainland_china」。那在只有一个取值时看着像不变量，
-  // 其实只是把当时的事实写死了 —— 加入海外供应商后它拦的不是 bug，是新功能。
-  // 真正该守的是：每个 availability 都有对应的展示文案。少一个分支不会报错，
-  // 只会让卡片上那行地区说明变成空白。
-  it('每种地区都有对应的展示文案', () => {
+  // 这条断言变过两次，记下来免得再绕回去：
+  //   v1「每一家都是 mainland_china」—— 只是把当时的事实写死，加海外供应商时它拦的是新功能；
+  //   v2「每种地区都有展示文案」—— 于是七张卡上各挂一句「面向中国大陆账号」，是纯噪音；
+  //   现在：国内是默认情形，不给字；只有需要海外账号/网络的才提醒。
+  it('只有海外供应商才给地区提示，国内的不占字', () => {
     for (const p of ASR_PROVIDERS) {
-      expect(asrAvailabilityLabel(p).trim()).not.toBe('')
+      const label = asrAvailabilityLabel(p).trim()
+      if (p.availability === 'global') expect(label).not.toBe('')
+      else expect(label).toBe('')
     }
+    // 至少还有一家是海外的，否则上面那半条断言等于没跑
+    expect(ASR_PROVIDERS.some((p) => p.availability === 'global')).toBe(true)
   })
 
   it('平台都在 ASR_PLATFORMS 里有定义', () => {
@@ -56,9 +60,25 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     }
   })
 
-  it('4 个千问变体归到同一个平台', () => {
+  it('5 个千问变体归到同一个平台', () => {
     expect(providersOfPlatform('qwen').map((p) => p.id)).toEqual([
-      'qwen', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_35_flash',
+      'qwen_audio_stream', 'qwen', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_35_flash',
+    ])
+  })
+
+  /** 清单顺序就是推荐顺序（卡片顺序 + 新建下拉的顺序），前两名钉住 */
+  it('推荐顺序：豆包第一，千问 Audio 3.0 第二', () => {
+    expect(ASR_PROVIDERS.slice(0, 2).map((p) => p.id)).toEqual(['doubao_v2', 'qwen_audio_stream'])
+  })
+
+  /**
+   * 只有 qwen3-asr-flash-realtime 需要业务空间 ID。
+   * qwen-audio-3.0-asr-flash-streaming 用通用域名就能跑（实测），加卡时照抄
+   * needsWorkspaceId 会让用户以为不填就用不了 —— 这条钉住这个区别。
+   */
+  it('只有 qwen_realtime 需要业务空间 ID', () => {
+    expect(ASR_PROVIDERS.filter((p) => p.needsWorkspaceId).map((p) => p.id)).toEqual([
+      'qwen_realtime',
     ])
   })
 

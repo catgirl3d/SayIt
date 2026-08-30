@@ -41,6 +41,18 @@ pub struct ConfigExportSelection {
     prompt_preset_ids: Vec<String>,
 }
 
+/// 全量备份里除配置之外还装什么。
+///
+/// 两个字段都**不给 serde 默认值**：调用方必须显式表态。给默认值的那一版是个陷阱 ——
+/// 漏传参数时会静默按「全都要」打包，而含音频的包可以有几个 GB，自动备份场景下
+/// 意味着每次悄悄上传几个 GB。宁可让反序列化直接失败，报一条看得见的错。
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupScope {
+    pub include_history: bool,
+    pub include_audio: bool,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigImportSectionPreview {
@@ -265,19 +277,42 @@ fn build_selected_config_value(
     }))
 }
 
-fn build_full_value(storage: &Storage) -> Value {
-    json!({
+/// 组装 `backup.json`。
+///
+/// 不含历史时**整个字段都不写**（而不是写一个空数组）：`import_full` 对缺失段是
+/// `if let Some(...)`，字段缺席就跳过、保留本机现有历史；写成空数组反而会把本机
+/// 历史整表清空。「只备份配置」这一档能安全恢复，全靠这个区别。
+fn build_full_value(storage: &Storage, scope: BackupScope) -> Value {
+    let mut payload = json!({
         "kind": "full",
         "formatVersion": FORMAT_VERSION,
         "appVersion": app_version(),
         "exportedAt": chrono::Utc::now().to_rfc3339(),
+        // 备份包自报装了什么，供恢复前预览与排查「为什么恢复完没有历史」。
+        "scope": {
+            "includeHistory": scope.include_history,
+            "includeAudio": scope.include_audio,
+        },
         "appSettings": storage.export_app_settings(&[]),
         "promptPresets": storage.get("promptPresets", None),
         "appPromptRules": storage.get("appPromptRules", None),
-        "history": storage.get("history", None),
-        "manualCorrections": storage.get("manualCorrections", None),
-        "feedbackQueue": storage.get("feedbackQueue", None),
-    })
+    });
+
+    if scope.include_history {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("history".to_string(), storage.get("history", None));
+            object.insert(
+                "manualCorrections".to_string(),
+                storage.get("manualCorrections", None),
+            );
+            object.insert(
+                "feedbackQueue".to_string(),
+                storage.get("feedbackQueue", None),
+            );
+        }
+    }
+
+    payload
 }
 
 fn check_kind_and_version(data: &Value, expected_kind: &str, max_version: i64) -> Result<i64, String> {
@@ -692,8 +727,11 @@ fn emit_export_progress(app: &AppHandle, progress: BackupExportProgress) {
     let _ = app.emit("backup-export-progress", progress);
 }
 
-fn collect_audio_export_files() -> Vec<AudioExportFile> {
+fn collect_audio_export_files(include_audio: bool) -> Vec<AudioExportFile> {
     let mut files = Vec::new();
+    if !include_audio {
+        return files;
+    }
     let adir = audio_dir();
     if let Ok(entries) = fs::read_dir(adir) {
         for entry in entries.flatten() {
@@ -754,56 +792,65 @@ pub async fn export_config(
     Ok(path)
 }
 
-#[tauri::command]
-pub async fn export_full(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-) -> Result<String, String> {
-    let output = timestamped_backup_path("sayit-backup", "zip");
-    let out_path = output.to_string_lossy().to_string();
-    let temp_path = PathBuf::from(format!("{}.part", out_path));
-    let audio_files = collect_audio_export_files();
+/// 打包过程中的一帧进度。`phase` 取值与前端 `BackupExportProgress['phase']` 对齐。
+pub struct ArchiveProgress<'a> {
+    pub phase: &'static str,
+    pub current_file: Option<&'a str>,
+    pub processed_files: u64,
+    pub total_files: u64,
+    pub processed_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: f64,
+}
+
+/// 把配置（+ 按 scope 决定的历史 / 音频）打成 zip 写到 `output`。
+///
+/// 本地「全部数据」导出与 WebDAV 备份共用这一份实现，两者的差别只在落地位置和
+/// 进度事件名。刻意不让 WebDAV 自己写一套打包：一旦两份代码分家，就会出现
+/// 「本地导出能恢复、云端备份恢复不了」这种只在换机时才暴露的问题。
+///
+/// 先写 `.part` 再原子 rename，失败时清掉临时文件 —— 中断留下的半个 zip 不能
+/// 长得像一个有效备份。
+///
+/// 总量（文件数 / 字节数）通过 `on_progress` 报出去，不作为返回值：调用方要的是
+/// 打包完成后**zip 本身**的大小（用来算上传进度），那个得 stat 产物文件才知道。
+pub fn write_backup_archive(
+    storage: &Storage,
+    scope: BackupScope,
+    output: &Path,
+    on_progress: &mut dyn FnMut(ArchiveProgress),
+) -> Result<(), String> {
+    let temp_path = PathBuf::from(format!("{}.part", output.to_string_lossy()));
+    let audio_files = collect_audio_export_files(scope.include_audio);
     let total_files = audio_files.len() as u64;
     let total_bytes = audio_files.iter().map(|file| file.size).sum::<u64>();
 
-    emit_export_progress(
-        &app,
-        BackupExportProgress {
-            status: "running".to_string(),
-            phase: "preparing".to_string(),
-            file_path: out_path.clone(),
-            current_file: None,
-            processed_files: 0,
-            total_files,
-            processed_bytes: 0,
-            total_bytes,
-            percent: 2.0,
-            error: None,
-        },
-    );
+    on_progress(ArchiveProgress {
+        phase: "preparing",
+        current_file: None,
+        processed_files: 0,
+        total_files,
+        processed_bytes: 0,
+        total_bytes,
+        percent: 2.0,
+    });
 
-    let export_result = (|| -> Result<(), String> {
+    let result = (|| -> Result<(), String> {
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("Failed to create export directory: {}", e))?;
         }
 
-        let payload = build_full_value(storage.inner());
+        let payload = build_full_value(storage, scope);
         let json_str = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-        emit_export_progress(
-            &app,
-            BackupExportProgress {
-                status: "running".to_string(),
-                phase: "packingData".to_string(),
-                file_path: out_path.clone(),
-                current_file: Some("backup.json".to_string()),
-                processed_files: 0,
-                total_files,
-                processed_bytes: 0,
-                total_bytes,
-                percent: 5.0,
-                error: None,
-            },
-        );
+        on_progress(ArchiveProgress {
+            phase: "packingData",
+            current_file: Some("backup.json"),
+            processed_files: 0,
+            total_files,
+            processed_bytes: 0,
+            total_bytes,
+            percent: 5.0,
+        });
 
         let file = fs::File::create(&temp_path).map_err(|e| format!("Failed to create file: {}", e))?;
         let mut zip = zip::ZipWriter::new(file);
@@ -839,66 +886,93 @@ pub async fn export_full(
                 processed_bytes += read as u64;
 
                 if last_emit.elapsed() >= Duration::from_millis(150) {
-                    emit_export_progress(
-                        &app,
-                        BackupExportProgress {
-                            status: "running".to_string(),
-                            phase: "packingAudio".to_string(),
-                            file_path: out_path.clone(),
-                            current_file: Some(audio.name.clone()),
-                            processed_files,
-                            total_files,
-                            processed_bytes,
-                            total_bytes,
-                            percent: audio_progress_percent(processed_bytes, total_bytes),
-                            error: None,
-                        },
-                    );
+                    on_progress(ArchiveProgress {
+                        phase: "packingAudio",
+                        current_file: Some(&audio.name),
+                        processed_files,
+                        total_files,
+                        processed_bytes,
+                        total_bytes,
+                        percent: audio_progress_percent(processed_bytes, total_bytes),
+                    });
                     last_emit = Instant::now();
                 }
             }
 
             processed_files += 1;
-            emit_export_progress(
-                &app,
-                BackupExportProgress {
-                    status: "running".to_string(),
-                    phase: "packingAudio".to_string(),
-                    file_path: out_path.clone(),
-                    current_file: Some(audio.name.clone()),
-                    processed_files,
-                    total_files,
-                    processed_bytes,
-                    total_bytes,
-                    percent: audio_progress_percent(processed_bytes, total_bytes),
-                    error: None,
-                },
-            );
-        }
-
-        emit_export_progress(
-            &app,
-            BackupExportProgress {
-                status: "running".to_string(),
-                phase: "finalizing".to_string(),
-                file_path: out_path.clone(),
-                current_file: None,
+            on_progress(ArchiveProgress {
+                phase: "packingAudio",
+                current_file: Some(&audio.name),
                 processed_files,
                 total_files,
                 processed_bytes,
                 total_bytes,
-                percent: 98.0,
-                error: None,
-            },
-        );
+                percent: audio_progress_percent(processed_bytes, total_bytes),
+            });
+        }
+
+        on_progress(ArchiveProgress {
+            phase: "finalizing",
+            current_file: None,
+            processed_files,
+            total_files,
+            processed_bytes,
+            total_bytes,
+            percent: 98.0,
+        });
         zip.finish().map_err(|e| e.to_string())?;
 
         if output.exists() {
-            fs::remove_file(&output).map_err(|e| format!("Failed to replace the previous backup: {}", e))?;
+            fs::remove_file(output).map_err(|e| format!("Failed to replace the previous backup: {}", e))?;
         }
-        fs::rename(&temp_path, &output).map_err(|e| format!("Failed to finalize the backup file: {}", e))?;
+        fs::rename(&temp_path, output).map_err(|e| format!("Failed to finalize the backup file: {}", e))?;
         Ok(())
     })();
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn export_full(
+    app: AppHandle,
+    scope: BackupScope,
+    storage: State<'_, Storage>,
+) -> Result<String, String> {
+    let output = timestamped_backup_path("sayit-backup", "zip");
+    let out_path = output.to_string_lossy().to_string();
+
+    // 失败分支也要报出总量，所以在回调里留一份最近值：write_backup_archive 出错时
+    // 只给 Err(String)，拿不到它内部算出的 totals。
+    let mut seen_totals = (0u64, 0u64);
+    let export_result = {
+        let progress_app = app.clone();
+        let progress_path = out_path.clone();
+        write_backup_archive(storage.inner(), scope, &output, &mut |progress| {
+            seen_totals = (progress.total_files, progress.total_bytes);
+            emit_export_progress(
+                &progress_app,
+                BackupExportProgress {
+                    status: "running".to_string(),
+                    phase: progress.phase.to_string(),
+                    file_path: progress_path.clone(),
+                    current_file: progress.current_file.map(ToString::to_string),
+                    processed_files: progress.processed_files,
+                    total_files: progress.total_files,
+                    processed_bytes: progress.processed_bytes,
+                    total_bytes: progress.total_bytes,
+                    percent: progress.percent,
+                    error: None,
+                },
+            );
+        })
+    };
+    let (total_files, total_bytes) = seen_totals;
 
     match export_result {
         Ok(()) => {
@@ -917,11 +991,16 @@ pub async fn export_full(
                     error: None,
                 },
             );
-            log::info!("Full backup exported to {}", out_path);
+            log::info!(
+                "Full backup exported to {} (history={} audio={})",
+                out_path,
+                scope.include_history,
+                scope.include_audio
+            );
             Ok(out_path)
         }
         Err(error) => {
-            let _ = fs::remove_file(&temp_path);
+            // 临时文件已由 write_backup_archive 清理。
             emit_export_progress(
                 &app,
                 BackupExportProgress {
@@ -1190,7 +1269,15 @@ pub async fn import_config(
 
 #[tauri::command]
 pub async fn import_full(in_path: String, storage: State<'_, Storage>) -> Result<(), String> {
-    let file = fs::File::open(&in_path).map_err(|e| format!("Failed to open file: {}", e))?;
+    apply_full_backup(storage.inner(), &in_path)
+}
+
+/// 应用一个全量备份 zip。本地导入与 WebDAV 恢复共用。
+///
+/// 对缺失段是宽容的：只含配置的备份（WebDAV 默认档）不会带 `history` 字段，
+/// 此时**保留本机现有历史**而不是清空 —— 见 `build_full_value` 里为什么不写空数组。
+pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String> {
+    let file = fs::File::open(in_path).map_err(|e| format!("Failed to open file: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Not a valid backup archive: {}", e))?;
 
     // 1. 读取并校验 backup.json
@@ -1225,7 +1312,7 @@ pub async fn import_full(in_path: String, storage: State<'_, Storage>) -> Result
     }
 
     // 3. 应用配置部分（含 stats）
-    apply_config_part(storage.inner(), &data, &[])?;
+    apply_config_part(storage, &data, &[])?;
 
     // 4. 历史：重写音频路径后整表替换
     if let Some(history) = data.get("history").and_then(|v| v.as_array()) {
@@ -1259,6 +1346,75 @@ pub fn restart_app(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_storage(tag: &str) -> (Storage, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("sayit-backup-test-{}-{}", tag, uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let storage = Storage::new(dir.join("test.db")).unwrap();
+        (storage, dir)
+    }
+
+    /// 不含历史时，`history` 字段必须**整个缺席**，不能是空数组。
+    ///
+    /// 这是「只备份配置」这一档能安全恢复的全部依据：`apply_full_backup` 用
+    /// `if let Some(history)` 判断，字段缺席就保留本机历史，写成空数组则会把本机
+    /// 历史整表清空 —— 一个「只想同步设置」的用户会因此丢掉全部记录，而且备份和
+    /// 恢复都不会报任何错。
+    #[test]
+    fn config_only_backup_omits_history_instead_of_emptying_it() {
+        let (storage, dir) = temp_storage("scope");
+        storage
+            .set(
+                "history",
+                &json!([{ "id": "h1", "timestamp": 1, "charCount": 3 }]),
+            )
+            .unwrap();
+
+        let config_only = build_full_value(
+            &storage,
+            BackupScope {
+                include_history: false,
+                include_audio: false,
+            },
+        );
+        assert!(
+            config_only.get("history").is_none(),
+            "history must be absent, got {:?}",
+            config_only.get("history")
+        );
+        assert!(config_only.get("manualCorrections").is_none());
+        assert!(config_only.get("feedbackQueue").is_none());
+        // 配置部分照旧在，且 kind 仍是 full —— 用现有的导入路径就能恢复。
+        assert_eq!(config_only.get("kind").and_then(Value::as_str), Some("full"));
+        assert!(config_only.get("appSettings").is_some());
+        assert_eq!(
+            config_only.pointer("/scope/includeAudio").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let with_history = build_full_value(
+            &storage,
+            BackupScope {
+                include_history: true,
+                include_audio: false,
+            },
+        );
+        assert_eq!(
+            with_history
+                .get("history")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 不含音频时不去扫 audio 目录，也就不会把别的备份的录音塞进来。
+    #[test]
+    fn audio_files_are_only_collected_when_requested() {
+        assert!(collect_audio_export_files(false).is_empty());
+    }
 
     #[test]
     fn prompt_overrides_allow_one_entry_per_builtin_language() {

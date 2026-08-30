@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { useAiEnabled } from '@/hooks/useAiEnabled'
 import { toggleAiEnabled } from '@/stores/aiEnabled'
-import { useLocale, useT } from '@/i18n/useT'
+import { useT } from '@/i18n/useT'
 import { ComboShortcutInput } from './ShortcutInputs'
 import { useEffect, useState } from 'react'
 import { getPresetShortcuts, getSetting, setSetting } from '@/services/store'
@@ -15,7 +15,6 @@ import { MAX_RECORDING_SEC } from '@/services/recorder/types'
 
 export default function AIProofreadToggle() {
   const t = useT()
-  const locale = useLocale()
   const aiEnabled = useAiEnabled()
   const [shortcut, setShortcut] = useState('')
   const [minDurationSec, setMinDurationSec] = useState(0)
@@ -62,14 +61,17 @@ export default function AIProofreadToggle() {
     void saveMinDuration(next)
   }
 
-  // 数字本身不如「实际会怎样」容易理解。默认值保留为可直接编辑的 0，
-  // 旁边同步说明 0 / 非 0 各自的效果，用户无需先记住规则再决定要不要改。
+  // 数字本身不如「实际会怎样」容易理解，所以把生效结果做成紧跟标签的小徽标。
+  // 原先它单独占一行右对齐，既不贴标签也不贴输入框，还得靠手算的 margin 才对得齐
+  // （中英各一套分支）——挪到标签后面之后那些魔法数就不需要了。
   const minDurationEffect = minDurationSec === 0
     ? t('aiProofread.minDurationDefaultHint')
     : t('aiProofread.minDurationActiveHint', { seconds: minDurationSec })
-  // 中文“始终整理”足够短，固定在 64px 输入框正下方居中；英文文案更长，
-  // 保持右对齐以避免越出卡片。填写数值后的状态说明始终使用右对齐。
-  const centerDefaultChineseEffect = minDurationSec === 0 && locale === 'zh-CN'
+  // 只有非默认值才上主色：默认的「始终整理」是常态，不该抢注意力；
+  // 用户真的设了门槛才值得被看见（与 ServerSection 的「未保存」徽标同一套逻辑）。
+  const effectToneClass = minDurationSec === 0
+    ? 'bg-muted text-muted-foreground'
+    : 'bg-primary/10 text-primary'
 
   return (
     <Card>
@@ -101,11 +103,32 @@ export default function AIProofreadToggle() {
             label={t('aiProofread.shortcutLabel')}
             description={t('aiProofread.shortcutDesc')}
           />
+          {/* 这一项只在 AI 整理开启时才有意义。关闭时不能只是留着让人填 ——
+              原来照样可编辑，用户填完一个数字，它却根本不参与判断，界面还一声不响。
+              所以关闭时真的 disabled（读屏也能听到），并把说明换成「不生效」的原因。
+              上面的快捷键那行不跟着灰：它正是用来把 AI 整理打开的手段。 */}
           <div>
             <div className="flex items-center justify-between gap-5">
               <div className="min-w-0">
-                <p className="text-sm font-medium">{t('aiProofread.minDurationLabel')}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{t('aiProofread.minDurationDesc')}</p>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <p
+                    id="ai-min-duration-label"
+                    className={`text-sm font-medium ${aiEnabled ? '' : 'text-muted-foreground'}`}
+                  >
+                    {t('aiProofread.minDurationLabel')}
+                  </p>
+                  {aiEnabled && (
+                    <span
+                      id="ai-min-duration-effect"
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${effectToneClass}`}
+                    >
+                      {minDurationEffect}
+                    </span>
+                  )}
+                </div>
+                <p id="ai-min-duration-desc" className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {aiEnabled ? t('aiProofread.minDurationDesc') : t('aiProofread.minDurationDisabled')}
+                </p>
               </div>
               <label className="mr-2 flex shrink-0 items-center gap-1.5">
                 <input
@@ -114,24 +137,17 @@ export default function AIProofreadToggle() {
                   max={MAX_RECORDING_SEC}
                   step="1"
                   value={minDurationSec}
+                  disabled={!aiEnabled}
                   placeholder={t('aiProofread.minDurationOff')}
                   onChange={(event) => handleMinDurationChange(event.target.value, event.currentTarget)}
-                  className="h-8 w-16 rounded-md border border-input bg-background px-2 text-right text-sm tabular-nums outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
-                  aria-label={t('aiProofread.minDurationLabel')}
-                  aria-describedby="ai-min-duration-effect"
+                  className="h-8 w-16 rounded-md border border-input bg-background px-2 text-right text-sm tabular-nums outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-labelledby="ai-min-duration-label"
+                  aria-describedby={aiEnabled ? 'ai-min-duration-effect ai-min-duration-desc' : 'ai-min-duration-desc'}
                 />
-                <span className="text-sm text-muted-foreground">{t('aiProofread.seconds')}</span>
+                <span className={`text-sm ${aiEnabled ? 'text-muted-foreground' : 'text-muted-foreground/50'}`}>
+                  {t('aiProofread.seconds')}
+                </span>
               </label>
-            </div>
-            <div className="mt-1 flex justify-end">
-              <p
-                id="ai-min-duration-effect"
-                className={`text-xs leading-relaxed text-muted-foreground ${centerDefaultChineseEffect
-                  ? 'mr-[1.875rem] w-16 text-center'
-                  : 'w-fit max-w-full text-right max-w-[22rem]'}`}
-              >
-                {minDurationEffect}
-              </p>
             </div>
           </div>
         </div>

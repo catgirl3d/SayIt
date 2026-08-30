@@ -8,10 +8,16 @@ export type WorkMode = 'server' | 'cloud_api' | 'local'
 
 export type ProviderState = 'disconnected' | 'connecting' | 'connected' | 'error'
 
+export type AiExecutionSource = 'server' | 'custom' | 'none'
+export type AiExecutionStatus = 'applied' | 'skipped' | 'unavailable' | 'failed'
+
 export interface ASRResult {
   text: string
   asrMs: number
   durationSec: number
+  /** 空 ASR 会先于 final 触发专用收尾，执行元数据必须随它一起落库。 */
+  aiSource?: AiExecutionSource
+  aiStatus?: AiExecutionStatus
 }
 
 export interface FinalResult {
@@ -24,6 +30,11 @@ export interface FinalResult {
   asrModel?: string
   /** True only when the AI actually received and processed this run's editor context. */
   contextApplied?: boolean
+  /** Explicit execution metadata; text equality cannot prove whether AI ran. */
+  aiSource?: AiExecutionSource
+  aiStatus?: AiExecutionStatus
+  aiProvider?: string
+  aiModel?: string
 }
 
 export interface TranscriptionCallbacks {
