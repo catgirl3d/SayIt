@@ -1,0 +1,6 @@
+src-tauri/target/**
+src-tauri/transcribe-libs/**
+src-tauri/gen/**
+dist/**
+node_modules/**
+*.log
