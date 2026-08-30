@@ -5,7 +5,8 @@ import { Github, Loader2, CheckCircle } from 'lucide-react'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { getAutoUpdateState, onAutoUpdateChange, checkForUpdateNow, installPendingUpdate, type AutoUpdateState } from '@/features/update/autoUpdate'
 import { RELEASE_HIGHLIGHTS } from '@/features/update/releaseHighlights'
-import appIcon from '@/assets/icon-128.png'
+import appIconOnDark from '@/assets/icon-128.png'
+import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
@@ -60,7 +61,8 @@ export default function About() {
         <CardContent className="p-6">
           {/* 品牌 */}
           <div className="flex items-center gap-4">
-            <img src={appIcon} alt="SayIt" className="h-16 w-16 rounded-2xl" />
+            <img src={appIconOnLight} alt="SayIt" className="block h-16 w-16 rounded-2xl dark:hidden" />
+            <img src={appIconOnDark} alt="SayIt" className="hidden h-16 w-16 rounded-2xl dark:block" />
             <div>
               <h2 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 800 }}>
                 SayIt

@@ -12,7 +12,8 @@ import {
   isSingleKeySetting,
 } from '@/lib/shortcutKeys'
 import { refreshPTTSetting } from '@/services/webviewKeyboardFallback'
-import appIcon from '@/assets/icon-128.png'
+import appIconOnDark from '@/assets/icon-128.png'
+import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { t, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
@@ -251,7 +252,8 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
       case 0:
         return (
           <div className="flex flex-col items-center text-center">
-            <img src={appIcon} alt="SayIt" className="mb-6 h-20 w-20 rounded-2xl" />
+            <img src={appIconOnLight} alt="SayIt" className="mb-6 block h-20 w-20 rounded-2xl dark:hidden" />
+            <img src={appIconOnDark} alt="SayIt" className="mb-6 hidden h-20 w-20 rounded-2xl dark:block" />
             <h1 className="text-3xl font-bold tracking-tight" style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 800 }}>{t('welcome.title')}</h1>
             <p className="mt-3 text-base text-muted-foreground">{t('welcome.tagline')}</p>
             <p className="mt-1.5 text-sm text-muted-foreground/70">{t('welcome.subtitle')}</p>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import * as bridge from '@/services/bridge'
 import { Minus, Square, X, Wand2 } from 'lucide-react'
-import appIcon from '@/assets/ico-frame-48x48.png'
+import appIconOnDark from '@/assets/ico-frame-48x48.png'
+import appIconOnLight from '@/assets/ico-frame-48x48-on-light.png'
 import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { useActivePreset } from '@/hooks/useActivePreset'
 import { toggleAiEnabled } from '@/stores/aiEnabled'
@@ -31,7 +32,8 @@ export default function TitleBar() {
     <div className="flex h-10 items-center justify-between bg-titlebar border-b select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <div className="flex items-center gap-2.5 pl-3">
-        <img src={appIcon} alt="SayIt" className="h-7 w-7" draggable={false} />
+        <img src={appIconOnLight} alt="SayIt" className="block h-7 w-7 dark:hidden" draggable={false} />
+        <img src={appIconOnDark} alt="SayIt" className="hidden h-7 w-7 dark:block" draggable={false} />
         <span className="text-sm text-foreground" style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 800, letterSpacing: '0.01em' }}>SayIt</span>
       </div>
       <div className="flex items-center">
