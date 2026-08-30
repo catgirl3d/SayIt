@@ -5,7 +5,9 @@ import { t, type TranslationKey } from '.'
 const BUILTIN_PRESET_NAME_KEYS: Record<string, TranslationKey> = {
   intent: 'builtinPreset.intent',
   faithful: 'builtinPreset.faithful',
-  zh2en: 'builtinPreset.zh2en',
+  translate_uk: 'builtinPreset.translate_uk',
+  translate_ru: 'builtinPreset.translate_ru',
+  translate_en: 'builtinPreset.translate_en',
   casual: 'builtinPreset.casual',
 }
 

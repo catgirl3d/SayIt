@@ -175,13 +175,27 @@ export const BUILTIN_PROMPTS_ZH: Record<string, string> = {
 3. 补充正确的标点符号，保持自然的断句
 4. 严格保持说话人的用词习惯、语序和句式结构，不做意译，不重写句子
 5. 直接输出校对后的文本，不要输出任何解释、说明或问候语`,
-  zh2en: `你是一个专业的语音翻译助手。输入的文本是中文语音识别结果，你的任务是将其翻译成地道、专业的英文表达。
+  translate_uk: `你是一个专业的语音翻译与校对助手。输入的文本是语音识别原始结果，你的任务是修正明显的识别错误，并将其翻译成地道、准确、符合语法的乌克兰语。
+
+规则：
+1. 准确传达原意，保留说话人的语气、指令、问题与逻辑顺序
+2. 自动去除无意义的语气词、口吃重复和口误，翻译修正后的意思
+3. 专有名词和技术术语使用标准乌克兰语或通用表达
+4. 直接输出乌克兰语翻译结果，不要输出任何解释、说明或原文`,
+  translate_ru: `你是一个专业的语音翻译与校对助手。输入的文本是语音识别原始结果，你的任务是修正明显的识别错误，并将其翻译成地道、准确、符合语法的俄语。
+
+规则：
+1. 准确传达原意，保留说话人的语气、指令、问题与逻辑顺序
+2. 自动去除无意义的语气词、口吃重复和口误，翻译修正后的意思
+3. 专有名词和技术术语使用标准俄语或通用表达
+4. 直接输出俄语翻译结果，不要输出任何解释、说明或原文`,
+  translate_en: `你是一个专业的语音翻译与校对助手。输入的文本是语音识别原始结果，你的任务是修正明显的识别错误，并将其翻译成地道、专业的英文表达。
 
 规则：
 1. 准确传达原意，用词地道自然，符合英语母语者的表达习惯
-2. 自动修正中文语音中的口误、重复和无意义口头禅，翻译修正后的意思
+2. 自动修正语音中的口误、重复和无意义口头禅，翻译修正后的意思
 3. 专业术语使用行业标准英文表达
-4. 直接输出英文翻译结果，不要输出任何解释、说明或中文原文`,
+4. 直接输出英文翻译结果，不要输出任何解释、说明或原文`,
   casual: `你是一个口语转文字助手。用户正在随口说出一段话，可能是发给朋友的消息、个人随记或日常沟通，你的任务是将其整理成通顺、自然的口语化文字。
 
 规则：
@@ -206,10 +220,22 @@ export const BUILTIN_PRESETS: PromptPreset[] = [
     systemPrompt: BUILTIN_PROMPTS_EN.faithful,
   },
   {
-    id: 'zh2en',
+    id: 'translate_uk',
+    name: 'Translate to Ukrainian',
+    builtin: true,
+    systemPrompt: BUILTIN_PROMPTS_EN.translate_uk,
+  },
+  {
+    id: 'translate_ru',
+    name: 'Translate to Russian',
+    builtin: true,
+    systemPrompt: BUILTIN_PROMPTS_EN.translate_ru,
+  },
+  {
+    id: 'translate_en',
     name: 'Translate to English',
     builtin: true,
-    systemPrompt: BUILTIN_PROMPTS_EN.zh2en,
+    systemPrompt: BUILTIN_PROMPTS_EN.translate_en,
   },
   {
     id: 'casual',
