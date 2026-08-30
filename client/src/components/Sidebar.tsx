@@ -14,8 +14,8 @@ import {
   BarChart3,
   Stethoscope,
   Info,
-  Wifi,
-  WifiOff,
+  Server,
+  ServerOff,
   Cpu,
   Cloud,
 } from 'lucide-react'
@@ -164,11 +164,11 @@ function FooterIcons() {
  * allowing it to report real-time status (connected/connecting/disconnected/error).
  */
 const statusConfig = {
-  connected: { icon: Wifi, color: 'text-success', labelKey: 'connection.connected' },
-  connecting: { icon: Wifi, color: 'text-warning animate-pulse', labelKey: 'connection.connecting' },
-  disconnected: { icon: WifiOff, color: 'text-muted-foreground', labelKey: 'connection.disconnected' },
-  error: { icon: WifiOff, color: 'text-destructive', labelKey: 'connection.error' },
-} as const satisfies Record<string, { icon: typeof Wifi; color: string; labelKey: TranslationKey }>
+  connected: { icon: Server, color: 'text-success', labelKey: 'connection.connected' },
+  connecting: { icon: Server, color: 'text-warning animate-pulse', labelKey: 'connection.connecting' },
+  disconnected: { icon: ServerOff, color: 'text-muted-foreground', labelKey: 'connection.disconnected' },
+  error: { icon: ServerOff, color: 'text-destructive', labelKey: 'connection.error' },
+} as const satisfies Record<string, { icon: typeof Server; color: string; labelKey: TranslationKey }>
 
 /**
  * Engine status indicator at the bottom-left of the sidebar.
