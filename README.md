@@ -20,7 +20,7 @@ Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcr
 
 This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG-FORK.md).
 
-**English and Russian dictation:** Chinese-oriented cleanup prompts can introduce Chinese text or formatting into processed English or Russian dictation. This fork defaults to **English** built-in prompts when no previous prompt-language choice or legacy Chinese override exists, which has tested better for that case. Existing saved choices and legacy Chinese overrides are preserved; set **AI Instructions → Built-in preset language → English** manually.
+**English and Russian dictation:** Chinese-oriented cleanup prompts can introduce Chinese text or formatting into processed English or Russian dictation. This fork defaults to **English** built-in prompts when no previous prompt-language choice or legacy Chinese override exists, avoiding that behavior for this case. Existing saved choices and legacy Chinese overrides are preserved; set **AI Instructions → Built-in preset language → English** manually.
 
 This setting controls AI cleanup only. Set the ASR recognition language independently and use a model that supports the language you speak.
 
@@ -54,7 +54,7 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 | **Cloud API mode** | The best balance for personal use | Your PC talks directly to the ASR and AI providers you configure. No SayIt server is involved. |
 | **Server mode** | Teams and managed deployments | Audio is processed by a SayIt backend you control—or by the public trial server for a quick start. |
 
-Local recognition ships seven GGUF models, with GPU acceleration when available: Parakeet Unified EN (fastest and most accurate for English), SenseVoice Small, Fun-ASR Nano, Nemotron 3.5 ASR (32 languages), and three Qwen3-ASR sizes. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI cleanup works with DeepSeek, Qwen, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
+Local recognition offers seven downloadable local GGUF models, with GPU acceleration when available: Parakeet Unified EN for English, SenseVoice Small, Fun-ASR Nano, Nemotron 3.5 ASR (32 languages), and three Qwen3-ASR sizes. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI cleanup works with DeepSeek, Qwen, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
 
 ## A closer look
 
