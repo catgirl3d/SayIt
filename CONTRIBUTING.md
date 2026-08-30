@@ -1,32 +1,24 @@
-# 贡献指南
+# Contributing to SayIt
 
-感谢你对 SayIt 的关注！
+This repository is a maintained fork of SayIt. Focused bug fixes, feature work,
+documentation updates, and translations are welcome.
 
-## 关于 PR
+## Issues
 
-**本项目暂不接受 Pull Request。**
+Open an issue for bugs, feature proposals, or usability feedback. Include:
 
-整个项目都是使用 AI（Claude Opus 4.6）开发的，PR 现在大概率也是 AI 写的，这种场景很难 review。
+- Windows version
+- SayIt version
+- Processing mode: Server, Cloud API, or Local
+- Steps to reproduce and the expected behavior
+- Relevant logs or screenshots, with secrets removed
 
-## 欢迎提交 Issue
+## Local Development
 
-我非常欢迎以下类型的 Issue：
+### Client
 
-- 🐛 **Bug 报告** — 描述问题、复现步骤、期望行为
-- 💡 **功能建议** — 你希望 SayIt 增加什么功能
-- 📝 **使用反馈** — 哪里体验不好、哪里不够直观
-
-提交 Issue 时请尽量包含：
-- 操作系统版本
-- SayIt 版本号（在「关于」页面查看）
-- 使用的模式（服务器 / 云 API / 本地）
-- 问题的具体描述和复现步骤
-
-## 本地开发
-
-如果你想在本地跑起来看看：
-
-### 客户端
+Requirements: Node.js 18+, Rust 1.75+, CMake 3.20+, and the Vulkan SDK for local
+ASR builds.
 
 ```bash
 cd client
@@ -34,35 +26,39 @@ npm install
 npm run tauri dev
 ```
 
-前置要求：Node.js 18+、Rust 1.75+、CMake 3.20+、Vulkan SDK
-（本地识别引擎要用 CMake 编原生库、Vulkan SDK 编 SPIR-V 着色器；装完请新开终端，
-非英文 Windows 还需设 `CL=/utf-8`。详见 README 的「开发 / 客户端」一节。）
+### Server
 
-### 服务端
+Requirements: Python 3.10+ and an NVIDIA GPU with CUDA for GPU inference.
 
 ```bash
 cd server
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r backend/requirements.txt
-cd backend && uvicorn app.main:app --port 8000
+cd backend
+uvicorn app.main:app --port 8000
 ```
 
-前置要求：Python 3.10+、NVIDIA GPU + CUDA
+## Code and Documentation
 
-## 代码规范
+- Keep TypeScript code compatible with the project's strict compiler settings.
+- Keep user-facing documentation and code comments in English unless a specific
+  translation is being added.
+- Keep changes focused and update tests for new behavior.
+- Do not include API keys, credentials, private URLs, or user data in commits.
 
-- TypeScript strict 模式
-- ESLint + Prettier 自动格式化
-- UI 文本使用中文
+Run the relevant tests and `npm run build` before opening a pull request. The
+current `npm run lint` command requires the project's ESLint configuration to be
+migrated to flat config or ESLint to be pinned to a legacy-compatible version.
 
-## 提交规范
+## Commit Messages
 
-使用语义化提交信息：
+Use conventional prefixes:
 
-- `feat:` 新功能
-- `fix:` 修复 bug
-- `refactor:` 重构
-- `chore:` 构建/工具/依赖变更
-- `docs:` 文档更新
-- `perf:` 性能优化
+- `feat:` new functionality
+- `fix:` bug fixes
+- `refactor:` code restructuring
+- `chore:` build, tooling, or dependency changes
+- `docs:` documentation changes
+- `perf:` performance improvements
 
