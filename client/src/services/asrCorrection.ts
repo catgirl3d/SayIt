@@ -8,7 +8,7 @@ import { normalizeForDiff } from '@/lib/asrDiff'
  * ASR 纠错反馈：用户主动把「这条识别错了，正确的是这样」连同当次录音提交给服务端。
  *
  * 与「服务端静默录音」不是一回事：这里的每一次上传都由用户在历史记录里点出来，
- * 首次提交前还要过一次明确的同意确认。详见 docs/decisions.md。
+ * 首次提交前还要过一次明确的同意确认。详见 .kiro/decisions.md。
  *
  * 走 webview 的 fetch + FormData，不走 Rust：
  * 浏览器会自带 User-Agent，天然避开"reqwest 不带 UA 被 WAF 403"那个坑（pitfalls #1）。

@@ -21,7 +21,7 @@ import { AsrDiffPreview } from './AsrDiffPreview'
 /**
  * 「纠正识别」面板。
  *
- * 三个刻意的设计，改之前先看 docs/decisions.md：
+ * 三个刻意的设计，改之前先看 .kiro/decisions.md：
  * 1. 可编辑的那一栏初值是 **record.asrText（识别原文）**，绝不是 llmText。
  *    用户平时看到的是 AI 整理后的文本，如果照着它改（补标点、分段、改书面语），
  *    拿到的标注对 ASR 训练是噪声，因此纠正面板不展示 AI 整理后的文本。

@@ -37,6 +37,9 @@ node_modules/
 
 # ── Rust build output ──
 target/
+# 应用在跑时它锁着 target/debug 里的 ggml DLL，cargo 会报 os error 32；
+# 换个 target 目录编译是绕过它的标准做法（pitfalls #4），别让产物进仓库。
+target-check/
 
 # ── Python ──
 __pycache__/

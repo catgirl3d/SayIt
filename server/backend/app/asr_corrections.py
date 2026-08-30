@@ -1,7 +1,7 @@
 """ASR 纠错反馈：接收用户主动提交的 (音频, 原始 ASR 文本, 用户修正文本) 样本。
 
 这条通道和「服务端静默录音」不是一回事：每一个字节都是用户在历史记录里点了
-「提交纠正」、看过同意文案之后才发出来的，所以公开版允许存在（见 docs/decisions.md）。
+「提交纠正」、看过同意文案之后才发出来的，所以公开版允许存在（见 .kiro/decisions.md）。
 
 几条约束都不是随手加的：
 
@@ -35,7 +35,7 @@ router = APIRouter()
 
 # 落盘根目录。用 __file__ 定位而不是跟着 telemetry.db_path，这样切到 PostgreSQL
 # （db_path 变成连接串）时不会把音频写到莫名其妙的地方。
-# 部署树是扁的（/root/Fun-ASR/SayIt/backend/app/…），parents[2] 正好是项目根。
+# 部署树是扁的（backend/app/… 直接挂在项目根下），parents[2] 正好是项目根。
 STORAGE_DIR = Path(__file__).resolve().parents[2] / "runtime" / "asr-corrections"
 
 # 16kHz / 单声道 / 16bit 一秒 32KB，五分钟 = 9.6MB (9.16 MiB) + 44 字节头。
