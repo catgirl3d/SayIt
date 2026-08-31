@@ -1,6 +1,6 @@
 import * as bridge from '@/services/bridge'
 import { cn } from '@/lib/utils'
-import { resolveAsrDisplayModel, isQwenOmniProvider, resolveCloudAsrLanguageRequest, resolveQwenOmniModel } from '@/lib/asrModels'
+import { resolveAsrDisplayModel, isQwenOmniProvider, buildCloudAsrExtra, resolveQwenOmniModel } from '@/lib/asrModels'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
@@ -232,16 +232,11 @@ async function reprocessViaCloudApi(
     omniInstructions = savedPrompt || undefined
   }
 
-  let cloudExtra: Record<string, unknown> | undefined
-  if (isQwenOmni) cloudExtra = { model: qwenOmniModel, instructions: omniInstructions }
-  const requestLanguage = resolveCloudAsrLanguageRequest(asrProvider, language)
-  if (requestLanguage) cloudExtra = { ...(cloudExtra ?? {}), language: requestLanguage }
-
   const asrConfig: Record<string, unknown> = {
     provider: isQwenOmni ? 'qwen_omni' : asrProvider,
     api_key: asrApiKey,
     app_id: asrAppId,
-    ...(cloudExtra && { extra: cloudExtra }),
+    extra: buildCloudAsrExtra(asrProvider, language, omniInstructions),
   }
 
   const asrStart = performance.now()

@@ -76,3 +76,20 @@ export function getCloudAsrSupportedLanguages(provider: string): SpeechInputLang
   if (provider === 'mimo') return ['zh', 'en']
   return null
 }
+
+/**
+ * Build the `extra` payload for a cloud ASR request. Omni providers carry the
+ * resolved model ID plus system-prompt instructions; explicit-language providers
+ * (Groq, MiMo) carry the language code; every other provider needs no payload.
+ */
+export function buildCloudAsrExtra(
+  provider: string,
+  language: SpeechInputLanguage,
+  omniInstructions?: string,
+): Record<string, unknown> | undefined {
+  if (isQwenOmniProvider(provider)) {
+    return { model: resolveQwenOmniModel(provider), instructions: omniInstructions }
+  }
+  const requestLanguage = resolveCloudAsrLanguageRequest(provider, language)
+  return requestLanguage ? { language: requestLanguage } : undefined
+}

@@ -2,7 +2,7 @@
 // 豆包 ASR：边录边发（实时流式）
 // 其他 ASR：录完再发（BufferedProvider）
 
-import { isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel, resolveCloudAsrLanguageRequest } from '@/lib/asrModels'
+import { buildCloudAsrExtra, isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { invoke } from '@tauri-apps/api/core'
@@ -498,8 +498,6 @@ export class CloudAPIProvider implements TranscriptionProvider {
         const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
         const asrAppId = await getSetting('cloudAsr.appId', '') as string
         if (!this.isRunCurrent(runId)) return
-        const qwenOmniModel = resolveQwenOmniModel(asrProvider)
-
         let omniInstructions: string | undefined
         if (isQwenOmni) {
           const savedPrompt = await getSetting('cloudAsr.omniSystemPrompt', '') as string
@@ -511,12 +509,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
           provider: isQwenOmni ? 'qwen_omni' : asrProvider,
           api_key: asrApiKey,
           app_id: asrAppId,
-          ...(isQwenOmni && {
-            extra: { model: qwenOmniModel, instructions: omniInstructions },
-          }),
+          extra: buildCloudAsrExtra(asrProvider, normalizeSpeechInputLanguage(startOpts.language), omniInstructions),
         }
-        const language = resolveCloudAsrLanguageRequest(asrProvider, normalizeSpeechInputLanguage(startOpts.language))
-        if (language) asrConfig.extra = { ...(asrConfig.extra ?? {}), language }
 
         addRuntimeEvent('info', 'cloud_api', 'ASR started', { provider: asrProvider, durationSec })
         const asrResult = await invoke<AsrResult>('cloud_transcribe', {

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Feedback } from '@/components/ui/feedback'
 import { getSetting } from '@/services/store'
 import { getEngineDraftDirty, subscribeEngineDraft } from '@/stores/engineDraft'
-import { isQwenOmniProvider, resolveAsrDisplayModel, resolveCloudAsrLanguageRequest, resolveQwenOmniModel } from '@/lib/asrModels'
+import { buildCloudAsrExtra, isQwenOmniProvider, resolveAsrDisplayModel, resolveQwenOmniModel } from '@/lib/asrModels'
 import { describeProviderError, describeServerError } from '@/lib/errorMessages'
 import type { WorkMode } from '@/services/transcription'
 import { useT } from '@/i18n/useT'
@@ -100,13 +100,11 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
         // 已经不在 ASR_PROVIDERS 里的旧 key——测试可能用与实际配置不同的模型。
         const isOmni = isQwenOmniProvider(asrProvider)
         const qwenOmniModel = resolveQwenOmniModel(asrProvider)
-        let cloudExtra: Record<string, unknown> | undefined
+        let omniInstructions: string | undefined
         if (isOmni) {
           const savedPrompt = await getSetting('cloudAsr.omniSystemPrompt', '') as string
-          cloudExtra = { model: qwenOmniModel, instructions: savedPrompt || undefined }
+          omniInstructions = savedPrompt || undefined
         }
-        const requestLanguage = resolveCloudAsrLanguageRequest(asrProvider, speechLanguage)
-        if (requestLanguage) cloudExtra = { ...(cloudExtra ?? {}), language: requestLanguage }
 
         const start = performance.now()
         const r = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
@@ -117,7 +115,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
               provider: isOmni ? 'qwen_omni' : asrProvider,
               api_key: asrApiKey,
               app_id: asrAppId,
-              ...(cloudExtra && { extra: cloudExtra }),
+              extra: buildCloudAsrExtra(asrProvider, speechLanguage, omniInstructions),
             },
           },
         })

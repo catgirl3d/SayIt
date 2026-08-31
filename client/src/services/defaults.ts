@@ -117,9 +117,13 @@ export const DEFAULTS: Record<string, unknown> = {
   // 既在逻辑修好后自愈，又不把用户主动删掉的卡救回来。
   'cloudAsr.autoCreatedProviders': [],
 
-  // ── ASR（本地）──
-  // Shared preferred speech language for every recognition mode.
+  // ── Speech input language ──
+  // Shared preferred speech language for every recognition mode (local, server,
+  // cloud_api). Input side only: the UI locale and each preset's output language
+  // are separate concerns.
   'speechInput.language': 'auto',
+
+  // ── ASR（本地）──
   // 可选值就是 catalog.rs 里那几个 id：'sensevoice-small-gguf'（默认，最快）
   // | 'funasr-nano-2512-gguf' | 'qwen3-asr-0.6b-gguf'
   // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf'（最准）

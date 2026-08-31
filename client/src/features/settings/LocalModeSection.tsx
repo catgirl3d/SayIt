@@ -545,6 +545,7 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
   }
 
   const downloadedIds = new Set(downloadedModels.filter((m) => m.complete).map((m) => m.id))
+  const selectedModel = availableModels.find((m) => m.id === selectedModelId)
 
   // 小/中/大三个直接展示，其余折叠进「更多」。后端没标 featured 时全部展示兜底。
   const featuredModels = availableModels.some((m) => m.featured)
@@ -582,11 +583,11 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
 
           {selectedModelId && downloadedIds.has(selectedModelId) && (
             <p className="mb-2 text-sm text-muted-foreground">
-              {t('local.currentModel', { name: availableModels.find((m) => m.id === selectedModelId)?.name || selectedModelId })}
+              {t('local.currentModel', { name: selectedModel?.name || selectedModelId })}
             </p>
           )}
-          {speechLanguage !== 'auto' && selectedModelId && availableModels.find((m) => m.id === selectedModelId)
-            && !availableModels.find((m) => m.id === selectedModelId)?.languages.includes(speechLanguage) && (
+          {speechLanguage !== 'auto' && selectedModel
+            && !selectedModel.languages.includes(speechLanguage) && (
             <p className="mb-3 text-xs text-warning-strong">
               {t('local.languageFallback', { lang: t(`local.lang.${speechLanguage}` as 'local.lang.ru') })}
             </p>
