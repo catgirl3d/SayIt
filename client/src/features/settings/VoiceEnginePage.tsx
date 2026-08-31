@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { getSetting, setSetting } from '@/services/store'
 import { switchProvider, getWorkMode, type WorkMode } from '@/services/transcription'
-import { refreshRecorderSettings, reconnectProvider } from '@/services/recorder'
+import { refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
+import { getSpeechInputLanguage, setSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import WorkModeSection from './WorkModeSection'
@@ -13,15 +14,18 @@ import LocalModeSection, { LocalModeAdvancedSection } from './LocalModeSection'
 import ServerSection from './ServerSection'
 import AsrTestSection from './AsrTestSection'
 import { useT } from '@/i18n/useT'
+import SpeechLanguageSection from './SpeechLanguageSection'
 
 export default function VoiceEnginePage() {
   const t = useT()
   const [workMode, setWorkMode] = useState<WorkMode>(getWorkMode)
+  const [speechLanguage, setSpeechLanguage] = useState<SpeechInputLanguage>('auto')
   // 本地模式的次级设置默认收起。原来这 4 张卡与"选模型"完全等权地平铺在一起，
   // 本地模式一屏 7 个同级标题、27 个控件，用户没法判断哪几个是必须做的。
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   useEffect(() => {
+    void getSpeechInputLanguage().then(setSpeechLanguage)
     getSetting('workMode', 'server').then((value) => {
       const v = value as WorkMode
       if (v === 'server' || v === 'cloud_api' || v === 'local') setWorkMode(v)
@@ -49,15 +53,24 @@ export default function VoiceEnginePage() {
 
       <div className="space-y-6">
         <WorkModeSection value={workMode} onChange={(m) => void handleWorkModeChange(m)} />
+        <SpeechLanguageSection
+          value={speechLanguage}
+          onChange={(language) => {
+            setSpeechLanguage(language)
+            // Persist first, then update the cache: an interleaved refreshRecorderSettings() re-reads
+            // the stored value, so the cache must never be newer than the persisted setting.
+            void setSpeechInputLanguage(language).then(() => setSpeechLanguageCache(language))
+          }}
+        />
 
         {/* id 供「工作模式」右上角的「待配置」徽标点击后滚动定位 */}
         <div id="engine-config" className="space-y-6">
-          {workMode === 'local' && <LocalModeSection />}
-          {workMode === 'server' && <ServerSection />}
-          {workMode === 'cloud_api' && <CloudAPISection />}
+          {workMode === 'local' && <LocalModeSection speechLanguage={speechLanguage} />}
+          {workMode === 'server' && <ServerSection speechLanguage={speechLanguage} />}
+          {workMode === 'cloud_api' && <CloudAPISection speechLanguage={speechLanguage} />}
         </div>
 
-        <AsrTestSection workMode={workMode} />
+        <AsrTestSection workMode={workMode} speechLanguage={speechLanguage} />
 
         {workMode === 'local' && (
           <section className="space-y-6">

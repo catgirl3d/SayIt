@@ -2,6 +2,7 @@ import type { ActiveAppContext } from '@/types/appContext'
 import { BUILTIN_PRESETS } from '@/services/store'
 import type { AppPromptRule, PromptResolution, PromptRoutingInput } from './types'
 import { buildDynamicIdentityPrompt, summarizeDomainScenes } from './userStats'
+import { applySpeechLanguageToPrompt } from '@/services/speechInputLanguage'
 
 function normalizeText(value?: string) {
   return String(value || '').trim().toLowerCase()
@@ -85,6 +86,10 @@ export function resolvePromptRouting(input: PromptRoutingInput): PromptResolutio
 
   const preset = pickPreset(matchedRule?.presetId, input.presets, input.activePresetId)
   const systemPromptParts = [preset.systemPrompt.trim()]
+  const speechLanguagePart = input.speechLanguage
+    ? applySpeechLanguageToPrompt(preset, input.speechLanguage)
+    : null
+  if (speechLanguagePart) systemPromptParts.push(speechLanguagePart)
   const dominantScene = summarizeDomainScenes(input.userStats, 1)[0]
 
   if (matchedRule?.promptAppend) {
@@ -111,6 +116,7 @@ export function resolvePromptRouting(input: PromptRoutingInput): PromptResolutio
     matchedRule ? `App rule id: ${matchedRule.id}` : 'App rule: no match',
     dynamicIdentityPrompt && dominantScene ? `User profile: ${dominantScene.label}` : '',
     hotwordInjected ? 'Hotwords injected: yes' : '',
+    speechLanguagePart ? `Speech language: ${input.speechLanguage}` : '',
   ]
 
   return {

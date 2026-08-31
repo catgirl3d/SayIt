@@ -1,3 +1,5 @@
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
+
 /**
  * ASR 供应商 key → 实际模型 ID 映射
  */
@@ -61,4 +63,16 @@ export function isStreamingDisplayReady(provider: string, qwenWorkspaceId?: stri
     return Boolean(qwenWorkspaceId && qwenWorkspaceId.trim())
   }
   return false
+}
+
+export function resolveCloudAsrLanguageRequest(provider: string, language: SpeechInputLanguage): string | undefined {
+  if (provider === 'groq_whisper') return language === 'auto' ? undefined : language
+  if (provider === 'mimo') return language === 'zh' || language === 'en' ? language : undefined
+  return undefined
+}
+
+export function getCloudAsrSupportedLanguages(provider: string): SpeechInputLanguage[] | null {
+  if (provider === 'groq_whisper') return ['ru', 'uk', 'en', 'zh']
+  if (provider === 'mimo') return ['zh', 'en']
+  return null
 }

@@ -6,9 +6,10 @@
  * 漏 key、拼错 key 在 tsc 阶段就报错，而不是运行时静默 fallback 成 key 本身。
  * locale 文件保持平铺 JSON，将来要迁 i18next 或接 Crowdin 都没有摩擦。
  *
- * ⚠️ 语言只管界面文字，与「识别语种」是两件事：
- * `localAsr.language` / `server.language` 是送给 ASR 的语种，Preset 决定输出语种，
- * 三者都不受这里影响。改这个文件时别顺手把它们串在一起。
+ * ⚠️ The locale here governs UI text only; the recognition language is a separate concern:
+ * `speechInput.language` is the language sent to ASR (and to cleanup prompts), the Preset
+ * decides the output language. None of them are affected by this module. When touching
+ * this file, do not casually couple them together.
  */
 import en from './locales/en.json'
 import uk from './locales/uk.json'

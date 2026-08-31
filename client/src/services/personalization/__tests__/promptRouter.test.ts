@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { matchesAppPromptRule } from '../promptRouter'
+import { matchesAppPromptRule, resolvePromptRouting } from '../promptRouter'
 import { BUILTIN_APP_RULES } from '../defaults'
 import type { AppPromptRule } from '../types'
 import type { ActiveAppContext } from '@/types/appContext'
+import { withContextAwareInstructions } from '../../contextAware'
 
 function ruleById(id: string): AppPromptRule {
   const rule = BUILTIN_APP_RULES.find((r) => r.id === id)
@@ -69,5 +70,36 @@ describe('matchesAppPromptRule', () => {
 
   it('无上下文时不命中', () => {
     expect(matchesAppPromptRule(ruleById('teams'), null)).toBe(false)
+  })
+})
+
+describe('speech language prompt augmentation', () => {
+  const base = {
+    appContext: null,
+    presets: [{ id: 'intent', name: 'Intent', builtin: true, systemPrompt: 'Base' }],
+    activePresetId: 'intent', appRules: [],
+    userStats: { totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} },
+  }
+  it('adds language guidance for cleanup built-ins', () => {
+    for (const id of ['intent', 'faithful', 'casual']) {
+      const result = resolvePromptRouting({ ...base, presets: [{ id, name: id, builtin: true, systemPrompt: 'Base' }], activePresetId: id, speechLanguage: 'ru' })
+      expect(result.systemPrompt).toContain('Russian')
+      expect(result.systemPrompt).toContain('same language')
+      expect(result.summary).toContain('Speech language: ru')
+    }
+  })
+  it('does not add guidance for auto, translation, or user presets', () => {
+    for (const preset of [{ id: 'intent', builtin: true }, { id: 'translate_uk', builtin: true }, { id: 'translate_ru', builtin: true }, { id: 'translate_en', builtin: true }, { id: 'custom', builtin: false }]) {
+      const result = resolvePromptRouting({ ...base, presets: [{ ...preset, name: preset.id, systemPrompt: 'Base' }], activePresetId: preset.id, speechLanguage: preset.id === 'intent' ? 'auto' : 'ru' })
+      expect(result.systemPrompt).not.toContain('Speech language:')
+      expect(result.summary).not.toContain('Speech language:')
+    }
+  })
+  it('drops guidance for selected text but keeps it for caret context', () => {
+    const routed = resolvePromptRouting({ ...base, speechLanguage: 'ru' })
+    const selected = withContextAwareInstructions(routed.systemPrompt, { source: 'test', textBefore: '', selectedText: 'text', textAfter: '', selectionTruncated: false })
+    const caret = withContextAwareInstructions(routed.systemPrompt, { source: 'test', textBefore: 'before', selectedText: '', textAfter: '', selectionTruncated: false })
+    expect(selected).not.toContain('Speech language:')
+    expect(caret).toContain('in Russian')
   })
 })

@@ -17,6 +17,7 @@ import { reconnectProvider } from '@/services/recorder'
 import { describeDownloadError } from '@/lib/errorMessages'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import {
   localModelDisplayDescription,
   localModelDisplayLanguages,
@@ -372,7 +373,7 @@ function ModelsDirSection({ onChanged }: { onChanged: () => void }) {
   )
 }
 
-export default function LocalModeSection() {
+export default function LocalModeSection({ speechLanguage }: { speechLanguage: SpeechInputLanguage }) {
   useT()
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [downloadedModels, setDownloadedModels] = useState<LocalModelInfo[]>([])
@@ -582,6 +583,12 @@ export default function LocalModeSection() {
           {selectedModelId && downloadedIds.has(selectedModelId) && (
             <p className="mb-2 text-sm text-muted-foreground">
               {t('local.currentModel', { name: availableModels.find((m) => m.id === selectedModelId)?.name || selectedModelId })}
+            </p>
+          )}
+          {speechLanguage !== 'auto' && selectedModelId && availableModels.find((m) => m.id === selectedModelId)
+            && !availableModels.find((m) => m.id === selectedModelId)?.languages.includes(speechLanguage) && (
+            <p className="mb-3 text-xs text-warning-strong">
+              {t('local.languageFallback', { lang: t(`local.lang.${speechLanguage}` as 'local.lang.ru') })}
             </p>
           )}
           {selectedModelId && !downloadedIds.has(selectedModelId) && listState === 'ready' && (
@@ -841,7 +848,6 @@ export default function LocalModeSection() {
  *  这些是偶尔动一次的，不该排在测试入口前面。 */
 export function LocalModeAdvancedSection() {
   useT()
-  const [asrLanguage, setAsrLanguage] = useState('auto')
   const [accelerator, setAccelerator] = useState('auto')
   const [unloadIdleMinutes, setUnloadIdleMinutes] = useState(0)
   const [devices, setDevices] = useState<GgufDevice[]>([])
@@ -868,7 +874,6 @@ export function LocalModeAdvancedSection() {
 
   useEffect(() => {
     void (async () => {
-      setAsrLanguage(await getSetting('localAsr.language', 'auto') as string)
       setAccelerator(await getSetting('localAsr.accelerator', 'auto') as string)
       setUnloadIdleMinutes(Number(await getSetting('localAsr.unloadIdleMinutes', 0)) || 0)
       await refreshDiagnostics()
@@ -907,30 +912,6 @@ export function LocalModeAdvancedSection() {
 
   return (
     <>
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <h2 id="local-language-heading" className="text-lg font-semibold">{t('local.languageTitle')}</h2>
-              <p className="mt-2 text-xs text-muted-foreground">{t('local.languageNote')}</p>
-            </div>
-            <Segmented
-              labelledBy="local-language-heading"
-              value={asrLanguage}
-              options={[
-                { value: 'auto', label: t('common.auto') },
-                { value: 'zh', label: t('local.lang.zh') },
-                { value: 'en', label: t('local.lang.en') },
-                { value: 'ru', label: t('local.lang.ru') },
-                { value: 'uk', label: t('local.lang.uk') },
-              ]}
-              onChange={(value) => { setAsrLanguage(value); void setSetting('localAsr.language', value) }}
-              className="shrink-0 justify-end"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
       <Card>
         <CardContent className="p-6">
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

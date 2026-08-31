@@ -8,10 +8,11 @@ import { Button } from '@/components/ui/button'
 import { Feedback } from '@/components/ui/feedback'
 import { getSetting } from '@/services/store'
 import { getEngineDraftDirty, subscribeEngineDraft } from '@/stores/engineDraft'
-import { isQwenOmniProvider, resolveAsrDisplayModel, resolveQwenOmniModel } from '@/lib/asrModels'
+import { isQwenOmniProvider, resolveAsrDisplayModel, resolveCloudAsrLanguageRequest, resolveQwenOmniModel } from '@/lib/asrModels'
 import { describeProviderError, describeServerError } from '@/lib/errorMessages'
 import type { WorkMode } from '@/services/transcription'
 import { useT } from '@/i18n/useT'
+import { type SpeechInputLanguage } from '@/services/speechInputLanguage'
 
 interface TestResult {
   text: string
@@ -26,7 +27,7 @@ interface TestError {
   detail?: string
 }
 
-export default function AsrTestSection({ workMode }: { workMode: WorkMode }) {
+export default function AsrTestSection({ workMode, speechLanguage }: { workMode: WorkMode; speechLanguage: SpeechInputLanguage }) {
   const t = useT()
   const [testing, setTesting] = useState(false)
   const [playing, setPlaying] = useState(false)
@@ -78,9 +79,8 @@ export default function AsrTestSection({ workMode }: { workMode: WorkMode }) {
 
       if (workMode === 'local') {
         const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
-        const language = await getSetting('localAsr.language', 'auto') as string
         const r = await invoke<{ text: string; elapsed_ms: number; model_id: string }>('run_asr_benchmark', {
-          modelId, language,
+          modelId, language: speechLanguage,
         })
         setResult({ text: r.text, asrMs: r.elapsed_ms, mode: 'local', model: r.model_id, audioDurationSec })
       } else if (workMode === 'cloud_api') {
@@ -100,11 +100,13 @@ export default function AsrTestSection({ workMode }: { workMode: WorkMode }) {
         // 已经不在 ASR_PROVIDERS 里的旧 key——测试可能用与实际配置不同的模型。
         const isOmni = isQwenOmniProvider(asrProvider)
         const qwenOmniModel = resolveQwenOmniModel(asrProvider)
-        let omniExtra: Record<string, unknown> | undefined
+        let cloudExtra: Record<string, unknown> | undefined
         if (isOmni) {
           const savedPrompt = await getSetting('cloudAsr.omniSystemPrompt', '') as string
-          omniExtra = { model: qwenOmniModel, instructions: savedPrompt || undefined }
+          cloudExtra = { model: qwenOmniModel, instructions: savedPrompt || undefined }
         }
+        const requestLanguage = resolveCloudAsrLanguageRequest(asrProvider, speechLanguage)
+        if (requestLanguage) cloudExtra = { ...(cloudExtra ?? {}), language: requestLanguage }
 
         const start = performance.now()
         const r = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
@@ -115,7 +117,7 @@ export default function AsrTestSection({ workMode }: { workMode: WorkMode }) {
               provider: isOmni ? 'qwen_omni' : asrProvider,
               api_key: asrApiKey,
               app_id: asrAppId,
-              ...(omniExtra && { extra: omniExtra }),
+              ...(cloudExtra && { extra: cloudExtra }),
             },
           },
         })
@@ -137,7 +139,7 @@ export default function AsrTestSection({ workMode }: { workMode: WorkMode }) {
           const sock = new WebSocket(wsUrl)
           sock.binaryType = 'arraybuffer'
           sock.onopen = () => {
-            sock.send(JSON.stringify({ cmd: 'start', disable_ai: true }))
+            sock.send(JSON.stringify({ cmd: 'start', disable_ai: true, language: speechLanguage }))
             // 分块发送 PCM（每块 3200 字节 = 100ms @16kHz 16bit mono）
             const chunkSize = 3200
             for (let i = 0; i < pcmBytes.length; i += chunkSize) {
@@ -212,6 +214,10 @@ export default function AsrTestSection({ workMode }: { workMode: WorkMode }) {
             tone="warning"
             message={t('asrTest.unsavedWarning')}
           />
+        )}
+
+        {speechLanguage !== 'auto' && speechLanguage !== 'zh' && (
+          <Feedback className="mt-4" tone="warning" message={t('asrTest.languageMismatchWarning')} />
         )}
 
         {error && (

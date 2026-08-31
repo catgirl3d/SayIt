@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isQwenOmniProvider, resolveQwenOmniModel, resolveAsrDisplayModel } from '../asrModels'
+import { getCloudAsrSupportedLanguages, isQwenOmniProvider, resolveCloudAsrLanguageRequest, resolveQwenOmniModel, resolveAsrDisplayModel } from '../asrModels'
 
 describe('isQwenOmniProvider', () => {
   it('识别 Qwen Omni 系列', () => {
@@ -45,5 +45,25 @@ describe('resolveAsrDisplayModel', () => {
 
   it('空字符串返回 unknown', () => {
     expect(resolveAsrDisplayModel('')).toBe('unknown')
+  })
+})
+
+describe('cloud ASR language capabilities', () => {
+  it('resolves explicit language requests by provider', () => {
+    expect(resolveCloudAsrLanguageRequest('groq_whisper', 'auto')).toBeUndefined()
+    expect(resolveCloudAsrLanguageRequest('groq_whisper', 'ru')).toBe('ru')
+    expect(resolveCloudAsrLanguageRequest('mimo', 'zh')).toBe('zh')
+    expect(resolveCloudAsrLanguageRequest('mimo', 'ru')).toBeUndefined()
+    for (const provider of ['doubao_v2', 'qwen', 'qwen_realtime', 'qwen_omni_plus']) {
+      for (const language of ['auto', 'ru', 'uk', 'en', 'zh'] as const) {
+        expect(resolveCloudAsrLanguageRequest(provider, language)).toBeUndefined()
+      }
+    }
+  })
+
+  it('reports provider-supported explicit languages', () => {
+    expect(getCloudAsrSupportedLanguages('groq_whisper')).toEqual(['ru', 'uk', 'en', 'zh'])
+    expect(getCloudAsrSupportedLanguages('mimo')).toEqual(['zh', 'en'])
+    expect(getCloudAsrSupportedLanguages('qwen')).toBeNull()
   })
 })

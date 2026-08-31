@@ -1,5 +1,6 @@
 import type { ActiveAppContext } from '@/types/appContext'
 import type { PromptPreset } from '@/services/store'
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
 export interface AppPromptMatcher {
   processNames: string[]
@@ -55,4 +56,5 @@ export interface PromptRoutingInput {
   hotwords?: string[]
   /** 是否把热词注入到 AI 系统提示词，帮助 AI 纠正专有名词。默认关闭。 */
   injectHotwords?: boolean
+  speechLanguage?: SpeechInputLanguage
 }

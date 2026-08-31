@@ -40,11 +40,12 @@ export function resolveMicBoost(value: unknown): MicBoostConfig {
 
 export const DEFAULTS: Record<string, unknown> = {
 
-  // ── 界面语言 ──
-  // 只管**界面文字**，不改识别语种。设置层已经有三个"语言"了
-  // （localAsr.language / server.language 是 ASR 语种，Preset 决定输出语种），
-  // 所以这个键必须带 ui. 前缀，别再起名叫 language。
-  'ui.language': 'auto', // 可选: 'auto'（跟随系统）| 'zh-CN' | 'en'
+  // ── UI language ──
+  // Governs **UI text only**; it does not change the recognition language. The settings
+  // layer already has several "language" keys (`speechInput.language` is the ASR speech
+  // language, Preset decides the output language), so this key must carry the `ui.` prefix
+  // and must not be named just `language`.
+  'ui.language': 'auto', // 'auto' follows the system locale; otherwise 'zh-CN' | 'en'
 
   // ── 工作模式 ──
   workMode: 'server', // 可选: 'server' | 'cloud_api' | 'local'
@@ -117,12 +118,13 @@ export const DEFAULTS: Record<string, unknown> = {
   'cloudAsr.autoCreatedProviders': [],
 
   // ── ASR（本地）──
+  // Shared preferred speech language for every recognition mode.
+  'speechInput.language': 'auto',
   // 可选值就是 catalog.rs 里那几个 id：'sensevoice-small-gguf'（默认，最快）
   // | 'funasr-nano-2512-gguf' | 'qwen3-asr-0.6b-gguf'
   // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf'（最准）
   // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf' | 'whisper-large-v2-gguf'
   'localAsr.modelId': 'sensevoice-small-gguf',
-  'localAsr.language': 'auto', // 可选: 'auto' | 'zh' | 'en' | 'ru' | 'uk'
   // GGUF 权重目前只发在 HuggingFace（handy-computer 组织下），国内走镜像更稳。
   // 值要和 catalog 里 DownloadSource.source 的名字完全一致，否则会回落到第一个源。
   'localAsr.downloadSource': 'HuggingFace Mirror', // 可选: 'HuggingFace Mirror' | 'HuggingFace'
@@ -142,7 +144,6 @@ export const DEFAULTS: Record<string, unknown> = {
   //   客户端从来没写过这几个字符串。）
   // 服务器模式下的 AI 来源。managed = 服务器内置；custom = 服务器只做 ASR，客户端调用当前 AI 档案。
   'server.aiSource': 'managed', // 可选: 'managed' | 'custom'
-  'server.language': 'auto',
 
   // ── 悬浮窗 ──
   overlayWaveTheme: 'black-rainbow', // 可选: 'black-rainbow' | 'black-blue' | 'black-white'

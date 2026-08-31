@@ -62,6 +62,7 @@ import {
 import { t } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
 import { describeMicSource, micSourceChanged } from './micSourceReminder'
+import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import {
   CONTEXT_SELECTION_EDIT_PROMPT,
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
@@ -87,10 +88,6 @@ const VALID_TRANSITIONS: StateTransition[] = [
 const LATE_FINAL_GRACE_MS = 15000
 const MODIFIER_PTT_RELEASE_GUARD_MS = 200
 const MIC_MUTED_AUTO_CANCEL_MS = 3000
-
-function normalizeServerLanguage(value: unknown): string {
-  return typeof value === 'string' && value !== 'auto' ? value : ''
-}
 
 function classifyHistoryProviderFailure(message: string): HistoryFailReasonCode {
   const code = describeProviderError(message).code
@@ -192,7 +189,7 @@ export class RecorderOrchestrator {
   private cachedHotwords: string[] = []
   /** 是否把热词注入 AI 提示词（默认关，用户可在热词页开启）。 */
   private cachedInjectHotwords = false
-  private cachedLanguage: string = ''
+  private cachedLanguage = normalizeSpeechInputLanguage(undefined)
   /** 是否开启流式实时显示（识别过程中把中间结果实时显示在悬浮窗）。默认关闭。 */
   private cachedStreamingDisplay = false
   private currentActiveAppContext: ActiveAppContext | null = null
@@ -527,9 +524,9 @@ export class RecorderOrchestrator {
     this.cachedHotwords = Array.from(new Set(words.map((word) => word.trim()).filter(Boolean)))
   }
 
-  /** Update the server recognition language used by the next recording. */
-  setServerLanguageCache(language: string) {
-    this.cachedLanguage = normalizeServerLanguage(language)
+  /** Update the speech language used by the next recording. */
+  setSpeechLanguageCache(language: string) {
+    this.cachedLanguage = normalizeSpeechInputLanguage(language)
   }
 
   /** 仅更新「流式实时显示」开关缓存，供外观设置切换后立即生效。 */
@@ -623,13 +620,13 @@ export class RecorderOrchestrator {
         const themeActive = normalizeCustomThemeActive(rawCustomThemeActive as Record<string, unknown>, themes)
         return composeHotwords([], setWords, setActive, themes, themeActive)
       }),
-      getSetting('server.language', 'auto').then((lang) => {
-        return normalizeServerLanguage(lang)
+      getSetting('speechInput.language', 'auto').then((lang) => {
+        return normalizeSpeechInputLanguage(lang)
       }),
     ])
 
     this.cachedHotwords = hotwordsResult.status === 'fulfilled' ? hotwordsResult.value : []
-    this.cachedLanguage = languageResult.status === 'fulfilled' ? languageResult.value : ''
+    this.cachedLanguage = languageResult.status === 'fulfilled' ? languageResult.value : 'auto'
   }
 
   /** 采集一次客户端运行时信息并缓存。静态元数据，进程内只成功采集一次；
@@ -1415,6 +1412,7 @@ export class RecorderOrchestrator {
       userStats: this.cachedUserStats,
       hotwords: this.cachedHotwords,
       injectHotwords: this.cachedInjectHotwords,
+      speechLanguage: this.cachedLanguage,
     })
     if (textContext) {
       this.currentPromptResolution = {
@@ -1507,7 +1505,7 @@ export class RecorderOrchestrator {
         appContext: activeAppContext,
         textContext,
         hotwords: this.cachedHotwords.length > 0 ? this.cachedHotwords : undefined,
-        language: this.cachedLanguage || undefined,
+        language: this.cachedLanguage,
         streamingDisplay: this.cachedStreamingDisplay,
       }
       : {
@@ -1518,7 +1516,7 @@ export class RecorderOrchestrator {
         appContext: activeAppContext,
         textContext,
         hotwords: this.cachedHotwords.length > 0 ? this.cachedHotwords : undefined,
-        language: this.cachedLanguage || undefined,
+        language: this.cachedLanguage,
         streamingDisplay: this.cachedStreamingDisplay,
       }
 

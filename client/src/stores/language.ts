@@ -2,8 +2,9 @@
  * 界面语言状态管理
  * 负责语言偏好的持久化（存到 settings）和初始化，形状对齐 stores/theme.ts。
  *
- * ⚠️ 这里管的是**界面文字**。识别语种是另外三个东西（localAsr.language、
- * server.language、Preset 的输出语种），改语言不动它们，也不要在这里联动。
+ * ⚠️ This store governs **UI text only**. The recognition language lives elsewhere
+ * (`speechInput.language` for ASR, and the Preset's output language); changing the UI
+ * language must not touch them and must not couple with them here.
  */
 import * as bridge from '@/services/bridge'
 import {

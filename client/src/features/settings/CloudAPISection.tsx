@@ -24,7 +24,8 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
-import { resolveQwenOmniModel } from '@/lib/asrModels'
+import { getCloudAsrSupportedLanguages, resolveQwenOmniModel } from '@/lib/asrModels'
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { describeProviderError } from '@/lib/errorMessages'
 import { doubaoKeyLabel } from '@/lib/cloudAsrCreds'
 import {
@@ -179,7 +180,7 @@ function profileTitle(profile: AsrProfile, siblings: number): string {
   return fp ? `${base} ${fp}` : base
 }
 
-export default function CloudAPISection() {
+export default function CloudAPISection({ speechLanguage }: { speechLanguage: SpeechInputLanguage }) {
   useT()
   const [profiles, setProfiles] = useState<AsrProfile[]>([])
   const [activeId, setActiveId] = useState('')
@@ -199,6 +200,8 @@ export default function CloudAPISection() {
   const [saving, setSaving] = useState(false)
 
   const busy = testingId !== '' || saving || batch !== null
+  const activeProvider = profiles.find((profile) => profile.id === activeId)?.provider
+  const supportedLanguages = activeProvider ? getCloudAsrSupportedLanguages(activeProvider) : null
   /** 这张卡正在测吗 —— 单张测试和并发批量测试都要算上 */
   const isTesting = (id: string) => testingId === id || testingIds.includes(id)
   const draftEntry = draft ? findAsrProvider(draft.provider) : undefined
@@ -883,6 +886,14 @@ export default function CloudAPISection() {
 
         {notice && (
           <Feedback className="mt-3" tone={notice.tone} message={notice.message} detail={notice.detail} />
+        )}
+        {activeProvider && supportedLanguages && speechLanguage !== 'auto' && !supportedLanguages.includes(speechLanguage) && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {t('asr.lang.supportedOnly', { langs: supportedLanguages.map((lang) => t(`local.lang.${lang}` as 'local.lang.en')).join(t('common.listSeparator')) })}
+          </p>
+        )}
+        {activeProvider && !supportedLanguages && (
+          <p className="mt-3 text-xs text-muted-foreground">{t('asr.lang.autoOnly')}</p>
         )}
       </CardContent>
 

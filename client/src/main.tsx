@@ -8,6 +8,7 @@ import { addRuntimeEvent } from './services/debugLog'
 import { initRuntimeConfig } from './services/runtimeConfig'
 import { initProviderFromStore } from './services/transcription'
 import { initLanguage, initLocaleDefaults } from './stores/language'
+import { initSpeechInputLanguageMigration } from './services/speechInputLanguage'
 
 window.addEventListener('error', (event) => {
   addRuntimeEvent('error', 'window', event.message || 'Uncaught error', {
@@ -34,6 +35,11 @@ async function bootstrap() {
     await initLocaleDefaults(locale)
   } catch (e) {
     console.error('[bootstrap] initLanguage error:', e)
+  }
+  try {
+    await initSpeechInputLanguageMigration()
+  } catch (e) {
+    console.error('[bootstrap] initSpeechInputLanguageMigration error:', e)
   }
   try {
     await initProviderFromStore()

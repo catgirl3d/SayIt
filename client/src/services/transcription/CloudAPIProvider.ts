@@ -2,7 +2,8 @@
 // 豆包 ASR：边录边发（实时流式）
 // 其他 ASR：录完再发（BufferedProvider）
 
-import { isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
+import { isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel, resolveCloudAsrLanguageRequest } from '@/lib/asrModels'
+import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -514,6 +515,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
             extra: { model: qwenOmniModel, instructions: omniInstructions },
           }),
         }
+        const language = resolveCloudAsrLanguageRequest(asrProvider, normalizeSpeechInputLanguage(startOpts.language))
+        if (language) asrConfig.extra = { ...(asrConfig.extra ?? {}), language }
 
         addRuntimeEvent('info', 'cloud_api', 'ASR started', { provider: asrProvider, durationSec })
         const asrResult = await invoke<AsrResult>('cloud_transcribe', {

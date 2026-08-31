@@ -71,8 +71,7 @@ export class LocalProvider extends BufferedProvider {
     try {
       const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf')
       if (!this.isRunCurrent(runId)) return
-      const language = await getSetting('localAsr.language', 'auto')
-      if (!this.isRunCurrent(runId)) return
+      const language = startOpts?.language || 'auto'
       const accelerator = await getSetting('localAsr.accelerator', 'auto')
       if (!this.isRunCurrent(runId)) return
 

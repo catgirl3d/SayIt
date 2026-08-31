@@ -15,6 +15,9 @@ class ASRLanguageResolutionTests(unittest.TestCase):
     def test_resolves_russian_iso_code_to_qwen_language_name(self) -> None:
         self.assertEqual(self._engine()._resolve_language("ru"), "Russian")
 
+    def test_resolves_ukrainian_iso_code_to_qwen_language_name(self) -> None:
+        self.assertEqual(self._engine()._resolve_language("uk"), "Ukrainian")
+
     def test_preserves_auto_detection_override(self) -> None:
         self.assertIsNone(self._engine()._resolve_language("auto"))
 

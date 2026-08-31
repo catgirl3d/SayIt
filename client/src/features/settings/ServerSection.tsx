@@ -6,16 +6,15 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip } from '@/components/ui/tooltip'
 import { Feedback, type FeedbackTone } from '@/components/ui/feedback'
-import { Segmented } from '@/components/ui/segmented'
 import {
   getBackendBaseUrl,
   getDefaultBackendBaseUrl,
   resetBackendBaseUrl,
   setBackendBaseUrl as persistBackendBaseUrl,
 } from '@/services/runtimeConfig'
-import { reconnectProvider, setServerLanguageCache } from '@/services/recorder'
+import { reconnectProvider } from '@/services/recorder'
 import { checkForUpdateNow, discardPendingForChannelSwitch } from '@/features/update/autoUpdate'
-import { getSetting, setSetting } from '@/services/store'
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import { describeServerError } from '@/lib/errorMessages'
 import { t } from '@/i18n'
@@ -27,7 +26,7 @@ interface ServiceResult {
   detail?: string
 }
 
-export default function ServerSection() {
+export default function ServerSection({ speechLanguage }: { speechLanguage: SpeechInputLanguage }) {
   const t = useT()
   const [backendBaseUrl, setBackendBaseUrl] = useState('')
   /** 已保存的地址。输入框与它不一致就是「未保存」 */
@@ -35,14 +34,12 @@ export default function ServerSection() {
   const [defaultBaseUrl, setDefaultBaseUrl] = useState('')
   const [result, setResult] = useState<ServiceResult | null>(null)
   const [busy, setBusy] = useState(false)
-  const [asrLanguage, setAsrLanguage] = useState('auto')
 
   useEffect(() => {
     const current = getBackendBaseUrl()
     setBackendBaseUrl(current)
     setSavedBaseUrl(current)
     setDefaultBaseUrl(getDefaultBackendBaseUrl())
-    void getSetting('server.language', 'auto').then((v) => setAsrLanguage(String(v || 'auto')))
     // 切走路由时把"有未保存改动"复位，别把脏状态留给下一次进入
     return () => setEngineDraftDirty(false)
   }, [])
@@ -75,19 +72,32 @@ export default function ServerSection() {
   /** 把 /healthz 的 asr/llm 及模型信息翻译成人话。 */
   function describeHealth(payload: HealthPayload, prefix: string): ServiceResult {
     const modelDetail = payload.asr_model ? ` · ASR: ${payload.asr_model}` : ''
+    const languageDetail = payload.asr_engine === 'qwen3'
+      ? t('server.lang.applied', {
+        lang: speechLanguage === 'auto' ? t('common.auto') : t(`local.lang.${speechLanguage}` as 'local.lang.en'),
+      })
+      : payload.asr_engine === 'gigaam' || payload.asr_engine === 'firered'
+        ? t('server.lang.ignored')
+        : undefined
     if (payload.asr === false) {
       return {
         tone: 'warning',
         message: t('server.asrNotReady', { prefix }),
+        detail: languageDetail,
       }
     }
     if (payload.llm === false) {
       return {
         tone: 'success',
         message: t('server.noAi', { prefix }) + modelDetail,
+        detail: languageDetail,
       }
     }
-    return { tone: 'success', message: t('server.allGood', { prefix }) + modelDetail }
+    return {
+      tone: 'success',
+      message: t('server.allGood', { prefix }) + modelDetail,
+      detail: languageDetail,
+    }
   }
 
   /**
@@ -241,35 +251,10 @@ export default function ServerSection() {
               detail={result.detail}
             />
           )}
+          {!result && <p className="mt-3 text-xs text-muted-foreground">{t('server.lang.generic')}</p>}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <h2 id="server-language-heading" className="text-lg font-semibold">{t('server.languageTitle')}</h2>
-              <p className="mt-2 text-xs text-muted-foreground">{t('server.languageNote')}</p>
-            </div>
-            <Segmented
-              labelledBy="server-language-heading"
-              value={asrLanguage}
-              options={[
-                { value: 'auto', label: t('common.auto') },
-                { value: 'zh', label: t('local.lang.zh') },
-                { value: 'en', label: t('local.lang.en') },
-                { value: 'ru', label: t('local.lang.ru') },
-              ]}
-              onChange={(value) => {
-                setAsrLanguage(value)
-                setServerLanguageCache(value)
-                void setSetting('server.language', value)
-              }}
-              className="shrink-0 justify-end"
-            />
-          </div>
-        </CardContent>
-      </Card>
     </>
   )
 }

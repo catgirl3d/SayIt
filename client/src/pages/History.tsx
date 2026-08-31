@@ -1,6 +1,6 @@
 import * as bridge from '@/services/bridge'
 import { cn } from '@/lib/utils'
-import { resolveAsrDisplayModel, isQwenOmniProvider, resolveQwenOmniModel } from '@/lib/asrModels'
+import { resolveAsrDisplayModel, isQwenOmniProvider, resolveCloudAsrLanguageRequest, resolveQwenOmniModel } from '@/lib/asrModels'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
@@ -27,6 +27,7 @@ import { loadAudioAsDataUrl } from '@/services/audioFileService'
 import { useT } from '@/i18n/useT'
 import { applyTextTransforms, restoreHotwordSpacing } from '@/services/textPostProcess'
 import { buildHotwordInjectionPart } from '@/services/personalization/promptRouter'
+import { applySpeechLanguageToPrompt, getSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import {
   BUILTIN_SET_WORDS_KEY,
   BUILTIN_SET_ACTIVE_KEY,
@@ -62,6 +63,7 @@ async function reprocessViaServer(
   aiEnabled: boolean,
   systemPrompt: string | undefined,
   clientMeta: Awaited<ReturnType<typeof bridge.getClientRuntimeInfo>> | null,
+  language: SpeechInputLanguage,
 ): Promise<ReprocessResult> {
   const { getWSUrl } = await import('@/services/runtimeConfig')
   const wsUrl = getWSUrl()
@@ -91,6 +93,7 @@ async function reprocessViaServer(
         cmd: 'start',
         source: 'history_reprocess',
         disable_ai: !useManagedAi,
+        language,
       }
       if (useManagedAi && systemPrompt) startMsg.system_prompt = systemPrompt
       if (clientMeta) {
@@ -212,6 +215,7 @@ async function reprocessViaCloudApi(
   hotwords: string[],
   aiEnabled: boolean,
   systemPrompt: string | undefined,
+  language: SpeechInputLanguage,
 ): Promise<ReprocessResult> {
   const durationSec = (chunk.byteLength / 2) / 16000
   const audioB64 = uint8ArrayToBase64(new Uint8Array(chunk))
@@ -228,11 +232,16 @@ async function reprocessViaCloudApi(
     omniInstructions = savedPrompt || undefined
   }
 
+  let cloudExtra: Record<string, unknown> | undefined
+  if (isQwenOmni) cloudExtra = { model: qwenOmniModel, instructions: omniInstructions }
+  const requestLanguage = resolveCloudAsrLanguageRequest(asrProvider, language)
+  if (requestLanguage) cloudExtra = { ...(cloudExtra ?? {}), language: requestLanguage }
+
   const asrConfig: Record<string, unknown> = {
     provider: isQwenOmni ? 'qwen_omni' : asrProvider,
     api_key: asrApiKey,
     app_id: asrAppId,
-    ...(isQwenOmni && { extra: { model: qwenOmniModel, instructions: omniInstructions } }),
+    ...(cloudExtra && { extra: cloudExtra }),
   }
 
   const asrStart = performance.now()
@@ -282,12 +291,12 @@ async function reprocessViaLocal(
   hotwords: string[],
   aiEnabled: boolean,
   systemPrompt: string | undefined,
+  language: SpeechInputLanguage,
 ): Promise<ReprocessResult> {
   const durationSec = (chunk.byteLength / 2) / 16000
   const audioB64 = uint8ArrayToBase64(new Uint8Array(chunk))
 
   const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
-  const language = await getSetting('localAsr.language', 'auto') as string
   const accelerator = await getSetting('localAsr.accelerator', 'auto') as string
 
   // hotwords 在 GGUF 引擎上不支持（transcribe.cpp 只有 whisper 族接 initial prompt），
@@ -509,7 +518,10 @@ export default function History() {
     // 按用户当前选择的工作模式重新识别，与实时录音保持一致
     // （此前这里硬编码走服务器模式，导致云 API/本地模式下重新识别被错误地发回服务器）
     const workMode = getWorkMode()
+    const speechLanguage = await getSpeechInputLanguage()
     let systemPrompt = aiEnabled ? preset.systemPrompt : undefined
+    const speechLanguagePart = applySpeechLanguageToPrompt(preset, speechLanguage)
+    if (systemPrompt && speechLanguagePart) systemPrompt = `${systemPrompt}\n\n${speechLanguagePart}`
     // 与实时一致：开启"热词注入 AI 提示词"时，重新识别也把热词表注入系统提示词
     if (systemPrompt && (await getSetting('injectHotwordsToPrompt', false))) {
       const part = buildHotwordInjectionPart(hotwords)
@@ -518,11 +530,11 @@ export default function History() {
 
     let result: ReprocessResult
     if (workMode === 'cloud_api') {
-      result = await reprocessViaCloudApi(chunk, hotwords, Boolean(aiEnabled), systemPrompt)
+      result = await reprocessViaCloudApi(chunk, hotwords, Boolean(aiEnabled), systemPrompt, speechLanguage)
     } else if (workMode === 'local') {
-      result = await reprocessViaLocal(chunk, hotwords, Boolean(aiEnabled), systemPrompt)
+      result = await reprocessViaLocal(chunk, hotwords, Boolean(aiEnabled), systemPrompt, speechLanguage)
     } else {
-      result = await reprocessViaServer(chunk, hotwords, Boolean(aiEnabled), systemPrompt, clientMeta)
+      result = await reprocessViaServer(chunk, hotwords, Boolean(aiEnabled), systemPrompt, clientMeta, speechLanguage)
     }
 
     // 新链路优先采用显式执行状态；旧的云/本地历史重跑尚未返回状态时才兼容文本比较。
