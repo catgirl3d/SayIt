@@ -9,11 +9,9 @@ import appIconOnDark from '@/assets/icon-128.png'
 import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { PROJECT_RELEASES_URL, PROJECT_REPOSITORY_URL } from '@/services/projectLinks'
 
 const currentVersion = __APP_VERSION__
-
-const REPO_URL = 'https://github.com/crosswk/SayIt'
-const RELEASES_URL = `${REPO_URL}/releases`
 
 function formatTimestamp(value: number | null | undefined) {
   if (!value) return t('about.neverChecked')
@@ -74,7 +72,7 @@ export default function About() {
                     想看历史版本或某一版改了什么的人第一反应就是点这里的版本号。 */}
                 <button
                   type="button"
-                  onClick={() => void shellOpen(RELEASES_URL)}
+                  onClick={() => void shellOpen(PROJECT_RELEASES_URL)}
                   className="flex h-6 items-center rounded-full bg-muted/50 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/15 hover:text-foreground"
                   title={t('about.viewReleases')}
                   aria-label={t('about.viewReleases')}
@@ -83,7 +81,7 @@ export default function About() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void shellOpen(REPO_URL)}
+                  onClick={() => void shellOpen(PROJECT_REPOSITORY_URL)}
                   className="flex h-6 w-6 items-center justify-center rounded-full bg-muted/50 text-muted-foreground transition-colors hover:bg-foreground/15 hover:text-foreground"
                   title="GitHub"
                   aria-label="GitHub"
