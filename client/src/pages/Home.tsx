@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Mic, Clock, Type, Zap } from 'lucide-react'
 import { getStats, type Stats, getSetting } from '@/services/store'
 import { SHORTCUTS_CHANGED_EVENT } from '@/services/bridge'
-import FeedbackSection from '@/components/FeedbackSection'
+import ReportIssueSection from '@/components/ReportIssueSection'
 import NoticeBanner from '@/components/NoticeBanner'
 import { displayShortcut } from '@/lib/shortcutKeys'
 import { getLocale } from '@/i18n'
@@ -148,7 +148,7 @@ export default function Home() {
       </div>
 
       <div className="mt-6">
-        <FeedbackSection />
+        <ReportIssueSection />
       </div>
     </div>
   )
