@@ -1,12 +1,15 @@
 import type { ActiveAppContext } from './appContext'
 
-export type DiagnosticOccurrence =
-  | 'just_now'
-  | 'within_1h'
-  | 'today'
-  | 'yesterday'
-  | 'older'
-  | 'not_sure'
+export type DiagnosticOccurrence = 'just_now' | 'within_1h' | 'today' | 'yesterday' | 'older' | 'not_sure'
+
+export interface PublicDiagnosticsEnvironment {
+  workMode: 'local' | 'server' | 'cloud_api' | 'unknown'
+  speechInputLanguage: string
+  aiEnabled: boolean
+  asrProvider: 'local' | 'server' | 'cloud' | 'unknown'
+  aiProvider: 'none' | 'server' | 'cloud' | 'unknown'
+  localAccelerator: 'cpu' | 'cuda' | 'vulkan' | 'auto' | 'unknown'
+}
 
 export interface DiagnosticsPreview {
   generatedAt: string
@@ -150,18 +153,11 @@ export interface AppAPI {
   downloadUpdate: (url: string, sha512?: string | null) => Promise<string>
   verifyUpdatePackage: (filePath: string, sha512?: string | null) => Promise<boolean>
   setPTTLabConfig: (data: unknown) => void
-  collectSettings: () => Promise<Record<string, unknown>>
-  getDiagnosticsPreview: (data: {
-    settings: Record<string, unknown>
+  getDiagnosticsPreview: (issueOccurrence: DiagnosticOccurrence) => Promise<DiagnosticsPreview>
+  createPublicDiagnosticsBundle: (data: {
     issueOccurrence: DiagnosticOccurrence
-  }) => Promise<DiagnosticsPreview>
-  createDiagnosticsZip: (data: {
-    description: string
-    settings: Record<string, unknown>
-    issueOccurrence: DiagnosticOccurrence
-    images: Array<{ name: string; data: number[]; size: number; type: string }>
+    environment: PublicDiagnosticsEnvironment
   }) => Promise<string>
-  readDiagnosticsZip: (path: string) => Promise<number[] | null>
   readLogFile: (logType: 'frontend' | 'ptt') => Promise<string | null>
   saveAudioFile: (id: string, wavBase64: string) => Promise<string>
   readAudioFile: (filePath: string) => Promise<string | null>

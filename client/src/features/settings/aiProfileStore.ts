@@ -10,8 +10,8 @@
 // 「切了模型但地址/密钥还是上一家的」这个 bug 之所以可能存在，就是因为过去这四个键
 // 是分别维护的；现在它们只有一个写入点。
 //
-// profiles 里带 apiKey，会跟着配置导出走（Rust 侧 export_app_settings 是整表导出，
-// 无需登记新键）。诊断报告不受影响：collect_settings 用的是固定白名单，不含 cloudAi.*。
+// Profiles include API keys and are included in full configuration exports. Public support bundles
+// use an explicit categorical environment contract and never include cloudAi settings.
 
 import { getSetting, setSetting } from '@/services/store'
 import {

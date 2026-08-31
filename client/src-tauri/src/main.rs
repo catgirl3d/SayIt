@@ -643,10 +643,8 @@ fn main() {
             commands::webdav::webdav_backup_now,
             commands::webdav::webdav_restore,
             // Diagnostics
-            commands::diagnostics::collect_settings,
             commands::diagnostics::get_diagnostics_preview,
-            commands::diagnostics::create_diagnostics_zip,
-            commands::diagnostics::read_diagnostics_zip,
+            commands::diagnostics::create_public_diagnostics_bundle,
             commands::diagnostics::copy_diagnostics_zip,
             commands::diagnostics::read_log_file,
             commands::diagnostics::open_log_folder,

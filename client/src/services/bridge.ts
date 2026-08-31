@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
-import type { DiagnosticOccurrence, DiagnosticsPreview } from '../types/appApi'
+import type { DiagnosticOccurrence, DiagnosticsPreview, PublicDiagnosticsEnvironment } from '../types/appApi'
 
 // Re-export for convenience
 export { invoke, listen, emit }
@@ -376,23 +376,15 @@ export function deleteAudioFile(filePath: string) {
 
 // ─── Diagnostics ───
 
-export function collectSettings() {
-  return invoke<Record<string, unknown>>('collect_settings')
+export function getDiagnosticsPreview(issueOccurrence: DiagnosticOccurrence) {
+  return invoke<DiagnosticsPreview>('get_diagnostics_preview', { data: { issueOccurrence } })
 }
 
-export function getDiagnosticsPreview(data: {
-  settings: Record<string, unknown>
+export function createPublicDiagnosticsBundle(data: {
   issueOccurrence: DiagnosticOccurrence
+  environment: PublicDiagnosticsEnvironment
 }) {
-  return invoke<DiagnosticsPreview>('get_diagnostics_preview', { data })
-}
-
-export function createDiagnosticsZip(data: unknown) {
-  return invoke<string>('create_diagnostics_zip', { data })
-}
-
-export function readDiagnosticsZip(path: string) {
-  return invoke<number[] | null>('read_diagnostics_zip', { path })
+  return invoke<string>('create_public_diagnostics_bundle', { data })
 }
 
 export function copyDiagnosticsZip(source: string, destination: string) {
