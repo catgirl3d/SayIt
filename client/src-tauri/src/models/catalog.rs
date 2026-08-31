@@ -268,6 +268,25 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             sources: QWEN3_06B_Q8.sources(),
             archive_url: None,
         },
+        // Whisper Small Q4_K_M GGUF (multilingual, transcribe.cpp).
+        // The lightweight Whisper tier: 99 languages, including Ukrainian.
+        ModelInfo {
+            id: "whisper-small-gguf".into(),
+            name: "Whisper Small".into(),
+            description: "轻量多语种模型，适合配置较低的电脑".into(),
+            model_type: "whisper-gguf".into(),
+            total_size_bytes: WHISPER_SMALL_Q4.size,
+            speed: 6.5,
+            accuracy: 7.0,
+            recommended: false,
+            memory_mb: 700,
+            featured: false,
+            languages_label: "99 语种".into(),
+            quant: "Q4_K_M".into(),
+            languages: vec!["uk".into(), "en".into(), "ru".into(), "zh".into()],
+            sources: WHISPER_SMALL_Q4.sources(),
+            archive_url: None,
+        },
         // ── Qwen3-ASR 1.7B GGUF Q4_K_M（1.7B 的轻量档）──
         // 存在的意义是让"想要 1.7B 的准确度但不想下 1.4 GB / 不想占 2 GB 内存"
         // 的人有得选。上游 WER 1.81%，仍明显好于 0.6B 的 Q8_0（2.11%），
@@ -310,24 +329,57 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             sources: QWEN3_17B_Q5.sources(),
             archive_url: None,
         },
+        // Whisper Large v3 Turbo Q4_K_M GGUF (multilingual, transcribe.cpp).
+        // Fast, high-accuracy multilingual recognition across 100 languages.
+        ModelInfo {
+            id: "whisper-large-v3-turbo-gguf".into(),
+            name: "Whisper Large v3 Turbo".into(),
+            description: "兼顾速度与高精度的多语种模型".into(),
+            model_type: "whisper-gguf".into(),
+            total_size_bytes: WHISPER_LARGE_V3_TURBO_Q4.size,
+            speed: 3.5,
+            accuracy: 8.5,
+            recommended: false,
+            memory_mb: 1800,
+            featured: false,
+            languages_label: "100 语种".into(),
+            quant: "Q4_K_M".into(),
+            languages: vec!["uk".into(), "en".into(), "ru".into(), "zh".into()],
+            sources: WHISPER_LARGE_V3_TURBO_Q4.sources(),
+            archive_url: None,
+        },
+        // Whisper Large v2 Q4_K_M GGUF (multilingual, transcribe.cpp).
+        // The high-accuracy Whisper tier for 99 languages, at the cost of speed.
+        ModelInfo {
+            id: "whisper-large-v2-gguf".into(),
+            name: "Whisper Large v2".into(),
+            description: "多语种高精度，但运行明显更慢".into(),
+            model_type: "whisper-gguf".into(),
+            total_size_bytes: WHISPER_LARGE_V2_Q4.size,
+            speed: 2.5,
+            accuracy: 9.0,
+            recommended: false,
+            memory_mb: 2800,
+            featured: false,
+            languages_label: "99 语种".into(),
+            quant: "Q4_K_M".into(),
+            languages: vec!["uk".into(), "en".into(), "ru".into(), "zh".into()],
+            sources: WHISPER_LARGE_V2_Q4.sources(),
+            archive_url: None,
+        },
     ]
 }
 
-// GGUF 权重坐标（仓库 / 文件名 / 字节数 / sha256）。
-// 这几份权重是自托管在 `cswk/sayit-asr-gguf`——从 handy-computer 那套
-// **transcribe.cpp 兼容**的 GGUF 原样转存（字节完全一致，故体积 / sha256 不变），
-// 目的是不再依赖第三方仓库（对方删库我们就抓瞎）。体积 / sha256 用每个文件的
-// Git-LFS 指针核对过（`https://huggingface.co/<repo>/raw/main/<file>` 返回 oid+size）。
-// 换量化档时改这里就够，模型条目里不再重复写体积和校验和。
-// （`memory_mb` 是实测工作集，不是从这里的体积推算的——见 ModelInfo 字段注释。）
+// GGUF weight coordinates (repository, file name, byte size, and SHA-256).
+// Most weights are byte-for-byte mirrors of handy-computer's transcribe.cpp-compatible
+// conversions in `cswk/sayit-asr-gguf`. GigaAM and Whisper still use the upstream
+// repositories until identical files are copied to the project mirror.
 //
-// ⚠️ 别随便换成"看起来同名"的其它 HF 仓库（如 FunAudioLLM 官方、mradermacher、
-//    cstr 的 GGUF）：它们是给别的运行时（llama.cpp 系）转的，`general.architecture`
-//    标成了 `sensevoice-small` / 其它，而我们的引擎 transcribe.cpp 只认 handy-computer
-//    这套转换所用的架构标签（如 `sensevoice`）。换了会在加载时报
-//    "unsupported architecture (status 5)"，下载/校验和都正常也没用。
-//    要换源，只能转存"transcribe.cpp 兼容"的那一份（就像现在这样），而不是另找重转的。
-//    size_bytes 会在下载前与服务器报告值核对；sha256 会在入库前校验完整文件，二者都必须准确。
+// Do not replace these files with similarly named GGUF conversions from other repositories.
+// They may target llama.cpp-derived runtimes and use a different `general.architecture` tag,
+// which transcribe.cpp rejects with "unsupported architecture (status 5)" even when the
+// download and checksum succeed. A source change must preserve the exact bytes. The downloader
+// checks `size_bytes` before accepting the transfer and verifies SHA-256 before installation.
 
 const PARAKEET_UNIFIED_EN_Q4: GgufWeight = GgufWeight {
     repo: "cswk/sayit-asr-gguf",
@@ -348,6 +400,27 @@ const GIGAAM_V3_E2E_RNNT_Q8: GgufWeight = GgufWeight {
     file: "gigaam-v3-e2e-rnnt-Q8_0.gguf",
     size: 273_724_832,
     sha256: "78d63b47723b7f8d78c6113a6ef983b5a86e2a86f6c273e1f5cb6967b1c4467a",
+};
+
+const WHISPER_SMALL_Q4: GgufWeight = GgufWeight {
+    repo: "handy-computer/whisper-small-gguf",
+    file: "whisper-small-Q4_K_M.gguf",
+    size: 171_630_656,
+    sha256: "b204d2005a3e5d4fe6153bd61e5e8b32e757ff7b017ac8f61c6f051c2f80e939",
+};
+
+const WHISPER_LARGE_V3_TURBO_Q4: GgufWeight = GgufWeight {
+    repo: "handy-computer/whisper-large-v3-turbo-gguf",
+    file: "whisper-large-v3-turbo-Q4_K_M.gguf",
+    size: 536_069_728,
+    sha256: "ecfe9b6beb4ab18fef49187cc968cc74b5168b94629c8830e2ca6b794c6e25ed",
+};
+
+const WHISPER_LARGE_V2_Q4: GgufWeight = GgufWeight {
+    repo: "handy-computer/whisper-large-v2-gguf",
+    file: "whisper-large-v2-Q4_K_M.gguf",
+    size: 996_526_080,
+    sha256: "76aa37b205abc1fb7a9e7aaf0655b8747995b81e6bb72c18f4b1acf59e222f79",
 };
 
 const SENSEVOICE: GgufWeight = GgufWeight {
@@ -464,6 +537,44 @@ mod tests {
         }
         // defaults.ts 里 localAsr.downloadSource 的默认值必须能对上其中一个
         assert!(expected.contains(&"HuggingFace Mirror"));
+    }
+
+    #[test]
+    fn whisper_catalog_entries_cover_selected_tiers() {
+        let models = get_available_models();
+        let expected = [
+            (
+                "whisper-small-gguf",
+                171_630_656,
+                "b204d2005a3e5d4fe6153bd61e5e8b32e757ff7b017ac8f61c6f051c2f80e939",
+            ),
+            (
+                "whisper-large-v3-turbo-gguf",
+                536_069_728,
+                "ecfe9b6beb4ab18fef49187cc968cc74b5168b94629c8830e2ca6b794c6e25ed",
+            ),
+            (
+                "whisper-large-v2-gguf",
+                996_526_080,
+                "76aa37b205abc1fb7a9e7aaf0655b8747995b81e6bb72c18f4b1acf59e222f79",
+            ),
+        ];
+
+        for (id, size, sha256) in expected {
+            let model = models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap_or_else(|| panic!("{id} must be present in the catalog"));
+            let file = &model.sources[0].files[0];
+
+            assert_eq!(model.model_type, "whisper-gguf");
+            assert!(model.languages.iter().any(|language| language == "uk"));
+            assert_eq!(model.quant, "Q4_K_M");
+            assert!(!model.featured);
+            assert_eq!(model.total_size_bytes, size);
+            assert_eq!(file.size_bytes, size);
+            assert_eq!(file.sha256.as_deref(), Some(sha256));
+        }
     }
 
     /// 排序契约：列表顺序就是 UI 顺序，按 speed 从高到低。写成测试是因为

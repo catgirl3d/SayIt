@@ -120,8 +120,9 @@ export const DEFAULTS: Record<string, unknown> = {
   // 可选值就是 catalog.rs 里那几个 id：'sensevoice-small-gguf'（默认，最快）
   // | 'funasr-nano-2512-gguf' | 'qwen3-asr-0.6b-gguf'
   // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf'（最准）
+  // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf' | 'whisper-large-v2-gguf'
   'localAsr.modelId': 'sensevoice-small-gguf',
-  'localAsr.language': 'auto', // 可选: 'auto' | 'zh' | 'en' | 'ja' | 'ko'
+  'localAsr.language': 'auto', // 可选: 'auto' | 'zh' | 'en' | 'ru' | 'uk'
   // GGUF 权重目前只发在 HuggingFace（handy-computer 组织下），国内走镜像更稳。
   // 值要和 catalog 里 DownloadSource.source 的名字完全一致，否则会回落到第一个源。
   'localAsr.downloadSource': 'HuggingFace Mirror', // 可选: 'HuggingFace Mirror' | 'HuggingFace'

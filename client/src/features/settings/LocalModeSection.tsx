@@ -922,6 +922,7 @@ export function LocalModeAdvancedSection() {
                 { value: 'zh', label: t('local.lang.zh') },
                 { value: 'en', label: t('local.lang.en') },
                 { value: 'ru', label: t('local.lang.ru') },
+                { value: 'uk', label: t('local.lang.uk') },
               ]}
               onChange={(value) => { setAsrLanguage(value); void setSetting('localAsr.language', value) }}
               className="shrink-0 justify-end"
