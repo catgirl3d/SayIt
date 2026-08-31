@@ -1,4 +1,5 @@
-import { forwardRef, useState, useRef, useEffect } from 'react'
+import { forwardRef, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
@@ -18,15 +19,17 @@ export interface SelectProps {
   disabled?: boolean
 }
 
-const Select = forwardRef<HTMLDivElement, SelectProps>(
+const Select = forwardRef<HTMLButtonElement, SelectProps>(
   ({ value, onChange, options, children, className, placeholder, disabled = false }, ref) => {
     const t = useT()
     const [isOpen, setIsOpen] = useState(false)
-    const containerRef = useRef<HTMLDivElement>(null)
+    const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
+    const buttonRef = useRef<HTMLButtonElement>(null)
+    const dropdownRef = useRef<HTMLDivElement>(null)
 
-    // 如果传入了 children（原生 option），则解析它们
+    // If options were passed as children (<option>), parse them
     const parsedOptions: SelectOption[] = options || []
-    
+
     if (!options && children) {
       const childArray = Array.isArray(children) ? children : [children]
       childArray.forEach((child: any) => {
@@ -41,9 +44,48 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
 
     const selectedOption = parsedOptions.find((opt) => opt.value === value)
 
+    const updatePosition = useCallback(() => {
+      const el = buttonRef.current
+      if (!el) return
+
+      const rect = el.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom - 8
+      const spaceAbove = rect.top - 8
+      const openUpwards = spaceBelow < 180 && spaceAbove > spaceBelow
+
+      const maxHeight = Math.min(240, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
+      const top = openUpwards ? rect.top - maxHeight - 4 : rect.bottom + 4
+
+      setDropdownStyle({
+        top,
+        left: rect.left,
+        width: rect.width,
+        maxHeight,
+      })
+    }, [])
+
+    useLayoutEffect(() => {
+      if (isOpen) {
+        updatePosition()
+        const handleScrollOrResize = () => updatePosition()
+        window.addEventListener('resize', handleScrollOrResize)
+        window.addEventListener('scroll', handleScrollOrResize, true)
+        return () => {
+          window.removeEventListener('resize', handleScrollOrResize)
+          window.removeEventListener('scroll', handleScrollOrResize, true)
+        }
+      } else {
+        setDropdownStyle(null)
+      }
+    }, [isOpen, updatePosition])
+
     useEffect(() => {
       const handleClickOutside = (event: MouseEvent) => {
-        if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        const target = event.target as Node
+        if (
+          buttonRef.current && !buttonRef.current.contains(target) &&
+          dropdownRef.current && !dropdownRef.current.contains(target)
+        ) {
           setIsOpen(false)
         }
       }
@@ -59,10 +101,50 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
       setIsOpen(false)
     }
 
+    const dropdown = isOpen && dropdownStyle ? createPortal(
+      <div
+        ref={dropdownRef}
+        className="fixed z-[9999] rounded-md border border-border bg-card shadow-xl"
+        style={{
+          top: `${dropdownStyle.top}px`,
+          left: `${dropdownStyle.left}px`,
+          width: `${dropdownStyle.width}px`,
+          maxHeight: `${dropdownStyle.maxHeight}px`,
+        }}
+      >
+        <div
+          className="custom-scrollbar overflow-y-auto py-1"
+          style={{ maxHeight: `${dropdownStyle.maxHeight - 2}px` }}
+        >
+          {parsedOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => handleSelect(option.value)}
+              className={cn(
+                'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors',
+                option.value === value
+                  ? 'bg-primary/5 text-primary font-medium'
+                  : 'text-foreground hover:bg-accent',
+              )}
+            >
+              <span className="truncate">{option.label}</span>
+              {option.value === value && <Check className="ml-2 h-4 w-4 shrink-0" />}
+            </button>
+          ))}
+        </div>
+      </div>,
+      document.body,
+    ) : null
+
     return (
-      <div ref={containerRef} className={cn('relative', className)}>
+      <div className={cn('relative', className)}>
         <button
-          ref={ref as any}
+          ref={(node) => {
+            buttonRef.current = node
+            if (typeof ref === 'function') ref(node)
+            else if (ref) (ref as React.MutableRefObject<HTMLButtonElement | null>).current = node
+          }}
           type="button"
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
@@ -84,28 +166,7 @@ const Select = forwardRef<HTMLDivElement, SelectProps>(
           />
         </button>
 
-        {isOpen && (
-          <div className="absolute z-50 mt-1 w-full rounded-md border border-border bg-card shadow-lg">
-            <div className="custom-scrollbar max-h-60 overflow-y-auto py-1">
-              {parsedOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => handleSelect(option.value)}
-                  className={cn(
-                    'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors',
-                    option.value === value
-                      ? 'bg-primary/5 text-primary font-medium'
-                      : 'text-foreground hover:bg-accent',
-                  )}
-                >
-                  <span className="truncate">{option.label}</span>
-                  {option.value === value && <Check className="ml-2 h-4 w-4 shrink-0" />}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        {dropdown}
       </div>
     )
   },

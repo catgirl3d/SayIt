@@ -30,6 +30,7 @@ import { Feedback, FormatHint, type FeedbackTone } from '@/components/ui/feedbac
 import { Modal } from '@/components/ui/modal'
 import { PasswordInput } from '@/components/ui/password-input'
 import { Switch } from '@/components/ui/switch'
+import { Select } from '@/components/ui/select'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { getSetting, setSetting } from '@/services/store'
@@ -257,7 +258,6 @@ function describeStatus(profile: AiProfile, checking: boolean): CardStatus {
 const pickAdvice = () => t('ai.pickAdvice')
 
 const inputClass = 'h-9 w-full rounded-md border border-input-border bg-input-bg px-3 text-sm transition-colors focus:border-input-focus-border'
-const selectClass = 'h-9 w-full rounded-md border border-input-border bg-input-bg px-2 text-sm transition-colors focus:border-input-focus-border'
 const linkClass = 'inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2 decoration-primary/40 transition-colors hover:decoration-primary'
 const cardIconButtonClass = 'pointer-events-auto rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40'
 const helpIconClass = 'h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground'
@@ -834,6 +834,7 @@ export default function AIProviderSection() {
     if (targets.length > 1) {
       lines.push('', t('ai.msg.batchNote'))
     }
+
     setNotice({
       tone: failCount > 0 ? 'warning' : 'success',
       scope: 'list',
@@ -1065,16 +1066,14 @@ export default function AIProviderSection() {
           <div className="mt-4 space-y-3">
             <div>
               <label htmlFor="ai-provider" className="mb-1 block text-sm text-muted-foreground">{t('ai.provider')}</label>
-              <select
-                id="ai-provider"
+              <Select
                 value={draft.provider}
-                onChange={(e) => handleDraftProvider(e.target.value)}
-                className={selectClass}
-              >
-                {aiProvidersForDisplay().map((p) => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
+                onChange={(value) => handleDraftProvider(value)}
+                options={aiProvidersForDisplay().map((p) => ({
+                  value: p.value,
+                  label: p.label,
+                }))}
+              />
             </div>
 
             <div>
@@ -1138,17 +1137,15 @@ export default function AIProviderSection() {
             <div>
               <label htmlFor="ai-model" className="mb-1 block text-sm text-muted-foreground">{t('ai.model')}</label>
               {availableModels.length > 0 ? (
-                <select
-                  id="ai-model"
+                <Select
                   value={selectedModel}
-                  onChange={(e) => selectModel(e.target.value)}
-                  className={selectClass}
-                >
-                  {!selectedModel && <option value="">{t('ai.selectModel')}</option>}
-                  {modelOptions.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
+                  onChange={(value) => selectModel(value)}
+                  placeholder={t('ai.selectModel')}
+                  options={modelOptions.map((model) => ({
+                    value: model,
+                    label: model,
+                  }))}
+                />
               ) : (
                 <>
                   <div className="flex items-center gap-2">
@@ -1209,7 +1206,7 @@ export default function AIProviderSection() {
                   onClick={() => void handleFetchModels()}
                   disabled={busy || fetchingModels}
                 >
-                  <RefreshCw className={cn('mr-1 h-3 w-3', fetchingModels && 'animate-spin')} aria-hidden />
+                  <RefreshCw className={cn('mr-1 h-3.5 w-3.5', fetchingModels && 'animate-spin')} aria-hidden />
                   {fetchingModels ? t('ai.fetchingModels') : t('ai.fetchModels')}
                 </Button>
               </div>

@@ -20,6 +20,7 @@ import { Feedback, FormatHint, type FeedbackTone } from '@/components/ui/feedbac
 import { Modal } from '@/components/ui/modal'
 import { PasswordInput } from '@/components/ui/password-input'
 import { Segmented } from '@/components/ui/segmented'
+import { Select } from '@/components/ui/select'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { refreshModeStatus } from '@/stores/modeStatus'
@@ -673,16 +674,14 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
         <div className="mt-4 space-y-3">
           <div>
             <label htmlFor="asr-provider" className="mb-1 block text-sm text-muted-foreground">{t('asr.provider')}</label>
-            <select
-              id="asr-provider"
+            <Select
               value={draft.provider}
-              onChange={(e) => handleDraftProvider(e.target.value)}
-              className={selectClass}
-            >
-              {ASR_PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>{p.label} · {p.model}</option>
-              ))}
-            </select>
+              onChange={(value) => handleDraftProvider(value)}
+              options={ASR_PROVIDERS.map((p) => ({
+                value: p.id,
+                label: `${p.label} · ${p.model}`,
+              }))}
+            />
             <p className="mt-1 text-xs text-muted-foreground">
               {draftEntry?.blurb}
               {draftAvailability !== '' && <> <span className="font-medium">{draftAvailability}</span></>}
