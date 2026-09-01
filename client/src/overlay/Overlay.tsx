@@ -192,7 +192,6 @@ export default function Overlay() {
       }
       if (typeof payload.showDuration === 'boolean') setShowDuration(payload.showDuration)
       if (payload.theme) setTheme(normalizeTheme(payload.theme))
-      if (typeof payload.barCount === 'number' && payload.barCount > 0) setBarCount(payload.barCount)
       if (typeof payload.fallbackText === 'string') setFallbackText(payload.fallbackText)
       if (typeof payload.errorMessage === 'string') setErrorMessage(payload.errorMessage)
       if (typeof payload.toastText === 'string') setToastText(payload.toastText)

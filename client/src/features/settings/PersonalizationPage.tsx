@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import { getStats, listHistory, type Stats, type HistoryRecord } from '@/services/store'
+import { listHistory, type HistoryRecord } from '@/services/store'
 import { createDefaultUserStats } from '@/services/personalization/defaults'
 import { getUserStats } from '@/services/personalization/store'
 import type { UserStats } from '@/services/personalization/types'
@@ -199,12 +199,10 @@ function DistributionList({ entries }: { entries: [string, number][] }) {
 export default function PersonalizationPage() {
   useT()
   const [range, setRange] = useState<TimeRange>('all')
-  const [allStats, setAllStats] = useState<Stats>({ totalDurationSec: 0, totalChars: 0 })
   const [userStats, setUserStats] = useState<UserStats>(createDefaultUserStats())
   const [records, setRecords] = useState<HistoryRecord[]>([])
 
   useEffect(() => {
-    getStats().then(setAllStats)
     getUserStats().then(setUserStats)
     listHistory({ limit: 10000 }).then(setRecords)
   }, [])
@@ -351,7 +349,6 @@ export default function PersonalizationPage() {
               <div className="space-y-2">
                 {appUsageEntries.map(([appName, count]) => {
                   const maxCount = appUsageEntries[0][1]
-                  const total = appUsageEntries.reduce((a, [, c]) => a + c, 0) || 1
                   const pct = Math.max((count / maxCount) * 100, 3)
                   return (
                     <div key={appName} className="flex items-center gap-3">

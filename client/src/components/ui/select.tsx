@@ -1,4 +1,4 @@
-import { forwardRef, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { forwardRef, useState, useRef, useEffect, useLayoutEffect, useCallback, isValidElement, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
 import { useT } from '@/i18n/useT'
@@ -13,10 +13,15 @@ export interface SelectProps {
   value: string
   onChange: (value: string) => void
   options?: SelectOption[]
-  children?: React.ReactNode
+  children?: ReactNode
   className?: string
   placeholder?: string
   disabled?: boolean
+}
+
+interface OptionElementProps {
+  value?: string
+  children?: string
 }
 
 const Select = forwardRef<HTMLButtonElement, SelectProps>(
@@ -24,16 +29,16 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
     const t = useT()
     const [isOpen, setIsOpen] = useState(false)
     const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
-    const buttonRef = useRef<HTMLButtonElement>(null)
+    const buttonRef = useRef<HTMLButtonElement | null>(null)
     const dropdownRef = useRef<HTMLDivElement>(null)
 
     // If options were passed as children (<option>), parse them
     const parsedOptions: SelectOption[] = options || []
 
     if (!options && children) {
-      const childArray = Array.isArray(children) ? children : [children]
-      childArray.forEach((child: any) => {
-        if (child?.type === 'option') {
+      const childArray: ReactNode[] = Array.isArray(children) ? children : [children]
+      childArray.forEach((child) => {
+        if (isValidElement<OptionElementProps>(child) && child.type === 'option') {
           parsedOptions.push({
             value: child.props.value || '',
             label: child.props.children || '',

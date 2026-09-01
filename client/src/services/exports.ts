@@ -99,18 +99,6 @@ async function saveTextFile(defaultPath: string, content: string, filters: Array
   }
 }
 
-async function saveBundle(defaultPath: string, files: Array<{ name: string; content: string }>): Promise<SaveResult> {
-  const filePath = await bridge.saveExportBundle({
-    defaultPath,
-    files,
-  })
-
-  return {
-    canceled: !filePath,
-    filePath: filePath || null,
-  }
-}
-
 async function buildHistoryPayload(query: HistoryListQuery = {}) {
   const [records, total] = await Promise.all([
     listHistory(query),

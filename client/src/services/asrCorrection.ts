@@ -167,9 +167,7 @@ export async function submitAsrCorrection(
   let body: Record<string, unknown> = {}
   try {
     body = (await response.json()) as Record<string, unknown>
-  } catch {
-    body = {}
-  }
+  } catch { /* Keep the default empty body for non-JSON responses. */ }
 
   if (response.ok) {
     return {

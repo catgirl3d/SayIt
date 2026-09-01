@@ -17,7 +17,6 @@ import { checkForUpdateNow, discardPendingForChannelSwitch } from '@/features/up
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import { describeServerError } from '@/lib/errorMessages'
-import { t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
 interface ServiceResult {

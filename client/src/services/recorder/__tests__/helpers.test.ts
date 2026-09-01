@@ -74,11 +74,11 @@ describe('summarizeAppContext', () => {
 
 describe('buildStatsAppId', () => {
   it('优先使用 processName', () => {
-    expect(buildStatsAppId({ processName: 'code.exe' } as any)).toBe('code.exe')
+    expect(buildStatsAppId({ processName: 'code.exe' })).toBe('code.exe')
   })
 
   it('processName 为空时用 exePath 最后一段', () => {
-    expect(buildStatsAppId({ exePath: 'C:\\Apps\\notepad.exe' } as any)).toBe('notepad.exe')
+    expect(buildStatsAppId({ exePath: 'C:\\Apps\\notepad.exe' })).toBe('notepad.exe')
   })
 
   it('都为空时用 promptAppId', () => {

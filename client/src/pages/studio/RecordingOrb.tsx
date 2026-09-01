@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react'
+import { useEffect, useRef } from 'react'
 import { Loader2, Mic, Square } from 'lucide-react'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'

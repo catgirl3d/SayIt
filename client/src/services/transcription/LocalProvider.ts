@@ -30,7 +30,7 @@ export class LocalProvider extends BufferedProvider {
       return false
     }
 
-    let downloaded = false
+    let downloaded: boolean
     try {
       const models = await invoke<{ id: string; complete: boolean }[]>('list_downloaded_models')
       downloaded = models.some((m) => m.id === modelId && m.complete)
@@ -65,8 +65,8 @@ export class LocalProvider extends BufferedProvider {
     const startTime = performance.now()
 
     addRuntimeEvent('info', 'local', 'Local ASR started', { durationSec, runId })
-    let asrText = ''
-    let asrMs = 0
+    let asrText: string
+    let asrMs: number
 
     try {
       const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf')

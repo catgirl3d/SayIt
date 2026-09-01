@@ -6,7 +6,7 @@ import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
 import { SERVER_AI_SOURCE_KEY } from '@/services/transcription/serverAiSource'
 import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/transcription'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Download, Search, Check, FolderOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -23,7 +23,6 @@ import {
   getSetting,
   type HistoryRecord,
 } from '@/services/store'
-import { loadAudioAsDataUrl } from '@/services/audioFileService'
 import { useT } from '@/i18n/useT'
 import { applyTextTransforms, restoreHotwordSpacing } from '@/services/textPostProcess'
 import { buildHotwordInjectionPart } from '@/services/personalization/promptRouter'

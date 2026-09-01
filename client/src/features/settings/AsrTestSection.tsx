@@ -133,7 +133,10 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
         const wsUrl = getWSUrl()
 
         const r = await new Promise<{ text: string; asrMs: number }>((resolve, reject) => {
-          const timeout = setTimeout(() => { try { sock.close() } catch { } reject(new Error(t('asrTest.timeout'))) }, 30000)
+          const timeout = setTimeout(() => {
+            try { sock.close() } catch { /* Ignore cleanup failures after timeout. */ }
+            reject(new Error(t('asrTest.timeout')))
+          }, 30000)
           const sock = new WebSocket(wsUrl)
           sock.binaryType = 'arraybuffer'
           sock.onopen = () => {
@@ -158,7 +161,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
                 reject(new Error(msg.message || t('asrTest.serverError')))
                 sock.close()
               }
-            } catch { }
+            } catch { /* Ignore malformed WebSocket messages and keep waiting. */ }
           }
           sock.onerror = () => { clearTimeout(timeout); reject(new Error(t('asrTest.wsFailed'))) }
         })

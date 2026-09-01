@@ -1377,7 +1377,7 @@ export class RecorderOrchestrator {
     const targetCapture = captureActiveInsertionTarget(undefined, {
       preserveExistingOnFailure: true,
     })
-    let activeAppContext: ActiveAppContext | null = null
+    let activeAppContext: ActiveAppContext | null
     try {
       // AI is the only consumer of editor text. If cleanup is off, do not read the text even when
       // the preference remains enabled, so the privacy boundary matches actual behavior.
