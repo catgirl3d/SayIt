@@ -13,3 +13,8 @@
 ## 3. Preserving Architectural Context & Rationale
 - **Preserve the "Why"**: Legacy comments in this codebase often contain in-depth technical essays explaining subtle OS edge cases, race conditions, hardware quirks, and why specific design decisions were made.
 - **High-Fidelity Translation**: When translating legacy comments from Chinese to English, you MUST fully preserve the technical depth, nuances, and underlying rationale. Never blindly truncate, over-summarize, or strip away vital architectural context.
+
+## 4. Changelog Discipline
+- **Always update `CHANGELOG-FORK.md`** when adding or materially changing an important user-facing feature or improvement in the fork.
+- Add concise release-note entries for all important fork-specific features, including meaningful behavior changes that users need to know about.
+- Before finishing the work, compare the final changes with `CHANGELOG-FORK.md` and ensure no important feature is missing. Do not add internal refactors, formatting-only changes, or test-only changes as user-facing features.
