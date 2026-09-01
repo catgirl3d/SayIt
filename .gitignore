@@ -62,3 +62,5 @@ Thumbs.db
 runtime/
 .mcp-brain/memory/issues.md
 .mcp-brain/memory/dashboard.md
+docs/internal/*
+.mcp-brain/memory/todo.md
