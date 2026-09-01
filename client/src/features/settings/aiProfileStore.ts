@@ -61,7 +61,12 @@ async function readLegacyData(): Promise<LegacyProviderData[]> {
         apiUrl,
         apiKey,
         model,
-        models: modelsRaw ? modelsRaw.split(',').map((m) => m.trim()).filter(Boolean) : [],
+        models: modelsRaw
+          ? modelsRaw
+              .split(',')
+              .map((m) => m.trim())
+              .filter(Boolean)
+          : [],
         latencies: parseLegacyLatencies(latencyRaw),
       }
     }),
@@ -121,9 +126,6 @@ export async function loadAiProfiles(): Promise<AiProfileState> {
 /** 落盘列表 + 启用项，并把启用的那条同步进运行时四个键。所有写路径都必须走这里 */
 export async function saveAiProfiles(state: AiProfileState): Promise<void> {
   const active = resolveActiveProfile(state.profiles, state.activeId)
-  await Promise.all([
-    setSetting(AI_PROFILES_KEY, state.profiles),
-    setSetting(AI_ACTIVE_PROFILE_KEY, active?.id ?? ''),
-  ])
+  await Promise.all([setSetting(AI_PROFILES_KEY, state.profiles), setSetting(AI_ACTIVE_PROFILE_KEY, active?.id ?? '')])
   await syncRuntimeActive(active)
 }

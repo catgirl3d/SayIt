@@ -602,28 +602,23 @@ pub fn open_log_folder() -> Result<(), String> {
         let _ = std::fs::create_dir_all(&dir);
     }
     #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(dir.to_string_lossy().to_string())
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
+    std::process::Command::new("explorer")
+        .arg(dir.to_string_lossy().to_string())
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
     #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(dir.to_string_lossy().to_string())
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
+    std::process::Command::new("open")
+        .arg(dir.to_string_lossy().to_string())
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
     #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(dir.to_string_lossy().to_string())
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
+    std::process::Command::new("xdg-open")
+        .arg(dir.to_string_lossy().to_string())
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

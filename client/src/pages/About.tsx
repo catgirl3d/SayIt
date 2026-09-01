@@ -3,7 +3,13 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Github, Loader2, CheckCircle } from 'lucide-react'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
-import { getAutoUpdateState, onAutoUpdateChange, checkForUpdateNow, installPendingUpdate, type AutoUpdateState } from '@/features/update/autoUpdate'
+import {
+  getAutoUpdateState,
+  onAutoUpdateChange,
+  checkForUpdateNow,
+  installPendingUpdate,
+  type AutoUpdateState,
+} from '@/features/update/autoUpdate'
 import { RELEASE_HIGHLIGHTS } from '@/features/update/releaseHighlights'
 import appIconOnDark from '@/assets/icon-128.png'
 import appIconOnLight from '@/assets/icon-128-on-light.png'
@@ -46,7 +52,11 @@ export default function About() {
     if (versionInfo.error) return t('about.checkFailed')
     // String() 而不是 ?? ''：保持与改造前 `${...}` 完全一致的输出，
     // 这轮只做翻译，不顺手改 latestVersion 为空时的表现。
-    if (downloading) return t('about.downloading', { version: String(versionInfo.latestVersion), percent: Math.round(state.downloadPercent ?? 0) })
+    if (downloading)
+      return t('about.downloading', {
+        version: String(versionInfo.latestVersion),
+        percent: Math.round(state.downloadPercent ?? 0),
+      })
     if (hasUpdate) return t('about.updateAvailable', { version: String(versionInfo.latestVersion) })
     return t('about.upToDate')
   })()
@@ -62,7 +72,10 @@ export default function About() {
             <img src={appIconOnLight} alt="SayIt" className="block h-16 w-16 rounded-2xl dark:hidden" />
             <img src={appIconOnDark} alt="SayIt" className="hidden h-16 w-16 rounded-2xl dark:block" />
             <div>
-              <h2 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 800 }}>
+              <h2
+                className="text-2xl font-bold tracking-tight"
+                style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 800 }}
+              >
                 SayIt
               </h2>
               <p className="text-sm text-muted-foreground">{t('about.tagline')}</p>
@@ -102,15 +115,13 @@ export default function About() {
                     {updateStatusText}
                   </p>
                 )}
-                {error && (
-                  <p className="text-xs text-red-500">{error}</p>
-                )}
+                {error && <p className="text-xs text-red-500">{error}</p>}
                 {/* 待安装时补一句"不装也会装上"：用户在这一页才有机会知道退出兜底那条路 */}
-                {ready && (
-                  <p className="text-xs text-muted-foreground/60">{t('about.readyHint')}</p>
-                )}
+                {ready && <p className="text-xs text-muted-foreground/60">{t('about.readyHint')}</p>}
                 {checkedAt && (
-                  <p className="text-xs text-muted-foreground/60">{t('about.lastChecked', { time: formatTimestamp(checkedAt) })}</p>
+                  <p className="text-xs text-muted-foreground/60">
+                    {t('about.lastChecked', { time: formatTimestamp(checkedAt) })}
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -149,7 +160,9 @@ export default function About() {
           {/* 本次更新 */}
           {RELEASE_HIGHLIGHTS.version === currentVersion && RELEASE_HIGHLIGHTS.items.length > 0 && (
             <div className="mt-6">
-              <h3 className="mb-3 text-sm font-medium">{t('about.releaseNotes', { version: RELEASE_HIGHLIGHTS.version })}</h3>
+              <h3 className="mb-3 text-sm font-medium">
+                {t('about.releaseNotes', { version: RELEASE_HIGHLIGHTS.version })}
+              </h3>
               <ul className="space-y-1.5">
                 {RELEASE_HIGHLIGHTS.items.map((item, index) => (
                   <li key={index} className="flex gap-2 text-sm text-muted-foreground">

@@ -16,7 +16,11 @@ import { useT } from '@/i18n/useT'
  * 位置不同（"按下 X 开始…" vs "Press X to start…"）。按占位符切分，位置就由
  * 译文自己决定，不用为每种语言各写一份 JSX。
  */
-function WithKeyChip({ template, keyLabel, chipClassName }: {
+function WithKeyChip({
+  template,
+  keyLabel,
+  chipClassName,
+}: {
   template: string
   keyLabel: string
   chipClassName: string
@@ -56,7 +60,7 @@ export default function Home() {
         value: `${hours}`,
         extraValue: minutes > 0 ? `${minutes}` : null,
         unit: t('home.unitHours'),
-        extraUnit: minutes > 0 ? t('home.unitMinutes') : null
+        extraUnit: minutes > 0 ? t('home.unitMinutes') : null,
       }
     }
     return { value: `${totalMinutes}`, extraValue: null, unit: t('home.unitMinutes'), extraUnit: null }
@@ -82,19 +86,30 @@ export default function Home() {
   }
 
   const totalTime = formatTime(stats.totalDurationSec)
-  const avgWordsPerMin =
-    stats.totalDurationSec > 60
-      ? Math.round(stats.totalChars / (stats.totalDurationSec / 60))
-      : 0
+  const avgWordsPerMin = stats.totalDurationSec > 60 ? Math.round(stats.totalChars / (stats.totalDurationSec / 60)) : 0
   const savedTime = formatTime(Math.round(stats.totalChars / 50) * 60)
 
   const handsFreeKeyLabel = displayShortcut(handsFreeKey).join(' + ')
 
   const cards = [
     { icon: Clock, label: t('home.statTotalTime'), ...totalTime },
-    { icon: Mic, label: t('home.statChars'), value: formatCompactNumber(stats.totalChars), extraValue: null, unit: t('home.unitChars'), extraUnit: null },
+    {
+      icon: Mic,
+      label: t('home.statChars'),
+      value: formatCompactNumber(stats.totalChars),
+      extraValue: null,
+      unit: t('home.unitChars'),
+      extraUnit: null,
+    },
     { icon: Zap, label: t('home.statSavedTime'), ...savedTime },
-    { icon: Type, label: t('home.statSpeed'), value: `${avgWordsPerMin}`, extraValue: null, unit: t('home.unitCharsPerMinute'), extraUnit: null },
+    {
+      icon: Type,
+      label: t('home.statSpeed'),
+      value: `${avgWordsPerMin}`,
+      extraValue: null,
+      unit: t('home.unitCharsPerMinute'),
+      extraUnit: null,
+    },
   ]
 
   const isNewUser = stats.totalDurationSec === 0 && stats.totalChars === 0
@@ -137,7 +152,8 @@ export default function Home() {
                   {value} <span className="text-sm font-normal text-muted-foreground">{unit}</span>
                   {extraValue && (
                     <>
-                      {' '}{extraValue} <span className="text-sm font-normal text-muted-foreground">{extraUnit}</span>
+                      {' '}
+                      {extraValue} <span className="text-sm font-normal text-muted-foreground">{extraUnit}</span>
                     </>
                   )}
                 </p>

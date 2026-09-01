@@ -69,7 +69,11 @@ export interface AppAPI {
   showOverlay: () => void
   hideOverlay: () => void
   updateOverlay: (data: unknown) => void
-  pasteText: (text: string, hwnd?: string, focusHwnd?: string) => Promise<{
+  pasteText: (
+    text: string,
+    hwnd?: string,
+    focusHwnd?: string,
+  ) => Promise<{
     ok: boolean
     strategy?: 'renderer_dom' | 'value_pattern' | 'wm_paste' | 'send_unicode' | 'send_input'
     reason?: string
@@ -128,10 +132,7 @@ export interface AppAPI {
     limit?: number
     offset?: number
   }) => Promise<unknown[]>
-  historyCount: (query?: {
-    keyword?: string
-    favoriteOnly?: boolean
-  }) => Promise<number>
+  historyCount: (query?: { keyword?: string; favoriteOnly?: boolean }) => Promise<number>
   historyAdd: (record: unknown) => Promise<void>
   historyUpdate: (id: string, patch: Record<string, unknown>) => Promise<void>
   historyDelete: (id: string) => Promise<void>

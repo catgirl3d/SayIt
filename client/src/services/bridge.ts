@@ -116,7 +116,12 @@ export function pasteText(text: string, hwnd?: string, focusHwnd?: string, resto
     reason?: string
     detail?: string
     attempts?: Array<{ strategy: string; ok: boolean; reason?: string; detail?: string }>
-  }>('paste_text', { text, hwnd: hwnd || null, focusHwnd: focusHwnd || null, restoreClipboard: restoreClipboard ?? false })
+  }>('paste_text', {
+    text,
+    hwnd: hwnd || null,
+    focusHwnd: focusHwnd || null,
+    restoreClipboard: restoreClipboard ?? false,
+  })
 }
 
 export function getProbeResult() {
@@ -198,19 +203,11 @@ export function storeDelete(key: string) {
 
 // ─── History ───
 
-export function historyList(query?: {
-  keyword?: string
-  favoriteOnly?: boolean
-  limit?: number
-  offset?: number
-}) {
+export function historyList(query?: { keyword?: string; favoriteOnly?: boolean; limit?: number; offset?: number }) {
   return invoke<unknown[]>('history_list', { query })
 }
 
-export function historyCount(query?: {
-  keyword?: string
-  favoriteOnly?: boolean
-}) {
+export function historyCount(query?: { keyword?: string; favoriteOnly?: boolean }) {
   return invoke<number>('history_count', { query })
 }
 
@@ -240,10 +237,7 @@ export function saveTextExport(payload: {
   return invoke<string | null>('save_text_export', { payload })
 }
 
-export function saveExportBundle(payload: {
-  defaultPath: string
-  files: Array<{ name: string; content: string }>
-}) {
+export function saveExportBundle(payload: { defaultPath: string; files: Array<{ name: string; content: string }> }) {
   return invoke<string | null>('save_export_bundle', { payload })
 }
 
@@ -276,12 +270,12 @@ export function getPTTPhysicalKeyStates(codes: string[]) {
  * - 注销全部 global_shortcut，避免已绑定的组合键被系统抢走、录不进来。
  */
 export function beginShortcutCapture() {
-  return invoke('begin_shortcut_capture').catch(() => { })
+  return invoke('begin_shortcut_capture').catch(() => {})
 }
 
 /** 结束快捷键录制捕获（录制结束/取消时调用），并恢复 Rust 侧的热键注册。 */
 export function endShortcutCapture() {
-  return invoke('end_shortcut_capture').catch(() => { })
+  return invoke('end_shortcut_capture').catch(() => {})
 }
 
 // ─── System ───
@@ -322,7 +316,7 @@ export function verifyUpdatePackage(filePath: string, sha512?: string | null) {
  * 所以界面里每次切开关都要主动回写，否则右键看到的是上一次的状态。
  */
 export function setTrayAiEnabled(enabled: boolean) {
-  return invoke<void>('set_tray_ai_enabled', { enabled }).catch(() => { })
+  return invoke<void>('set_tray_ai_enabled', { enabled }).catch(() => {})
 }
 
 /** 托盘右键切换了「AI 整理」（Rust 已落库，payload 是切换后的值）。 */
@@ -330,13 +324,17 @@ export function onAiCleanupChanged(cb: (enabled: boolean) => void) {
   const unlisten = listen<{ enabled?: boolean }>('ai-cleanup-changed', (event) => {
     cb(Boolean(event.payload?.enabled))
   })
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 /** AI 整理快捷键被触发；前端负责更新内存、持久化和悬浮窗提示。 */
 export function onAiCleanupToggleRequested(cb: () => void) {
   const unlisten = listen('toggle-ai-cleanup', () => cb())
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function setPTTLabConfig(data: unknown) {
@@ -403,50 +401,70 @@ export function openLogFolder() {
 
 export function onOverlayState(cb: (data: unknown) => void) {
   const unlisten = listen<unknown>('overlay-state', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onActiveAppContext(cb: (data: unknown) => void) {
   const unlisten = listen<unknown>('active-app-context', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onPTTDown(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('ptt-down', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onPTTUp(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('ptt-up', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onPTTToggle(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('ptt-toggle', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onPTTTimeoutWarning(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('ptt-timeout-warning', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onToggleHandsFree(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('toggle-hands-free', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onEscapeAction(cb: (data: { mode: EscapeActionMode; token: number }) => void) {
   const unlisten = listen<{ mode: EscapeActionMode; token: number }>('escape-action', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onMouseShortcutCaptured(cb: (data: { setting: string; vk: number }) => void) {
   const unlisten = listen<{ setting: string; vk: number }>('mouse-shortcut-captured', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
 
 export function onPTTLabEvent(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('ptt-lab-event', (event) => cb(event.payload))
-  return () => { unlisten.then((fn) => fn()) }
+  return () => {
+    unlisten.then((fn) => fn())
+  }
 }
