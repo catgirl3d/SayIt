@@ -902,6 +902,14 @@ mod tests {
         let path = test_db_path("prompt-migration");
         {
             let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at INTEGER NOT NULL
+                )",
+            )
+            .unwrap();
             db.execute_batch(include_str!("migration_001.sql")).unwrap();
             db.execute("DROP TABLE prompt_presets", []).unwrap();
             db.execute_batch(

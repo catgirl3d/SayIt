@@ -340,7 +340,7 @@ mod tests {
     fn extracts_model_names_from_tags_response() {
         let data: serde_json::Value = serde_json::json!({
             "models": [
-                { "name": "qwen2.5:7b", "model": "qwen2.5:7b", "size": 4_682_000_000 },
+                { "name": "qwen2.5:7b", "model": "qwen2.5:7b", "size": 4_682_000_000_u64 },
                 { "name": "llama3.2:latest", "model": "llama3.2:latest", "size": 2_020_000_000 }
             ]
         });
