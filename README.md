@@ -1,139 +1,141 @@
 <div align="center">
 
+**Українська** · [English](README.en.md)
+
 <img src="docs/images/readme/icon.png" width="80" height="80" alt="SayIt">
 
 # SayIt
 
-**Just say it, and write well**
+**Говоріть замість того, щоб набирати**
 
-Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcribes, cleans up, and inserts polished text wherever your cursor is.
+Голосове введення з відкритим вихідним кодом для Windows. Натисніть гарячу клавішу та говоріть — SayIt транскрибує, очищує за допомогою AI і вставляє готовий текст прямо туди, де розташований ваш курсор.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
 [![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/catgirl3d/SayIt/releases/latest)
 [![Latest release](https://img.shields.io/github/v/release/catgirl3d/SayIt?label=release)](https://github.com/catgirl3d/SayIt/releases/latest)
 
-**[Download for Windows](https://github.com/catgirl3d/SayIt/releases/latest)**
+**[Завантажити для Windows](https://github.com/catgirl3d/SayIt/releases/latest)**
 
 </div>
 
-## Fork Build
+## Збірка форку
 
-This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG-FORK.md).
+Цей репозиторій є підтримуваним форком [crosswk/SayIt](https://github.com/crosswk/SayIt). Завантажуйте готові збірки на сторінці [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) цього репозиторію та переглядайте [список змін форку](CHANGELOG-FORK.md).
 
-**English and Russian dictation:** Chinese-oriented cleanup prompts can introduce Chinese text or formatting into processed English or Russian dictation. This fork defaults to **English** built-in prompts when no previous prompt-language choice or legacy Chinese override exists, avoiding that behavior for this case. Existing saved choices and legacy Chinese overrides are preserved; set **AI Instructions → Built-in preset language → English** manually.
+**Диктування англійською, українською та російською:** Промпти очищення, орієнтовані на китайську мову, можуть додавати китайський текст або форматування до обробленого тексту іншими мовами. У цьому форку за замовчуванням використовуються вбудовані **англійські** промпти, коли вибір мови ще не збережено або відсутнє старе перевизначення для китайської, що дозволяє уникнути такої поведінки. Раніше вибрані параметри та збережені налаштування не скидаються; за потреби встановіть **AI-очищення → Мова вбудованих пресетів → Українська** (або English) вручну.
 
-This setting controls AI cleanup only. Set the ASR recognition language independently and use a model that supports the language you speak.
+Це налаштування впливає лише на AI-очищення. Мову розпізнавання ASR налаштовуйте окремо та використовуйте модель, яка підтримує мову вашого диктування.
 
 <div align="center">
 
-<img src="docs/images/readme/demo-en.gif" width="820" alt="SayIt in action: pressing the shortcut, speaking, and the cleaned-up text appearing at the cursor">
+<img src="docs/images/readme/demo-en.gif" width="820" alt="SayIt у роботі: натискання гарячої клавіші, мовлення та поява очищеного тексту біля курсора">
 
-*Trigger the shortcut, speak, and the cleaned-up text is typed in at your cursor — no window switching.*
+*Натисніть гарячу клавішу, говоріть — і очищений текст буде введено у місці курсора без перемикання вікон.*
 
 </div>
 
-## Why SayIt?
+## Чому SayIt?
 
-Typing is often the slowest part of working with AI. SayIt turns speech into text you can use immediately, while keeping the important choices in your hands:
+Набір тексту на клавіатурі часто є найповільнішою частиною взаємодії з AI. SayIt перетворює голос на готовий текст, який можна одразу використовувати, залишаючи всі важливі налаштування під вашим контролем:
 
-- **Voice typing anywhere** — dictate into editors, chat apps, browsers, and other Windows software.
-- **Editable AI cleanup** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
-- **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped.
-- **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, connect to the public trial server, or host your own backend.
-- **English, Chinese, and Ukrainian interface** — the UI follows your system language and can be switched at any time.
-- **Hotwords and per-app rules** — improve names and technical terms, then change cleanup behavior automatically for different apps.
-- **Overlay feedback** — a small waveform overlay shows recording state and elapsed time, with optional live captions while you speak.
-- **Transparent data flow** — the app shows which mode is active and where audio and text are processed.
-- **Local history and diagnostics** — review recordings, re-transcribe them, and collect useful troubleshooting details without guesswork.
+- **Голосове введення всюди** — диктуйте у текстових редакторах, месенджерах, браузерах та будь-яких інших програмах для Windows.
+- **Гнучке AI-очищення** — видаляйте слова-паразити, виправляйте помилки розпізнавання, структуруйте думки або зберігайте дослівну транскрипцію. Кожен системний промпт можна змінити.
+- **Контекстний набір** (вимкнено за замовчуванням) — зчитує текст навколо курсора, щоб новий фрагмент відповідав тону та термінології документа. Якщо спочатку виділити текст, ваше мовлення перетвориться на інструкцію для редагування — перекласти, скоротити, переписати або поставити запитання — замінюючи виділений фрагмент. Поля введення паролів автоматично пропускаються.
+- **Гнучке розпізнавання мовлення** — підключайте хмарних ASR-провайдерів, запускайте локальні GGUF-моделі на власному GPU, використовуйте публічний тестовий сервер або розгортайте власний бекенд.
+- **Інтерфейс українською, англійською та китайською** — застосунок автоматично визначає мову системи, яку можна будь-коли змінити в налаштуваннях.
+- **Гарячі слова та правила для застосунків** — покращуйте розпізнавання імен та термінів, а також автоматично перемикайте правила очищення для різних програм.
+- **Зручний оверлей** — компактний віджет-оверлей із формою хвилі показує стан запису та таймер, з можливістю показу субтитрів у реальному часі під час мовлення.
+- **Прозорий потік даних** — інтерфейс чітко показує, який режим активний і куди саме надсилаються аудіо та текст.
+- **Локальна історія та діагностика** — переглядайте записи, повторно транскрибуйте їх та збирайте діагностичні дані для розв'язання проблем без здогадок.
 
-## Choose how it runs
+## Оберіть режим роботи
 
-| Mode | Best for | Data flow |
+| Режим | Найкраще підходить для | Потік даних |
 | --- | --- | --- |
-| **Local mode** | Privacy and offline use | Speech recognition stays on your PC. With AI cleanup off, nothing leaves the device. |
-| **Cloud API mode** | The best balance for personal use | Your PC talks directly to the ASR and AI providers you configure. No SayIt server is involved. |
-| **Server mode** | Teams and managed deployments | Audio is processed by a SayIt backend you control—or by the public trial server for a quick start. |
+| **Локальний режим** | Конфіденційності та роботи офлайн | Розпізнавання мовлення виконується повністю на вашому ПК. Якщо вимкнути AI-очищення, жодні дані не залишають пристрій. |
+| **Хмарний API** | Оптимального балансу для особистого використання | Ваш ПК напряму взаємодіє з налаштованими провайдерами ASR та AI. Сервер SayIt не використовується. |
+| **Режим сервера** | Команд та керованих інфраструктур | Аудіо обробляється бекендом SayIt під вашим контролем — або публічним тестовим сервером для швидкого старту. |
 
-Local recognition offers seven downloadable local GGUF models, with GPU acceleration when available: Parakeet Unified EN for English, SenseVoice Small, Fun-ASR Nano, Nemotron 3.5 ASR (32 languages), and three Qwen3-ASR sizes. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI cleanup works with DeepSeek, Qwen, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
+Локальне розпізнавання пропонує завантажувані локальні GGUF-моделі з прискоренням на GPU (за наявності): Parakeet Unified EN для англійської, SenseVoice Small, Fun-ASR Nano, Nemotron 3.5 ASR (32 мови), GigaAM v3 e2e RNN-T, Whisper (Small, Large v3 Turbo, Large v2) та три розміри Qwen3-ASR. Хмарне розпізнавання підтримує Doubao, Qwen, Xiaomi MiMo та Groq Whisper; AI-очищення працює з DeepSeek, Qwen, Groq, MiMo, Ollama та будь-яким OpenAI-сумісним сервером.
 
-## A closer look
+## Погляньмо ближче
 
 <div align="center">
 
-<img src="docs/images/readme/home-en.png" width="760" alt="SayIt home screen showing dictation stats and a feedback box">
+<img src="docs/images/readme/home-en.png" width="760" alt="Головний екран SayIt зі статистикою диктування та полем зворотного зв'язку">
 
-*Home — dictation stats, the active shortcut, and a feedback box that carries your last transcript.*
-
-<br>
-
-<img src="docs/images/readme/voice-engine-en.png" width="760" alt="Voice engine settings with Local, Cloud API, and Server mode cards above the model list">
-
-*Voice engine — choose Local, Cloud API, or Server mode, then download and switch recognition models. Detected GPUs are used automatically.*
+*Головна — статистика диктування, активна гаряча клавіша та поле зворотного зв'язку з останньою транскрипцією.*
 
 <br>
 
-<img src="docs/images/readme/ai-cleanup-en.png" width="760" alt="AI cleanup settings showing built-in presets and per-app prompt rules">
+<img src="docs/images/readme/voice-engine-en.png" width="760" alt="Налаштування голосового рушія з картками локального, хмарного API та серверного режимів над списком моделей">
 
-*AI cleanup — every built-in preset is editable, and per-app rules can switch presets based on the app you are typing into.*
-
-<br>
-
-<img src="docs/images/readme/ai-providers-en.png" width="760" alt="AI providers grid with measured response times on each model card">
-
-*AI providers — bring your own keys, add any OpenAI-compatible endpoint, and test round-trip latency on every card.*
+*Голосовий рушій — оберіть локальний режим, хмарний API або режим сервера, завантажуйте та перемикайте моделі розпізнавання. Виявлені GPU використовуються автоматично.*
 
 <br>
 
-<img src="docs/images/readme/history-en.png" width="760" alt="History list with search, raw ASR text, timings, and playback controls">
+<img src="docs/images/readme/ai-cleanup-en.png" width="760" alt="Налаштування AI-очищення із вбудованими пресетами та правилами промптів для застосунків">
 
-*History — searchable local records. Expand one to see the raw ASR text, timings, audio playback, and re-transcribe.*
+*AI-очищення — кожен вбудований пресет можна редагувати, а правила для окремих програм автоматично змінюють пресет залежно від того, де ви друкуєте.*
 
 <br>
 
-<img src="docs/images/readme/appearance-en.png" width="760" alt="Appearance settings with app themes, waveform themes, overlay width, and a live overlay preview">
+<img src="docs/images/readme/ai-providers-en.png" width="760" alt="Сітка AI-провайдерів із виміряним часом відгуку на картці кожної моделі">
 
-*Appearance — three app themes, waveform styles, overlay width, and live captions with a preview of the overlay.*
+*Провайдери AI — підключайте власні API-ключі, додавайте будь-який OpenAI-сумісний сервіс та тестуйте затримку на кожній картці.*
+
+<br>
+
+<img src="docs/images/readme/history-en.png" width="760" alt="Список історії з пошуком, сирим текстом ASR, таймінгами та керуванням відтворенням">
+
+*Історія — локальні записи з можливістю пошуку. Розгорніть запис, щоб побачити сирий текст ASR, таймінги, прослухати аудіо або запустити повторну транскрипцію.*
+
+<br>
+
+<img src="docs/images/readme/appearance-en.png" width="760" alt="Налаштування вигляду з темами оформлення, темами хвилі, шириною оверлею та попереднім переглядом">
+
+*Вигляд — три теми оформлення, стилі форми хвилі, ширина оверлею та субтитри в реальному часі з попереднім переглядом віджета.*
 
 </div>
 
-## Get started
+## Початок роботи
 
-1. Download the latest [Windows installer](https://github.com/catgirl3d/SayIt/releases/latest).
-2. Open SayIt and choose a voice engine. The default public server is enough for a quick trial.
-3. Press the configured shortcut in any app and speak. By default you press once to start and again to finish; hold-to-talk is available too, under a separate shortcut.
+1. Завантажте останню версію [інсталятора для Windows](https://github.com/catgirl3d/SayIt/releases/latest).
+2. Відкрийте SayIt і оберіть голосовий рушій. Для швидкої перевірки достатньо публічного тестового сервера за замовчуванням.
+3. Натисніть налаштовану гарячу клавішу в будь-якій програмі та почніть говорити. За замовчуванням одне натискання починає запис, а повторне — завершує його; також доступний режим утримання клавіші за окремою комбінацією.
 
-For regular use, choose Local mode or add your own cloud provider keys from the in-app settings. The provider console links are available beside each key field.
+Для постійного використання виберіть локальний режим або вкажіть власні ключі хмарних провайдерів у налаштуваннях застосунку. Посилання на консолі провайдерів доступні поруч із кожним полем введення ключа.
 
-## Self-hosting
+## Власний сервер (Self-hosting)
 
-The backend combines FastAPI, WebSocket streaming, Qwen3-ASR, and an optional OpenAI-compatible cleanup model. Docker Compose is the recommended deployment path.
+Бекенд поєднує FastAPI, потокове передавання через WebSocket, Qwen3-ASR та опціональну модель очищення через OpenAI-сумісний API. Рекомендований спосіб розгортання — Docker Compose.
 
 ```bash
 git clone https://github.com/catgirl3d/SayIt.git
 cd SayIt/server
 cp config.example.yaml config.yaml
 cp .env.example .env
-# Add your provider and deployment settings to .env/config.yaml
+# Вкажіть налаштування провайдерів і параметри розгортання в .env/config.yaml
 docker compose up -d --build
 ```
 
-GPU speech recognition requires an NVIDIA GPU; 16 GB or more of VRAM is recommended for the default server model. See the [server guide](server/README.md) for configuration, deployment, security, and API details.
+Для апаратного прискорення розпізнавання потрібна відеокарта NVIDIA; для серверної моделі за замовчуванням рекомендується від 16 ГБ VRAM. Докладніше про налаштування, безпеку та API дивіться в [посібнику з сервера](server/README.md).
 
-## Performance reference
+## Довідкові показники продуктивності
 
-Qwen3-ASR-1.7B with vLLM on an AWS EC2 `g5.xlarge` (NVIDIA A10G 24 GB):
+Qwen3-ASR-1.7B з vLLM на інстансі AWS EC2 `g5.xlarge` (NVIDIA A10G 24 ГБ):
 
-| Audio length | ASR latency | RTF |
+| Тривалість аудіо | Затримка ASR | RTF |
 | --- | --- | --- |
-| 30 seconds | ~0.8 s | 0.025 |
-| 1 minute | ~1.6 s | 0.026 |
-| 2 minutes | ~2.1 s | 0.017 |
-| 3 minutes | ~2.5 s | 0.014 |
-| 5 minutes | ~3.0 s | 0.010 |
+| 30 секунд | ~0.8 с | 0.025 |
+| 1 хвилина | ~1.6 с | 0.026 |
+| 2 хвилини | ~2.1 с | 0.017 |
+| 3 хвилини | ~2.5 с | 0.014 |
+| 5 хвилин | ~3.0 с | 0.010 |
 
-## Development
+## Розробка
 
-### Desktop client
+### Десктопний клієнт
 
 ```bash
 cd client
@@ -141,11 +143,11 @@ npm install
 npm run tauri dev
 ```
 
-Requirements: Node.js 18+, Rust 1.75+, CMake 3.20+, and the Vulkan SDK. The first native build compiles the C++ speech engine and may take around 20 minutes; later builds use the cache.
+Вимоги: Node.js 18+, Rust 1.75+, CMake 3.20+ та Vulkan SDK. Перша нативна збірка компілює рушій розпізнавання C++ і може тривати близько 20 хвилин; подальші збірки використовують кеш.
 
-On non-English Windows installations, set `CL=/utf-8` before building so MSVC reads UTF-8 source files correctly.
+На неанглійських версіях Windows встановіть змінну `CL=/utf-8` перед збіркою, щоб MSVC коректно зчитував вихідні файли у кодуванні UTF-8.
 
-### Server
+### Сервер
 
 ```bash
 cd server
@@ -156,14 +158,14 @@ cd backend
 uvicorn app.main:app --port 8000
 ```
 
-Requirements: Python 3.10+ and, for GPU inference, an NVIDIA GPU with CUDA.
+Вимоги: Python 3.10+ та відеокарта NVIDIA з CUDA для GPU-інференсу.
 
-## Project layout
+## Структура проєкту
 
 ```text
 SayIt/
-├── client/       # Tauri + React desktop client
-├── server/       # FastAPI backend, gateway, web demo, and deployment files
-├── docs/         # User guides and images
-└── dev-docs/     # Internal development notes
+├── client/       # Десктопний клієнт на Tauri + React
+├── server/       # Бекенд на FastAPI, шлюз, веб-демо та файли розгортання
+├── docs/         # Посібники користувача та зображення
+└── dev-docs/     # Внутрішні нотатки для розробки
 ```
