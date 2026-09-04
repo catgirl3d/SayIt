@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { FolderOpen, Copy, Check, ChevronDown, HardDrive, Loader2, Info } from 'lucide-react'
+import { FolderOpen, Copy, Check, CheckCircle2, ChevronDown, HardDrive, Loader2, Info, Download, Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -668,9 +668,11 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{modelName}</span>
                       {isDownloaded && (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Check className="h-3 w-3" />{t('local.downloaded')}
-                        </span>
+                        <Tooltip content={t('local.downloaded')}>
+                          <span className="inline-flex items-center text-success-strong" aria-label={t('local.downloaded')}>
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          </span>
+                        </Tooltip>
                       )}
                       {langSupport === true && (
                         <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success-strong">{t('local.langSupported', { lang: speechLangName })}</span>
@@ -767,18 +769,34 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                             {preloadingModelId === model.id ? t('local.loadingModel') : t('local.select')}
                           </Button>
                         )}
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(model.id)}>
-                          {t('common.delete')}
-                        </Button>
+                        <Tooltip content={t('common.delete')}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            aria-label={t('common.delete')}
+                            onClick={() => setConfirmDeleteId(model.id)}
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                          </Button>
+                        </Tooltip>
                       </>
                     ) : (
-                      <Button
-                        size="sm"
-                        onClick={() => void handleDownload(model.id)}
-                        disabled={isDownloading}
-                      >
-                        {isDownloading ? t('local.downloading') : t('local.download')}
-                      </Button>
+                      <Tooltip content={isDownloading ? t('local.downloading') : t('local.download')}>
+                        <Button
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          aria-label={isDownloading ? t('local.downloading') : t('local.download')}
+                          onClick={() => void handleDownload(model.id)}
+                          disabled={isDownloading}
+                        >
+                          {isDownloading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                          ) : (
+                            <Download className="h-4 w-4" aria-hidden />
+                          )}
+                        </Button>
+                      </Tooltip>
                     )}
                   </div>
                 </div>
