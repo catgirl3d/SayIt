@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCloudAsrExtra, getCloudAsrSupportedLanguages, isQwenOmniProvider, modelSupportsSpeechLanguage, resolveBadgeLanguage, resolveCloudAsrLanguageRequest, resolveQwenOmniModel, resolveAsrDisplayModel } from '../asrModels'
+import { buildCloudAsrExtra, getCloudAsrSupportedLanguages, isQwenOmniProvider, modelSupportsSpeechLanguage, resolveBadgeLanguage, resolveCloudAsrLanguageRequest, resolveQwenOmniModel, resolveAsrDisplayModel, sortModelsBySpeechLanguageSupport } from '../asrModels'
 
 describe('isQwenOmniProvider', () => {
   it('识别 Qwen Omni 系列', () => {
@@ -87,6 +87,30 @@ describe('modelSupportsSpeechLanguage', () => {
 
   it('treats an empty list as supporting nothing', () => {
     expect(modelSupportsSpeechLanguage([], 'en')).toBe(false)
+  })
+})
+
+describe('sortModelsBySpeechLanguageSupport', () => {
+  it('puts supported models first and preserves order within support groups', () => {
+    const models = [
+      { id: 'unsupported-first', languages: ['en'] },
+      { id: 'unknown', languages: null },
+      { id: 'supported-first', languages: ['ru'] },
+      { id: 'supported-second', languages: ['ru'] },
+      { id: 'unsupported-second', languages: [] },
+    ]
+    const original = [...models]
+
+    const ordered = sortModelsBySpeechLanguageSupport(models, 'ru')
+
+    expect(ordered.map((model) => model.id)).toEqual([
+      'supported-first',
+      'supported-second',
+      'unknown',
+      'unsupported-first',
+      'unsupported-second',
+    ])
+    expect(models).toEqual(original)
   })
 })
 

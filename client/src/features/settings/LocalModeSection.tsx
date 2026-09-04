@@ -15,7 +15,7 @@ import { getSetting, setSetting } from '@/services/store'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { reconnectProvider } from '@/services/recorder'
 import { describeDownloadError } from '@/lib/errorMessages'
-import { modelSupportsSpeechLanguage, resolveBadgeLanguage } from '@/lib/asrModels'
+import { modelSupportsSpeechLanguage, resolveBadgeLanguage, sortModelsBySpeechLanguageSupport } from '@/lib/asrModels'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
@@ -547,13 +547,15 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
 
   const downloadedIds = new Set(downloadedModels.filter((m) => m.complete).map((m) => m.id))
   const selectedModel = availableModels.find((m) => m.id === selectedModelId)
+  const badgeLanguage = resolveBadgeLanguage(speechLanguage, getLocale())
 
   // 小/中/大三个直接展示，其余折叠进「更多」。后端没标 featured 时全部展示兜底。
   const featuredModels = availableModels.some((m) => m.featured)
     ? availableModels.filter((m) => m.featured)
     : availableModels
   const moreModels = availableModels.filter((m) => !featuredModels.includes(m))
-  const visibleModels = showMore ? [...featuredModels, ...moreModels] : featuredModels
+  const modelsToDisplay = showMore ? [...featuredModels, ...moreModels] : featuredModels
+  const visibleModels = sortModelsBySpeechLanguageSupport(modelsToDisplay, badgeLanguage)
 
   // 下载源按钮从 catalog 生成，保证和后端提供的源一一对应
   // （catalog 的测试保证了所有模型的源集合一致，取第一个模型的即可）
@@ -651,7 +653,6 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               const isDownloading = progress?.status === 'downloading'
               // Compatibility badge: selected speech language, or the interface
               // language when 'auto'. Informational only; it does not affect recognition.
-              const badgeLanguage = resolveBadgeLanguage(speechLanguage, getLocale())
               const langSupport = modelSupportsSpeechLanguage(model.languages, badgeLanguage)
               const speechLangName = langSupport !== null
                 ? t(`local.lang.${badgeLanguage}` as 'local.lang.ru')

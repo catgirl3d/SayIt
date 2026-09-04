@@ -91,6 +91,33 @@ export function modelSupportsSpeechLanguage(
 }
 
 /**
+ * Put models that support the requested language first without changing the
+ * catalog order within each support group. Unknown metadata stays ahead of
+ * models explicitly marked as unsupported.
+ */
+export function sortModelsBySpeechLanguageSupport<
+  T extends { languages?: readonly string[] | null },
+>(
+  models: readonly T[],
+  language: Exclude<SpeechInputLanguage, 'auto'>,
+): T[] {
+  const supportRank = (support: boolean | null): number => {
+    if (support === true) return 0
+    if (support === null) return 1
+    return 2
+  }
+
+  return models
+    .map((model, index) => ({
+      model,
+      index,
+      rank: supportRank(modelSupportsSpeechLanguage(model.languages, language)),
+    }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ model }) => model)
+}
+
+/**
  * Display-only language for the compatibility badge: the selected speech
  * language, or — when it is 'auto' — the interface language mapped to an
  * ASR code. Never affects recognition; the engine still gets 'auto'.
