@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCloudAsrExtra, getCloudAsrSupportedLanguages, isQwenOmniProvider, resolveCloudAsrLanguageRequest, resolveQwenOmniModel, resolveAsrDisplayModel } from '../asrModels'
+import { buildCloudAsrExtra, getCloudAsrSupportedLanguages, isQwenOmniProvider, modelSupportsSpeechLanguage, resolveBadgeLanguage, resolveCloudAsrLanguageRequest, resolveQwenOmniModel, resolveAsrDisplayModel } from '../asrModels'
 
 describe('isQwenOmniProvider', () => {
   it('识别 Qwen Omni 系列', () => {
@@ -65,6 +65,41 @@ describe('cloud ASR language capabilities', () => {
     expect(getCloudAsrSupportedLanguages('groq_whisper')).toEqual(['ru', 'uk', 'en', 'zh'])
     expect(getCloudAsrSupportedLanguages('mimo')).toEqual(['zh', 'en'])
     expect(getCloudAsrSupportedLanguages('qwen')).toBeNull()
+  })
+})
+
+describe('modelSupportsSpeechLanguage', () => {
+  it('returns null for auto: the engine detects the language itself', () => {
+    expect(modelSupportsSpeechLanguage(['ru', 'en'], 'auto')).toBeNull()
+    expect(modelSupportsSpeechLanguage([], 'auto')).toBeNull()
+    expect(modelSupportsSpeechLanguage(null, 'auto')).toBeNull()
+  })
+
+  it('matches the model language list exactly', () => {
+    expect(modelSupportsSpeechLanguage(['ru', 'uk', 'en', 'zh'], 'ru')).toBe(true)
+    expect(modelSupportsSpeechLanguage(['zh', 'en'], 'ru')).toBe(false)
+  })
+
+  it('returns null for a missing list: support is unknown, not absent', () => {
+    expect(modelSupportsSpeechLanguage(null, 'ru')).toBeNull()
+    expect(modelSupportsSpeechLanguage(undefined, 'ru')).toBeNull()
+  })
+
+  it('treats an empty list as supporting nothing', () => {
+    expect(modelSupportsSpeechLanguage([], 'en')).toBe(false)
+  })
+})
+
+describe('resolveBadgeLanguage', () => {
+  it('prefers the selected speech language', () => {
+    expect(resolveBadgeLanguage('ru', 'uk')).toBe('ru')
+    expect(resolveBadgeLanguage('en', 'zh-CN')).toBe('en')
+  })
+
+  it('falls back to the interface language when speech is auto', () => {
+    expect(resolveBadgeLanguage('auto', 'zh-CN')).toBe('zh')
+    expect(resolveBadgeLanguage('auto', 'uk')).toBe('uk')
+    expect(resolveBadgeLanguage('auto', 'en')).toBe('en')
   })
 })
 

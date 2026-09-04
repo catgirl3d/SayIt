@@ -163,17 +163,25 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             sources: SENSEVOICE.sources(),
             archive_url: None,
         },
-        // ── Nemotron 3.5 ASR Streaming 0.6B GGUF（NVIDIA，parakeet 族）──
-        // 存在的意义是**语种覆盖面**：32 个 locale，含西/法/德/意/葡/荷/俄/阿/印地/
-        // 土/越/乌 等 Qwen3 也没有或更慢的语种。上游标称原生标点与大小写（PnC），
-        // 数字保持口语形式（训练文本就是 spoken form，不是缺陷）。
-        // 准确度明显不如 parakeet：LibriSpeech test-clean Q4_K_M = 3.28% vs 1.62%，
-        // 所以只说英文的话没有理由选它。实测 RTF 0.069（CPU）/ 0.032（Vulkan）。
+        // ── Nemotron 3.5 ASR Streaming 0.6B GGUF (NVIDIA, parakeet family) ──
+        // Its whole reason to exist is language coverage: 40 language-locales in
+        // three tiers (19 transcription-ready, 13 broad-coverage, 8 adaptation-ready),
+        // covering Spanish/French/German/Italian/Portuguese/Dutch/Russian/Arabic/
+        // Hindi/Turkish/Vietnamese/Ukrainian — languages Qwen3 lacks or handles
+        // slower. Upstream promises native punctuation and capitalization (PnC);
+        // numbers stay in spoken form by design (training text is spoken form).
+        // Accuracy is well below parakeet: LibriSpeech test-clean Q4_K_M 3.28% vs 1.62%,
+        // so for English-only use there is no reason to pick it. Measured RTF
+        // 0.069 (CPU) / 0.032 (Vulkan).
         //
-        // ⚠️ 这是本目录里第一个用**带地区 locale**（`en-US` / `zh-CN`）自报语种的
-        //    模型，且只认这种形式。界面上的 `localAsr.language` 只有 auto/zh/en/ja/ko，
-        //    直接透传会 `unsupported language (status 10)` —— 映射在
-        //    gguf_asr.rs 的 `resolve_language`，别绕过它。
+        // ⚠️ The engine-side language list is regional locales (`en-US` / `zh-CN`)
+        //    and only accepts that form. UI `localAsr.language` only has
+        //    auto/zh/en/ja/ko, so passing it through verbatim yields
+        //    `unsupported language (status 10)` — the mapping lives in
+        //    gguf_asr.rs `resolve_language`, don't bypass it. The catalog list
+        //    below carries base codes (the 40 locales collapse to 36 distinct
+        //    languages; en/es/fr/pt appear twice as regional pairs), which is
+        //    the granularity the per-model language badges compare against.
         ModelInfo {
             id: "nemotron-asr-streaming-0.6b-gguf".into(),
             name: "Nemotron 3.5 ASR".into(),
@@ -185,19 +193,21 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: false,
             memory_mb: 1050,
             featured: true,
-            languages_label: "32 语种".into(),
+            languages_label: "40 语种".into(),
             quant: "Q4_K_M".into(),
             languages: vec![
-                "en".into(),
-                "es".into(),
-                "fr".into(),
-                "de".into(),
-                "it".into(),
-                "pt".into(),
-                "ru".into(),
-                "zh".into(),
-                "ja".into(),
-                "ko".into(),
+                // Tier 1, transcription-ready (19 locales → 15 languages): en, es,
+                // fr, it, pt, nl, de, tr, ru, ar, hi, ja, ko, vi, uk.
+                "en".into(), "es".into(), "fr".into(), "it".into(), "pt".into(),
+                "nl".into(), "de".into(), "tr".into(), "ru".into(), "ar".into(),
+                "hi".into(), "ja".into(), "ko".into(), "vi".into(), "uk".into(),
+                // Tier 2, broad-coverage (13 locales → 13 languages).
+                "pl".into(), "sv".into(), "cs".into(), "nb".into(), "da".into(),
+                "bg".into(), "fi".into(), "hr".into(), "sk".into(), "zh".into(),
+                "hu".into(), "ro".into(), "et".into(),
+                // Tier 3, adaptation-ready (8 locales → 8 languages).
+                "el".into(), "lt".into(), "lv".into(), "mt".into(), "sl".into(),
+                "he".into(), "th".into(), "nn".into(),
             ],
             sources: NEMOTRON_STREAMING_Q4.sources(),
             archive_url: None,
@@ -262,14 +272,24 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: false,
             memory_mb: 1500,
             featured: false,
-            languages_label: "30+ 语种".into(),
+            languages_label: "30 语种".into(),
             quant: "Q8_0".into(),
-            languages: vec!["zh".into(), "en".into(), "yue".into(), "ja".into(), "ko".into()],
+            // 30 languages per the Qwen3-ASR model card (incl. Russian; the list
+            // below matches the card order). Not buried in the display label —
+            // the badges compare against these codes.
+            languages: vec![
+                "zh".into(), "en".into(), "yue".into(), "ar".into(), "de".into(),
+                "fr".into(), "es".into(), "pt".into(), "id".into(), "it".into(),
+                "ko".into(), "ru".into(), "th".into(), "vi".into(), "ja".into(),
+                "tr".into(), "hi".into(), "ms".into(), "nl".into(), "sv".into(),
+                "da".into(), "fi".into(), "pl".into(), "cs".into(), "fil".into(),
+                "fa".into(), "el".into(), "hu".into(), "mk".into(), "ro".into(),
+            ],
             sources: QWEN3_06B_Q8.sources(),
             archive_url: None,
         },
         // Whisper Small Q4_K_M GGUF (multilingual, transcribe.cpp).
-        // The lightweight Whisper tier: 99 languages, including Ukrainian.
+        // The lightweight Whisper tier: 100 languages, including Ukrainian.
         ModelInfo {
             id: "whisper-small-gguf".into(),
             name: "Whisper Small".into(),
@@ -281,9 +301,32 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: false,
             memory_mb: 700,
             featured: false,
-            languages_label: "99 语种".into(),
+            languages_label: "100 语种".into(),
             quant: "Q4_K_M".into(),
-            languages: vec!["uk".into(), "en".into(), "ru".into(), "zh".into()],
+            languages: vec![
+                // Full list from the openai/whisper tokenizer.py LANGUAGES dict
+                // (100 codes, incl. Cantonese yue) — shared by every Whisper tier.
+                "en".into(), "zh".into(), "de".into(), "es".into(), "ru".into(),
+                "ko".into(), "fr".into(), "ja".into(), "pt".into(), "tr".into(),
+                "pl".into(), "ca".into(), "nl".into(), "ar".into(), "sv".into(),
+                "it".into(), "id".into(), "hi".into(), "fi".into(), "vi".into(),
+                "he".into(), "uk".into(), "el".into(), "ms".into(), "cs".into(),
+                "ro".into(), "da".into(), "hu".into(), "ta".into(), "no".into(),
+                "th".into(), "ur".into(), "hr".into(), "bg".into(), "lt".into(),
+                "la".into(), "mi".into(), "ml".into(), "cy".into(), "sk".into(),
+                "te".into(), "fa".into(), "lv".into(), "bn".into(), "sr".into(),
+                "az".into(), "sl".into(), "kn".into(), "et".into(), "mk".into(),
+                "br".into(), "eu".into(), "is".into(), "hy".into(), "ne".into(),
+                "mn".into(), "bs".into(), "kk".into(), "sq".into(), "sw".into(),
+                "gl".into(), "mr".into(), "pa".into(), "si".into(), "km".into(),
+                "sn".into(), "yo".into(), "so".into(), "af".into(), "oc".into(),
+                "ka".into(), "be".into(), "tg".into(), "sd".into(), "gu".into(),
+                "am".into(), "yi".into(), "lo".into(), "uz".into(), "fo".into(),
+                "ht".into(), "ps".into(), "tk".into(), "nn".into(), "mt".into(),
+                "sa".into(), "lb".into(), "my".into(), "bo".into(), "tl".into(),
+                "mg".into(), "as".into(), "tt".into(), "haw".into(), "ln".into(),
+                "ha".into(), "ba".into(), "jw".into(), "su".into(), "yue".into(),
+            ],
             sources: WHISPER_SMALL_Q4.sources(),
             archive_url: None,
         },
@@ -303,9 +346,19 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: false,
             memory_mb: 2300,
             featured: false,
-            languages_label: "30+ 语种".into(),
+            languages_label: "30 语种".into(),
             quant: "Q4_K_M".into(),
-            languages: vec!["zh".into(), "en".into(), "yue".into(), "ja".into(), "ko".into()],
+            // 30 languages per the Qwen3-ASR model card (incl. Russian; the list
+            // below matches the card order). Not buried in the display label —
+            // the badges compare against these codes.
+            languages: vec![
+                "zh".into(), "en".into(), "yue".into(), "ar".into(), "de".into(),
+                "fr".into(), "es".into(), "pt".into(), "id".into(), "it".into(),
+                "ko".into(), "ru".into(), "th".into(), "vi".into(), "ja".into(),
+                "tr".into(), "hi".into(), "ms".into(), "nl".into(), "sv".into(),
+                "da".into(), "fi".into(), "pl".into(), "cs".into(), "fil".into(),
+                "fa".into(), "el".into(), "hu".into(), "mk".into(), "ro".into(),
+            ],
             sources: QWEN3_17B_Q4.sources(),
             archive_url: None,
         },
@@ -323,9 +376,19 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: false,
             memory_mb: 2600,
             featured: true,
-            languages_label: "30+ 语种".into(),
+            languages_label: "30 语种".into(),
             quant: "Q5_K_M".into(),
-            languages: vec!["zh".into(), "en".into(), "yue".into(), "ja".into(), "ko".into()],
+            // 30 languages per the Qwen3-ASR model card (incl. Russian; the list
+            // below matches the card order). Not buried in the display label —
+            // the badges compare against these codes.
+            languages: vec![
+                "zh".into(), "en".into(), "yue".into(), "ar".into(), "de".into(),
+                "fr".into(), "es".into(), "pt".into(), "id".into(), "it".into(),
+                "ko".into(), "ru".into(), "th".into(), "vi".into(), "ja".into(),
+                "tr".into(), "hi".into(), "ms".into(), "nl".into(), "sv".into(),
+                "da".into(), "fi".into(), "pl".into(), "cs".into(), "fil".into(),
+                "fa".into(), "el".into(), "hu".into(), "mk".into(), "ro".into(),
+            ],
             sources: QWEN3_17B_Q5.sources(),
             archive_url: None,
         },
@@ -344,12 +407,35 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             featured: false,
             languages_label: "100 语种".into(),
             quant: "Q4_K_M".into(),
-            languages: vec!["uk".into(), "en".into(), "ru".into(), "zh".into()],
+            languages: vec![
+                // Full list from the openai/whisper tokenizer.py LANGUAGES dict
+                // (100 codes, incl. Cantonese yue) — shared by every Whisper tier.
+                "en".into(), "zh".into(), "de".into(), "es".into(), "ru".into(),
+                "ko".into(), "fr".into(), "ja".into(), "pt".into(), "tr".into(),
+                "pl".into(), "ca".into(), "nl".into(), "ar".into(), "sv".into(),
+                "it".into(), "id".into(), "hi".into(), "fi".into(), "vi".into(),
+                "he".into(), "uk".into(), "el".into(), "ms".into(), "cs".into(),
+                "ro".into(), "da".into(), "hu".into(), "ta".into(), "no".into(),
+                "th".into(), "ur".into(), "hr".into(), "bg".into(), "lt".into(),
+                "la".into(), "mi".into(), "ml".into(), "cy".into(), "sk".into(),
+                "te".into(), "fa".into(), "lv".into(), "bn".into(), "sr".into(),
+                "az".into(), "sl".into(), "kn".into(), "et".into(), "mk".into(),
+                "br".into(), "eu".into(), "is".into(), "hy".into(), "ne".into(),
+                "mn".into(), "bs".into(), "kk".into(), "sq".into(), "sw".into(),
+                "gl".into(), "mr".into(), "pa".into(), "si".into(), "km".into(),
+                "sn".into(), "yo".into(), "so".into(), "af".into(), "oc".into(),
+                "ka".into(), "be".into(), "tg".into(), "sd".into(), "gu".into(),
+                "am".into(), "yi".into(), "lo".into(), "uz".into(), "fo".into(),
+                "ht".into(), "ps".into(), "tk".into(), "nn".into(), "mt".into(),
+                "sa".into(), "lb".into(), "my".into(), "bo".into(), "tl".into(),
+                "mg".into(), "as".into(), "tt".into(), "haw".into(), "ln".into(),
+                "ha".into(), "ba".into(), "jw".into(), "su".into(), "yue".into(),
+            ],
             sources: WHISPER_LARGE_V3_TURBO_Q4.sources(),
             archive_url: None,
         },
         // Whisper Large v2 Q4_K_M GGUF (multilingual, transcribe.cpp).
-        // The high-accuracy Whisper tier for 99 languages, at the cost of speed.
+        // The high-accuracy Whisper tier for 100 languages, at the cost of speed.
         ModelInfo {
             id: "whisper-large-v2-gguf".into(),
             name: "Whisper Large v2".into(),
@@ -361,9 +447,32 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: false,
             memory_mb: 2800,
             featured: false,
-            languages_label: "99 语种".into(),
+            languages_label: "100 语种".into(),
             quant: "Q4_K_M".into(),
-            languages: vec!["uk".into(), "en".into(), "ru".into(), "zh".into()],
+            languages: vec![
+                // Full list from the openai/whisper tokenizer.py LANGUAGES dict
+                // (100 codes, incl. Cantonese yue) — shared by every Whisper tier.
+                "en".into(), "zh".into(), "de".into(), "es".into(), "ru".into(),
+                "ko".into(), "fr".into(), "ja".into(), "pt".into(), "tr".into(),
+                "pl".into(), "ca".into(), "nl".into(), "ar".into(), "sv".into(),
+                "it".into(), "id".into(), "hi".into(), "fi".into(), "vi".into(),
+                "he".into(), "uk".into(), "el".into(), "ms".into(), "cs".into(),
+                "ro".into(), "da".into(), "hu".into(), "ta".into(), "no".into(),
+                "th".into(), "ur".into(), "hr".into(), "bg".into(), "lt".into(),
+                "la".into(), "mi".into(), "ml".into(), "cy".into(), "sk".into(),
+                "te".into(), "fa".into(), "lv".into(), "bn".into(), "sr".into(),
+                "az".into(), "sl".into(), "kn".into(), "et".into(), "mk".into(),
+                "br".into(), "eu".into(), "is".into(), "hy".into(), "ne".into(),
+                "mn".into(), "bs".into(), "kk".into(), "sq".into(), "sw".into(),
+                "gl".into(), "mr".into(), "pa".into(), "si".into(), "km".into(),
+                "sn".into(), "yo".into(), "so".into(), "af".into(), "oc".into(),
+                "ka".into(), "be".into(), "tg".into(), "sd".into(), "gu".into(),
+                "am".into(), "yi".into(), "lo".into(), "uz".into(), "fo".into(),
+                "ht".into(), "ps".into(), "tk".into(), "nn".into(), "mt".into(),
+                "sa".into(), "lb".into(), "my".into(), "bo".into(), "tl".into(),
+                "mg".into(), "as".into(), "tt".into(), "haw".into(), "ln".into(),
+                "ha".into(), "ba".into(), "jw".into(), "su".into(), "yue".into(),
+            ],
             sources: WHISPER_LARGE_V2_Q4.sources(),
             archive_url: None,
         },
@@ -574,6 +683,82 @@ mod tests {
             assert_eq!(model.total_size_bytes, size);
             assert_eq!(file.size_bytes, size);
             assert_eq!(file.sha256.as_deref(), Some(sha256));
+        }
+    }
+
+    /// The catalog language lists must match the real support matrix verified
+    /// against upstream model cards, or the per-model compatibility badges lie.
+    ///
+    /// Sources:
+    /// - Whisper (all tiers): openai/whisper tokenizer.py `LANGUAGES` (100 codes,
+    ///   incl. Cantonese yue).
+    /// - Qwen3-ASR: model card on Hugging Face (30 languages, in card order).
+    /// - Nemotron 3.5 ASR Streaming: model card (40 locales = 36 distinct languages,
+    ///   grouped by the three upstream tiers; en/es/fr/pt appear as regional pairs).
+    /// - SenseVoice Small / Fun-ASR Nano / GigaAM v3 e2e / Parakeet Unified EN:
+    ///   official model cards of FunAudioLLM, Sber, and NVIDIA.
+    ///
+    /// The regression this protects: truncated lists made the badge report
+    /// "unsupported" for languages the model actually recognizes (e.g. Ukrainian
+    /// or Russian on Nemotron, Russian on Qwen3-ASR).
+    #[test]
+    fn catalog_language_matrix_matches_upstream() {
+        let models = get_available_models();
+        let languages = |id: &str| {
+            models
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap_or_else(|| panic!("{id} must be present in the catalog"))
+                .languages
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+        };
+
+        let whisper_100: Vec<&str> = vec![
+            "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca",
+            "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms",
+            "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la",
+            "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+            "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw",
+            "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be",
+            "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn",
+            "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln", "ha",
+            "ba", "jw", "su", "yue",
+        ];
+
+        let qwen3_30: Vec<&str> = vec![
+            "zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru",
+            "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs",
+            "fil", "fa", "el", "hu", "mk", "ro",
+        ];
+
+        let nemotron_36: Vec<&str> = vec![
+            "en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar", "hi", "ja",
+            "ko", "vi", "uk", "pl", "sv", "cs", "nb", "da", "bg", "fi", "hr", "sk",
+            "zh", "hu", "ro", "et", "el", "lt", "lv", "mt", "sl", "he", "th", "nn",
+        ];
+
+        assert_eq!(whisper_100.len(), 100, "canonical Whisper list must hold 100 codes");
+        assert_eq!(qwen3_30.len(), 30);
+        assert_eq!(nemotron_36.len(), 36);
+
+        let expected: Vec<(&str, Vec<&str>)> = vec![
+            ("parakeet-unified-en-0.6b-gguf", vec!["en"]),
+            ("sensevoice-small-gguf", vec!["zh", "en", "ja", "ko", "yue"]),
+            ("nemotron-asr-streaming-0.6b-gguf", nemotron_36),
+            ("gigaam-v3-e2e-rnnt-gguf", vec!["ru"]),
+            ("funasr-nano-2512-gguf", vec!["zh", "en", "ja"]),
+            ("qwen3-asr-0.6b-gguf", qwen3_30.clone()),
+            ("qwen3-asr-1.7b-q4-gguf", qwen3_30.clone()),
+            ("qwen3-asr-1.7b-gguf", qwen3_30.clone()),
+            ("whisper-small-gguf", whisper_100.clone()),
+            ("whisper-large-v3-turbo-gguf", whisper_100.clone()),
+            ("whisper-large-v2-gguf", whisper_100.clone()),
+        ];
+
+        for (id, wanted) in expected {
+            assert_eq!(languages(id), wanted, "{} 的语种清单与上游不符", id);
         }
     }
 

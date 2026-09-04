@@ -15,6 +15,7 @@ import { getSetting, setSetting } from '@/services/store'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { reconnectProvider } from '@/services/recorder'
 import { describeDownloadError } from '@/lib/errorMessages'
+import { modelSupportsSpeechLanguage, resolveBadgeLanguage } from '@/lib/asrModels'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
@@ -586,8 +587,7 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               {t('local.currentModel', { name: selectedModel?.name || selectedModelId })}
             </p>
           )}
-          {speechLanguage !== 'auto' && selectedModel
-            && !selectedModel.languages.includes(speechLanguage) && (
+          {selectedModel && modelSupportsSpeechLanguage(selectedModel.languages, speechLanguage) === false && (
             <p className="mb-3 text-xs text-warning-strong">
               {t('local.languageFallback', { lang: t(`local.lang.${speechLanguage}` as 'local.lang.ru') })}
             </p>
@@ -649,6 +649,13 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               const isSelected = selectedModelId === model.id
               const progress = downloading[model.id]
               const isDownloading = progress?.status === 'downloading'
+              // Compatibility badge: selected speech language, or the interface
+              // language when 'auto'. Informational only; it does not affect recognition.
+              const badgeLanguage = resolveBadgeLanguage(speechLanguage, getLocale())
+              const langSupport = modelSupportsSpeechLanguage(model.languages, badgeLanguage)
+              const speechLangName = langSupport !== null
+                ? t(`local.lang.${badgeLanguage}` as 'local.lang.ru')
+                : ''
 
               return (
                 <div
@@ -659,13 +666,18 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{modelName}</span>
-                      {model.recommended && (
-                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{t('local.recommended')}</span>
-                      )}
                       {isDownloaded && (
                         <span className="flex items-center gap-1 text-xs text-muted-foreground">
                           <Check className="h-3 w-3" />{t('local.downloaded')}
                         </span>
+                      )}
+                      {langSupport === true && (
+                        <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success-strong">{t('local.langSupported', { lang: speechLangName })}</span>
+                      )}
+                      {langSupport === false && (
+                        <Tooltip variant="light" content={t('local.languageFallback', { lang: speechLangName })}>
+                          <span className="cursor-help rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{t('local.langUnsupported', { lang: speechLangName })}</span>
+                        </Tooltip>
                       )}
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground">{modelDescription}</p>

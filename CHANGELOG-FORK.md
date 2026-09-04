@@ -15,6 +15,8 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added one shared speech-input language setting for local, server, and cloud ASR, migrating legacy mode-specific settings and applying it to compatible recognition requests, history reprocessing, and built-in cleanup prompts.
 - Added persistent microphone input boost with 1x, 2x, 3x, 5x, and browser-managed automatic gain modes.
 - Limited Groq's Chinese punctuation hint to explicitly selected Chinese, preventing it from being injected into automatic or other-language requests.
+- Show per-model language badges in the local model list indicating whether each model supports your language (selected speech language, or interface language when speech is set to Auto).
+- Corrected the local model catalog's language support matrix to match upstream model cards (Nemotron 3.5 ASR: 40 locales across three quality tiers; Qwen3-ASR: 30 languages; Whisper: 100 languages), fixing false "unsupported language" badges for languages the models actually recognize, such as Ukrainian and Russian on Nemotron and Russian on Qwen3-ASR.
 
 ### AI Prompts and Localization
 

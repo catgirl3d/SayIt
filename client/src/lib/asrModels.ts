@@ -78,6 +78,34 @@ export function getCloudAsrSupportedLanguages(provider: string): SpeechInputLang
 }
 
 /**
+ * Whether a model language list covers the selected speech language.
+ * Returns null when there is nothing to badge: 'auto' lets the engine
+ * detect the language, and a missing list means support is unknown.
+ */
+export function modelSupportsSpeechLanguage(
+  languages: readonly string[] | undefined | null,
+  language: SpeechInputLanguage,
+): boolean | null {
+  if (language === 'auto' || languages === undefined || languages === null) return null
+  return languages.includes(language)
+}
+
+/**
+ * Display-only language for the compatibility badge: the selected speech
+ * language, or — when it is 'auto' — the interface language mapped to an
+ * ASR code. Never affects recognition; the engine still gets 'auto'.
+ */
+export function resolveBadgeLanguage(
+  speechLanguage: SpeechInputLanguage,
+  uiLocale: string,
+): Exclude<SpeechInputLanguage, 'auto'> {
+  if (speechLanguage !== 'auto') return speechLanguage
+  if (uiLocale === 'zh-CN') return 'zh'
+  if (uiLocale === 'uk') return 'uk'
+  return 'en'
+}
+
+/**
  * Build the `extra` payload for a cloud ASR request. Omni providers carry the
  * resolved model ID plus system-prompt instructions; explicit-language providers
  * (Groq, MiMo) carry the language code; every other provider needs no payload.
