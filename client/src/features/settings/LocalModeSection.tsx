@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { FolderOpen, Copy, Check, CheckCircle2, ChevronDown, HardDrive, Loader2, Info, Download, Trash2 } from 'lucide-react'
+import { FolderOpen, Copy, Check, CheckCircle2, ChevronDown, HardDrive, Loader2, Info, Download, Trash2, Crown, Mic, Cpu } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -549,13 +549,26 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
   const selectedModel = availableModels.find((m) => m.id === selectedModelId)
   const badgeLanguage = resolveBadgeLanguage(speechLanguage, getLocale())
 
-  // 小/中/大三个直接展示，其余折叠进「更多」。后端没标 featured 时全部展示兜底。
+  // Featured models are shown directly; others are collapsed into "More models". Fallback to all if featured is not set.
   const featuredModels = availableModels.some((m) => m.featured)
     ? availableModels.filter((m) => m.featured)
     : availableModels
   const moreModels = availableModels.filter((m) => !featuredModels.includes(m))
   const modelsToDisplay = showMore ? [...featuredModels, ...moreModels] : featuredModels
-  const visibleModels = sortModelsBySpeechLanguageSupport(modelsToDisplay, badgeLanguage)
+
+  const isModelRecommendedForCurrentLanguage = (modelId: string): boolean => {
+    if (badgeLanguage === 'uk') return modelId === 'nemotron-asr-streaming-0.6b-gguf'
+    if (badgeLanguage === 'ru') return modelId === 'gigaam-v3-e2e-rnnt-gguf'
+    if (badgeLanguage === 'en') return modelId === 'parakeet-unified-en-0.6b-gguf'
+    return false
+  }
+
+  const sortedByLanguage = sortModelsBySpeechLanguageSupport(modelsToDisplay, badgeLanguage)
+  const visibleModels = [...sortedByLanguage].sort((a, b) => {
+    const aRec = isModelRecommendedForCurrentLanguage(a.id) ? 1 : 0
+    const bRec = isModelRecommendedForCurrentLanguage(b.id) ? 1 : 0
+    return bRec - aRec
+  })
 
   // 下载源按钮从 catalog 生成，保证和后端提供的源一一对应
   // （catalog 的测试保证了所有模型的源集合一致，取第一个模型的即可）
@@ -584,11 +597,58 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
             </Tooltip>
           </div>
 
-          {selectedModelId && downloadedIds.has(selectedModelId) && (
-            <p className="mb-2 text-sm text-muted-foreground">
-              {t('local.currentModel', { name: selectedModel?.name || selectedModelId })}
-            </p>
-          )}
+          {/* Status info bar: Current Model & Hardware Acceleration */}
+          <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* Card 1: Selected Model */}
+            <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/30 p-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Mic className="h-4 w-4" aria-hidden />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">{t('local.currentModelLabel')}</span>
+                  {selectedModelId && (
+                    downloadedIds.has(selectedModelId) ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success-strong">
+                        <Check className="h-2.5 w-2.5" />
+                        {t('local.modelReady')}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-strong">
+                        {t('local.modelNotDownloaded')}
+                      </span>
+                    )
+                  )}
+                </div>
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {selectedModel ? localModelDisplayName(selectedModel) : selectedModelId || '—'}
+                </p>
+              </div>
+            </div>
+
+            {/* Card 2: Hardware Acceleration / GPU */}
+            {gpuSummary !== null && (
+              <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/30 p-3">
+                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${gpuSummary ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                  <Cpu className="h-4 w-4" aria-hidden />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">{t('local.hardwareAccel')}</span>
+                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${gpuSummary ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                      {gpuSummary ? 'GPU' : 'CPU'}
+                    </span>
+                  </div>
+                  <Tooltip content={gpuSummary ? t('local.gpuHint') : t('local.cpuHint')}>
+                    <p className="truncate text-sm font-semibold text-foreground">
+                      {gpuSummary || t('local.cpuMode')}
+                    </p>
+                  </Tooltip>
+                </div>
+              </div>
+            )}
+          </div>
+
           {selectedModel && modelSupportsSpeechLanguage(selectedModel.languages, speechLanguage) === false && (
             <p className="mb-3 text-xs text-warning-strong">
               {t('local.languageFallback', { lang: t(`local.lang.${speechLanguage}` as 'local.lang.ru') })}
@@ -600,16 +660,6 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               tone="warning"
               message={t('local.notDownloadedWarning')}
             />
-          )}
-
-          {/* 硬件背景。选模型是这一页最难的决定，而"这台机器什么水平"这条信息
-              原来要往下翻两张卡才看得到。 */}
-          {gpuSummary !== null && (
-            <p className="mb-4 text-xs text-muted-foreground">
-              {gpuSummary
-                ? t('local.gpuDetected', { gpu: gpuSummary })
-                : t('local.noGpu')}
-            </p>
           )}
 
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -666,6 +716,13 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
+                      {langSupport !== null && (
+                        <Tooltip content={langSupport ? t('local.langSupported', { lang: speechLangName }) : t('local.languageFallback', { lang: speechLangName })}>
+                          <span className="flex h-4 w-4 shrink-0 cursor-help items-center justify-center" aria-label={langSupport ? t('local.langSupported', { lang: speechLangName }) : t('local.langUnsupported', { lang: speechLangName })}>
+                            <span className={`h-2 w-2 rounded-full ${langSupport ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                          </span>
+                        </Tooltip>
+                      )}
                       <span className="text-sm font-medium">{modelName}</span>
                       {isDownloaded && (
                         <Tooltip content={t('local.downloaded')}>
@@ -674,18 +731,16 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                           </span>
                         </Tooltip>
                       )}
-                      {langSupport === true && (
-                        <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success-strong">{t('local.langSupported', { lang: speechLangName })}</span>
-                      )}
-                      {langSupport === false && (
-                        <Tooltip variant="light" content={t('local.languageFallback', { lang: speechLangName })}>
-                          <span className="cursor-help rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{t('local.langUnsupported', { lang: speechLangName })}</span>
+                      {isModelRecommendedForCurrentLanguage(model.id) && (
+                        <Tooltip content={t('local.recommended')}>
+                          <span className="inline-flex cursor-help items-center text-amber-500" aria-label={t('local.recommended')}>
+                            <Crown className="h-3.5 w-3.5" aria-hidden />
+                          </span>
                         </Tooltip>
                       )}
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground">{modelDescription}</p>
-                    {/* 参数行：评分柱状条 + 下载体积（硬盘图标）+ 内存占用 + 语种，一行小字。
-                        量化档（Q8_0 之类）不展示——普通用户看不懂，文件名里查得到 */}
+                    {/* Parameter row: rating bars + download size (disk icon) + memory usage + quantization tier + languages */}
                     <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-muted-foreground">
                       {model.speed ? <MiniRating label={t('local.speed')} value={model.speed} /> : null}
                       {model.accuracy ? <MiniRating label={t('local.accuracy')} value={model.accuracy} /> : null}
@@ -696,10 +751,13 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                         </span>
                       )}
                       {model.memory_mb ? (
-                        <><span aria-hidden>·</span><span>{t('local.memoryUsage', { size: formatMemory(model.memory_mb) })}</span></>
+                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap"><span aria-hidden>·</span><span>{t('local.memoryUsage', { size: formatMemory(model.memory_mb) })}</span></span>
+                      ) : null}
+                      {model.quant ? (
+                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap"><span aria-hidden>·</span><span>{model.quant}</span></span>
                       ) : null}
                       {modelLanguages ? (
-                        <><span aria-hidden>·</span><span>{modelLanguages}</span></>
+                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap"><span aria-hidden>·</span><span>{modelLanguages}</span></span>
                       ) : null}
                     </div>
                     {isDownloading && progress && (
