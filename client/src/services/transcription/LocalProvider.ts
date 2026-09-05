@@ -23,7 +23,7 @@ export class LocalProvider extends BufferedProvider {
    * 里该模型是否 complete，避免同屏两处结论不同。
    */
   protected async onConnect(callbacks: TranscriptionCallbacks): Promise<boolean> {
-    const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
+    const modelId = (await getSetting('localAsr.modelId', 'sensevoice-small-gguf')) as string
     if (!modelId) {
       addRuntimeEvent('warn', 'local', 'No local model selected; provider is not ready')
       callbacks.onReady?.({ asr: false, llm: false })
@@ -50,10 +50,12 @@ export class LocalProvider extends BufferedProvider {
     // 已下载：预加载失败（如文件损坏、显卡后端异常）不代表不能用，
     // 真正的失败会在识别阶段带着具体原因报出来，这里仍按就绪处理。
     try {
-      const accelerator = await getSetting('localAsr.accelerator', 'auto') as string
+      const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
       await invoke<string>('preload_local_model', { modelId, accelerator })
     } catch (err) {
-      addRuntimeEvent('warn', 'local', 'Local model preload failed; provider remains marked ready', { error: String(err) })
+      addRuntimeEvent('warn', 'local', 'Local model preload failed; provider remains marked ready', {
+        error: String(err),
+      })
     }
     callbacks.onReady?.({ asr: true, llm: false })
     return true

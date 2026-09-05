@@ -4,8 +4,12 @@ import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { getSetting, setSetting } from '@/services/store'
 import { switchProvider, getWorkMode, type WorkMode } from '@/services/transcription'
-import { refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
-import { getSpeechInputLanguage, setSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
+import { getState, refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
+import {
+  getSpeechInputLanguage,
+  setSpeechInputLanguage,
+  type SpeechInputLanguage,
+} from '@/services/speechInputLanguage'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import WorkModeSection from './WorkModeSection'
@@ -47,9 +51,7 @@ export default function VoiceEnginePage() {
   return (
     <div className="mx-auto max-w-4xl">
       <h1 className="mb-2 text-2xl font-bold">{t('nav.voiceEngine')}</h1>
-      <p className="mb-6 text-sm text-muted-foreground">
-        {t('voiceEngine.subtitle')}
-      </p>
+      <p className="mb-6 text-sm text-muted-foreground">{t('voiceEngine.subtitle')}</p>
 
       <div className="space-y-6">
         <WorkModeSection value={workMode} onChange={(m) => void handleWorkModeChange(m)} />
@@ -59,7 +61,10 @@ export default function VoiceEnginePage() {
             setSpeechLanguage(language)
             // Persist first, then update the cache: an interleaved refreshRecorderSettings() re-reads
             // the stored value, so the cache must never be newer than the persisted setting.
-            void setSpeechInputLanguage(language).then(() => setSpeechLanguageCache(language))
+            void setSpeechInputLanguage(language).then(() => {
+              setSpeechLanguageCache(language)
+              if (workMode === 'local' && language !== 'auto' && getState() === 'idle') reconnectProvider()
+            })
           }}
         />
 

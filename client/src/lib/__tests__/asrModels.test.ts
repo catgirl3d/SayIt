@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { buildCloudAsrExtra, getCloudAsrSupportedLanguages, isQwenOmniProvider, modelSupportsSpeechLanguage, resolveBadgeLanguage, resolveCloudAsrLanguageRequest, resolveQwenOmniModel, resolveAsrDisplayModel, sortModelsBySpeechLanguageSupport } from '../asrModels'
+import {
+  buildCloudAsrExtra,
+  getCloudAsrSupportedLanguages,
+  isQwenOmniProvider,
+  modelSupportsSpeechLanguage,
+  resolveBadgeLanguage,
+  resolveCloudAsrLanguageRequest,
+  resolveQwenOmniModel,
+  resolveAsrDisplayModel,
+  sortModelsBySpeechLanguageSupport,
+} from '../asrModels'
 
 describe('isQwenOmniProvider', () => {
   it('识别 Qwen Omni 系列', () => {

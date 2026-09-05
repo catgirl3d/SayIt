@@ -17,6 +17,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Limited Groq's Chinese punctuation hint to explicitly selected Chinese, preventing it from being injected into automatic or other-language requests.
 - Show per-model language badges in the local model list indicating whether each model supports your language (selected speech language, or interface language when speech is set to Auto).
 - Corrected the local model catalog's language support matrix to match upstream model cards (Nemotron 3.5 ASR: 40 locales across three quality tiers; Qwen3-ASR: 30 languages; Whisper: 100 languages), fixing false "unsupported language" badges for languages the models actually recognize, such as Ukrainian and Russian on Nemotron and Russian on Qwen3-ASR.
+- Added five upstream GGUF local ASR models: Parakeet TDT v3 (25 European languages, 1.94% LibriSpeech WER), Fun-ASR MLT Nano (31 languages, 1.74% LibriSpeech WER), Parakeet TDT 1.1B (English, 1.38% LibriSpeech WER), GigaAM v3 CTC (compact Russian), and Whisper Large v3 (100 languages, 1.86% LibriSpeech WER).
 
 ### AI Prompts and Localization
 

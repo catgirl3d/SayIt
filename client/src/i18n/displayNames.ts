@@ -23,15 +23,43 @@ const BUILTIN_APP_NAME_KEYS: Record<string, TranslationKey> = {
   qq: 'builtinApp.qq',
 }
 
-const LOCAL_MODEL_KEYS: Record<string, {
-  name: TranslationKey
-  description: TranslationKey
-  languages: TranslationKey
-}> = {
+const LOCAL_MODEL_KEYS: Record<
+  string,
+  {
+    name: TranslationKey
+    description: TranslationKey
+    languages: TranslationKey
+  }
+> = {
   'parakeet-unified-en-0.6b-gguf': {
     name: 'localModel.parakeetEn.name',
     description: 'localModel.parakeetEn.description',
     languages: 'localModel.parakeetEn.languages',
+  },
+  'parakeet-tdt-0.6b-v3-gguf': {
+    name: 'localModel.parakeetV3.name',
+    description: 'localModel.parakeetV3.description',
+    languages: 'localModel.parakeetV3.languages',
+  },
+  'funasr-mlt-nano-2512-gguf': {
+    name: 'localModel.funasrMlt.name',
+    description: 'localModel.funasrMlt.description',
+    languages: 'localModel.funasrMlt.languages',
+  },
+  'parakeet-tdt-1.1b-gguf': {
+    name: 'localModel.parakeet11.name',
+    description: 'localModel.parakeet11.description',
+    languages: 'localModel.parakeet11.languages',
+  },
+  'gigaam-v3-e2e-ctc-gguf': {
+    name: 'localModel.gigaamCtc.name',
+    description: 'localModel.gigaamCtc.description',
+    languages: 'localModel.gigaamCtc.languages',
+  },
+  'whisper-large-v3-gguf': {
+    name: 'localModel.whisperLargeV3.name',
+    description: 'localModel.whisperLargeV3.description',
+    languages: 'localModel.whisperLargeV3.languages',
   },
   'sensevoice-small-gguf': {
     name: 'localModel.sensevoice.name',
