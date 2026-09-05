@@ -438,6 +438,25 @@ export default function LocalModeSection({ speechLanguage }: Props) {
     return mountedRef.current && modelIntentGenerationRef.current === generation && selectedModelIdRef.current === modelId
   }
 
+  async function activateSelectedModel(modelId: string, generation: number): Promise<boolean> {
+    if (!isCurrentModelIntent(generation, modelId)) return false
+    await setSetting('localAsr.modelId', modelId)
+    if (!isCurrentModelIntent(generation, modelId)) return false
+    void refreshModeStatus() // Synchronize the sidebar engine indicator.
+
+    try {
+      const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
+      if (!isCurrentModelIntent(generation, modelId)) return false
+      await invoke<string>('preload_local_model', { modelId, accelerator })
+    } catch {
+      // A preload failure is reported by readiness checks and transcription.
+    }
+
+    if (!isCurrentModelIntent(generation, modelId)) return false
+    reconnectProvider()
+    return true
+  }
+
   useEffect(() => {
     mountedRef.current = true
     const lifecycleGeneration = ++lifecycleGenerationRef.current
@@ -539,19 +558,8 @@ export default function LocalModeSection({ speechLanguage }: Props) {
       selectedModelIdRef.current = modelId
       setSelectedModelId(modelId)
       if (!isCurrentModelIntent(generation, modelId)) return
-      await setSetting('localAsr.modelId', modelId)
-      if (!isCurrentModelIntent(generation, modelId)) return
-      void refreshModeStatus() // 同步左下角的引擎指示
-      try {
-        const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
-        if (!isCurrentModelIntent(generation, modelId)) return
-        await invoke<string>('preload_local_model', { modelId, accelerator })
-      } catch {
-        /* ignore */
-      }
-      // provider 缓存着上次的就绪结果，不重连的话刚下载完第一次按快捷键仍会被判未就绪。
-      // 同 handleSelectModel：排在预加载之后，避免它的 onConnect 再排一轮加载。
-      if (isCurrentModelIntent(generation, modelId)) reconnectProvider()
+      setPreloadingModelId(modelId)
+      await activateSelectedModel(modelId, generation)
     } catch (err) {
       if (!mountedRef.current) return
       setDownloading((prev) => ({
@@ -567,6 +575,10 @@ export default function LocalModeSection({ speechLanguage }: Props) {
           error: String(err),
         },
       }))
+    } finally {
+      if (mountedRef.current && modelIntentGenerationRef.current === generation) {
+        setPreloadingModelId('')
+      }
     }
   }
 
@@ -621,26 +633,17 @@ export default function LocalModeSection({ speechLanguage }: Props) {
     selectedModelIdRef.current = modelId
     setSelectedModelId(modelId)
     setPreloadingModelId(modelId)
+    let activated = false
     try {
-      if (!isCurrentModelIntent(generation, modelId)) return
-      await setSetting('localAsr.modelId', modelId)
-      if (!isCurrentModelIntent(generation, modelId)) return
-      void refreshModeStatus() // 同步左下角的引擎指示
-      const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
-      if (!isCurrentModelIntent(generation, modelId)) return
-      await invoke<string>('preload_local_model', { modelId, accelerator })
+      activated = await activateSelectedModel(modelId, generation)
     } catch {
       /* 未下载 / 加载失败都由就绪判定与识别阶段报出，这里不打断选择 */
     } finally {
       if (mountedRef.current && modelIntentGenerationRef.current === generation) {
         setPreloadingModelId('')
-        // reconnectProvider must follow preload: its onConnect also sends preload_local_model,
-        // and the engine load is globally serialized by a single lock. Placing it first would
-        // make one click queue two unload/load rounds and could nearly double the wait time.
-        // Placing it after preload lets it hit the already-loaded cache and return immediately.
-        // For an undownloaded model, preload fails but reconnect is still required so the
-        // provider can re-evaluate readiness, which is why this remains in finally.
-        if (isCurrentModelIntent(generation, modelId)) reconnectProvider()
+        // Keep the reconnect fallback for selection persistence failures. Successful activation
+        // reconnects in activateSelectedModel after preload so the engine load is serialized.
+        if (!activated && isCurrentModelIntent(generation, modelId)) reconnectProvider()
       }
     }
   }

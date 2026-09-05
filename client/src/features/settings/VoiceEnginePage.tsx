@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { getSetting, setSetting } from '@/services/store'
 import { switchProvider, getWorkMode, type WorkMode } from '@/services/transcription'
-import { getState, refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
+import { refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
 import {
   getSpeechInputLanguage,
   setSpeechInputLanguage,
@@ -63,7 +63,6 @@ export default function VoiceEnginePage() {
             // the stored value, so the cache must never be newer than the persisted setting.
             void setSpeechInputLanguage(language).then(() => {
               setSpeechLanguageCache(language)
-              if (workMode === 'local' && language !== 'auto' && getState() === 'idle') reconnectProvider()
             })
           }}
         />
