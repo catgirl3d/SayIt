@@ -58,6 +58,14 @@ describe('mode status local readiness', () => {
     expect(getModeStatus().ready).toBe(true)
   })
 
+  it('uses the localized display name for a known local model', async () => {
+    configureLocal({ modelId: 'qwen3-asr-1.7b-gguf' })
+
+    await refreshModeStatus()
+
+    expect(getModeStatus().detail).toBe('localModel.qwen17Accurate.name')
+  })
+
   it('keeps a downloaded model ready when it is absent from the catalog', async () => {
     configureLocal({ modelId: 'missing', downloaded: true })
     state.invoke.mockImplementation(async (command: string) => {

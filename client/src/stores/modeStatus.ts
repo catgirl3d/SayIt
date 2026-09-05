@@ -17,6 +17,7 @@ import {
   resolveActiveAsrProfile,
 } from '../features/settings/asrProviderCatalog'
 import { subscribeLocale, t } from '@/i18n'
+import { localModelDisplayName } from '@/i18n/displayNames'
 
 export type ModeStatusMode = 'server' | 'cloud_api' | 'local'
 
@@ -83,12 +84,10 @@ export async function refreshModeStatus(): Promise<void> {
 
   if (mode === 'local') {
     const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
-    let selectedModel: { name: string } | undefined
     try {
       const models = await invoke<{ id: string; name: string }[]>('list_available_models')
-      selectedModel = models.find((m) => m.id === modelId)
-      if (!selectedModel) throw new Error(`Selected model is missing from the catalog: ${modelId}`)
-      detail = selectedModel.name
+      const selectedModel = models.find((m) => m.id === modelId)
+      detail = selectedModel ? localModelDisplayName(selectedModel) : modelId
     } catch {
       detail = modelId
     }
