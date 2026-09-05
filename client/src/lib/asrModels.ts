@@ -42,9 +42,7 @@ export function resolveAsrDisplayModel(providerKey: string): string {
  *  注意：qwen3-asr-flash（qwen）是非实时 HTTP 模型，不支持；千问这边只有
  *  qwen3-asr-flash-realtime 与 qwen-audio-3.0-asr-flash-streaming 支持。 */
 export function isStreamingDisplayCapable(provider: string): boolean {
-  return provider === 'doubao_v2'
-    || provider === 'qwen_realtime'
-    || provider === 'qwen_audio_stream'
+  return provider === 'doubao_v2' || provider === 'qwen_realtime' || provider === 'qwen_audio_stream'
 }
 
 /**
@@ -95,9 +93,7 @@ export function modelSupportsSpeechLanguage(
  * catalog order within each support group. Unknown metadata stays ahead of
  * models explicitly marked as unsupported.
  */
-export function sortModelsBySpeechLanguageSupport<
-  T extends { languages?: readonly string[] | null },
->(
+export function sortModelsBySpeechLanguageSupport<T extends { languages?: readonly string[] | null }>(
   models: readonly T[],
   language: Exclude<SpeechInputLanguage, 'auto'>,
 ): T[] {

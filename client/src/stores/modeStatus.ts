@@ -83,9 +83,12 @@ export async function refreshModeStatus(): Promise<void> {
 
   if (mode === 'local') {
     const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
+    let selectedModel: { name: string } | undefined
     try {
       const models = await invoke<{ id: string; name: string }[]>('list_available_models')
-      detail = models.find((m) => m.id === modelId)?.name ?? modelId
+      selectedModel = models.find((m) => m.id === modelId)
+      if (!selectedModel) throw new Error(`Selected model is missing from the catalog: ${modelId}`)
+      detail = selectedModel.name
     } catch {
       detail = modelId
     }

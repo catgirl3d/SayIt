@@ -1,10 +1,24 @@
 // 本地模式配置面板 — 模型管理
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { FolderOpen, Copy, Check, CheckCircle2, ChevronDown, HardDrive, Loader2, Info, Download, Trash2, Crown, Mic, Cpu } from 'lucide-react'
+import {
+  FolderOpen,
+  Copy,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  HardDrive,
+  Loader2,
+  Info,
+  Download,
+  Trash2,
+  Crown,
+  Mic,
+  Cpu,
+} from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -19,11 +33,7 @@ import { modelSupportsSpeechLanguage, resolveBadgeLanguage, sortModelsBySpeechLa
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
-import {
-  localModelDisplayDescription,
-  localModelDisplayLanguages,
-  localModelDisplayName,
-} from '@/i18n/displayNames'
+import { localModelDisplayDescription, localModelDisplayLanguages, localModelDisplayName } from '@/i18n/displayNames'
 
 /** 模型存储位置变更的窗口事件：次级设置卡片（LocalModeAdvancedSection）里改了
  *  目录后，通知模型列表卡片刷新已下载状态——两个卡片各自持有状态、不在同一组件树。 */
@@ -157,9 +167,11 @@ function CopyLink({ url, label }: { url: string; label: string }) {
             }}
             className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            {copied
-              ? <Check className="h-3.5 w-3.5 text-success-strong" aria-hidden />
-              : <Copy className="h-3.5 w-3.5" aria-hidden />}
+            {copied ? (
+              <Check className="h-3.5 w-3.5 text-success-strong" aria-hidden />
+            ) : (
+              <Copy className="h-3.5 w-3.5" aria-hidden />
+            )}
           </button>
         </Tooltip>
       </div>
@@ -185,7 +197,11 @@ function OfflineGuideDialog({ models, onClose }: { models: ModelInfo[]; onClose:
         </div>
 
         {/* 源切换 */}
-        <div role="radiogroup" aria-label={t('local.downloadSourceAria')} className="mt-4 flex gap-1 rounded-lg border border-border p-0.5">
+        <div
+          role="radiogroup"
+          aria-label={t('local.downloadSourceAria')}
+          className="mt-4 flex gap-1 rounded-lg border border-border p-0.5"
+        >
           {sourceNames.map((name, i) => (
             <button
               key={name}
@@ -193,10 +209,11 @@ function OfflineGuideDialog({ models, onClose }: { models: ModelInfo[]; onClose:
               role="radio"
               aria-checked={selectedSource === i}
               onClick={() => setSelectedSource(i)}
-              className={`flex-1 rounded-md px-2 py-1.5 text-xs transition-colors ${selectedSource === i
-                ? 'bg-accent font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-                }`}
+              className={`flex-1 rounded-md px-2 py-1.5 text-xs transition-colors ${
+                selectedSource === i
+                  ? 'bg-accent font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
             >
               {sourceLabel(name)}
             </button>
@@ -214,9 +231,9 @@ function OfflineGuideDialog({ models, onClose }: { models: ModelInfo[]; onClose:
             if (!source && !isArchive) return null
             // GitHub 地址用国内代理加速手动下载
             const archiveUrl = model.archive_url
-              ? (model.archive_url.startsWith('https://github.com/')
+              ? model.archive_url.startsWith('https://github.com/')
                 ? `https://gh-proxy.com/${model.archive_url}`
-                : model.archive_url)
+                : model.archive_url
               : ''
             return (
               <div key={model.id}>
@@ -236,14 +253,10 @@ function OfflineGuideDialog({ models, onClose }: { models: ModelInfo[]; onClose:
                 </div>
                 <div className="space-y-1.5">
                   {source ? (
-                    source.files.map((file) => (
-                      <CopyLink key={file.name} url={file.url} label={file.name} />
-                    ))
+                    source.files.map((file) => <CopyLink key={file.name} url={file.url} label={file.name} />)
                   ) : (
                     <>
-                      <p className="text-xs leading-relaxed text-muted-foreground">
-                        {t('local.archiveNote')}
-                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">{t('local.archiveNote')}</p>
                       <CopyLink url={archiveUrl} label={t('local.archiveLabel')} />
                     </>
                   )}
@@ -266,9 +279,15 @@ function ModelsDirSection({ onChanged }: { onChanged: () => void }) {
   const [pending, setPending] = useState<{ dir: string | null } | null>(null)
 
   const load = async () => {
-    try { setInfo(await invoke<ModelsDirInfo>('get_models_dir')) } catch { /* ignore */ }
+    try {
+      setInfo(await invoke<ModelsDirInfo>('get_models_dir'))
+    } catch {
+      /* ignore */
+    }
   }
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    void load()
+  }, [])
 
   async function pickDir() {
     setError('')
@@ -321,7 +340,9 @@ function ModelsDirSection({ onChanged }: { onChanged: () => void }) {
               {info?.current || t('common.loading')}
             </code>
             {info?.is_custom && (
-              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{t('local.storageCustom')}</span>
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                {t('local.storageCustom')}
+              </span>
             )}
             <Tooltip content={t('local.openDir')}>
               <button
@@ -356,15 +377,24 @@ function ModelsDirSection({ onChanged }: { onChanged: () => void }) {
         >
           <>
             <p className="mt-2 break-all text-sm text-muted-foreground">
-              {t('local.newLocation', { dir: pending.dir === null ? (info?.default_dir || t('local.defaultDir')) : pending.dir })}
+              {t('local.newLocation', {
+                dir: pending.dir === null ? info?.default_dir || t('local.defaultDir') : pending.dir,
+              })}
             </p>
-            <p className="mt-3 text-xs text-muted-foreground">
-              {t('local.migrateNote')}
-            </p>
+            <p className="mt-3 text-xs text-muted-foreground">{t('local.migrateNote')}</p>
             <div className="mt-5 flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => setPending(null)} disabled={busy}>{t('common.cancel')}</Button>
+              <Button size="sm" variant="outline" onClick={() => setPending(null)} disabled={busy}>
+                {t('common.cancel')}
+              </Button>
               <Button size="sm" onClick={() => void applyChange()} disabled={busy}>
-                {busy ? (<><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />{t('common.processing')}</>) : t('common.confirm')}
+                {busy ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                    {t('common.processing')}
+                  </>
+                ) : (
+                  t('common.confirm')
+                )}
               </Button>
             </div>
           </>
@@ -374,13 +404,17 @@ function ModelsDirSection({ onChanged }: { onChanged: () => void }) {
   )
 }
 
-export default function LocalModeSection({ speechLanguage }: { speechLanguage: SpeechInputLanguage }) {
+interface Props {
+  speechLanguage: SpeechInputLanguage
+}
+
+export default function LocalModeSection({ speechLanguage }: Props) {
   useT()
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [downloadedModels, setDownloadedModels] = useState<LocalModelInfo[]>([])
   const [selectedModelId, setSelectedModelId] = useState('')
-  const [downloadSource, setDownloadSource] = useState(
-    () => getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace',
+  const [downloadSource, setDownloadSource] = useState(() =>
+    getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace',
   )
   const [preloadingModelId, setPreloadingModelId] = useState('')
   const [downloading, setDownloading] = useState<Record<string, DownloadProgress>>({})
@@ -395,9 +429,19 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
   // 检测到的 GPU 摘要。选模型时最该知道的就是"这台机器什么水平"，
   // 而这条信息原来只出现在两张卡片之后的「计算后端」里。
   const [gpuSummary, setGpuSummary] = useState<string | null>(null)
+  const mountedRef = useRef(true)
+  const selectedModelIdRef = useRef(selectedModelId)
+  const modelIntentGenerationRef = useRef(0)
+  const lifecycleGenerationRef = useRef(0)
+
+  function isCurrentModelIntent(generation: number, modelId: string): boolean {
+    return mountedRef.current && modelIntentGenerationRef.current === generation && selectedModelIdRef.current === modelId
+  }
 
   useEffect(() => {
-    void loadData()
+    mountedRef.current = true
+    const lifecycleGeneration = ++lifecycleGenerationRef.current
+    void loadData(lifecycleGeneration)
     const unlisten = listen<DownloadProgress>('model-download-progress', (event) => {
       const p = event.payload
       setDownloading((prev) => ({ ...prev, [p.model_id]: p }))
@@ -406,15 +450,21 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
       }
     })
     // 模型存储位置（在次级设置卡片里）变更后，刷新已下载列表
-    const onDirChanged = () => { void refreshDownloaded() }
+    const onDirChanged = () => {
+      void refreshDownloaded()
+    }
     window.addEventListener(MODELS_DIR_CHANGED_EVENT, onDirChanged)
     return () => {
+      mountedRef.current = false
+      modelIntentGenerationRef.current += 1
       void unlisten.then((fn) => fn())
       window.removeEventListener(MODELS_DIR_CHANGED_EVENT, onDirChanged)
     }
   }, [])
 
-  async function loadData() {
+  async function loadData(lifecycleGeneration = lifecycleGenerationRef.current) {
+    const isActive = () => mountedRef.current && lifecycleGenerationRef.current === lifecycleGeneration
+    const hydrationIntentGeneration = modelIntentGenerationRef.current
     let available: ModelInfo[] = []
     try {
       const [a, downloaded] = await Promise.all([
@@ -422,11 +472,13 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
         invoke<LocalModelInfo[]>('list_downloaded_models'),
       ])
       available = a
+      if (!isActive()) return
       setAvailableModels(a)
       setDownloadedModels(downloaded)
       setListState('ready')
       setListError('')
     } catch (err) {
+      if (!isActive()) return
       setListState('error')
       setListError(String(err))
     }
@@ -435,46 +487,73 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
     try {
       const diag = await invoke<GgufDiagnostics>('gguf_asr_diagnostics')
       const gpus = diag.devices.filter((d) => d.kind !== 'cpu')
-      setGpuSummary(gpus.length > 0
-        ? formatList(gpus
-          .map((d) => `${d.name.replace(/\((R|TM)\)/gi, '')}${d.memory_mb > 0 ? t('local.vram', { gb: (d.memory_mb / 1024).toFixed(0) }) : ''}`))
-        : '')
+      if (!isActive()) return
+      setGpuSummary(
+        gpus.length > 0
+          ? formatList(
+              gpus.map(
+                (d) =>
+                  `${d.name.replace(/\((R|TM)\)/gi, '')}${d.memory_mb > 0 ? t('local.vram', { gb: (d.memory_mb / 1024).toFixed(0) }) : ''}`,
+              ),
+            )
+          : '',
+      )
     } catch {
+      if (!isActive()) return
       setGpuSummary(null)
     }
 
-    const selected = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
-    setSelectedModelId(selected)
+    const selected = (await getSetting('localAsr.modelId', 'sensevoice-small-gguf')) as string
+    if (isActive() && modelIntentGenerationRef.current === hydrationIntentGeneration && selectedModelIdRef.current === '') {
+      selectedModelIdRef.current = selected
+      setSelectedModelId(selected)
+    }
     const defaultSource = getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace'
-    setDownloadSource(await getSetting('localAsr.downloadSource', defaultSource) as string)
+    const persistedSource = (await getSetting('localAsr.downloadSource', defaultSource)) as string
+    if (isActive()) setDownloadSource(persistedSource)
 
     // 当前选中的模型在折叠区时自动展开，避免"当前模型在列表里找不到"
     const selectedInfo = available.find((m) => m.id === selected)
-    if (selectedInfo && !selectedInfo.featured) setShowMore(true)
+    if (isActive() && selectedInfo && !selectedInfo.featured) setShowMore(true)
   }
 
   async function refreshDownloaded() {
     try {
       const downloaded = await invoke<LocalModelInfo[]>('list_downloaded_models')
+      if (!mountedRef.current) return
       setDownloadedModels(downloaded)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   async function handleDownload(modelId: string) {
+    const generation = ++modelIntentGenerationRef.current
+    // A new model intent invalidates any pending preload indicator. The old
+    // operation may still finish, but its generation no longer owns cleanup.
+    setPreloadingModelId('')
     try {
       await invoke('download_model', { modelId, source: downloadSource })
+      if (!mountedRef.current || modelIntentGenerationRef.current !== generation) return
       // 下载完成后自动选中并预加载
+      selectedModelIdRef.current = modelId
       setSelectedModelId(modelId)
+      if (!isCurrentModelIntent(generation, modelId)) return
       await setSetting('localAsr.modelId', modelId)
+      if (!isCurrentModelIntent(generation, modelId)) return
       void refreshModeStatus() // 同步左下角的引擎指示
       try {
-        const accelerator = await getSetting('localAsr.accelerator', 'auto') as string
+        const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
+        if (!isCurrentModelIntent(generation, modelId)) return
         await invoke<string>('preload_local_model', { modelId, accelerator })
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       // provider 缓存着上次的就绪结果，不重连的话刚下载完第一次按快捷键仍会被判未就绪。
       // 同 handleSelectModel：排在预加载之后，避免它的 onConnect 再排一轮加载。
-      reconnectProvider()
+      if (isCurrentModelIntent(generation, modelId)) reconnectProvider()
     } catch (err) {
+      if (!mountedRef.current) return
       setDownloading((prev) => ({
         ...prev,
         [modelId]: {
@@ -494,10 +573,18 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   async function handleDelete(modelId: string) {
+    const invalidatesSelection = selectedModelIdRef.current === modelId
+    if (invalidatesSelection) {
+      modelIntentGenerationRef.current += 1
+      setPreloadingModelId('')
+    }
+    const deleteGeneration = modelIntentGenerationRef.current
     setConfirmDeleteId(null)
     try {
       await invoke('delete_model', { modelId })
+      if (!mountedRef.current) return
       await refreshDownloaded()
+      if (!mountedRef.current) return
       setDownloading((prev) => {
         const next = { ...prev }
         delete next[modelId]
@@ -506,8 +593,12 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
       // 删掉的可能正是当前选中的模型 → 就绪状态变了，通知徽标与侧栏指示
       void refreshModeStatus()
       // 同时让 provider 重新判定：否则它仍缓存着"已就绪"，模型都删了还能照常开录
-      reconnectProvider()
-    } catch { /* ignore */ }
+      if (mountedRef.current && (!invalidatesSelection || modelIntentGenerationRef.current === deleteGeneration)) {
+        reconnectProvider()
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   /** 切到另一个下载源并立刻重试。下载失败时最常见的下一步就是这个。 */
@@ -526,22 +617,31 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
 
   async function handleSelectModel(modelId: string) {
     if (preloadingModelId) return // 防止切换/加载中重复触发
+    const generation = ++modelIntentGenerationRef.current
+    selectedModelIdRef.current = modelId
     setSelectedModelId(modelId)
     setPreloadingModelId(modelId)
-    await setSetting('localAsr.modelId', modelId)
-    void refreshModeStatus() // 同步左下角的引擎指示
     try {
-      const accelerator = await getSetting('localAsr.accelerator', 'auto') as string
+      if (!isCurrentModelIntent(generation, modelId)) return
+      await setSetting('localAsr.modelId', modelId)
+      if (!isCurrentModelIntent(generation, modelId)) return
+      void refreshModeStatus() // 同步左下角的引擎指示
+      const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
+      if (!isCurrentModelIntent(generation, modelId)) return
       await invoke<string>('preload_local_model', { modelId, accelerator })
-    } catch { /* 未下载 / 加载失败都由就绪判定与识别阶段报出，这里不打断选择 */ } finally {
-      setPreloadingModelId('')
-      // reconnectProvider 必须排在预加载**之后**：它的 onConnect 自己也会发一次
-      // preload_local_model，而引擎的加载是全局单锁串行的。放在前面（原来的写法）
-      // 等于一次点击排两轮"卸旧 + 载新"，等待时间可能翻倍。
-      // 放在后面，它只会命中已经加载好的缓存，立刻返回。
-      // 未下载的模型走的是同一条路：预加载报错后仍然要 reconnect 让 provider
-      // 重新判定为未就绪，所以这行放在 finally 里而不是 try 的末尾。
-      reconnectProvider()
+    } catch {
+      /* 未下载 / 加载失败都由就绪判定与识别阶段报出，这里不打断选择 */
+    } finally {
+      if (mountedRef.current && modelIntentGenerationRef.current === generation) {
+        setPreloadingModelId('')
+        // reconnectProvider must follow preload: its onConnect also sends preload_local_model,
+        // and the engine load is globally serialized by a single lock. Placing it first would
+        // make one click queue two unload/load rounds and could nearly double the wait time.
+        // Placing it after preload lets it hit the already-loaded cache and return immediately.
+        // For an undownloaded model, preload fails but reconnect is still required so the
+        // provider can re-evaluate readiness, which is why this remains in finally.
+        if (isCurrentModelIntent(generation, modelId)) reconnectProvider()
+      }
     }
   }
 
@@ -575,9 +675,7 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
   const sourceOptions = availableModels[0]?.sources.map((s) => s.source) ?? []
   // 存储里的旧值（如已下线的 ModelScope）对不上任何源时，实际下载会回落到
   // 第一个源，这里让 UI 显示和实际行为一致
-  const effectiveSource = sourceOptions.includes(downloadSource)
-    ? downloadSource
-    : sourceOptions[0] ?? downloadSource
+  const effectiveSource = sourceOptions.includes(downloadSource) ? downloadSource : (sourceOptions[0] ?? downloadSource)
 
   return (
     <>
@@ -607,8 +705,8 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-1.5">
                   <span className="text-xs font-medium text-muted-foreground">{t('local.currentModelLabel')}</span>
-                  {selectedModelId && (
-                    downloadedIds.has(selectedModelId) ? (
+                  {selectedModelId &&
+                    (downloadedIds.has(selectedModelId) ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success-strong">
                         <Check className="h-2.5 w-2.5" />
                         {t('local.modelReady')}
@@ -617,8 +715,7 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                       <span className="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-strong">
                         {t('local.modelNotDownloaded')}
                       </span>
-                    )
-                  )}
+                    ))}
                 </div>
                 <p className="truncate text-sm font-semibold text-foreground">
                   {selectedModel ? localModelDisplayName(selectedModel) : selectedModelId || '—'}
@@ -629,54 +726,50 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
             {/* Card 2: Hardware Acceleration / GPU */}
             {gpuSummary !== null && (
               <div className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/30 p-3">
-                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${gpuSummary ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${gpuSummary ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}
+                >
                   <Cpu className="h-4 w-4" aria-hidden />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-1.5">
                     <span className="text-xs font-medium text-muted-foreground">{t('local.hardwareAccel')}</span>
-                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${gpuSummary ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                    <span
+                      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${gpuSummary ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}
+                    >
                       {gpuSummary ? 'GPU' : 'CPU'}
                     </span>
                   </div>
                   <Tooltip content={gpuSummary ? t('local.gpuHint') : t('local.cpuHint')}>
-                    <p className="truncate text-sm font-semibold text-foreground">
-                      {gpuSummary || t('local.cpuMode')}
-                    </p>
+                    <p className="truncate text-sm font-semibold text-foreground">{gpuSummary || t('local.cpuMode')}</p>
                   </Tooltip>
                 </div>
               </div>
             )}
           </div>
 
-          {selectedModel && modelSupportsSpeechLanguage(selectedModel.languages, speechLanguage) === false && (
-            <p className="mb-3 text-xs text-warning-strong">
-              {t('local.languageFallback', { lang: t(`local.lang.${speechLanguage}` as 'local.lang.ru') })}
-            </p>
-          )}
           {selectedModelId && !downloadedIds.has(selectedModelId) && listState === 'ready' && (
-            <Feedback
-              className="mb-3"
-              tone="warning"
-              message={t('local.notDownloadedWarning')}
-            />
+            <Feedback className="mb-3" tone="warning" message={t('local.notDownloadedWarning')} />
           )}
 
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <span id="download-source-label" className="text-sm text-muted-foreground">{t('local.downloadSource')}</span>
+            <span id="download-source-label" className="text-sm text-muted-foreground">
+              {t('local.downloadSource')}
+            </span>
             <Segmented
               labelledBy="download-source-label"
               size="sm"
               value={effectiveSource}
               options={sourceOptions.map((src) => ({ value: src, label: sourceLabel(src) }))}
-              onChange={(src) => { setDownloadSource(src); void setSetting('localAsr.downloadSource', src) }}
+              onChange={(src) => {
+                setDownloadSource(src)
+                void setSetting('localAsr.downloadSource', src)
+              }}
               className="shrink-0 justify-end"
             />
           </div>
 
-          {listState === 'loading' && (
-            <p className="py-4 text-sm text-muted-foreground">{t('local.loadingCatalog')}</p>
-          )}
+          {listState === 'loading' && <p className="py-4 text-sm text-muted-foreground">{t('local.loadingCatalog')}</p>}
           {listState === 'error' && (
             <Feedback
               tone="error"
@@ -686,10 +779,7 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
             />
           )}
           {listState === 'ready' && availableModels.length === 0 && (
-            <Feedback
-              tone="warning"
-              message={t('local.catalogEmpty')}
-            />
+            <Feedback tone="warning" message={t('local.catalogEmpty')} />
           )}
 
           <div className="space-y-2">
@@ -704,36 +794,56 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               // Compatibility badge: selected speech language, or the interface
               // language when 'auto'. Informational only; it does not affect recognition.
               const langSupport = modelSupportsSpeechLanguage(model.languages, badgeLanguage)
-              const speechLangName = langSupport !== null
-                ? t(`local.lang.${badgeLanguage}` as 'local.lang.ru')
-                : ''
+              const speechLangName = langSupport !== null ? t(`local.lang.${badgeLanguage}` as 'local.lang.ru') : ''
 
               return (
                 <div
                   key={model.id}
-                  className={`flex items-center justify-between rounded-lg border p-3 ${isSelected ? 'border-primary bg-primary/5' : 'border-border'
-                    }`}
+                  className={`flex items-center justify-between rounded-lg border p-3 ${
+                    isSelected ? 'border-primary bg-primary/5' : 'border-border'
+                  }`}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       {langSupport !== null && (
-                        <Tooltip content={langSupport ? t('local.langSupported', { lang: speechLangName }) : t('local.languageFallback', { lang: speechLangName })}>
-                          <span className="flex h-4 w-4 shrink-0 cursor-help items-center justify-center" aria-label={langSupport ? t('local.langSupported', { lang: speechLangName }) : t('local.langUnsupported', { lang: speechLangName })}>
-                            <span className={`h-2 w-2 rounded-full ${langSupport ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                        <Tooltip
+                          content={
+                            langSupport
+                              ? t('local.langSupported', { lang: speechLangName })
+                              : t('local.languageFallback', { lang: speechLangName })
+                          }
+                        >
+                          <span
+                            className="flex h-4 w-4 shrink-0 cursor-help items-center justify-center"
+                            aria-label={
+                              langSupport
+                                ? t('local.langSupported', { lang: speechLangName })
+                                : t('local.langUnsupported', { lang: speechLangName })
+                            }
+                          >
+                            <span
+                              className={`h-2 w-2 rounded-full ${langSupport ? 'bg-success' : 'bg-muted-foreground/40'}`}
+                            />
                           </span>
                         </Tooltip>
                       )}
                       <span className="text-sm font-medium">{modelName}</span>
                       {isDownloaded && (
                         <Tooltip content={t('local.downloaded')}>
-                          <span className="inline-flex items-center text-success-strong" aria-label={t('local.downloaded')}>
+                          <span
+                            className="inline-flex items-center text-success-strong"
+                            aria-label={t('local.downloaded')}
+                          >
                             <CheckCircle2 className="h-3.5 w-3.5" />
                           </span>
                         </Tooltip>
                       )}
                       {isModelRecommendedForCurrentLanguage(model.id) && (
                         <Tooltip content={t('local.recommended')}>
-                          <span className="inline-flex cursor-help items-center text-amber-500" aria-label={t('local.recommended')}>
+                          <span
+                            className="inline-flex cursor-help items-center text-amber-500"
+                            aria-label={t('local.recommended')}
+                          >
                             <Crown className="h-3.5 w-3.5" aria-hidden />
                           </span>
                         </Tooltip>
@@ -751,13 +861,22 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                         </span>
                       )}
                       {model.memory_mb ? (
-                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap"><span aria-hidden>·</span><span>{t('local.memoryUsage', { size: formatMemory(model.memory_mb) })}</span></span>
+                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
+                          <span aria-hidden>·</span>
+                          <span>{t('local.memoryUsage', { size: formatMemory(model.memory_mb) })}</span>
+                        </span>
                       ) : null}
                       {model.quant ? (
-                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap"><span aria-hidden>·</span><span>{model.quant}</span></span>
+                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
+                          <span aria-hidden>·</span>
+                          <span>{model.quant}</span>
+                        </span>
                       ) : null}
                       {modelLanguages ? (
-                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap"><span aria-hidden>·</span><span>{modelLanguages}</span></span>
+                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
+                          <span aria-hidden>·</span>
+                          <span>{modelLanguages}</span>
+                        </span>
                       ) : null}
                     </div>
                     {isDownloading && progress && (
@@ -783,9 +902,9 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                           {progress.file_name} — {progress.percent.toFixed(1)}%
                           {progress.total_bytes > 0
                             ? t('local.downloadProgressBytes', {
-                              downloaded: formatSize(progress.downloaded_bytes),
-                              total: formatSize(progress.total_bytes),
-                            })
+                                downloaded: formatSize(progress.downloaded_bytes),
+                                total: formatSize(progress.total_bytes),
+                              })
                             : t('local.downloadedBytes', { downloaded: formatSize(progress.downloaded_bytes) })}
                         </p>
                       </div>
@@ -793,34 +912,40 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
                     {/* 下载失败原来只有一行原始异常。而"换个源重试"和"手动下载指引"这两条
                         降级路径就在同一张卡上，失败信息却不指向任何一个——用户会以为
                         本地模式不能用。现在直接把两个动作放进错误块里。 */}
-                    {progress?.status === 'failed' && (() => {
-                      const friendly = describeDownloadError(progress.error ?? '')
-                      const hasOtherSource = sourceOptions.some((s) => s !== effectiveSource)
-                      return (
-                        <Feedback
-                          className="mt-2"
-                          tone="error"
-                          message={friendly.message}
-                          detail={friendly.detail}
-                          actions={[
-                            ...(friendly.action === 'switch_source' && hasOtherSource
-                              ? [{
-                                label: t('local.switchSourceRetry', { source: sourceLabel(sourceOptions.find((s) => s !== effectiveSource) ?? '') }),
-                                onClick: () => void retryWithOtherSource(model.id),
-                              }]
-                              : [{ label: t('common.retry'), onClick: () => void handleDownload(model.id) }]),
-                            { label: t('local.manualGuide'), onClick: () => setOfflineGuideOpen(true) },
-                          ]}
-                        />
-                      )
-                    })()}
+                    {progress?.status === 'failed' &&
+                      (() => {
+                        const friendly = describeDownloadError(progress.error ?? '')
+                        const hasOtherSource = sourceOptions.some((s) => s !== effectiveSource)
+                        return (
+                          <Feedback
+                            className="mt-2"
+                            tone="error"
+                            message={friendly.message}
+                            detail={friendly.detail}
+                            actions={[
+                              ...(friendly.action === 'switch_source' && hasOtherSource
+                                ? [
+                                    {
+                                      label: t('local.switchSourceRetry', {
+                                        source: sourceLabel(sourceOptions.find((s) => s !== effectiveSource) ?? ''),
+                                      }),
+                                      onClick: () => void retryWithOtherSource(model.id),
+                                    },
+                                  ]
+                                : [{ label: t('common.retry'), onClick: () => void handleDownload(model.id) }]),
+                              { label: t('local.manualGuide'), onClick: () => setOfflineGuideOpen(true) },
+                            ]}
+                          />
+                        )
+                      })()}
                   </div>
                   <div className="ml-3 flex gap-2">
                     {isDownloaded ? (
                       <>
                         {!isSelected && (
                           <Button
-                            size="sm" variant="outline"
+                            size="sm"
+                            variant="outline"
                             disabled={preloadingModelId !== ''}
                             onClick={() => void handleSelectModel(model.id)}
                           >
@@ -879,8 +1004,9 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
               <p className="text-sm leading-relaxed text-foreground">
                 {/* 显式 {' '}：两个表达式之间的换行会被 JSX 整个吃掉，
                     英文下就会粘成 "…Loading" 这种没有空格的样子 */}
-                {t('local.preloading', { name: availableModels.find((m) => m.id === preloadingModelId)?.name || preloadingModelId })}
-                {' '}
+                {t('local.preloading', {
+                  name: availableModels.find((m) => m.id === preloadingModelId)?.name || preloadingModelId,
+                })}{' '}
                 {t('local.preloadingNote')}
               </p>
             </div>
@@ -911,20 +1037,24 @@ export default function LocalModeSection({ speechLanguage }: { speechLanguage: S
         </CardContent>
       </Card>
 
-      {offlineGuideOpen && (
-        <OfflineGuideDialog models={availableModels} onClose={() => setOfflineGuideOpen(false)} />
-      )}
+      {offlineGuideOpen && <OfflineGuideDialog models={availableModels} onClose={() => setOfflineGuideOpen(false)} />}
 
       {/* 删除确认对话框 */}
       {confirmDeleteId && (
         <Modal title={t('local.deleteModelTitle')} onClose={() => setConfirmDeleteId(null)} panelClassName="w-80">
           <>
             <p className="mt-2 text-sm text-muted-foreground">
-              {t('local.deleteModelBody', { name: availableModels.find((m) => m.id === confirmDeleteId)?.name || confirmDeleteId })}
+              {t('local.deleteModelBody', {
+                name: availableModels.find((m) => m.id === confirmDeleteId)?.name || confirmDeleteId,
+              })}
             </p>
             <div className="mt-5 flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => setConfirmDeleteId(null)}>{t('common.cancel')}</Button>
-              <Button size="sm" variant="destructive" onClick={() => void handleDelete(confirmDeleteId)}>{t('common.delete')}</Button>
+              <Button size="sm" variant="outline" onClick={() => setConfirmDeleteId(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => void handleDelete(confirmDeleteId)}>
+                {t('common.delete')}
+              </Button>
             </div>
           </>
         </Modal>
@@ -964,7 +1094,7 @@ export function LocalModeAdvancedSection() {
 
   useEffect(() => {
     void (async () => {
-      setAccelerator(await getSetting('localAsr.accelerator', 'auto') as string)
+      setAccelerator((await getSetting('localAsr.accelerator', 'auto')) as string)
       setUnloadIdleMinutes(Number(await getSetting('localAsr.unloadIdleMinutes', 0)) || 0)
       await refreshDiagnostics()
     })()
@@ -972,8 +1102,12 @@ export function LocalModeAdvancedSection() {
 
   const gpuDevices = devices.filter((d) => d.kind !== 'cpu')
   const hasGpu = gpuDevices.length > 0
-  const gpuSummary = formatList(gpuDevices
-    .map((d) => `${d.name.replace(/\((R|TM)\)/gi, '')}${d.memory_mb > 0 ? t('local.vram', { gb: (d.memory_mb / 1024).toFixed(0) }) : ''}`))
+  const gpuSummary = formatList(
+    gpuDevices.map(
+      (d) =>
+        `${d.name.replace(/\((R|TM)\)/gi, '')}${d.memory_mb > 0 ? t('local.vram', { gb: (d.memory_mb / 1024).toFixed(0) }) : ''}`,
+    ),
+  )
 
   /** 切换计算后端。引擎按 (模型, 后端) 缓存，换后端要重载模型——
    *  就地重新预加载当前模型，让切换立刻生效而不是等下次口述。
@@ -984,9 +1118,11 @@ export function LocalModeAdvancedSection() {
     await setSetting('localAsr.accelerator', value)
     setRebinding(true)
     try {
-      const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
+      const modelId = (await getSetting('localAsr.modelId', 'sensevoice-small-gguf')) as string
       await invoke<string>('preload_local_model', { modelId, accelerator: value })
-    } catch { /* ignore */ } finally {
+    } catch {
+      /* ignore */
+    } finally {
       await refreshDiagnostics()
       setRebinding(false)
     }
@@ -997,7 +1133,9 @@ export function LocalModeAdvancedSection() {
     try {
       await setSetting('localAsr.unloadIdleMinutes', value)
       await invoke('set_local_model_idle_unload', { idleMinutes: value })
-    } catch { /* 重启后仍会从持久化设置读取；即时更新失败不影响识别 */ }
+    } catch {
+      /* 重启后仍会从持久化设置读取；即时更新失败不影响识别 */
+    }
   }
 
   return (
@@ -1006,13 +1144,27 @@ export function LocalModeAdvancedSection() {
         <CardContent className="p-6">
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
-              <h2 id="accelerator-heading" className="text-lg font-semibold">{t('local.backendTitle')}</h2>
-              <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs ${diagnosticsState === 'ready' && hasGpu
-                ? 'border-success/30 bg-success/10 text-success-strong'
-                : 'border-border bg-muted/40 text-muted-foreground'
-                }`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${diagnosticsState === 'ready' && hasGpu ? 'bg-success' : 'bg-muted-foreground'}`} aria-hidden />
-                {diagnosticsState === 'loading' ? t('local.backendChecking') : diagnosticsState === 'error' ? t('local.backendCheckFailed') : hasGpu ? t('local.backendGpuReady') : t('local.backendCpuOnly')}
+              <h2 id="accelerator-heading" className="text-lg font-semibold">
+                {t('local.backendTitle')}
+              </h2>
+              <span
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs ${
+                  diagnosticsState === 'ready' && hasGpu
+                    ? 'border-success/30 bg-success/10 text-success-strong'
+                    : 'border-border bg-muted/40 text-muted-foreground'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${diagnosticsState === 'ready' && hasGpu ? 'bg-success' : 'bg-muted-foreground'}`}
+                  aria-hidden
+                />
+                {diagnosticsState === 'loading'
+                  ? t('local.backendChecking')
+                  : diagnosticsState === 'error'
+                    ? t('local.backendCheckFailed')
+                    : hasGpu
+                      ? t('local.backendGpuReady')
+                      : t('local.backendCpuOnly')}
               </span>
             </div>
             <Segmented
@@ -1033,7 +1185,11 @@ export function LocalModeAdvancedSection() {
               {gpuSummary}
               {/* 加载中就说加载中：后端是在模型加载时才绑定的，这期间 currentBackend
                   一定是空，原来这里会什么都不显示，看着像检测失败。 */}
-              {loadingModel ? t('local.backendLoadingModel') : currentBackend ? t('local.backendCurrent', { backend: currentBackend.toUpperCase() }) : ''}
+              {loadingModel
+                ? t('local.backendLoadingModel')
+                : currentBackend
+                  ? t('local.backendCurrent', { backend: currentBackend.toUpperCase() })
+                  : ''}
             </p>
           )}
           <p className="mt-1.5 text-xs text-muted-foreground">
@@ -1052,14 +1208,19 @@ export function LocalModeAdvancedSection() {
         <CardContent className="p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h2 id="unload-idle-heading" className="text-lg font-semibold">{t('local.unloadTitle')}</h2>
+              <h2 id="unload-idle-heading" className="text-lg font-semibold">
+                {t('local.unloadTitle')}
+              </h2>
               <p className="mt-1 text-xs text-muted-foreground">{t('local.unloadDesc')}</p>
               <p className="mt-2 text-xs text-muted-foreground">
                 {unloadIdleMinutes === 0
                   ? t('local.unloadNever')
                   : t('local.unloadAfter', {
-                    duration: unloadIdleMinutes === 60 ? t('local.unload.1h') : t('local.minutes', { count: unloadIdleMinutes }),
-                  })}
+                      duration:
+                        unloadIdleMinutes === 60
+                          ? t('local.unload.1h')
+                          : t('local.minutes', { count: unloadIdleMinutes }),
+                    })}
               </p>
             </div>
             <Segmented
