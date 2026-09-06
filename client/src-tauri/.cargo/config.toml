@@ -6,7 +6,7 @@
 # CL is the environment variable recognized by MSVC for prepending compiler options. Using it
 # to add /utf-8 to all C/C++ builds is safer than modifying CMAKE_CXX_FLAGS (which would wipe out
 # crate-defined flags like /EHsc -W0).
-CL = "/utf-8"
+CL = "-utf-8"
 
 # The vulkan feature of transcribe-cpp relies on the Vulkan SDK to compile SPIR-V shaders,
 # which CMake looks for via VULKAN_SDK. The SDK installer writes it to Machine environment
