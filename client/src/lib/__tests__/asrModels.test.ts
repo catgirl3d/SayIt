@@ -131,7 +131,7 @@ describe('resolveBadgeLanguage', () => {
   })
 
   it('falls back to the interface language when speech is auto', () => {
-    expect(resolveBadgeLanguage('auto', 'zh-CN')).toBe('zh')
+    expect(resolveBadgeLanguage('auto', 'zh-CN')).toBe('en')
     expect(resolveBadgeLanguage('auto', 'uk')).toBe('uk')
     expect(resolveBadgeLanguage('auto', 'en')).toBe('en')
   })

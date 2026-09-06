@@ -66,19 +66,8 @@ export default function Home() {
     return { value: `${totalMinutes}`, extraValue: null, unit: t('home.unitMinutes'), extraUnit: null }
   }
 
-  /**
-   * 大数字缩写。
-   *
-   * 中文分档保持原样（万 / 千）—— 这是中文读者的习惯，不要动。
-   * 英文没有"万"这一档，按 k / M 分；用 Intl 的 compact 记数法也能出结果，
-   * 但它在 zh-CN 下不会给"千"这一档，会改掉现有中文显示，所以这里手写分支。
-   */
+  /** Format large values using the active UI locale. */
   const formatCompactNumber = (num: number) => {
-    if (getLocale() === 'zh-CN') {
-      if (num >= 10000) return t('home.compactTenThousand', { value: (num / 10000).toFixed(1) })
-      if (num >= 1000) return t('home.compactThousand', { value: (num / 1000).toFixed(1) })
-      return `${num}`
-    }
     return new Intl.NumberFormat(getLocale(), {
       notation: 'compact',
       maximumFractionDigits: 1,

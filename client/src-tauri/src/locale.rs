@@ -1,48 +1,41 @@
-//! 界面语言：系统显示语言读取 + `ui.language` 偏好解析。
+//! System display-language detection and `ui.language` preference support.
 //!
-//! 为什么这件事必须有 Rust 侧的一份：**托盘菜单在 Rust 建**（main.rs 的
-//! TrayIconBuilder），要它开机就是正确语言，就不能等前端起来再告诉它。
+//! The Rust-side resolver is necessary because the tray menu is created by Rust
+//! during startup. It must use the correct language before the frontend is ready.
 //!
-//! 为什么不加 `sys-locale` 依赖：`Win32_Globalization` 已经在 Cargo.toml 的
-//! windows feature 列表里，需要的 API 直接可用。这是 Windows 独占应用，
-//! 没必要为一次读取多背一个 crate。
+//! `Win32_Globalization` is already enabled in the Cargo Windows feature list, so
+//! the required API is available without adding a `sys-locale` dependency.
 //!
-//! ⚠️ **不要和 `commands/system.rs` 的 `get_system_locale()` 合并**，那个用的是
-//! `GetUserDefaultLocaleName`（**区域格式**，如日期货币怎么写），报给诊断用；
-//! 这里用 `GetUserDefaultUILanguage`（**显示语言**，Windows 界面本身什么语言）。
-//! 两者可以不一致 —— 英文版 Windows 把区域设成中国是很常见的组合。
-//! 界面语言只能跟显示语言，跟区域格式会把英文用户判成中文。
+//! Keep this separate from `commands/system.rs::get_system_locale()`: that command
+//! uses `GetUserDefaultLocaleName` for regional formatting diagnostics, while this
+//! module uses `GetUserDefaultUILanguage` for the Windows display language. The two
+//! values can legitimately differ.
 
-/// 受支持的界面语言。取值与前端 `Locale` 一一对应。
+    /// Supported interface languages. Values match the frontend `Locale` type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
-    ZhCn,
     Uk,
     En,
 }
 
 impl Lang {
-    /// 前端 `Locale` 用的标签，也是这个模块对外的唯一字符串形态。
+    /// Frontend `Locale` tag and the only string representation exposed by this module.
     pub fn tag(self) -> &'static str {
         match self {
-            Lang::ZhCn => "zh-CN",
             Lang::Uk => "uk",
             Lang::En => "en",
         }
     }
 }
 
-/// Windows 主语言 ID（`PRIMARYLANGID`）→ 界面语言。
+/// Maps a Windows primary language ID (`PRIMARYLANGID`) to an interface language.
 ///
-/// Chinese variants (simplified, traditional, Hong Kong, Macao, or Taiwan)
-/// map to simplified Chinese because that is the existing interface language.
-/// Ukrainian maps to Ukrainian; all other languages fall back to English.
+/// Ukrainian maps to Ukrainian; all other languages, including Chinese variants,
+/// fall back to English because Chinese is not a supported interface language.
 fn lang_from_primary_id(primary_id: u16) -> Lang {
-    const LANG_CHINESE: u16 = 0x04;
     const LANG_UKRAINIAN: u16 = 0x22;
 
     match primary_id {
-        LANG_CHINESE => Lang::ZhCn,
         LANG_UKRAINIAN => Lang::Uk,
         _ => Lang::En,
     }
@@ -52,7 +45,7 @@ fn lang_from_primary_id(primary_id: u16) -> Lang {
 fn lang_from_locale_value(value: &str) -> Lang {
     let value = value.to_ascii_lowercase();
     if value.starts_with("zh") {
-        Lang::ZhCn
+        Lang::En
     } else if value.starts_with("uk") {
         Lang::Uk
     } else {
@@ -60,7 +53,7 @@ fn lang_from_locale_value(value: &str) -> Lang {
     }
 }
 
-/// 系统显示语言。取不到时按英文处理（英文是更安全的默认：看不懂中文的人更多）。
+/// Returns the system display language, falling back to English when unavailable.
 #[cfg(windows)]
 pub fn system_ui_lang() -> Lang {
     use windows::Win32::Globalization::GetUserDefaultUILanguage;
@@ -74,7 +67,7 @@ pub fn system_ui_lang() -> Lang {
 
 #[cfg(not(windows))]
 pub fn system_ui_lang() -> Lang {
-    // 非 Windows 目前只有 cargo test 会走到（应用本身是 Windows 独占）。
+    // Non-Windows builds currently use this only for cargo test; the app targets Windows.
     ["LC_ALL", "LC_MESSAGES", "LANG"]
         .into_iter()
         .find_map(|name| std::env::var(name).ok())
@@ -86,8 +79,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chinese_primary_id_maps_to_simplified() {
-        assert_eq!(lang_from_primary_id(0x04), Lang::ZhCn);
+    fn chinese_primary_id_falls_back_to_english() {
+        assert_eq!(lang_from_primary_id(0x04), Lang::En);
     }
 
     #[test]
@@ -97,7 +90,7 @@ mod tests {
 
     #[test]
     fn other_primary_ids_map_to_english() {
-        // 0x09 = 英语，0x11 = 日语，0x12 = 韩语，0x07 = 德语
+        // 0x09 = English, 0x11 = Japanese, 0x12 = Korean, 0x07 = German.
         for id in [0x09, 0x11, 0x12, 0x07, 0x00] {
             assert_eq!(lang_from_primary_id(id), Lang::En, "primary_id={id:#x}");
         }
@@ -107,13 +100,12 @@ mod tests {
     #[test]
     fn locale_values_map_supported_languages() {
         assert_eq!(lang_from_locale_value("uk_UA.UTF-8"), Lang::Uk);
-        assert_eq!(lang_from_locale_value("zh_CN.UTF-8"), Lang::ZhCn);
+        assert_eq!(lang_from_locale_value("zh_CN.UTF-8"), Lang::En);
         assert_eq!(lang_from_locale_value("en_US.UTF-8"), Lang::En);
     }
 
     #[test]
     fn tags_match_frontend_locale_values() {
-        assert_eq!(Lang::ZhCn.tag(), "zh-CN");
         assert_eq!(Lang::Uk.tag(), "uk");
         assert_eq!(Lang::En.tag(), "en");
     }

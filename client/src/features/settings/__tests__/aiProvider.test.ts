@@ -52,20 +52,13 @@ describe('AI_PROVIDERS 清单', () => {
 })
 
 describe('地区相关的供应商默认值', () => {
-  afterEach(() => setLocale('zh-CN'))
+  afterEach(() => setLocale('en'))
 
   it('英文界面优先 OpenAI-compatible', () => {
     setLocale('en')
     expect(preferredAiProviderValue()).toBe('openai_compat')
     expect(aiProvidersForDisplay()[0].value).toBe('openai_compat')
     expect(blankProfile().provider).toBe('openai_compat')
-  })
-
-  it('中文界面保持 DeepSeek 优先', () => {
-    setLocale('zh-CN')
-    expect(preferredAiProviderValue()).toBe('deepseek')
-    expect(aiProvidersForDisplay()[0].value).toBe('deepseek')
-    expect(blankProfile().provider).toBe('deepseek')
   })
 
   it('乌克兰语界面不使用中国地区默认供应商', () => {
@@ -82,8 +75,8 @@ describe('checkAiKeyFormat', () => {
   })
 
   it('粘贴带进空白字符时报警', () => {
-    expect(checkAiKeyFormat('deepseek', 'sk-abc def')).toContain('空格')
-    expect(checkAiKeyFormat('doubao', 'abc\ndef')).toContain('空格')
+    expect(checkAiKeyFormat('deepseek', 'sk-abc def')).toContain('space')
+    expect(checkAiKeyFormat('doubao', 'abc\ndef')).toContain('space')
   })
 
   it('DeepSeek / 千问 缺 sk- 前缀时报警', () => {
@@ -119,7 +112,7 @@ describe('checkApiUrl', () => {
   })
 
   it('非法网址报警', () => {
-    expect(checkApiUrl('https://')).toContain('合法')
+    expect(checkApiUrl('https://')).toContain("valid URL")
   })
 })
 
@@ -232,15 +225,15 @@ describe('parseProfiles', () => {
 
 describe('gradeLatency', () => {
   it('五档，按口述场景的手感切：200 / 500 / 1000 / 2000', () => {
-    expect(gradeLatency(0).label).toBe('极速')
-    expect(gradeLatency(199).label).toBe('极速')
-    expect(gradeLatency(200).label).toBe('很快')
-    expect(gradeLatency(499).label).toBe('很快')
-    expect(gradeLatency(500).label).toBe('正常')
-    expect(gradeLatency(999).label).toBe('正常')
-    expect(gradeLatency(1000).label).toBe('偏慢')
-    expect(gradeLatency(1999).label).toBe('偏慢')
-    expect(gradeLatency(2000).label).toBe('太慢')
+    expect(gradeLatency(0).label).toBe('Instant')
+    expect(gradeLatency(199).label).toBe('Instant')
+    expect(gradeLatency(200).label).toBe('Fast')
+    expect(gradeLatency(499).label).toBe('Fast')
+    expect(gradeLatency(500).label).toBe('Normal')
+    expect(gradeLatency(999).label).toBe('Normal')
+    expect(gradeLatency(1000).label).toBe('Slow')
+    expect(gradeLatency(1999).label).toBe('Slow')
+    expect(gradeLatency(2000).label).toBe('Too slow')
   })
 
   it('每一档都有词：极速也要说出来，用户才知道这个数好不好', () => {
@@ -279,17 +272,19 @@ describe('formatCheckedAt', () => {
 
   // 断言"选了哪个粒度"，不写死具体文案：相对时间现在交给 Intl.RelativeTimeFormat
   // 渲染（英文的单复数没法用一条模板覆盖），所以文案随语言与 CLDR 走，不该锁死。
-  const rtf = new Intl.RelativeTimeFormat('zh-CN', { numeric: 'auto' })
+  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
   it('按最粗的合适粒度说"多久之前"', () => {
-    expect(formatCheckedAt(now - 30 * 1000, now)).toBe('刚刚')
+    setLocale('en')
+    expect(formatCheckedAt(now - 30 * 1000, now)).toBe('just now')
     expect(formatCheckedAt(now - 5 * 60 * 1000, now)).toBe(rtf.format(-5, 'minute'))
     expect(formatCheckedAt(now - 3 * 3600 * 1000, now)).toBe(rtf.format(-3, 'hour'))
     expect(formatCheckedAt(now - 50 * 3600 * 1000, now)).toBe(rtf.format(-2, 'day'))
   })
 
   it('时钟往回跳时不说"负几分钟前"', () => {
-    expect(formatCheckedAt(now + 60 * 1000, now)).toBe('刚刚')
+    setLocale('en')
+    expect(formatCheckedAt(now + 60 * 1000, now)).toBe('just now')
   })
 })
 
@@ -308,13 +303,13 @@ describe('resolveActiveProfile', () => {
 
 describe('一行的标题与副标题', () => {
   it('没填模型时也有字，否则那一行看着像坏了', () => {
-    expect(profileTitle(profile({ model: '  ' }))).toBe('未填写模型')
+    expect(profileTitle(profile({ model: '  ' }))).toBe('no model set')
   })
 
   it('默认地址不重复念，自定义端点才显示主机名', () => {
     expect(profileSubtitle(profile())).toBe('DeepSeek')
     expect(profileSubtitle(profile({ provider: 'openai_compat', apiUrl: 'http://127.0.0.1:8000/v1' })))
-      .toBe('OpenAI 兼容 · 127.0.0.1:8000')
+      .toBe('OpenAI-compatible · 127.0.0.1:8000')
   })
 
   it('两个不同端点的 OpenAI 兼容在列表里能区分开——这正是旧结构做不到的事', () => {

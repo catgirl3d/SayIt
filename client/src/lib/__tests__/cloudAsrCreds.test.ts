@@ -69,7 +69,7 @@ describe('effectiveDoubaoCredentials', () => {
 
 describe('describeDoubaoMissing', () => {
   it('新版只需要 API Key', () => {
-    expect(describeDoubaoMissing(creds({ console: 'new' }))).toBe('还没填 API Key')
+    expect(describeDoubaoMissing(creds({ console: 'new' }))).toBe('no API key yet')
     expect(describeDoubaoMissing(creds({ console: 'new', consoleKey: 'K' }))).toBe('')
   })
 
@@ -78,9 +78,9 @@ describe('describeDoubaoMissing', () => {
   })
 
   it('旧版两个都要，且先报密钥', () => {
-    expect(describeDoubaoMissing(creds({ console: 'legacy' }))).toBe('还没填 Access Token')
+    expect(describeDoubaoMissing(creds({ console: 'legacy' }))).toBe('no Access Token yet')
     expect(describeDoubaoMissing(creds({ console: 'legacy', accessToken: 'T' })))
-      .toBe('还没填 App ID')
+      .toBe('no App ID yet')
     expect(describeDoubaoMissing(creds({ console: 'legacy', accessToken: 'T', appId: '123' })))
       .toBe('')
   })

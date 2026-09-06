@@ -22,9 +22,7 @@ Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcr
 
 This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG-FORK.md).
 
-**English and Russian dictation:** Chinese-oriented cleanup prompts can introduce Chinese text or formatting into processed English or Russian dictation. This fork defaults to **English** built-in prompts when no previous prompt-language choice or legacy Chinese override exists, avoiding that behavior for this case. Existing saved choices and legacy Chinese overrides are preserved; set **AI Instructions → Built-in preset language → English** manually.
-
-This setting controls AI cleanup only. Set the ASR recognition language independently and use a model that supports the language you speak.
+**English, Ukrainian, Russian, and Chinese dictation:** built-in cleanup prompts are available in English and Ukrainian. Choose their instruction language separately in AI settings; on a fresh setup it follows the UI language. Set the ASR recognition language independently and use a model that supports the language you speak.
 
 <div align="center">
 
@@ -42,7 +40,7 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 - **Editable AI cleanup** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
 - **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped.
 - **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, connect to the public trial server, or host your own backend.
-- **English, Chinese, and Ukrainian interface** — the UI follows your system language and can be switched at any time.
+- **English and Ukrainian interface** — the UI follows your system language and can be switched at any time.
 - **Hotwords and per-app rules** — improve names and technical terms, then change cleanup behavior automatically for different apps.
 - **Overlay feedback** — a small waveform overlay shows recording state and elapsed time, with optional live captions while you speak.
 - **Transparent data flow** — the app shows which mode is active and where audio and text are processed.
@@ -56,15 +54,15 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 | **Cloud API mode** | The best balance for personal use | Your PC talks directly to the ASR and AI providers you configure. No SayIt server is involved. |
 | **Server mode** | Teams and managed deployments | Audio is processed by a SayIt backend you control—or by the public trial server for a quick start. |
 
-Local recognition offers seven downloadable local GGUF models, with GPU acceleration when available: Parakeet Unified EN for English, SenseVoice Small, Fun-ASR Nano, Nemotron 3.5 ASR (32 languages), and three Qwen3-ASR sizes. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI cleanup works with DeepSeek, Qwen, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
+The current local catalog contains 16 downloadable GGUF model variants, with GPU acceleration when available: Parakeet Unified EN, Parakeet TDT v3 and 1.1B, SenseVoice Small, Fun-ASR Nano and MLT Nano, Nemotron 3.5 ASR (40 languages), GigaAM v3 (RNN-T and CTC), Qwen3-ASR 0.6B and two 1.7B quantizations, and Whisper Small, Large v2, Large v3, and Large v3 Turbo. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI cleanup works with DeepSeek, Qwen, Doubao, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
 
 ## A closer look
 
 <div align="center">
 
-<img src="docs/images/readme/home-en.png" width="760" alt="SayIt home screen showing dictation stats and a feedback box">
+<img src="docs/images/readme/home-en.png" width="760" alt="SayIt home screen showing dictation stats and a GitHub issue link for feedback">
 
-*Home — dictation stats, the active shortcut, and a feedback box that carries your last transcript.*
+*Home — dictation stats, the active shortcut, and a GitHub issue link for feedback.*
 
 <br>
 
@@ -123,7 +121,7 @@ GPU speech recognition requires an NVIDIA GPU; 16 GB or more of VRAM is recommen
 
 ## Performance reference
 
-Qwen3-ASR-1.7B with vLLM on an AWS EC2 `g5.xlarge` (NVIDIA A10G 24 GB):
+The following upstream reference measurement is hardware- and configuration-dependent; it is not a performance guarantee. Qwen3-ASR-1.7B with vLLM on an AWS EC2 `g5.xlarge` (NVIDIA A10G 24 GB):
 
 | Audio length | ASR latency | RTF |
 | --- | --- | --- |
@@ -167,5 +165,5 @@ SayIt/
 ├── client/       # Tauri + React desktop client
 ├── server/       # FastAPI backend, gateway, web demo, and deployment files
 ├── docs/         # User guides and images
-└── dev-docs/     # Internal development notes
+└── LICENSE       # AGPL-3.0 license
 ```

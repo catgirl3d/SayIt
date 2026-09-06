@@ -123,7 +123,6 @@ export function resolveBadgeLanguage(
   uiLocale: string,
 ): Exclude<SpeechInputLanguage, 'auto'> {
   if (speechLanguage !== 'auto') return speechLanguage
-  if (uiLocale === 'zh-CN') return 'zh'
   if (uiLocale === 'uk') return 'uk'
   return 'en'
 }

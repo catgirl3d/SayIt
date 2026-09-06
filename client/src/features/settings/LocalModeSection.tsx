@@ -413,9 +413,7 @@ export default function LocalModeSection({ speechLanguage }: Props) {
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [downloadedModels, setDownloadedModels] = useState<LocalModelInfo[]>([])
   const [selectedModelId, setSelectedModelId] = useState('')
-  const [downloadSource, setDownloadSource] = useState(() =>
-    getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace',
-  )
+  const [downloadSource, setDownloadSource] = useState('HuggingFace')
   const [preloadingModelId, setPreloadingModelId] = useState('')
   const [downloading, setDownloading] = useState<Record<string, DownloadProgress>>({})
   // 「更多模型」折叠。默认只展示 featured 的小/中/大三个，其余点开才看到。
@@ -527,8 +525,7 @@ export default function LocalModeSection({ speechLanguage }: Props) {
       selectedModelIdRef.current = selected
       setSelectedModelId(selected)
     }
-    const defaultSource = getLocale() === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace'
-    const persistedSource = (await getSetting('localAsr.downloadSource', defaultSource)) as string
+    const persistedSource = (await getSetting('localAsr.downloadSource', 'HuggingFace')) as string
     if (isActive()) setDownloadSource(persistedSource)
 
     // 当前选中的模型在折叠区时自动展开，避免"当前模型在列表里找不到"

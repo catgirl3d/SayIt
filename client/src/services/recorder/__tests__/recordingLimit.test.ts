@@ -16,14 +16,14 @@ describe('formatRecordingTimer', () => {
 
   it('最后一分钟改为显示剩余时间', () => {
     // 正好剩 60 秒时进入倒计时
-    expect(formatRecordingTimer(240)).toMatchObject({ text: '剩余 60s', countdown: true, remainingSec: 60 })
-    expect(formatRecordingTimer(253)).toMatchObject({ text: '剩余 47s', countdown: true, remainingSec: 47 })
-    expect(formatRecordingTimer(299)).toMatchObject({ text: '剩余 1s', countdown: true, remainingSec: 1 })
+    expect(formatRecordingTimer(240)).toMatchObject({ text: '60s left', countdown: true, remainingSec: 60 })
+    expect(formatRecordingTimer(253)).toMatchObject({ text: '47s left', countdown: true, remainingSec: 47 })
+    expect(formatRecordingTimer(299)).toMatchObject({ text: '1s left', countdown: true, remainingSec: 1 })
   })
 
   it('到点及越界都停在 0，不出现负数', () => {
-    expect(formatRecordingTimer(300)).toMatchObject({ text: '剩余 0s', remainingSec: 0 })
-    expect(formatRecordingTimer(999)).toMatchObject({ text: '剩余 0s', remainingSec: 0 })
+    expect(formatRecordingTimer(300)).toMatchObject({ text: '0s left', remainingSec: 0 })
+    expect(formatRecordingTimer(999)).toMatchObject({ text: '0s left', remainingSec: 0 })
   })
 
   it('异常输入不炸', () => {
@@ -44,13 +44,13 @@ describe('formatRecordingTimer', () => {
 
 describe('formatRecordingLimit', () => {
   it('文案随上限自动变化（避免改了上限忘了改文案）', () => {
-    // 当前上限的中文说明；界面文案直接用它渲染
+    // The UI renders the current recording limit directly.
     expect(formatRecordingLimit()).toBe(
       MAX_RECORDING_SEC < 60
-        ? `${MAX_RECORDING_SEC} 秒`
+        ? `${MAX_RECORDING_SEC} sec`
         : MAX_RECORDING_SEC % 60 === 0
-          ? `${MAX_RECORDING_SEC / 60} 分钟`
-          : `${Math.floor(MAX_RECORDING_SEC / 60)} 分 ${MAX_RECORDING_SEC % 60} 秒`,
+          ? `${MAX_RECORDING_SEC / 60} min`
+          : `${Math.floor(MAX_RECORDING_SEC / 60)} min ${MAX_RECORDING_SEC % 60}s`,
     )
   })
 })

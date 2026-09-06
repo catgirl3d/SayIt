@@ -21,7 +21,6 @@ import {
 
 const LANGUAGE_OPTIONS = [
   { value: 'auto', labelKey: 'language.auto' },
-  { value: 'zh-CN', labelKey: 'language.zhCN' },
   { value: 'en', labelKey: 'language.en' },
   { value: 'uk', labelKey: 'language.uk' },
 ] as const satisfies readonly { value: LanguagePreference; labelKey: TranslationKey }[]

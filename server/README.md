@@ -4,7 +4,7 @@
 
 **Just say it, and write well**
 
-Self-hosted speech-to-text server with real-time ASR and AI cleanup.
+Self-hosted speech-to-text server with real-time ASR and optional AI cleanup.
 
 [Quick Start](#quick-start) · [Architecture](#architecture) · [Configuration](#configuration) · [Deployment](#deployment) · [License](#license)
 
@@ -14,74 +14,74 @@ Self-hosted speech-to-text server with real-time ASR and AI cleanup.
 
 ## What is SayIt?
 
-SayIt is a self-hosted speech-to-text service that combines real-time ASR (Qwen3-ASR) with AI cleanup. It provides:
+SayIt is a self-hosted speech-to-text service with configurable ASR engines (Qwen3-ASR, FireRedASR2, and Sber GigaAM) and optional AI cleanup. It provides:
 
 - **Browser Demo** — Record and transcribe directly in the browser, no install needed
-- **Windows Desktop App** — Push-to-talk with automatic paste into any application
-- **Admin Dashboard** — Monitor sessions, performance metrics, GPU/CPU usage
+- **Windows Desktop Integration** — Push-to-talk clients can stream audio and receive cleaned text
 - **REST & WebSocket API** — Integrate speech-to-text into your own applications
+- **Session Telemetry** — Store usage and pipeline timings in SQLite or PostgreSQL
 
-Everything runs on a single server with one GPU.
+The ASR workload runs on the server GPU; the optional LLM and PostgreSQL services may be local or external.
 
 ## Features
 
-- 🎯 **Real-time ASR** — Qwen3-ASR-1.7B with vLLM acceleration, <2s latency
-- ✨ **AI Cleanup** — Converts spoken language to written text (Azure OpenAI / Groq / Ollama)
+- 🎯 **Real-time ASR** — Qwen3-ASR-1.7B by default, with FireRedASR2 and Sber GigaAM alternatives
+- ✨ **AI Cleanup** — Optional written-text cleanup through OpenAI, Azure OpenAI, Groq, or Ollama
 - 🔥 **Hotword Boosting** — Custom vocabulary for domain-specific terms
-- 📊 **Admin Dashboard** — Session analytics, performance percentiles, system monitoring
+- 📊 **Session Telemetry** — Session analytics and performance measurements are persisted for operators
 - 🐳 **Docker Ready** — `docker compose up` with GPU support, model baked into image
-- 🔒 **Security** — Rate limiting, WebSocket connection limits, admin path isolation
+- 🔒 **Security** — Rate limiting and WebSocket connection limits
 - 📦 **SQLite / PostgreSQL** — SQLite for single-node, PostgreSQL for cluster deployment
 
 ## Architecture
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │            ALB (HTTPS 443)           │
-                    │         ACM TLS termination          │
-                    └──────────────┬──────────────────────┘
-                                   │
-                    ┌──────────────▼──────────────────────┐
-                    │         FastAPI Backend (:8000)       │
-                    │                                      │
-                    │  /              Landing page + demo   │
-                    │  /api/*         REST APIs             │
-                    │  /ws/transcribe WebSocket streaming   │
-                    │  /admin/*       Dashboard (blocked    │
-                    │                 on public, SSH only)  │
-                    │                                      │
-                    │  ┌────────┐  ┌─────┐  ┌──────────┐  │
-                    │  │Qwen3   │  │ LLM │  │Telemetry │  │
-                    │  │ASR+vLLM│  │proxy│  │ SQLite/  │  │
-                    │  │ (GPU)  │  │     │  │   PG     │  │
-                    │  └────────┘  └─────┘  └──────────┘  │
-                    └─────────────────────────────────────┘
+                    ┌────────────────────────────────────────────┐
+                    │ Optional ALB / reverse proxy (HTTPS)       │
+                    └──────────────────┬─────────────────────────┘
+                                       │
+                    ┌──────────────────▼─────────────────────────┐
+                    │ FastAPI Backend (:8443 HTTPS by default)    │
+                    │                                              │
+                    │ /                 Landing page + demo        │
+                    │ /api/*            REST APIs                  │
+                    │ /ws/transcribe    WebSocket streaming        │
+                    │                                              │
+                    │ ┌──────────┐ ┌─────┐ ┌──────────────┐       │
+                    │ │ASR       │ │ LLM │ │Telemetry     │       │
+                    │ │Qwen3 /   │ │     │ │SQLite /      │       │
+                    │ │FireRed / │ │     │ │PostgreSQL    │       │
+                    │ │GigaAM    │ │     │ │              │       │
+                    │ │(GPU)     │ │     │ │              │       │
+                    │ └──────────┘ └─────┘ └──────────────┘       │
+                    └────────────────────────────────────────────┘
 ```
 
 ## Quick Start
 
 ### Prerequisites
 
-- NVIDIA GPU with ≥16GB VRAM (e.g., A10G, L4, RTX 4090)
+- NVIDIA GPU; ≥16GB VRAM is recommended for the default Qwen3-ASR model (e.g., A10G, L4, RTX 4090)
 - Docker with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-- An LLM API key (Azure OpenAI, OpenAI, Groq, or local Ollama)
+- An LLM API key is optional; without one, the server runs ASR-only. Ollama can run locally without an API key.
 
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/crosswk/SayIt.git
-cd SayIt
+git clone https://github.com/catgirl3d/SayIt.git
+cd SayIt/server
 cp .env.example .env
 cp config.example.yaml config.yaml
+# If you edit config.yaml, uncomment its volume mount in docker-compose.yml.
 ```
 
 Edit `.env` — fill in your API keys:
 ```bash
-SAYIT_OPENAI_API_KEY=sk-...        # or SAYIT_AZURE_API_KEY
-SAYIT_ADMIN_PASSWORD=your-password
+SAYIT_OPENAI_API_KEY=sk-...        # or SAYIT_GROQ_API_KEY
+# Leave the LLM variables empty for ASR-only mode.
 ```
 
-Edit `config.yaml` — adjust LLM provider if needed (default: Azure OpenAI).
+Edit `.env` to add provider credentials. The image includes the settings from `config.example.yaml`; if you need host-side configuration overrides, edit `config.yaml` and uncomment its volume mount in `docker-compose.yml`. The sample selects OpenAI for the desktop profile and Groq for the web demo. Missing credentials disable the corresponding LLM profile.
 
 ### 2. Start
 
@@ -89,30 +89,26 @@ Edit `config.yaml` — adjust LLM provider if needed (default: Azure OpenAI).
 docker compose up -d --build
 ```
 
-First build takes ~15 minutes (downloads model + builds image).
-Subsequent starts take ~60 seconds (model loading).
+The first build downloads several gigabytes of model weights and builds the image, so its duration depends on your network and hardware. Subsequent starts still spend time loading the models.
 
 ### 3. Access
 
 | URL | Description |
 |-----|-------------|
-| `https://your-server/` | Landing page + browser demo |
-| `https://your-server/healthz` | Health check |
-| `http://localhost:8000/admin` | Admin dashboard (via SSH tunnel) |
-
-Admin access: `ssh -L 8000:localhost:8000 your-server` then open `http://localhost:8000/admin`
+| `https://localhost:8443/` | Landing page + browser demo (Docker default) |
+| `https://localhost:8443/healthz` | Health check (Docker default) |
+| `http://localhost:8000/` | HTTP access when `SAYIT_TLS_ENABLED=false` |
 
 ## Project Layout
 
 ```
-SayIt/
+server/
 ├── backend/              # FastAPI backend
 │   ├── app/
 │   │   ├── main.py       # Routes, WebSocket handler
 │   │   ├── config.py     # Nested config dataclasses
-│   │   ├── asr.py        # Qwen3-ASR engine + VAD
+│   │   ├── asr.py        # ASR engines + VAD
 │   │   ├── llm.py        # AI cleanup (multi-provider)
-│   │   ├── admin.py      # Admin API endpoints
 │   │   ├── telemetry.py  # Usage tracking + analytics
 │   │   ├── db.py         # SQLite / PostgreSQL abstraction
 │   │   └── ratelimit.py  # Token-bucket rate limiter
@@ -120,7 +116,7 @@ SayIt/
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── gateway/              # HTTPS reverse proxy (Node.js)
-├── web/                  # Landing page, browser demo, admin UI
+├── web/                  # Landing page and browser demo
 ├── prompts/              # System prompt + hotword files
 ├── config.example.yaml   # Configuration template
 ├── .env.example          # Secrets template
@@ -134,7 +130,8 @@ Configuration is split into two files:
 
 | File | Contains | Committed to git? |
 |------|----------|-------------------|
-| `config.yaml` | All settings (ASR, LLM, ports, logging, etc.) | Yes (template) |
+| `config.example.yaml` | Committed configuration template | **Yes** |
+| `config.yaml` | Local settings copied from the template | **No** |
 | `.env` | Secrets only (API keys, passwords) | **No** |
 
 All environment variables use the `SAYIT_` prefix. See [config.example.yaml](./config.example.yaml) for full documentation.
@@ -143,34 +140,46 @@ All environment variables use the `SAYIT_` prefix. See [config.example.yaml](./c
 
 ```yaml
 asr:
-  engine: "qwen3"                    # or "firered"
+  engine: "qwen3"                    # qwen3 / firered / gigaam
   model: "Qwen/Qwen3-ASR-1.7B"
   device: "cuda:0"
 
 llm:
-  enabled: true
-  provider: "openai"                 # azure / openai / groq / ollama
+  desktop: "openai"
+  web_demo: "groq"
+  providers:
+    openai:
+      base_url: "https://api.openai.com"
+      model: "gpt-4o-mini"
+    groq:
+      base_url: "https://api.groq.com/openai"
+      model: "qwen/qwen3-32b"
 
 web_demo:
   enabled: true
   max_duration_sec: 600              # Max recording per session
   max_concurrency_per_ip: 3
 
-admin:
+telemetry:
   enabled: true
+  db: "sqlite"                         # sqlite / postgresql
+  db_path: "runtime/telemetry/sayit.sqlite3"
 ```
 
 ### Database
 
-Default: SQLite (zero config). For multi-node deployment:
+Default: SQLite (zero config). For PostgreSQL or a multi-node deployment, select PostgreSQL in `config.yaml` and keep the connection URL in `.env`:
 
 ```yaml
 telemetry:
-  db_backend: "postgresql"
-  db_path: "postgresql://user:pass@host:5432/sayit"
+  db: "postgresql"
 ```
 
-Or via environment variable: `SAYIT_DB_URL=postgresql://...`
+```dotenv
+SAYIT_DB_URL=postgresql://user:pass@host:5432/sayit
+```
+
+`db_path` is a filesystem path for SQLite; use `SAYIT_DB_URL` for a PostgreSQL DSN.
 
 ## Deployment
 
@@ -180,15 +189,12 @@ Or via environment variable: `SAYIT_DB_URL=postgresql://...`
 docker compose up -d --build
 ```
 
-### With ALB (AWS)
+### Behind an ALB or reverse proxy
 
-1. Request ACM certificate for your domain
-2. Create ALB with HTTPS listener + ACM certificate
-3. Target group → EC2:8000, health check `/healthz`
-4. Block `/admin/*` at ALB level (fixed 404 response)
-5. Access admin via SSH tunnel
-
-See [docs/deployment.md](./docs/deployment.md) for details.
+1. Terminate TLS at the ALB or reverse proxy.
+2. Set `SAYIT_TLS_ENABLED=false` in `.env`.
+3. Forward requests to the container's HTTP port `8000`.
+4. Use `/healthz` as the health check endpoint.
 
 ## Development
 
@@ -203,14 +209,14 @@ cd backend
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # Run tests
-python -m pytest backend/tests/ -v
+python -m pytest tests/ -v
 ```
 
 ## API
 
 ### WebSocket `/ws/transcribe`
 
-```json
+```text
 // → Client sends
 {"cmd": "start", "client_meta": {"user_id": "..."}, "app_context": {"process_name": "..."}}
 // → Client sends PCM audio frames (16kHz, 16-bit, mono)
@@ -228,12 +234,11 @@ python -m pytest backend/tests/ -v
 |--------|------|-------------|
 | GET | `/healthz` | Health check |
 | GET | `/api/public/config` | Public site configuration |
-| GET | `/api/hotwords` | Current hotword list |
-| PUT | `/api/hotwords` | Update hotwords |
-| GET | `/admin/api/overview` | Dashboard metrics (auth required) |
-| GET | `/admin/api/sessions` | Session list (auth required) |
+| GET | `/api/public/downloads/windows/latest` | Latest Windows client download |
+| GET | `/api/notice` | Current client notice |
+| POST | `/api/feedback` | Submit feedback |
 
-See [docs/api.md](./docs/api.md) for full API reference.
+Hotwords are loaded from `prompts/hotwords.txt` and can also be supplied per WebSocket session.
 
 ## License
 

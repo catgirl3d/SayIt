@@ -361,8 +361,8 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
 // Prompt presets
 
 export function normalizeBuiltinPromptLanguage(value: unknown): BuiltinPromptLanguage {
-  if (value === 'zh-CN') return 'zh-CN'
   if (value === 'uk') return 'uk'
+  // Chinese prompt selection is no longer exposed; legacy values use English.
   return DEFAULT_BUILTIN_PROMPT_LANGUAGE
 }
 

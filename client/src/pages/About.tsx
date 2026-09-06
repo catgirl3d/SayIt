@@ -21,7 +21,7 @@ const currentVersion = __APP_VERSION__
 
 function formatTimestamp(value: number | null | undefined) {
   if (!value) return t('about.neverChecked')
-  // 时间格式跟界面语言：中文界面用 zh-CN 的写法，英文界面用 en-US 的。
+  // Keep date and time formatting aligned with the active UI locale.
   return new Date(value).toLocaleString(getLocale(), { hour12: false })
 }
 

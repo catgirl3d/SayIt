@@ -93,7 +93,7 @@
 
   body {
     @apply bg-background text-foreground text-base leading-relaxed;
-    font-family: "Microsoft YaHei", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     margin: 0;
@@ -101,16 +101,6 @@
     transition: background-color 200ms ease, color 200ms ease;
   }
 
-  /* 英文界面下把 Segoe UI 提前：微软雅黑渲染英文字符明显更糊（字重偏细、
-     字距偏松）。<html lang> 由 i18n 的 setLocale 写入，所以这条规则跟着
-     界面语言走，不跟系统语言 —— 中文用户切到英文界面也应该看到 Segoe UI。 */
-  html[lang="en"] body {
-    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Microsoft YaHei", sans-serif;
-  }
-
-  html[lang="uk"] body {
-    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-  }
 }
 
 /* 自定义滚动条样式 */

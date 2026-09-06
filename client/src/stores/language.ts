@@ -7,15 +7,7 @@
  * language must not touch them and must not couple with them here.
  */
 import * as bridge from '@/services/bridge'
-import {
-  DEFAULT_BUILTIN_PROMPT_LANGUAGE,
-  LEGACY_BUILTIN_PROMPT_LANGUAGE,
-} from '@/services/defaults'
-import {
-  BUILTIN_PRESETS,
-  getSetting,
-  setSetting,
-} from '@/services/store'
+import { getSetting, setSetting } from '@/services/store'
 import {
   getLocale,
   normalizePreference,
@@ -61,30 +53,14 @@ export async function initLanguage(): Promise<Locale> {
 }
 
 /**
- * 只在键从未写入时落一次地区相关默认值；已有设置（包括空字符串）绝不覆盖。
- * 这一步必须在 initLanguage 之后调用，不能用尚未解析的 `auto` 偏好来猜地区。
+ * Apply one-time defaults after the UI locale has been resolved. Existing settings,
+ * including empty strings, are never overwritten.
  */
 export async function initLocaleDefaults(locale: Locale): Promise<void> {
-  let promptLanguageDefault = DEFAULT_BUILTIN_PROMPT_LANGUAGE
-  const storedPromptLanguage = await bridge.storeGet('ai.builtinPromptLanguage')
-  if (storedPromptLanguage === null || storedPromptLanguage === undefined) {
-    const storedPresets = await bridge.storeGet('promptPresets')
-    const hasLegacyBuiltinOverride = Array.isArray(storedPresets) && storedPresets.some((preset) => {
-      if (!preset || typeof preset !== 'object') return false
-      const candidate = preset as { id?: unknown; builtinPromptLanguage?: unknown }
-      return candidate.builtinPromptLanguage === undefined
-        && typeof candidate.id === 'string'
-        && BUILTIN_PRESETS.some((builtin) => builtin.id === candidate.id)
-    })
-
-    // Legacy built-in overrides predate the language setting and were always Chinese.
-    if (hasLegacyBuiltinOverride) promptLanguageDefault = LEGACY_BUILTIN_PROMPT_LANGUAGE
-  }
-
   const defaults: Record<string, string> = {
-    'localAsr.downloadSource': locale === 'zh-CN' ? 'HuggingFace Mirror' : 'HuggingFace',
-    'cloudAi.provider': locale === 'zh-CN' ? 'deepseek' : 'openai_compat',
-    'ai.builtinPromptLanguage': promptLanguageDefault,
+    'localAsr.downloadSource': 'HuggingFace',
+    'cloudAi.provider': 'openai_compat',
+    'ai.builtinPromptLanguage': locale === 'uk' ? 'uk' : 'en',
   }
   await Promise.all(Object.entries(defaults).map(async ([key, value]) => {
     const existing = await bridge.storeGet(key)

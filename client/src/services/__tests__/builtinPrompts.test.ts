@@ -27,18 +27,15 @@ import {
 describe('Built-in prompt language', () => {
   beforeEach(() => bridgeState.values.clear())
 
-  it('defaults to English while preserving an explicit Chinese choice', async () => {
+  it('defaults to English while migrating removed Chinese prompt selection', async () => {
     expect(getDefault('ai.builtinPromptLanguage')).toBe('en')
-    expect(normalizeBuiltinPromptLanguage('zh-CN')).toBe('zh-CN')
+    expect(normalizeBuiltinPromptLanguage('zh-CN')).toBe('en')
     expect(normalizeBuiltinPromptLanguage('en')).toBe('en')
     expect(normalizeBuiltinPromptLanguage('uk')).toBe('uk')
     for (const value of ['', 'zh', 'en-US', 'uk-UA', null, undefined, 1]) {
       expect(normalizeBuiltinPromptLanguage(value), String(value)).toBe('en')
     }
     expect(await getBuiltinPromptLanguage()).toBe('en')
-
-    bridgeState.values.set('ai.builtinPromptLanguage', 'zh-CN')
-    expect(await getBuiltinPromptLanguage()).toBe('zh-CN')
   })
 
   it('all built-in languages provide the same ordered preset definitions', () => {
@@ -66,12 +63,27 @@ describe('Built-in prompt language', () => {
     expect(uk.find((preset) => preset.id === 'translate_en')?.systemPrompt).toContain('перекладач на англійську мову')
   })
 
-  it('loads presets according to persisted language selection', async () => {
+  it('uses the persisted Ukrainian prompt-language selection', async () => {
     await setBuiltinPromptLanguage('uk')
     const presets = await getPromptPresets()
 
     expect(bridgeState.values.get('ai.builtinPromptLanguage')).toBe('uk')
     expect(presets.every((preset) => !preset.builtin || preset.builtinPromptLanguage === 'uk')).toBe(true)
+  })
+
+  it('round-trips a Ukrainian built-in override without changing English', async () => {
+    const enIntent = getBuiltinPromptPresets('en')[0]
+    const ukIntent = getBuiltinPromptPresets('uk')[0]
+    await setBuiltinPromptLanguage('uk')
+
+    await savePromptPreset({ ...ukIntent, systemPrompt: 'Custom Ukrainian prompt' })
+    expect((await getPromptPresets())[0].systemPrompt).toBe('Custom Ukrainian prompt')
+
+    await setBuiltinPromptLanguage('en')
+    expect((await getPromptPresets())[0].systemPrompt).toBe(enIntent.systemPrompt)
+
+    await setBuiltinPromptLanguage('uk')
+    expect((await getPromptPresets())[0].systemPrompt).toBe('Custom Ukrainian prompt')
   })
 
   it('built-in overrides remain isolated across all supported languages', async () => {
