@@ -455,25 +455,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             sources: WHISPER_LARGE_V3_Q4.sources(),
             archive_url: None,
         },
-        // Whisper Large v2 Q4_K_M GGUF (multilingual, transcribe.cpp).
-        // The high-accuracy Whisper tier for 100 languages, at the cost of speed.
-        ModelInfo {
-            id: "whisper-large-v2-gguf".into(),
-            name: "Whisper Large v2".into(),
-            description: "High-precision transcription when accuracy is the top priority".into(),
-            model_type: "whisper-gguf".into(),
-            total_size_bytes: WHISPER_LARGE_V2_Q4.size,
-            speed: 2.5,
-            accuracy: 9.0,
-            recommended: false,
-            memory_mb: 2800,
-            featured: false,
-            languages_label: "100 languages".into(),
-            quant: "Q4_K_M".into(),
-            languages: lang_vec(WHISPER_LANGUAGES),
-            sources: WHISPER_LARGE_V2_Q4.sources(),
-            archive_url: None,
-        },
     ]
 }
 
@@ -556,13 +537,6 @@ const WHISPER_LARGE_V3_TURBO_Q4: GgufWeight = GgufWeight {
     file: "whisper-large-v3-turbo-Q4_K_M.gguf",
     size: 536_069_728,
     sha256: "ecfe9b6beb4ab18fef49187cc968cc74b5168b94629c8830e2ca6b794c6e25ed",
-};
-
-const WHISPER_LARGE_V2_Q4: GgufWeight = GgufWeight {
-    repo: "handy-computer/whisper-large-v2-gguf",
-    file: "whisper-large-v2-Q4_K_M.gguf",
-    size: 996_526_080,
-    sha256: "76aa37b205abc1fb7a9e7aaf0655b8747995b81e6bb72c18f4b1acf59e222f79",
 };
 
 const SENSEVOICE: GgufWeight = GgufWeight {
@@ -709,11 +683,6 @@ mod tests {
                 997_303_008,
                 "6fe933811cec4cd3159debc46520ecd3aac6c7e322ece2ac61fcfdab184e1fe0",
             ),
-            (
-                "whisper-large-v2-gguf",
-                996_526_080,
-                "76aa37b205abc1fb7a9e7aaf0655b8747995b81e6bb72c18f4b1acf59e222f79",
-            ),
         ];
 
         for (id, size, sha256) in expected {
@@ -803,7 +772,6 @@ mod tests {
             ("parakeet-tdt-1.1b-gguf", &["en"]),
             ("whisper-large-v3-turbo-gguf", whisper_100),
             ("whisper-large-v3-gguf", whisper_100),
-            ("whisper-large-v2-gguf", whisper_100),
         ];
 
         for (id, wanted) in expected {

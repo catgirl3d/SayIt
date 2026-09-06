@@ -127,7 +127,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // 可选值就是 catalog.rs 里那几个 id：'sensevoice-small-gguf'（默认，最快）
   // | 'funasr-nano-2512-gguf' | 'qwen3-asr-0.6b-gguf'
   // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf'（最准）
-  // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf' | 'whisper-large-v2-gguf'
+  // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf'
   'localAsr.modelId': 'sensevoice-small-gguf',
   // GGUF weights are published on HuggingFace. The value must match a catalog source.
   'localAsr.downloadSource': 'HuggingFace', // optional: 'HuggingFace'

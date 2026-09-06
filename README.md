@@ -54,7 +54,7 @@
 | **Хмарний API** | Оптимального балансу для особистого використання | Ваш ПК напряму взаємодіє з налаштованими провайдерами ASR та AI. Сервер SayIt не використовується. |
 | **Режим сервера** | Команд та керованих інфраструктур | Аудіо обробляється бекендом SayIt під вашим контролем — або публічним тестовим сервером для швидкого старту. |
 
-Поточний локальний каталог містить 16 завантажуваних варіантів GGUF-моделей із прискоренням на GPU (за наявності): Parakeet Unified EN, Parakeet TDT v3 та 1.1B, SenseVoice Small, Fun-ASR Nano та MLT Nano, Nemotron 3.5 ASR (40 мов), GigaAM v3 (RNN-T та CTC), Qwen3-ASR 0.6B і дві квантовані версії 1.7B, а також Whisper Small, Large v2, Large v3 та Large v3 Turbo. Хмарне розпізнавання підтримує Doubao, Qwen, Xiaomi MiMo та Groq Whisper; AI-очищення працює з DeepSeek, Qwen, Doubao, Groq, MiMo, Ollama та будь-яким OpenAI-сумісним сервером.
+Поточний локальний каталог містить 15 завантажуваних варіантів GGUF-моделей із прискоренням на GPU (за наявності): Parakeet Unified EN, Parakeet TDT v3 та 1.1B, SenseVoice Small, Fun-ASR Nano та MLT Nano, Nemotron 3.5 ASR (40 мов), GigaAM v3 (RNN-T та CTC), Qwen3-ASR 0.6B і дві квантовані версії 1.7B, а також Whisper Small, Large v3 та Large v3 Turbo. Хмарне розпізнавання підтримує Doubao, Qwen, Xiaomi MiMo та Groq Whisper; AI-очищення працює з DeepSeek, Qwen, Doubao, Groq, MiMo, Ollama та будь-яким OpenAI-сумісним сервером.
 
 ## Погляньмо ближче
 

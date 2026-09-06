@@ -106,11 +106,6 @@ const LOCAL_MODEL_KEYS: Record<
     description: 'localModel.whisperTurbo.description',
     languages: 'localModel.whisperTurbo.languages',
   },
-  'whisper-large-v2-gguf': {
-    name: 'localModel.whisperLargeV2.name',
-    description: 'localModel.whisperLargeV2.description',
-    languages: 'localModel.whisperLargeV2.languages',
-  },
 }
 
 const HISTORY_FAILURE_KEYS: Record<HistoryFailReasonCode, TranslationKey> = {

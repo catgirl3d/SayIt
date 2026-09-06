@@ -20,6 +20,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Improved language badge popover accessibility and viewport positioning, including keyboard focus handling, close labels, scroll/resize alignment, tooltip suppression, and empty-metadata separators.
 - Corrected the local model catalog's language support matrix to match upstream model cards (Nemotron 3.5 ASR: 40 locales across three quality tiers; Qwen3-ASR: 30 languages; Whisper: 100 languages), fixing false "unsupported language" badges for languages the models actually recognize, such as Ukrainian and Russian on Nemotron and Russian on Qwen3-ASR.
 - Added five upstream GGUF local ASR models: Parakeet TDT v3 (25 European languages, 1.94% LibriSpeech WER), Fun-ASR MLT Nano (31 languages, 1.74% LibriSpeech WER), Parakeet TDT 1.1B (English, 1.38% LibriSpeech WER), GigaAM v3 CTC (compact Russian), and Whisper Large v3 (100 languages, 1.86% LibriSpeech WER).
+- Removed Whisper Large v2 from the local model catalog in favor of Whisper Large v3 and v3 Turbo, which match or exceed its accuracy with lower memory use and faster transcription. Existing selections of v2 keep working, and previously downloaded v2 weights are not deleted.
 
 ### AI Prompts and Localization
 
