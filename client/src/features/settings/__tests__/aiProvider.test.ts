@@ -61,13 +61,6 @@ describe('地区相关的供应商默认值', () => {
     expect(blankProfile().provider).toBe('openai_compat')
   })
 
-  it('中文界面保持 DeepSeek 优先', () => {
-    setLocale('zh-CN')
-    expect(preferredAiProviderValue()).toBe('deepseek')
-    expect(aiProvidersForDisplay()[0].value).toBe('deepseek')
-    expect(blankProfile().provider).toBe('deepseek')
-  })
-
   it('乌克兰语界面不使用中国地区默认供应商', () => {
     setLocale('uk')
     expect(preferredAiProviderValue()).toBe('openai_compat')

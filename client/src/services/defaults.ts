@@ -81,13 +81,13 @@ export const DEFAULTS: Record<string, unknown> = {
   // 读取光标附近文字/选区并交给 AI，用于上下文续写与语音编辑。涉及正文读取，默认关闭。
   contextAwareWritingEnabled: false,
   aiPromptAppend: '', // 全局附加 prompt
-  'ai.builtinPromptLanguage': DEFAULT_BUILTIN_PROMPT_LANGUAGE, // Built-in prompt language is independent of the UI locale.
+  'ai.builtinPromptLanguage': DEFAULT_BUILTIN_PROMPT_LANGUAGE, // First-run default follows the UI locale; saved choices remain independent.
 
   // ── AI 供应商 ──
   // 下面这四个是**运行时生效的那一份**，录音链路、历史重跑、诊断页、反馈上报都只认它们。
   // 它们由「AI 服务」页在启用/保存时整份写入，不要在别处单独改其中一个
   // （历史 bug：切了模型但地址和密钥还是上一家的）。
-  'cloudAi.provider': 'deepseek', // 可选: 'deepseek' | 'openai_compat' | 'doubao' | 'qwen' | 'mimo' | 'ollama'
+  'cloudAi.provider': 'openai_compat', // 可选: 'deepseek' | 'openai_compat' | 'doubao' | 'qwen' | 'mimo' | 'ollama'
   'cloudAi.apiUrl': '',
   'cloudAi.apiKey': '',
   'cloudAi.model': '',
@@ -129,9 +129,8 @@ export const DEFAULTS: Record<string, unknown> = {
   // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf'（最准）
   // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf' | 'whisper-large-v2-gguf'
   'localAsr.modelId': 'sensevoice-small-gguf',
-  // GGUF 权重目前只发在 HuggingFace（handy-computer 组织下），国内走镜像更稳。
-  // 值要和 catalog 里 DownloadSource.source 的名字完全一致，否则会回落到第一个源。
-  'localAsr.downloadSource': 'HuggingFace Mirror', // 可选: 'HuggingFace Mirror' | 'HuggingFace'
+  // GGUF weights are published on HuggingFace. The value must match a catalog source.
+  'localAsr.downloadSource': 'HuggingFace', // optional: 'HuggingFace'
   'localAsr.model': '',
   // GGUF 引擎的计算后端偏好。'auto' = 有 GPU 用 GPU、没有自动用 CPU。
   // 没装 GPU 加速包的机器永远是 CPU，这个值不影响功能，只影响速度。
