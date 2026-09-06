@@ -4,10 +4,6 @@ const PROMPTS = {
     faithful: 'You are a speech-to-text post-processing assistant. Correct clear recognition errors while preserving the speaker\'s original wording.\n\nRules:\n1. Fix only obvious transcription errors, including names and technical terms.\n2. Add punctuation and sensible spacing.\n3. Keep filler words, repetition, hesitation, and sentence structure.\n4. Do not answer, explain, summarize, or continue the content.\n\nReturn only the corrected transcript.',
     intent: 'You refine raw speech-to-text output into clean, ready-to-use writing. Preserve every meaningful detail while removing speech noise and recognition errors.\n\nRules:\n1. Remove filler words, empty repetition, and hesitation.\n2. Follow self-corrections and keep only the speaker\'s final wording.\n3. Fix obvious recognition errors, names, capitalization, numbers, and times.\n4. Add punctuation and paragraphs where useful.\n5. Turn clearly structured points into a numbered list.\n\nDo not add new information, change the core meaning, answer questions, explain, summarize, or continue the content.\n\nReturn only the refined text.',
   },
-  'zh-CN': {
-    faithful: '你是语音转文字的后处理助手。输入是 ASR 语音识别的原始文本，你的任务是修正识别错误，尽量保留用户的原始表达。\n\n规则：\n1. 只修正明显的识别错误：错别字、同音字、音近字、专有名词。\n2. 添加标点符号。中英文混合时保留合理空格。\n3. 不要删除口头禅、重复或犹豫，不要改写句式。\n4. 不要回答、解释、总结或续写文本中的内容。\n\n只输出修正后的文本。',
-    intent: '你是语音文本精炼助手。输入是 ASR 语音识别的原始转写，你的任务是清洗为可直接使用的干净文本。\n核心原则：保留用户全部有效信息，只清除语音噪声和识别错误。\n\n处理规则：\n1. 移除口语填充词（嗯、啊、那个、就是说、然后呢）和无意义的重复、犹豫。\n2. 识别自我修正——"不对"、"不是"、"应该是"、"改到"后以最终表达为准，删除前序错误。\n3. 修正明显的语音识别错误：同音字、音近字、专有名词、英文大小写、数字和时间。\n4. 添加标点符号，必要时分段。中英文混合保留合理空格。\n5. 检测到"第一/第二/首先/然后"等结构化表达时，输出为有序列表。\n\n约束：\n- 不添加原文没有的内容，不改变用户核心语义\n- 不回答、解释、总结或续写文本中提到的问题\n\n只输出精炼后的文本。',
-  },
 }
 
 const MESSAGES = {
@@ -15,10 +11,6 @@ const MESSAGES = {
     'meta.title': '{app} — Just say it, and write well',
     'meta.description': 'Open-source voice typing for Windows with local, cloud API, and self-hosted modes. Turn speech into polished text in any app.',
     'nav.download': 'Download',
-    // The accessible name must be in the language of the page the reader is on.
-    // The visible label deliberately shows the *target* language, but a screen
-    // reader on the English page must not be handed a Chinese string.
-    'language.switch': 'Switch to Chinese',
     'hero.headline': 'Just say it, and write well',
     'hero.subheadline': 'Turn speech into polished, ready-to-use text—three times faster than typing.',
     'modes.title': 'Three modes. Your choice.',
@@ -80,80 +72,10 @@ const MESSAGES = {
     'rerun.aiFailed': 'AI cleanup failed',
     'rerun.noResult': 'No result was generated.',
   },
-  'zh-CN': {
-    'meta.title': '{app} — 随口说，出色写',
-    'meta.description': '开源 Windows 语音输入工具，支持本地、云 API 和自部署模式，在任何应用中把口语变成可直接使用的文字。',
-    'nav.download': '下载',
-    'language.switch': '切换到英文',
-    'hero.headline': '随口说，出色写',
-    'hero.subheadline': '说话比打字快 3 倍，AI 实时把口语变成可以直接用的书面表达。',
-    'modes.title': '三种模式，按需选择',
-    'modes.local.title': '本地模式',
-    'modes.local.desc': '语音识别在本机运行，数据不出设备',
-    'modes.cloud.title': '云 API 模式',
-    'modes.cloud.desc': '无需 GPU，对接云端 ASR 和 AI',
-    'modes.server.title': '服务器模式',
-    'modes.server.desc': 'Docker 一键部署，GPU 加速推理',
-    'features.anywhere': '按下快捷键说话，文字直接落在任何应用里',
-    'features.cleanup': 'AI 自动去除口头禅，输出书面表达',
-    'features.fast': '说完即出稿，不打断工作流',
-    'features.rust': 'Rust 构建，轻量安全',
-    'demo.title': '在线体验',
-    'demo.startAria': '开始录音',
-    'demo.stopAria': '结束录音',
-    'demo.start': '点击录音体验',
-    'demo.stop': '结束录音',
-    'playback.playAria': '播放',
-    'playback.label': '本次录音',
-    'playback.download': '下载录音',
-    'result.waiting': '等待录音…',
-    'result.receiving': '正在接收语音…',
-    'result.empty': '本次没有识别到有效文本。',
-    'result.copy': '复制文本',
-    'result.copied': '已复制',
-    'result.rawAsr': 'ASR 原文',
-    'result.recordAgain': '重新录音',
-    'result.audioDuration': '语音 {seconds}s',
-    'result.processingTime': '识别 {seconds}s',
-    'oss.title': '开源 · 自托管 · 隐私优先',
-    'oss.desc': 'AGPL-3.0 开源协议，Docker 一键部署，数据完全自控。',
-    'status.unavailable': '未开放',
-    'status.connecting': '连接中',
-    'status.connectionFailed': '连接失败',
-    'status.disconnected': '已断开',
-    'status.ready': '准备就绪',
-    'status.requestFailed': '请求失败',
-    'status.notReady': '服务未就绪',
-    'status.recording': '录音中',
-    'status.processing': '处理中',
-    'status.recordingFailed': '录音失败',
-    'status.initFailed': '初始化失败',
-    'error.noRecording': '没有可回放的录音',
-    'error.wsMissing': 'WebSocket 地址未配置',
-    'error.replayTimeout': '回放请求超时',
-    'error.replayConnection': '回放连接出错',
-    'error.replayClosed': '回放连接已关闭',
-    'error.replayFailed': '回放失败',
-    'error.config': '配置接口返回 {status}',
-    'error.websocket': 'WebSocket 连接失败',
-    'error.audioContext': '浏览器不支持 AudioContext',
-    'rerun.asrRunning': '重新识别中',
-    'rerun.asrFailed': '识别失败',
-    'rerun.aiRunning': '重新润色中',
-    'rerun.aiFailed': '润色失败',
-    'rerun.noResult': '未生成结果。',
-  },
-}
-
-function detectLocale() {
-  const saved = localStorage.getItem('sayit.web.locale')
-  if (saved === 'en' || saved === 'zh-CN') return saved
-  const languages = navigator.languages?.length ? navigator.languages : [navigator.language]
-  return languages.some((tag) => String(tag).toLowerCase().startsWith('zh')) ? 'zh-CN' : 'en'
 }
 
 const state = {
-  locale: detectLocale(), statusKey: 'status.ready', statusDot: '', lastResult: null,
+  statusKey: 'status.ready', statusDot: '', lastResult: null,
   config: null, ws: null, wsReady: false, recording: false,
   mediaStream: null, audioCtx: null, workletNode: null, sourceNode: null,
   analyser: null,
@@ -173,7 +95,6 @@ const state = {
 const $ = (id) => document.getElementById(id)
 const els = {
   brandName: $('brandName'), headline: $('headline'), subheadline: $('subheadline'),
-  languageToggle: $('languageToggle'),
   navDlBtn: $('navDlBtn'), dlBtn: $('dlBtn'), dlLabel: $('dlLabel'),
   stateDot: $('stateDot'), stateText: $('stateText'), timer: $('timer'),
   recordButton: $('recordButton'), recordLabel: $('recordLabel'),
@@ -207,7 +128,7 @@ const els = {
 
 /* ── Helpers ── */
 const tr = (key, vars = {}) => {
-  const template = MESSAGES[state.locale]?.[key] ?? MESSAGES.en[key] ?? key
+  const template = MESSAGES.en[key] ?? key
   return template.replace(/\{(\w+)\}/g, (_, name) => String(vars[name] ?? `{${name}}`))
 }
 
@@ -218,23 +139,20 @@ function applyBranding() {
   document.querySelector('meta[property="og:title"]')?.setAttribute('content', document.title)
   document.querySelector('meta[property="og:description"]')?.setAttribute('content', tr('meta.description'))
   els.brandName.textContent = appName
-  const useCustomChinese = state.locale === 'zh-CN'
-  els.headline.textContent = useCustomChinese && state.config?.headline
+  els.headline.textContent = state.config?.headline
     ? state.config.headline
     : tr('hero.headline')
-  els.subheadline.textContent = useCustomChinese && state.config?.subheadline
+  els.subheadline.textContent = state.config?.subheadline
     ? state.config.subheadline
     : tr('hero.subheadline')
 }
 
 function applyLocale() {
-  document.documentElement.lang = state.locale
+  document.documentElement.lang = 'en'
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = tr(el.dataset.i18n) })
   document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', tr(el.dataset.i18nAria)) })
   document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.setAttribute('title', tr(el.dataset.i18nTitle)) })
   document.querySelectorAll('[data-i18n-tooltip]').forEach((el) => { el.dataset.tooltip = tr(el.dataset.i18nTooltip) })
-  els.languageToggle.textContent = state.locale === 'en' ? '中文' : 'EN'
-  els.languageToggle.setAttribute('aria-label', tr('language.switch'))
   applyBranding()
   setRecordUI(state.recording)
   setStateText(state.statusKey, state.statusDot)
@@ -712,8 +630,7 @@ async function rerunLlm() {
   try {
     const hwText = (els.hotwordInput.value || '').trim()
     const hotwords = hwText ? hwText.split(/[,，]/).map(s => s.trim()).filter(Boolean) : undefined
-    const localePrompts = PROMPTS[state.locale] || PROMPTS.en
-    const systemPrompt = localePrompts[state.promptMode] || localePrompts.faithful
+    const systemPrompt = PROMPTS.en[state.promptMode] || PROMPTS.en.faithful
     const result = await replayAudio({ hotwords, systemPrompt })
     state.lastAiText = result.llmText
     state.lastAsrText = result.asrText
@@ -741,12 +658,6 @@ async function boot() {
 
   // Copy buttons
   if (els.copyResult) els.copyResult.addEventListener('click', () => void copyCard(els.resultText, els.copyResult).catch(() => {}))
-
-  els.languageToggle.addEventListener('click', () => {
-    state.locale = state.locale === 'en' ? 'zh-CN' : 'en'
-    localStorage.setItem('sayit.web.locale', state.locale)
-    applyLocale()
-  })
 
   // Record button
   els.recordButton.addEventListener('click', () => {
