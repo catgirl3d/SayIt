@@ -181,18 +181,18 @@ describe('effectiveAsrCredentials', () => {
 
 describe('describeAsrMissing', () => {
   it('豆包新版只要密钥', () => {
-    expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'new' }))).toBe('还没填 API Key')
+    expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'new' }))).toBe('no API key yet')
     expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'new', apiKey: 'k' }))).toBe('')
   })
 
   it('豆包旧版两个都要，且先报密钥', () => {
-    expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'legacy' }))).toBe('还没填 Access Token')
-    expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'legacy', apiKey: 't' }))).toBe('还没填 App ID')
+    expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'legacy' }))).toBe('no Access Token yet')
+    expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'legacy', apiKey: 't' }))).toBe('no App ID yet')
     expect(describeAsrMissing(profile({ provider: 'doubao_v2', console: 'legacy', apiKey: 't', appId: '1' }))).toBe('')
   })
 
   it('其它平台只要 API Key', () => {
-    expect(describeAsrMissing(profile({ provider: 'mimo' }))).toBe('还没填 API Key')
+    expect(describeAsrMissing(profile({ provider: 'mimo' }))).toBe('no API key yet')
     expect(describeAsrMissing(profile({ provider: 'mimo', apiKey: 'k' }))).toBe('')
   })
 })
@@ -218,15 +218,15 @@ describe('gradeAsrLatency', () => {
   // 若照搬 AI 服务那套「1 秒就算慢」的阈值，所有 ASR 都会被标成太慢。
   it('3 秒音频花 1 秒算正常，不算慢', () => {
     expect(gradeAsrLatency(1000, 3).tone).toBe('ok')
-    expect(gradeAsrLatency(1000, 3).label).toBe('正常')
+    expect(gradeAsrLatency(1000, 3).label).toBe('Normal')
   })
 
   it('按 RTF 分档', () => {
-    expect(gradeAsrLatency(300, 3).label).toBe('极速')
-    expect(gradeAsrLatency(700, 3).label).toBe('很快')
-    expect(gradeAsrLatency(1200, 3).label).toBe('正常')
-    expect(gradeAsrLatency(2000, 3).label).toBe('偏慢')
-    expect(gradeAsrLatency(3000, 3).label).toBe('太慢')
+    expect(gradeAsrLatency(300, 3).label).toBe('Instant')
+    expect(gradeAsrLatency(700, 3).label).toBe('Fast')
+    expect(gradeAsrLatency(1200, 3).label).toBe('Normal')
+    expect(gradeAsrLatency(2000, 3).label).toBe('Slow')
+    expect(gradeAsrLatency(3000, 3).label).toBe('Too slow')
   })
 
   it('同样的毫秒数，音频越长档位越好', () => {
@@ -246,7 +246,7 @@ describe('gradeAsrLatency', () => {
   })
 
   it('音频时长缺失时不硬猜档位', () => {
-    expect(gradeAsrLatency(1000, 0).label).toBe('已测通')
-    expect(gradeAsrLatency(1000, NaN).label).toBe('已测通')
+    expect(gradeAsrLatency(1000, 0).label).toBe('Works')
+    expect(gradeAsrLatency(1000, NaN).label).toBe('Works')
   })
 })

@@ -221,12 +221,12 @@ pub fn get_client_runtime_info(storage: State<Storage>) -> Result<ClientRuntimeI
     })
 }
 
-/// 系统**显示语言**，返回前端 `Locale` 用的标签（`zh-CN` / `en`）。
+/// Reports the system display language using frontend `Locale` tags (`en` / `uk`).
 ///
-/// 前端 `ui.language = 'auto'` 时靠这个定语言。刻意不让前端用
-/// `navigator.language` 自己判：那个跟的是 WebView 的语言，与托盘用的
-/// `GetUserDefaultUILanguage` 可能给出不同结论，会出现「托盘中文、界面英文」。
-/// 判定只保留一处（`locale::system_ui_lang`），两边都问它。
+/// The frontend uses this result for `ui.language = 'auto'` instead of deriving
+/// a value from `navigator.language`, which follows the WebView and can disagree
+/// with `GetUserDefaultUILanguage`. The Rust resolver is the single source for both
+/// the tray and the main interface.
 #[tauri::command]
 pub fn get_system_ui_language() -> String {
     crate::locale::system_ui_lang().tag().to_string()

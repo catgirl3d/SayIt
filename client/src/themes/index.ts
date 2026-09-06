@@ -34,7 +34,7 @@ export function getCurrentThemeId(): string {
 }
 
 /** 默认字体（与 index.css body 一致） */
-const DEFAULT_FONT_BODY = '"Microsoft YaHei", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif'
+const DEFAULT_FONT_BODY = '"Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Microsoft YaHei", sans-serif'
 
 /**
  * 应用主题：将 CSS 变量注入 :root，切换 dark class，设置字体

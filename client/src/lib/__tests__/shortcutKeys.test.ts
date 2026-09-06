@@ -23,7 +23,7 @@ describe('PTT 物理组合键', () => {
       'ShiftRight',
       'KeyK',
     ])
-    expect(displayPTTShortcut('ControlLeft+MetaLeft')).toEqual(['左 Ctrl', '左 Win'])
+    expect(displayPTTShortcut('ControlLeft+MetaLeft')).toEqual(['Left Ctrl', 'Left Win'])
   })
 
   it('兼容旧单键，并接受普通组合与纯修饰组合', () => {
@@ -40,12 +40,12 @@ describe('PTT 物理组合键', () => {
   })
 
   it('拒绝单独 Win、裸字母、多主键和危险系统组合', () => {
-    expect(getPTTShortcutValidationError('MetaLeft')).toContain('不能单独')
-    expect(getPTTShortcutValidationError('KeyK')).toContain('不能单独')
-    expect(getPTTShortcutValidationError('ControlLeft+KeyK+KeyL')).toContain('最多')
-    expect(getPTTShortcutValidationError('ControlLeft+ControlRight+KeyK')).toContain('左右')
-    expect(getPTTShortcutValidationError('MetaLeft+KeyL')).toContain('系统组合')
-    expect(getPTTShortcutValidationError('AltLeft+F4')).toContain('系统组合')
+    expect(getPTTShortcutValidationError('MetaLeft')).toContain("can't be used on its own")
+    expect(getPTTShortcutValidationError('KeyK')).toContain("can't be used on their own")
+    expect(getPTTShortcutValidationError('ControlLeft+KeyK+KeyL')).toContain('only one')
+    expect(getPTTShortcutValidationError('ControlLeft+ControlRight+KeyK')).toContain('left and right')
+    expect(getPTTShortcutValidationError('MetaLeft+KeyL')).toContain('reserved by the system')
+    expect(getPTTShortcutValidationError('AltLeft+F4')).toContain('system combination')
     expect(getPTTShortcutValidationError('MetaLeft+KeyK')).not.toBeNull()
     expect(getPTTShortcutValidationError('AltLeft+Space')).not.toBeNull()
     expect(isValidPTTShortcut('ControlLeft+MetaLeft')).toBe(true)

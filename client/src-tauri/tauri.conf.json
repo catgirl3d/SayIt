@@ -45,8 +45,8 @@
       "icons/128x128.png",
       "icons/128x128@2x.png"
     ],
-    "shortDescription": "语音输入，AI 润色",
-    "longDescription": "SayIt - 随口说，出色写。用说话代替打字，AI 实时把口语变成书面表达。",
+    "shortDescription": "Voice input with AI cleanup",
+    "longDescription": "SayIt - Just say it, and write well. Turn speech into polished writing with AI in real time.",
     "copyright": "© 2026 Liu Qianglong & Claude",
     "category": "Productivity",
     "windows": {
@@ -54,14 +54,12 @@
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "languages": [
-          "SimpChinese",
           "English"
         ],
         "installerIcon": "icons/icon.ico"
       },
       "wix": {
         "language": [
-          "zh-CN",
           "en-US"
         ]
       }

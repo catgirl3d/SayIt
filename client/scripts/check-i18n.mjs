@@ -138,6 +138,22 @@ function isAllowed(relPath) {
 }
 
 const findings = []
+const activeLocaleFindings = []
+for (const name of ['en.json', 'uk.json']) {
+  const file = join(CLIENT_ROOT, 'src/i18n/locales', name)
+  const source = readFileSync(file, 'utf8')
+  const table = JSON.parse(source)
+  for (const [key, value] of Object.entries(table)) {
+    if (!CJK.test(value)) continue
+    const keyOffset = source.indexOf(JSON.stringify(key))
+    activeLocaleFindings.push({
+      file: `src/i18n/locales/${name}`,
+      line: source.slice(0, keyOffset).split('\n').length,
+      text: `${key}: ${value}`,
+    })
+  }
+}
+
 for (const file of walk(SRC_ROOT)) {
   const relPath = relative(CLIENT_ROOT, file)
   if (isAllowed(relPath)) continue
@@ -146,6 +162,7 @@ for (const file of walk(SRC_ROOT)) {
     findings.push({ file: relPath.split(sep).join('/'), ...item })
   }
 }
+findings.push(...activeLocaleFindings)
 
 if (findings.length === 0) {
   console.log('check-i18n: no hardcoded Chinese found outside the allowlist.')

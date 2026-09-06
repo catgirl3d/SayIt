@@ -45,7 +45,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // layer already has several "language" keys (`speechInput.language` is the ASR speech
   // language, Preset decides the output language), so this key must carry the `ui.` prefix
   // and must not be named just `language`.
-  'ui.language': 'auto', // 'auto' follows the system locale; otherwise 'zh-CN' | 'en'
+  'ui.language': 'auto', // 'auto' follows the system locale; otherwise 'en' | 'uk'
 
   // ── 工作模式 ──
   workMode: 'server', // 可选: 'server' | 'cloud_api' | 'local'

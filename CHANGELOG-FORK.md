@@ -25,7 +25,8 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added Ukrainian built-in cleanup, translation, and conversational presets with per-language prompt overrides.
 - Added English, Ukrainian, and Russian translation target presets and made the English translation preset language-agnostic.
 - Added Ukrainian interface localization with manual switching and system-language auto-detection.
-- Made English the default built-in prompt language when no saved choice or legacy Chinese override exists, while preserving existing prompt-language choices and legacy Chinese overrides.
+- Removed the Simplified Chinese desktop, tray, overlay, web-demo, and installer UI; English and Ukrainian are now the only supported interface locales while Chinese ASR and prompt data remain compatible.
+- Removed the Chinese built-in prompt option while retaining English and Ukrainian instructions with per-language preset overrides; legacy Chinese prompt data remains compatible.
 - Moved shared prompt and rule definitions into reusable constants.
 
 ### AI Providers
