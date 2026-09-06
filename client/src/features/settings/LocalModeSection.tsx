@@ -33,7 +33,8 @@ import { modelSupportsSpeechLanguage, resolveBadgeLanguage, sortModelsBySpeechLa
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
-import { localModelDisplayDescription, localModelDisplayLanguages, localModelDisplayName } from '@/i18n/displayNames'
+import { localModelDisplayDescription, localModelDisplayName } from '@/i18n/displayNames'
+import { ModelLanguageBadge } from './ModelLanguageBadge'
 
 /** 模型存储位置变更的窗口事件：次级设置卡片（LocalModeAdvancedSection）里改了
  *  目录后，通知模型列表卡片刷新已下载状态——两个卡片各自持有状态、不在同一组件树。 */
@@ -786,7 +787,6 @@ export default function LocalModeSection({ speechLanguage }: Props) {
             {visibleModels.map((model) => {
               const modelName = localModelDisplayName(model)
               const modelDescription = localModelDisplayDescription(model)
-              const modelLanguages = localModelDisplayLanguages(model)
               const isDownloaded = downloadedIds.has(model.id)
               const isSelected = selectedModelId === model.id
               const progress = downloading[model.id]
@@ -872,12 +872,12 @@ export default function LocalModeSection({ speechLanguage }: Props) {
                           <span>{model.quant}</span>
                         </span>
                       ) : null}
-                      {modelLanguages ? (
+                      {((model.languages?.length ?? 0) > 0 || Boolean(model.languages_label)) && (
                         <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
                           <span aria-hidden>·</span>
-                          <span>{modelLanguages}</span>
+                          <ModelLanguageBadge model={model} badgeLanguage={badgeLanguage} />
                         </span>
-                      ) : null}
+                      )}
                     </div>
                     {isDownloading && progress && (
                       <div className="mt-2">
