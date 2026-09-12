@@ -40,6 +40,8 @@ target/
 # 应用在跑时它锁着 target/debug 里的 ggml DLL，cargo 会报 os error 32；
 # 换个 target 目录编译是绕过它的标准做法（pitfalls #4），别让产物进仓库。
 target-check/
+# 本机专用的 target 目录覆盖（仓库卷空间不足），绝不提交
+/.cargo/config.toml
 
 # ── Python ──
 __pycache__/
@@ -60,7 +62,8 @@ Thumbs.db
 # ── Logs & runtime ──
 *.log
 runtime/
-.mcp-brain/memory/issues.md
-.mcp-brain/memory/dashboard.md
+
+#custom
+.mcp-brain/*
 docs/internal/*
-.mcp-brain/memory/todo.md
+*/plans/
