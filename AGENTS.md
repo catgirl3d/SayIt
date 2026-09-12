@@ -21,7 +21,7 @@
 
 ## 5. Local Rust Build Directory
 - This Windows workstation has insufficient free space on the repository volume for Rust/Tauri build artifacts. Keep the Cargo target directory outside the repository.
-- Before running any Cargo or Tauri command that can compile Rust, preserve the inherited `CARGO_TARGET_DIR`. If it is unset on this workstation, set it for the command or shell session to `C:/cargo-target/sayit`.
-- In Git Bash, inspect it with `printf '%s\n' "$CARGO_TARGET_DIR"` and set it for the current shell with `export CARGO_TARGET_DIR='C:/cargo-target/sayit'`. In PowerShell, use `$env:CARGO_TARGET_DIR` instead.
-- Verify the effective directory with `cargo metadata --no-deps --format-version 1 --offline` before an expensive build when the environment is uncertain.
+- Pass the directory inline in the same command as the build, for example: `CARGO_TARGET_DIR='C:/cargo-target/sayit' cargo test --offline`. A separate `export` does not survive tool invocations; without the inline variable cargo silently builds into `client/src-tauri/target` on the almost-full repository volume (observed: a full cold rebuild including the transcribe C++/Vulkan stack).
+- On this workstation a local, git-ignored `.cargo/config.toml` at the repository root pins the target directory; cargo discovers it from any directory under the checkout, including the nested Agent Manager worktrees under `.kilo/worktrees`. Worktrees created outside this path must pass `CARGO_TARGET_DIR` inline as above.
+- In Git Bash, inspect the inherited variable with `printf '%s\n' "$CARGO_TARGET_DIR"`; in PowerShell use `$env:CARGO_TARGET_DIR`. When the environment is uncertain, verify the effective directory with `cargo metadata --no-deps --format-version 1 --offline` before an expensive build.
 - Do not commit this machine-specific path to Cargo configuration, package scripts, CI workflows, or Agent Manager scripts. Other machines and CI must choose their own target directory.
