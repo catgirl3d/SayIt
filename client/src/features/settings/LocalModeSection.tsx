@@ -824,8 +824,26 @@ export default function LocalModeSection({ speechLanguage }: Props) {
               return (
                 <div
                   key={model.id}
-                  className={`flex items-center justify-between rounded-lg border p-3 ${
-                    isSelected ? 'border-primary bg-primary/5' : 'border-border'
+                  onClick={() => {
+                    if (isDownloaded && !isSelected && preloadingModelId === '') {
+                      void handleSelectModel(model.id)
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return
+                    if ((e.key === 'Enter' || e.key === ' ') && isDownloaded && !isSelected && preloadingModelId === '') {
+                      e.preventDefault()
+                      void handleSelectModel(model.id)
+                    }
+                  }}
+                  tabIndex={isDownloaded ? 0 : undefined}
+                  aria-current={isSelected ? 'true' : undefined}
+                  className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${
+                    isSelected
+                      ? 'border-primary bg-primary/5'
+                      : isDownloaded
+                        ? 'cursor-pointer border-border hover:border-primary/50 hover:bg-accent/25'
+                        : 'border-border'
                   }`}
                 >
                   <div className="flex-1">
@@ -962,26 +980,26 @@ export default function LocalModeSection({ speechLanguage }: Props) {
                         )
                       })()}
                   </div>
-                  <div className="ml-3 flex gap-2">
+                  <div className="ml-3 flex shrink-0 items-center gap-2">
                     {isDownloaded ? (
                       <>
-                        {!isSelected && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={preloadingModelId !== ''}
-                            onClick={() => void handleSelectModel(model.id)}
-                          >
-                            {preloadingModelId === model.id ? t('local.loadingModel') : t('local.select')}
-                          </Button>
+                        {preloadingModelId === model.id && (
+                          <Tooltip content={t('local.loadingModel')}>
+                            <div className="flex h-8 w-8 items-center justify-center text-primary">
+                              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                            </div>
+                          </Tooltip>
                         )}
                         <Tooltip content={t('common.delete')}>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            className="h-8 w-8 p-0 rounded-md border border-destructive/20 bg-destructive/10 text-destructive transition-colors hover:border-destructive/40 hover:bg-destructive hover:text-destructive-foreground"
                             aria-label={t('common.delete')}
-                            onClick={() => setConfirmDeleteId(model.id)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setConfirmDeleteId(model.id)
+                            }}
                           >
                             <Trash2 className="h-4 w-4" aria-hidden />
                           </Button>
@@ -993,7 +1011,10 @@ export default function LocalModeSection({ speechLanguage }: Props) {
                           size="sm"
                           className="h-8 w-8 p-0"
                           aria-label={isDownloading ? t('local.downloading') : t('local.download')}
-                          onClick={() => void handleDownload(model.id)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleDownload(model.id)
+                          }}
                           disabled={isDownloading}
                         >
                           {isDownloading ? (

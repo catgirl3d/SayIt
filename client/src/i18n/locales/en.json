@@ -664,7 +664,6 @@
   "local.switchSourceRetry": "Retry using {source}",
   "local.manualGuide": "Download manually",
   "local.loadingModel": "Loading…",
-  "local.select": "Select",
   "local.downloading": "Downloading…",
   "local.download": "Download",
   "local.preloading": "Loading \"{name}\"…",

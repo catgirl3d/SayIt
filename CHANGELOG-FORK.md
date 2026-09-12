@@ -23,6 +23,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Removed Whisper Large v2 from the local model catalog in favor of Whisper Large v3 and v3 Turbo, which match or exceed its accuracy with lower memory use and faster transcription. Existing selections of v2 keep working, and previously downloaded v2 weights are not deleted.
 - Redesigned the local model catalog cards with consistent micro-chips for disk, memory, quantization, and languages, eliminating layout shift and uneven button alignment.
 - Added model catalog filtering with "All" and "Downloaded" tabs and a quick search bar with instant cross-lingual search across localized model titles, descriptions, quantization tiers, and language names (Ukrainian, Russian, English).
+- Made downloaded model cards selectable by clicking anywhere on the card body (with keyboard navigation via Enter and Space), removed redundant explicit select buttons, and highlighted the model delete action with a clear soft-destructive style.
 
 ### AI Prompts and Localization
 

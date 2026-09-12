@@ -661,7 +661,6 @@
   "local.switchSourceRetry": "Спробувати знову через {source}",
   "local.manualGuide": "Як завантажити вручну",
   "local.loadingModel": "Завантаження…",
-  "local.select": "Вибрати",
   "local.downloading": "Завантаження…",
   "local.download": "Завантажити",
   "local.preloading": "Завантаження «{name}»…",
