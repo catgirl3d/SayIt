@@ -7,6 +7,21 @@ use super::{
 };
 use crate::error_protocol;
 
+/// Providers that speak the OpenAI chat/completions protocol and reuse the shared implementation.
+const OPENAI_COMPAT_PROVIDERS: &[&str] = &[
+    "openai_compat",
+    "deepseek",
+    "doubao",
+    "qwen",
+    "mimo",
+    "groq",
+    "opencode_go",
+];
+
+fn is_openai_compat_provider(provider: &str) -> bool {
+    OPENAI_COMPAT_PROVIDERS.contains(&provider)
+}
+
 /// 云端 AI 校对（Tauri command）
 #[tauri::command]
 pub async fn cloud_polish(request: CloudPolishRequest) -> Result<AiResult, String> {
@@ -14,7 +29,7 @@ pub async fn cloud_polish(request: CloudPolishRequest) -> Result<AiResult, Strin
     match config.provider.as_str() {
         // Groq 是标准的 OpenAI 兼容 chat/completions，直接复用通用实现，
         // 不需要单独的文件（base_url 已带 /v1，normalize_base_url 会原样保留）。
-        "openai_compat" | "deepseek" | "doubao" | "qwen" | "mimo" | "groq" => {
+        provider if is_openai_compat_provider(provider) => {
             ai_openai_compat::polish(
                 &request.text,
                 config,
@@ -43,7 +58,7 @@ pub async fn cloud_polish(request: CloudPolishRequest) -> Result<AiResult, Strin
 #[tauri::command]
 pub async fn test_ai_connection(config: AiProviderConfig) -> Result<TestResult, String> {
     match config.provider.as_str() {
-        "openai_compat" | "deepseek" | "doubao" | "qwen" | "mimo" | "groq" => {
+        provider if is_openai_compat_provider(provider) => {
             Ok(ai_openai_compat::test_connection(&config).await)
         }
         "ollama" => Ok(ai_ollama::test_connection(&config).await),
@@ -63,7 +78,7 @@ pub async fn test_ai_connection(config: AiProviderConfig) -> Result<TestResult, 
 #[tauri::command]
 pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListResult, String> {
     let fetch = match config.provider.as_str() {
-        "openai_compat" | "deepseek" | "doubao" | "qwen" | "mimo" | "groq" => {
+        provider if is_openai_compat_provider(provider) => {
             ai_openai_compat::list_models(&config).await
         }
         "ollama" => ai_ollama::list_models(&config).await,
@@ -180,5 +195,22 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_compat_list_covers_the_shared_dispatch() {
+        for provider in OPENAI_COMPAT_PROVIDERS {
+            assert!(
+                is_openai_compat_provider(provider),
+                "{provider} must dispatch to the shared OpenAI-compatible implementation"
+            );
+        }
+        assert!(!is_openai_compat_provider("ollama"));
+        assert!(!is_openai_compat_provider("unknown_provider"));
     }
 }

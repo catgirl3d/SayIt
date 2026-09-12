@@ -87,7 +87,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // 下面这四个是**运行时生效的那一份**，录音链路、历史重跑、诊断页、反馈上报都只认它们。
   // 它们由「AI 服务」页在启用/保存时整份写入，不要在别处单独改其中一个
   // （历史 bug：切了模型但地址和密钥还是上一家的）。
-  'cloudAi.provider': 'openai_compat', // 可选: 'deepseek' | 'openai_compat' | 'doubao' | 'qwen' | 'mimo' | 'ollama'
+  'cloudAi.provider': 'openai_compat', // Allowed values come from AI_PROVIDERS in features/settings/aiProviderCatalog.ts.
   'cloudAi.apiUrl': '',
   'cloudAi.apiKey': '',
   'cloudAi.model': '',

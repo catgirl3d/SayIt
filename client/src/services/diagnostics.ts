@@ -21,6 +21,7 @@ const CLOUD_PROVIDERS = new Set([
   'ollama',
   'doubao',
   'groq',
+  'opencode_go',
 ])
 
 function normalizeProvider(value: unknown, mode: string): 'local' | 'server' | 'cloud' | 'unknown' {

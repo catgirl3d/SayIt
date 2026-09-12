@@ -72,6 +72,15 @@ export const AI_PROVIDERS: AiProvider[] = [
     consoleUrl: 'https://console.groq.com/keys',
   },
   {
+    value: 'opencode_go',
+    // Brand name, identical in every locale (same handling as DeepSeek and Groq).
+    label: 'OpenCode Go',
+    // Rust appends /chat/completions: -> https://opencode.ai/zen/go/v1/chat/completions
+    defaultUrl: 'https://opencode.ai/zen/go/v1',
+    defaultModels: ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k2.6'],
+    consoleUrl: 'https://opencode.ai/auth',
+  },
+  {
     value: 'openai_compat',
     get label() { return t('aiProvider.openaiCompat') },
     defaultUrl: 'https://api.openai.com',

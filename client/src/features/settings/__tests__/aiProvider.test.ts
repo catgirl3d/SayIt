@@ -8,6 +8,7 @@ import {
   extractTestReply,
   formatCheckedAt,
   formatLatency,
+  findProvider,
   gradeLatency,
   isCheckFresh,
   isProfileComplete,
@@ -48,6 +49,14 @@ describe('AI_PROVIDERS 清单', () => {
 
   it('只有 Ollama 是免密钥的本机服务', () => {
     expect(AI_PROVIDERS.filter((p) => p.keyless).map((p) => p.value)).toEqual(['ollama'])
+  })
+})
+
+describe('OpenCode Go provider preset', () => {
+  it('uses the Go endpoint, default model, and no key format rule', () => {
+    expect(findProvider('opencode_go').defaultUrl).toBe('https://opencode.ai/zen/go/v1')
+    expect(blankProfile('opencode_go')).toMatchObject({ provider: 'opencode_go', model: 'deepseek-v4.1-flash' })
+    expect(checkAiKeyFormat('opencode_go', 'anything')).toBe('')
   })
 })
 

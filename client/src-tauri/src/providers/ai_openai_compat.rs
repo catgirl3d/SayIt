@@ -13,6 +13,46 @@ fn http() -> &'static reqwest::Client {
     super::http_client::shared()
 }
 
+const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
+
+fn opencode_session_id() -> &'static str {
+    static SESSION: once_cell::sync::Lazy<String> =
+        once_cell::sync::Lazy::new(|| format!("sayit-{}", uuid::Uuid::new_v4()));
+    SESSION.as_str()
+}
+
+fn is_opencode_host(api_url: &str) -> bool {
+    reqwest::Url::parse(api_url.trim())
+        .ok()
+        .and_then(|url| {
+            url.host_str().map(|host| {
+                let host = host.to_ascii_lowercase();
+                host == "opencode.ai" || host.ends_with(".opencode.ai")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Shared header builder for every OpenAI-compatible provider: Bearer auth,
+/// the Xiaomi MiMo api-key header, and the OpenCode session routing header.
+fn apply_provider_headers(
+    mut req: reqwest::RequestBuilder,
+    config: &AiProviderConfig,
+    url: &str,
+) -> reqwest::RequestBuilder {
+    req = req.header("Authorization", format!("Bearer {}", config.api_key));
+    if config.provider == "mimo" {
+        req = req.header("api-key", config.api_key.clone());
+    }
+    // OpenCode Go rejects requests without this routing header with HTTP 400 MissingSessionID.
+    // The explicit provider choice covers relays and proxies; the host check covers profiles
+    // that reach opencode.ai through the generic OpenAI-compatible preset.
+    if config.provider == "opencode_go" || is_opencode_host(url) {
+        req = req.header(OPENCODE_SESSION_HEADER, opencode_session_id());
+    }
+    req
+}
+
 /// 按供应商关闭校对场景不需要的思考模式。
 fn configure_thinking(body: &mut serde_json::Value, config: &AiProviderConfig) {
     let Some(object) = body.as_object_mut() else {
@@ -95,14 +135,11 @@ pub async fn polish(
         ),
     );
 
-    let mut req = http()
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Content-Type", "application/json");
-    // 小米 MiMo 规范鉴权头为 api-key（同时兼容 Bearer），两个都带最稳妥
-    if config.provider == "mimo" {
-        req = req.header("api-key", config.api_key.clone());
-    }
+    let req = apply_provider_headers(
+        http().post(&url).header("Content-Type", "application/json"),
+        config,
+        &url,
+    );
     let resp = req
         .json(&body)
         .timeout(std::time::Duration::from_secs(60))
@@ -226,13 +263,11 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
 
     let start = Instant::now();
 
-    let mut req = http()
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Content-Type", "application/json");
-    if config.provider == "mimo" {
-        req = req.header("api-key", config.api_key.clone());
-    }
+    let req = apply_provider_headers(
+        http().post(&url).header("Content-Type", "application/json"),
+        config,
+        &url,
+    );
     let result = req
         .json(&body)
         .timeout(std::time::Duration::from_secs(30))
@@ -316,15 +351,8 @@ pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<String>, Strin
         &format!("provider={} url={}", config.provider, url),
     );
 
-    let mut req = http()
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
+    let req = apply_provider_headers(http().get(&url), config, &url)
         .timeout(std::time::Duration::from_secs(30));
-    // Xiaomi MiMo requires the api-key header. Keep Bearer as well for compatibility
-    // with polish and test_connection.
-    if config.provider == "mimo" {
-        req = req.header("api-key", config.api_key.clone());
-    }
 
     let start = Instant::now();
 
@@ -614,5 +642,87 @@ mod tests {
             models_url("https://api.openai.com"),
             "https://api.openai.com/v1/models"
         );
+    }
+
+    #[test]
+    fn detects_opencode_hosts() {
+        assert!(is_opencode_host("https://opencode.ai/zen/go/v1/chat/completions"));
+        assert!(is_opencode_host("https://api.opencode.ai/v1"));
+        assert!(is_opencode_host("https://OPENCODE.AI/zen/v1"));
+        assert!(!is_opencode_host("https://opencode.ai.evil.com/v1"));
+        assert!(!is_opencode_host("https://api.openai.com"));
+        assert!(!is_opencode_host("https://example.com/opencode.ai"));
+        assert!(!is_opencode_host("not a url"));
+    }
+
+    #[test]
+    fn opencode_session_id_is_stable_and_opaque() {
+        let first = opencode_session_id();
+        let second = opencode_session_id();
+        assert_eq!(first, second);
+        assert!(!first.is_empty());
+        assert!(first.starts_with("sayit-"));
+    }
+
+    fn opencode_header_config(provider: &str) -> AiProviderConfig {
+        AiProviderConfig {
+            provider: provider.to_string(),
+            api_url: String::new(),
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            extra: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn sends_session_header_for_the_opencode_go_choice_through_a_relay() {
+        let url = "https://relay.example.com/v1/chat/completions";
+        let request = apply_provider_headers(
+            http().post(url),
+            &opencode_header_config("opencode_go"),
+            url,
+        )
+        .build()
+        .expect("request builds");
+        assert_eq!(
+            request
+                .headers()
+                .get(OPENCODE_SESSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(opencode_session_id())
+        );
+    }
+
+    #[test]
+    fn sends_session_header_for_an_opencode_host_with_the_generic_preset() {
+        let url = "https://opencode.ai/zen/go/v1/chat/completions";
+        let request = apply_provider_headers(
+            http().post(url),
+            &opencode_header_config("openai_compat"),
+            url,
+        )
+        .build()
+        .expect("request builds");
+        assert!(request.headers().contains_key(OPENCODE_SESSION_HEADER));
+    }
+
+    #[test]
+    fn omits_session_header_for_other_providers_and_hosts() {
+        let url = "https://api.deepseek.com/v1/chat/completions";
+        let request = apply_provider_headers(
+            http().post(url),
+            &opencode_header_config("deepseek"),
+            url,
+        )
+        .build()
+        .expect("request builds");
+        assert!(!request.headers().contains_key(OPENCODE_SESSION_HEADER));
+    }
+
+    #[test]
+    fn derives_go_endpoints_from_the_preset_url() {
+        assert_eq!(chat_completion_url("https://opencode.ai/zen/go/v1"), "https://opencode.ai/zen/go/v1/chat/completions");
+        assert_eq!(models_url("https://opencode.ai/zen/go/v1"), "https://opencode.ai/zen/go/v1/models");
+        assert_eq!(models_url("https://opencode.ai/zen/go/v1/chat/completions"), "https://opencode.ai/zen/go/v1/models");
     }
 }

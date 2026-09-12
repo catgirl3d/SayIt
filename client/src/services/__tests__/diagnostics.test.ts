@@ -28,6 +28,7 @@ import {
   getDiagnosticsPreview,
   saveSupportBundle,
 } from '../diagnostics'
+import { AI_PROVIDERS } from '@/features/settings/aiProviderCatalog'
 
 describe('public diagnostics', () => {
   beforeEach(() => {
@@ -94,6 +95,19 @@ describe('public diagnostics', () => {
       asrProvider: 'local',
       aiProvider: 'cloud',
     })
+  })
+
+  it('classifies every catalog AI provider as cloud in local mode', async () => {
+    state.mode = 'local'
+    state.settings.set('aiEnabled', true)
+
+    for (const provider of AI_PROVIDERS) {
+      state.settings.set('cloudAi.provider', provider.value)
+      expect(await collectPublicDiagnosticsEnvironment(), provider.value).toMatchObject({
+        workMode: 'local',
+        aiProvider: 'cloud',
+      })
+    }
   })
 
   it('creates and saves through bridge methods without a network path', async () => {

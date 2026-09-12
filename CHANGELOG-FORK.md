@@ -35,6 +35,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 ### AI Providers
 
 - Added remote model discovery for Ollama and OpenAI-compatible endpoints, with selectable model catalogs in the settings UI.
+- Added OpenCode Go as an AI provider preset and send the mandatory `x-opencode-session` routing header on OpenCode (Zen and Go) endpoints, fixing HTTP 400 `MissingSessionID` failures.
 
 ### Desktop Client
 
