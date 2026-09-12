@@ -38,7 +38,7 @@ const DISPLAY_NAMES_BY_LOCALE = new Map<string, Intl.DisplayNames>()
  * Returns a human-readable, capitalized display name for an ISO-639-1 / BCP-47
  * language code in the current or specified UI locale.
  */
-export function getLanguageDisplayName(code: string, locale = getLocale()): string {
+export function getLanguageDisplayName(code: string, locale: string = getLocale()): string {
   const norm = code.toLowerCase().trim()
   if (!norm) return ''
 

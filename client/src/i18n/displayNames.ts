@@ -1,6 +1,6 @@
 import type { HistoryFailReasonCode, PromptPreset } from '@/services/store'
 import type { AppPromptRule } from '@/services/personalization/types'
-import { t, type TranslationKey } from '.'
+import { t, tForLocale, type TranslationKey } from '.'
 
 const BUILTIN_PRESET_NAME_KEYS: Record<string, TranslationKey> = {
   intent: 'builtinPreset.intent',
@@ -151,20 +151,23 @@ interface LocalModelDisplaySource {
   languages_label?: string
 }
 
-/** Rust catalog 保留稳定 id；展示文案在渲染时取值，切换界面语言不会冻结。 */
-export function localModelDisplayName(model: LocalModelDisplaySource): string {
+/**
+ * Resolves localized model name. When locale is supplied, resolves strictly for
+ * that locale without reading currentLocale; otherwise falls back to active UI locale.
+ */
+export function localModelDisplayName(model: LocalModelDisplaySource, locale?: string): string {
   const key = LOCAL_MODEL_KEYS[model.id]?.name
-  return key ? t(key) : model.name
+  return key ? (locale ? tForLocale(key, locale) : t(key)) : model.name
 }
 
-export function localModelDisplayDescription(model: LocalModelDisplaySource): string {
+export function localModelDisplayDescription(model: LocalModelDisplaySource, locale?: string): string {
   const key = LOCAL_MODEL_KEYS[model.id]?.description
-  return key ? t(key) : model.description || ''
+  return key ? (locale ? tForLocale(key, locale) : t(key)) : model.description || ''
 }
 
-export function localModelDisplayLanguages(model: LocalModelDisplaySource): string {
+export function localModelDisplayLanguages(model: LocalModelDisplaySource, locale?: string): string {
   const key = LOCAL_MODEL_KEYS[model.id]?.languages
-  return key ? t(key) : model.languages_label || ''
+  return key ? (locale ? tForLocale(key, locale) : t(key)) : model.languages_label || ''
 }
 
 /** 新记录按稳定 code 翻译；老记录没有 code 时保留当时写入的原文。 */

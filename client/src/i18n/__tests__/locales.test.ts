@@ -8,6 +8,7 @@ import {
   resolveLocale,
   setLocale,
   t,
+  tForLocale,
   LOCALES,
 } from '..'
 import {
@@ -119,6 +120,30 @@ describe('t', () => {
     setLocale('en')
     expect(t('titleBar.presetTooltip')).toContain('{name}')
     expect(t('titleBar.presetTooltip')).not.toContain('undefined')
+  })
+})
+
+describe('tForLocale', () => {
+  afterEach(() => setLocale('en'))
+
+  it('resolves text for an explicit locale independently of currentLocale', () => {
+    setLocale('en')
+    expect(tForLocale('nav.home', 'uk')).toBe(uk['nav.home'])
+    expect(tForLocale('nav.home', 'en')).toBe(en['nav.home'])
+
+    setLocale('uk')
+    expect(tForLocale('nav.home', 'en')).toBe(en['nav.home'])
+    expect(tForLocale('nav.home', 'uk')).toBe(uk['nav.home'])
+  })
+
+  it('interpolates placeholders in explicit locale', () => {
+    const rendered = tForLocale('titleBar.presetTooltip', 'uk', { name: 'Faithful' })
+    expect(rendered).toBe(uk['titleBar.presetTooltip'].replace('{name}', 'Faithful'))
+    expect(rendered).not.toContain('{name}')
+  })
+
+  it('falls back to default locale for invalid locale tag', () => {
+    expect(tForLocale('nav.home', 'unknown-tag')).toBe(en['nav.home'])
   })
 })
 

@@ -112,3 +112,23 @@ export function t(key: TranslationKey, params?: Record<string, string | number>)
     return value === undefined ? match : String(value)
   })
 }
+
+/**
+ * Looks up a localized string for an explicit target locale without relying on
+ * the global currentLocale singleton.
+ */
+export function tForLocale(
+  key: TranslationKey,
+  locale: string,
+  params?: Record<string, string | number>,
+): string {
+  const loc = resolveLocale(locale)
+  const table = TABLES[loc] ?? TABLES[DEFAULT_LOCALE]
+  const template = table[key] ?? TABLES[DEFAULT_LOCALE][key] ?? key
+  if (!params) return template
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => {
+    const value = params[name]
+    return value === undefined ? match : String(value)
+  })
+}
+
