@@ -159,11 +159,15 @@ const SINGLE_KEY_TABLE: &[(&str, u32)] = &[
     // 鼠标中键：走同一个低级鼠标钩子，vk 用 VK_MBUTTON。
     ("MButton", 0x04),
     // 浏览器后退/前进键：罗技等改键鼠标常把侧键映射成这个（走键盘钩子）。
-    ("BrowserBack", 0xA6),
-    ("BrowserForward", 0xA7),
+    ("BrowserBack", VK_BROWSER_BACK),
+    ("BrowserForward", VK_BROWSER_FORWARD),
     ("F1", 0x70), ("F2", 0x71), ("F3", 0x72), ("F4", 0x73),
     ("F5", 0x74), ("F6", 0x75), ("F7", 0x76), ("F8", 0x77),
     ("F9", 0x78), ("F10", 0x79), ("F11", 0x7A), ("F12", 0x7B),
+    // F13-F24 are virtual function keys commonly produced by remappers.
+    ("F13", 0x7C), ("F14", 0x7D), ("F15", 0x7E), ("F16", 0x7F),
+    ("F17", 0x80), ("F18", 0x81), ("F19", 0x82), ("F20", 0x83),
+    ("F21", 0x84), ("F22", 0x85), ("F23", 0x86), ("F24", 0x87),
 ];
 
 fn ptt_modifier_family(code: &str) -> Option<&'static str> {
@@ -340,6 +344,20 @@ fn is_mouse_button_setting(setting: &str) -> bool {
 /// 若日后往 SINGLE_KEY_TABLE 里加第四个鼠标键，这里也要跟着加（有测试钉住）。
 fn is_mouse_vk(vk: u32) -> bool {
     matches!(vk, 0x04 | 0x05 | 0x06)
+}
+
+/// Virtual keys commonly produced by keyboard and mouse remappers: F13-F24 and the
+/// browser back/forward keys. Remappers emit them as injected events or with scanCode 0,
+/// so they must bypass the synthetic-event filter for configured shortcuts to work.
+const VK_BROWSER_BACK: u32 = 0xA6;
+const VK_BROWSER_FORWARD: u32 = 0xA7;
+const VK_F13: u32 = 0x7C;
+const VK_F24: u32 = 0x87;
+
+/// Synthetic events that can legitimately represent configured shortcuts,
+/// i.e. the remapper-produced virtual keys above.
+fn is_injection_exempt_vk(vk: u32) -> bool {
+    matches!(vk, VK_BROWSER_BACK | VK_BROWSER_FORWARD) || (VK_F13..=VK_F24).contains(&vk)
 }
 
 #[allow(dead_code)]
@@ -564,8 +582,8 @@ unsafe fn is_ptt_member_physically_down(vk: u32) -> bool {
     let mapped_side_button_down = match vk {
         // 罗技等驱动常把标准侧键改写成 BrowserBack/Forward；同时检查原始
         // XBUTTON，避免注入后的浏览器 VK 不维护异步键状态。
-        0xA6 => GetAsyncKeyState(0x05) < 0,
-        0xA7 => GetAsyncKeyState(0x06) < 0,
+        VK_BROWSER_BACK => GetAsyncKeyState(0x05) < 0,
+        VK_BROWSER_FORWARD => GetAsyncKeyState(0x06) < 0,
         _ => false,
     };
     configured_key_down || mapped_side_button_down
@@ -1288,8 +1306,8 @@ impl KeyboardHookManager {
                             0x04 => "MButton",
                             0x05 => "XButton1",
                             0x06 => "XButton2",
-                            0xA6 => "BrowserBack",
-                            0xA7 => "BrowserForward",
+                            VK_BROWSER_BACK => "BrowserBack",
+                            VK_BROWSER_FORWARD => "BrowserForward",
                             _ => "",
                         };
                         crate::commands::system::write_log_line(
@@ -1674,7 +1692,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
             });
 
             // 浏览器后退/前进键 → 作为侧键绑定，并吞掉避免 webview 后退/前进导航。
-            if vk == 0xA6 || vk == 0xA7 {
+            if vk == VK_BROWSER_BACK || vk == VK_BROWSER_FORWARD {
                 if is_kdown {
                     SHORTCUT_CAPTURE.store(false, Ordering::SeqCst);
                     HOOK_ACTION_TX.with(|tx| {
@@ -1692,13 +1710,12 @@ unsafe extern "system" fn low_level_keyboard_proc(
             return CallNextHookEx(None, n_code, w_param, l_param);
         }
 
-        // 幻影过滤：注入或 scanCode==0 视为系统合成键，放行、不当作用户按键。
-        // 例外：浏览器后退/前进（0xA6/0xA7）常由鼠标驱动“注入”，不能按幻影丢弃——
-        // 否则绑成侧键后按下不生效；它们不会是“幻影 Alt”，放行进入匹配是安全的。
+        // Synthetic filtering: injected or scanCode==0 events are normally ignored.
+        // Remapper-emitted keys (F13-F24, BrowserBack/Forward) are exempted by
+        // is_injection_exempt_vk so configured shortcuts on them keep working.
         let is_synthetic = ((kb.flags.0 & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)) != 0
             || kb.scanCode == 0)
-            && vk != 0xA6
-            && vk != 0xA7;
+            && !is_injection_exempt_vk(vk);
         if is_synthetic {
             // 只接受“已有真实 PTT down”的合成抬起作为释放信号。Windows 辅助功能、
             // 远程桌面或驱动可能把配对 up 标成 injected/scanCode=0；此前在这里直接
@@ -1976,8 +1993,9 @@ unsafe extern "system" fn low_level_keyboard_proc(
 mod tests {
     use super::{
         begin_hf_press, begin_ptt_press, claim_ptt_release, complete_ptt_release, end_hf_press,
-        is_mouse_button_setting, is_mouse_vk, press_ptt_member, ptt_key_config, release_ptt_member,
-        should_consume_combo_main_down, DEFAULT_PTT_SETTING, DEFAULT_PTT_VK, SINGLE_KEY_TABLE,
+        is_injection_exempt_vk, is_mouse_button_setting, is_mouse_vk, press_ptt_member,
+        ptt_key_config, release_ptt_member, should_consume_combo_main_down, DEFAULT_PTT_SETTING,
+        DEFAULT_PTT_VK, SINGLE_KEY_TABLE,
     };
     #[cfg(windows)]
     use super::queue_ptt_release;
@@ -2080,6 +2098,38 @@ mod tests {
         let modifier_combo = ptt_key_config("ControlLeft+MetaLeft");
         assert_eq!(modifier_combo.vk_codes, vec![0xA2, 0x5B]);
         assert_eq!(modifier_combo.modifier_mask, 0b11);
+    }
+
+    #[test]
+    fn function_keys_f1_through_f24_are_present_with_contiguous_vks() {
+        for n in 1..=24_u32 {
+            let code = format!("F{n}");
+            let expected_vk = 0x70 + n - 1;
+            let found = SINGLE_KEY_TABLE
+                .iter()
+                .find(|(setting, _)| *setting == code.as_str());
+            let Some((_, vk)) = found else {
+                panic!("{code} must be present in SINGLE_KEY_TABLE");
+            };
+            assert_eq!(*vk, expected_vk, "{code} must map to its contiguous VK");
+
+            let config = ptt_key_config(&code);
+            assert_eq!(config.setting, code, "{code} must not fall back to the default");
+            assert_eq!(config.vk_codes, vec![expected_vk]);
+        }
+    }
+
+    #[test]
+    fn injected_function_keys_and_side_button_remaps_are_exempt_from_synthetic_filter() {
+        for vk in 0x7C..=0x87_u32 {
+            assert!(is_injection_exempt_vk(vk), "{vk:#04x} must be exempt");
+        }
+        assert!(is_injection_exempt_vk(0xA6));
+        assert!(is_injection_exempt_vk(0xA7));
+        assert!(!is_injection_exempt_vk(0x7B));
+        assert!(!is_injection_exempt_vk(0x88));
+        assert!(!is_injection_exempt_vk(0xA4));
+        assert!(!is_injection_exempt_vk(0xA5));
     }
 
     #[test]

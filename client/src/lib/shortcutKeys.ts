@@ -43,8 +43,8 @@ export const SINGLE_KEYS: SingleKeyDef[] = [
   // 浏览器后退/前进键（罗技等改键鼠标常把侧键映射成这个，由键盘钩子处理）
   { setting: 'BrowserBack', vk: 0xa6, label: '鼠标侧键（后退键）' },
   { setting: 'BrowserForward', vk: 0xa7, label: '鼠标侧键（前进键）' },
-  // 功能键
-  ...Array.from({ length: 12 }, (_, index) => ({
+  // Function keys F1-F24.
+  ...Array.from({ length: 24 }, (_, index) => ({
     setting: `F${index + 1}`,
     vk: 0x70 + index,
     label: `F${index + 1}`,

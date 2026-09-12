@@ -39,6 +39,19 @@ describe('PTT 物理组合键', () => {
     expect(PTT_CODE_TO_VK.KeyK).toBe(0x4b)
   })
 
+  it('supports F1 through F24 as single-key shortcuts', () => {
+    for (let n = 1; n <= 24; n += 1) {
+      const code = `F${n}`
+      expect(PTT_CODE_TO_VK[code], `${code} must be in the shortcut table`).toBe(0x70 + n - 1)
+      expect(isValidPTTShortcut(code), `${code} must be valid as a single key`).toBe(true)
+    }
+    expect(displayPTTShortcut('F13')).toEqual(['F13'])
+    expect(displayPTTShortcut('F24')).toEqual(['F24'])
+    expect(isValidPTTShortcut('ControlLeft+F13')).toBe(true)
+    expect(isValidPTTShortcut('AltLeft+F13')).toBe(true)
+    expect(getPTTShortcutValidationError('AltLeft+F4')).not.toBeNull()
+  })
+
   it('拒绝单独 Win、裸字母、多主键和危险系统组合', () => {
     expect(getPTTShortcutValidationError('MetaLeft')).toContain("can't be used on its own")
     expect(getPTTShortcutValidationError('KeyK')).toContain("can't be used on their own")
