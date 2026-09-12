@@ -1,6 +1,6 @@
 // 本地模式配置面板 — 模型管理
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -29,12 +29,14 @@ import { getSetting, setSetting } from '@/services/store'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { reconnectProvider } from '@/services/recorder'
 import { describeDownloadError } from '@/lib/errorMessages'
-import { modelSupportsSpeechLanguage, resolveBadgeLanguage, sortModelsBySpeechLanguageSupport } from '@/lib/asrModels'
+import { modelSupportsSpeechLanguage, resolveBadgeLanguage } from '@/lib/asrModels'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { localModelDisplayDescription, localModelDisplayName } from '@/i18n/displayNames'
 import { ModelLanguageBadge } from './ModelLanguageBadge'
+import { type ModelFilterTab, filterCatalogModels } from './modelFilter'
+import { ModelFilterBar, ModelFilterEmptyState } from './ModelFilterBar'
 
 /** 模型存储位置变更的窗口事件：次级设置卡片（LocalModeAdvancedSection）里改了
  *  目录后，通知模型列表卡片刷新已下载状态——两个卡片各自持有状态、不在同一组件树。 */
@@ -419,6 +421,8 @@ export default function LocalModeSection({ speechLanguage }: Props) {
   const [downloading, setDownloading] = useState<Record<string, DownloadProgress>>({})
   // 「更多模型」折叠。默认只展示 featured 的小/中/大三个，其余点开才看到。
   const [showMore, setShowMore] = useState(false)
+  const [modelFilterTab, setModelFilterTab] = useState<ModelFilterTab>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   // 模型清单的加载状态。原来 loadData 的 catch 是空的，list_available_models 失败时
   // 页面只剩标题 + 下载源一行 + 下面一片空白，看起来像"本地模式坏了"。
   const [listState, setListState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -646,16 +650,14 @@ export default function LocalModeSection({ speechLanguage }: Props) {
     }
   }
 
-  const downloadedIds = new Set(downloadedModels.filter((m) => m.complete).map((m) => m.id))
+  const downloadedIds = useMemo(
+    () => new Set(downloadedModels.filter((m) => m.complete).map((m) => m.id)),
+    [downloadedModels],
+  )
   const selectedModel = availableModels.find((m) => m.id === selectedModelId)
-  const badgeLanguage = resolveBadgeLanguage(speechLanguage, getLocale())
-
-  // Featured models are shown directly; others are collapsed into "More models". Fallback to all if featured is not set.
-  const featuredModels = availableModels.some((m) => m.featured)
-    ? availableModels.filter((m) => m.featured)
-    : availableModels
-  const moreModels = availableModels.filter((m) => !featuredModels.includes(m))
-  const modelsToDisplay = showMore ? [...featuredModels, ...moreModels] : featuredModels
+  const currentLocale = getLocale()
+  const badgeLanguage = resolveBadgeLanguage(speechLanguage, currentLocale)
+  const downloadedCount = availableModels.filter((m) => downloadedIds.has(m.id)).length
 
   const isModelRecommendedForCurrentLanguage = (modelId: string): boolean => {
     if (badgeLanguage === 'uk') return modelId === 'nemotron-asr-streaming-0.6b-gguf'
@@ -664,12 +666,20 @@ export default function LocalModeSection({ speechLanguage }: Props) {
     return false
   }
 
-  const sortedByLanguage = sortModelsBySpeechLanguageSupport(modelsToDisplay, badgeLanguage)
-  const visibleModels = [...sortedByLanguage].sort((a, b) => {
-    const aRec = isModelRecommendedForCurrentLanguage(a.id) ? 1 : 0
-    const bRec = isModelRecommendedForCurrentLanguage(b.id) ? 1 : 0
-    return bRec - aRec
-  })
+  const { visibleModels, moreCount, isFiltering } = useMemo(
+    () =>
+      filterCatalogModels({
+        models: availableModels,
+        downloadedIds,
+        filterTab: modelFilterTab,
+        searchQuery,
+        showMore,
+        badgeLanguage,
+        locale: currentLocale,
+        isRecommended: isModelRecommendedForCurrentLanguage,
+      }),
+    [availableModels, downloadedIds, modelFilterTab, searchQuery, showMore, badgeLanguage, currentLocale],
+  )
 
   // 下载源按钮从 catalog 生成，保证和后端提供的源一一对应
   // （catalog 的测试保证了所有模型的源集合一致，取第一个模型的即可）
@@ -770,6 +780,16 @@ export default function LocalModeSection({ speechLanguage }: Props) {
             />
           </div>
 
+          {/* Model filter bar: All / Downloaded tabs + quick search input */}
+          <ModelFilterBar
+            tab={modelFilterTab}
+            onTabChange={setModelFilterTab}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            totalCount={availableModels.length}
+            downloadedCount={downloadedCount}
+          />
+
           {listState === 'loading' && <p className="py-4 text-sm text-muted-foreground">{t('local.loadingCatalog')}</p>}
           {listState === 'error' && (
             <Feedback
@@ -783,7 +803,12 @@ export default function LocalModeSection({ speechLanguage }: Props) {
             <Feedback tone="warning" message={t('local.catalogEmpty')} />
           )}
 
-          <div className="space-y-2">
+          <div
+            id="model-catalog-list"
+            role="tabpanel"
+            aria-labelledby={modelFilterTab === 'downloaded' ? 'model-filter-tab-downloaded' : 'model-filter-tab-all'}
+            className="space-y-2"
+          >
             {visibleModels.map((model) => {
               const modelName = localModelDisplayName(model)
               const modelDescription = localModelDisplayDescription(model)
@@ -1012,15 +1037,28 @@ export default function LocalModeSection({ speechLanguage }: Props) {
             </div>
           )}
 
-          {/* 更多模型：小众需求（更多语种 / 中间量化档）折叠收纳 */}
-          {moreModels.length > 0 && (
+          {availableModels.length > 0 && visibleModels.length === 0 && listState === 'ready' && (
+            <ModelFilterEmptyState
+              tab={modelFilterTab}
+              downloadedCount={downloadedCount}
+              searchQuery={searchQuery}
+              onSwitchToAll={() => setModelFilterTab('all')}
+              onClearFilters={() => {
+                setSearchQuery('')
+                setModelFilterTab('all')
+              }}
+            />
+          )}
+
+          {/* 更多模型：非过滤/搜索状态下折叠收纳 */}
+          {!isFiltering && moreCount > 0 && (
             <button
               type="button"
               aria-expanded={showMore}
               onClick={() => setShowMore(!showMore)}
               className="mt-3 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              {showMore ? t('common.collapse') : t('local.moreModels', { count: moreModels.length })}
+              {showMore ? t('common.collapse') : t('local.moreModels', { count: moreCount })}
               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showMore ? 'rotate-180' : ''}`} aria-hidden />
             </button>
           )}
