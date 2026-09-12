@@ -875,33 +875,31 @@ export default function LocalModeSection({ speechLanguage }: Props) {
                       )}
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground">{modelDescription}</p>
-                    {/* Parameter row: rating bars + download size (disk icon) + memory usage + quantization tier + languages */}
-                    <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-muted-foreground">
+                    {/* Parameter row: rating bars + vertical divider + specs chips (disk, RAM, quant, languages) */}
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-xs text-muted-foreground">
                       {model.speed ? <MiniRating label={t('local.speed')} value={model.speed} /> : null}
                       {model.accuracy ? <MiniRating label={t('local.accuracy')} value={model.accuracy} /> : null}
+                      {(model.speed || model.accuracy) && (model.total_size_bytes > 0 || model.memory_mb || model.quant || (model.languages?.length ?? 0) > 0) && (
+                        <div className="mx-0.5 h-3.5 w-px bg-border/80" aria-hidden />
+                      )}
                       {model.total_size_bytes > 0 && (
-                        <span className="flex items-center gap-1">
-                          <HardDrive className="h-3 w-3" />
+                        <span className="inline-flex min-w-[72px] items-center justify-center gap-1 rounded-md border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                          <HardDrive className="h-3 w-3 opacity-70" aria-hidden />
                           {formatSize(model.total_size_bytes)}
                         </span>
                       )}
                       {model.memory_mb ? (
-                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
-                          <span aria-hidden>·</span>
-                          <span>{t('local.memoryUsage', { size: formatMemory(model.memory_mb) })}</span>
+                        <span className="inline-flex min-w-[110px] w-auto max-w-full items-center justify-center rounded-md border border-border/70 bg-muted/40 px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                          {t('local.memoryUsage', { size: formatMemory(model.memory_mb) })}
                         </span>
                       ) : null}
                       {model.quant ? (
-                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
-                          <span aria-hidden>·</span>
-                          <span>{model.quant}</span>
+                        <span className="inline-flex min-w-[56px] items-center justify-center rounded-md border border-border/70 bg-muted/40 px-1.5 py-0.5 font-mono text-[11px] font-medium text-muted-foreground">
+                          {model.quant}
                         </span>
                       ) : null}
                       {((model.languages?.length ?? 0) > 0 || Boolean(model.languages_label)) && (
-                        <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
-                          <span aria-hidden>·</span>
-                          <ModelLanguageBadge model={model} badgeLanguage={badgeLanguage} />
-                        </span>
+                        <ModelLanguageBadge model={model} badgeLanguage={badgeLanguage} />
                       )}
                     </div>
                     {isDownloading && progress && (
