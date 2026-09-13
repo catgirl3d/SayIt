@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   AI_PROVIDERS,
   aiProvidersForDisplay,
+  applyProviderSwitch,
   blankProfile,
   checkAiKeyFormat,
   checkApiUrl,
@@ -325,6 +326,63 @@ describe('newDraftProfile', () => {
     const saved = profile({ id: 'a', provider: 'qwen', apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode' })
     expect(newDraftProfile([saved], 'deleted-id').provider).toBe('qwen')
     expect(newDraftProfile([], '').provider).toBe(preferredAiProviderValue())
+  })
+})
+
+describe('applyProviderSwitch', () => {
+  it('replaces a URL and key inherited from the provider being left', () => {
+    const qwen = profile({ id: 'q', provider: 'qwen', apiUrl: 'https://qwen.example/v1', apiKey: 'sk-qwen' })
+    const ds = profile({ id: 'd', apiUrl: 'https://deepseek.example/v1', apiKey: 'sk-ds' })
+    const draft = { ...blankProfile('qwen'), apiUrl: qwen.apiUrl, apiKey: qwen.apiKey }
+    expect(applyProviderSwitch(draft, ['qwen3.6-flash'], 'deepseek', [qwen, ds])).toEqual({
+      provider: 'deepseek',
+      apiUrl: 'https://deepseek.example/v1',
+      apiKey: 'sk-ds',
+      models: ['deepseek-v4-flash'],
+    })
+  })
+
+  it('leaves no foreign key behind when switching back and forth', () => {
+    const qwen = profile({ id: 'q', provider: 'qwen', apiUrl: 'https://qwen.example/v1', apiKey: 'sk-qwen' })
+    const ds = profile({ id: 'd', apiKey: 'sk-ds' })
+    const first = applyProviderSwitch(blankProfile('qwen'), ['qwen3.6-flash'], 'deepseek', [qwen, ds])
+    const back = applyProviderSwitch(
+      { ...blankProfile('qwen'), ...first },
+      first.models,
+      'qwen',
+      [qwen, ds],
+    )
+    expect(back.apiKey).toBe('sk-qwen')
+    expect(back.apiUrl).toBe('https://qwen.example/v1')
+  })
+
+  it('does the same when an existing card is edited rather than created', () => {
+    const qwen = profile({ id: 'q', provider: 'qwen', apiUrl: 'https://qwen.example/v1', apiKey: 'sk-qwen' })
+    const ds = profile({ id: 'd', apiKey: 'sk-ds' })
+    const first = applyProviderSwitch(qwen, ['qwen3.6-flash'], 'deepseek', [qwen, ds])
+    const back = applyProviderSwitch(
+      { ...qwen, provider: first.provider, apiUrl: first.apiUrl, apiKey: first.apiKey },
+      first.models,
+      'qwen',
+      [qwen, ds],
+    )
+    expect(back.apiKey).toBe('sk-qwen')
+    expect(back.apiUrl).toBe('https://qwen.example/v1')
+  })
+
+  it('replaces the stored URL and key when an existing card is switched to another provider', () => {
+    const qwen = profile({ id: 'q', provider: 'qwen', apiUrl: 'https://qwen.example/v1', apiKey: 'sk-qwen' })
+    const next = applyProviderSwitch(qwen, ['qwen3.6-flash'], 'deepseek', [qwen])
+    expect(next.apiUrl).toBe(findProvider('deepseek').defaultUrl)
+    expect(next.apiKey).toBe('')
+  })
+
+  it('keeps a URL, key, and model names the user typed', () => {
+    const draft = { ...blankProfile('qwen'), apiUrl: 'http://127.0.0.1:9000/v1', apiKey: 'sk-mine' }
+    const next = applyProviderSwitch(draft, ['my-local-model'], 'deepseek', [])
+    expect(next.apiUrl).toBe('http://127.0.0.1:9000/v1')
+    expect(next.apiKey).toBe('sk-mine')
+    expect(next.models).toEqual(['my-local-model'])
   })
 })
 

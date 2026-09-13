@@ -309,6 +309,50 @@ export function newDraftProfile(profiles: AiProfile[], activeId: string): AiProf
   return blankProfile(active?.provider)
 }
 
+/** The most recently saved profile of a provider that has a URL — the source for reused credentials. */
+export function lastProfileOf(profiles: AiProfile[], providerValue: string): AiProfile | undefined {
+  return [...profiles].reverse().find((p) => p.provider === providerValue && p.apiUrl.trim() !== '')
+}
+
+/** Fields that follow the new provider when the editor's provider select changes. */
+export interface ProviderSwitchResult {
+  provider: string
+  apiUrl: string
+  apiKey: string
+  models: string[]
+}
+
+/**
+ * Apply a provider change inside the editor.
+ *
+ * Only values still matching what was seeded for the current provider are replaced; anything the
+ * user typed must survive a mis-click of the dropdown. The seeds are the card's own saved profile
+ * (when editing) and the provider's most recent saved profile, so values auto-filled by an earlier
+ * switch also count: A -> B -> A must not leave B's key on A while the reuse hint disappears.
+ */
+export function applyProviderSwitch(
+  draft: AiProfile,
+  models: string[],
+  nextProvider: string,
+  profiles: AiProfile[],
+): ProviderSwitchResult {
+  const from = findProvider(draft.provider)
+  const to = findProvider(nextProvider)
+  const previous = lastProfileOf(profiles, nextProvider)
+  const seeds = [profiles.find((p) => p.id === draft.id), lastProfileOf(profiles, draft.provider)]
+    .filter((p): p is AiProfile => p !== undefined)
+  const urlSeeded = seeds.some((s) => draft.apiUrl.trim() === s.apiUrl.trim())
+  const keySeeded = seeds.some((s) => draft.apiKey === s.apiKey)
+  const urlBoilerplate = draft.apiUrl.trim() === '' || draft.apiUrl.trim() === from.defaultUrl || urlSeeded
+  const modelsBoilerplate = models.length === 0 || models.every((m) => from.defaultModels.includes(m))
+  return {
+    provider: nextProvider,
+    apiUrl: urlBoilerplate ? previous?.apiUrl || to.defaultUrl : draft.apiUrl,
+    apiKey: draft.apiKey.trim() === '' || keySeeded ? previous?.apiKey ?? '' : draft.apiKey,
+    models: modelsBoilerplate ? (to.defaultModels[0] ? [to.defaultModels[0]] : []) : models,
+  }
+}
+
 /**
  * 检查 API Key 格式，返回提示文字（空字符串表示格式正常）。
  *

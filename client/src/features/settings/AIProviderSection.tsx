@@ -45,6 +45,7 @@ import { setEngineDraftDirty } from '@/stores/engineDraft'
 import { describeProviderError } from '@/lib/errorMessages'
 import {
   aiProvidersForDisplay,
+  applyProviderSwitch,
   blankProfile,
   checkAiKeyFormat,
   checkApiUrl,
@@ -55,6 +56,7 @@ import {
   gradeLatency,
   isCheckFresh,
   isProfileComplete,
+  lastProfileOf,
   newDraftProfile,
   normalizeModelNames,
   profileSubtitle,
@@ -285,7 +287,7 @@ export default function AIProviderSection() {
   const draftKeyInherited = draft !== null
     && draftIsNew
     && draft.apiKey.trim() !== ''
-    && lastProfileOf(draft.provider)?.apiKey === draft.apiKey
+    && lastProfileOf(profiles, draft.provider)?.apiKey === draft.apiKey
   const busy = saving || fetchingModels || testingDraft || checkingId !== '' || batch !== null
   const isChecking = (id: string) => checkingId === id || checkingIds.includes(id)
   const pendingDelete = profiles.find((p) => p.id === pendingDeleteId) ?? null
@@ -457,19 +459,10 @@ export default function AIProviderSection() {
 
   function handleDraftProvider(value: string) {
     if (!draft) return
-    const from = findProvider(draft.provider)
-    const to = findProvider(value)
-    const previous = lastProfileOf(value)
-    const boilerplate = draft.apiUrl.trim() === '' || draft.apiUrl.trim() === from.defaultUrl
-    const url = boilerplate ? previous?.apiUrl || to.defaultUrl : draft.apiUrl
-    const apiKey = draft.apiKey.trim() === '' ? previous?.apiKey ?? '' : draft.apiKey
-    const stillBoilerplate = draftModels.length === 0
-      || draftModels.every((m) => from.defaultModels.includes(m))
-    if (stillBoilerplate) {
-      setDraftModels(to.defaultModels[0] ? [to.defaultModels[0]] : [])
-    }
+    const next = applyProviderSwitch(draft, draftModels, value, profiles)
+    setDraftModels(next.models)
     setAvailableModels([])
-    setDraft({ ...draft, provider: value, apiUrl: url, apiKey, check: undefined })
+    setDraft({ ...draft, provider: next.provider, apiUrl: next.apiUrl, apiKey: next.apiKey, check: undefined })
     setNotice(null)
   }
 
@@ -483,10 +476,6 @@ export default function AIProviderSection() {
   /** A change to the model set makes the last test result describe a different configuration. */
   function clearDraftCheck() {
     setDraft((prev) => (prev ? { ...prev, check: undefined } : null))
-  }
-
-  function lastProfileOf(providerValue: string): AiProfile | undefined {
-    return [...profiles].reverse().find((p) => p.provider === providerValue && p.apiUrl.trim() !== '')
   }
 
   async function runTest(profile: AiProfile): Promise<TestOutcome> {

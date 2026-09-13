@@ -41,6 +41,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added OpenCode Go as an AI provider preset and send the mandatory `x-opencode-session` routing header on OpenCode (Zen and Go) endpoints, fixing HTTP 400 `MissingSessionID` failures.
 - Decoupled connection testing from configuration saving in the AI provider editor modal: added an in-modal "Test connection" action for real-time verification without saving or closing, alongside standard Cancel and Save actions that properly close the modal on completion.
 - Stopped the AI provider editor from pre-filling a new service with the active profile's URL and key: the New dialog now starts from the selected provider's own defaults with an empty key, while switching to an already configured provider still reuses its saved credentials with an explicit note.
+- Fixed the AI provider editor keeping another provider's URL and key in the form when the provider select was switched back and forth; values the user typed are still preserved.
 
 ### Desktop Client
 
