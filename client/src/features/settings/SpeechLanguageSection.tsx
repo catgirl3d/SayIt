@@ -1,5 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card'
-import { Segmented } from '@/components/ui/segmented'
+import { Select } from '@/components/ui/select'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
@@ -20,34 +20,35 @@ export default function SpeechLanguageSection({ value, onChange }: Props) {
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">{t('speechLanguage.note')}</p>
           </div>
-          <Segmented
-            labelledBy="speech-language-heading"
-            value={value}
-            options={[
-              {
-                value: 'auto',
-                label: t('common.auto'),
-              },
-              {
-                value: 'ru',
-                label: t('local.lang.ru'),
-              },
-              {
-                value: 'uk',
-                label: t('local.lang.uk'),
-              },
-              {
-                value: 'en',
-                label: t('local.lang.en'),
-              },
-              {
-                value: 'zh',
-                label: t('local.lang.zh'),
-              },
-            ]}
-            onChange={onChange}
-            className="shrink-0 justify-end"
-          />
+          <div className="w-full shrink-0 sm:w-56">
+            <Select
+              value={value}
+              onChange={(val) => onChange(val as SpeechInputLanguage)}
+              options={[
+                {
+                  value: 'auto',
+                  label: t('common.auto'),
+                },
+                {
+                  value: 'ru',
+                  label: t('local.lang.ru'),
+                },
+                {
+                  value: 'uk',
+                  label: t('local.lang.uk'),
+                },
+                {
+                  value: 'en',
+                  label: t('local.lang.en'),
+                },
+                {
+                  value: 'zh',
+                  label: t('local.lang.zh'),
+                },
+              ]}
+              className="text-sm [&>button]:h-9"
+            />
+          </div>
         </div>
       </CardContent>
     </Card>
