@@ -24,20 +24,20 @@ export default function ReportIssueSection() {
     <div>
       <h2 className="mb-3 text-lg font-semibold">{text('reportIssue.title')}</h2>
 
-      <div className="rounded-xl border border-border p-4">
-        <p className="text-sm text-muted-foreground">{text('reportIssue.description')}</p>
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground/70">{text('reportIssue.publicNotice')}</p>
-        {openFailed && <p className="mt-3 text-xs text-destructive">{text('reportIssue.openFailed')}</p>}
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            onClick={() => void handleOpenIssue()}
-            className="flex items-center gap-1.5 rounded-full bg-secondary px-4 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground hover:text-background"
-          >
-            <Bug className="h-3.5 w-3.5" aria-hidden />
-            {text('reportIssue.open')}
-          </button>
+      <div className="flex flex-col gap-4 rounded-xl border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-muted-foreground">{text('reportIssue.description')}</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground/70">{text('reportIssue.publicNotice')}</p>
+          {openFailed && <p className="mt-2 text-xs text-destructive">{text('reportIssue.openFailed')}</p>}
         </div>
+        <button
+          type="button"
+          onClick={() => void handleOpenIssue()}
+          className="flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-secondary px-4 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground hover:text-background"
+        >
+          <Bug className="h-3.5 w-3.5" aria-hidden />
+          {text('reportIssue.open')}
+        </button>
       </div>
     </div>
   )

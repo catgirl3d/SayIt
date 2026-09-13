@@ -379,7 +379,7 @@
   "asrCorrection.errorNotSupported": "Цей сервер ще не підтримує надсилання виправлень (застаріла версія бекенда)",
   "asrCorrection.errorServer": "Помилка надсилання ({status})",
   "reportIssue.title": "Повідомити про проблему",
-  "reportIssue.description": "Відкрийте GitHub Issue, щоб описати проблему або неочікувану поведінку. GitHub відкриється у браузері.",
+  "reportIssue.description": "Відкрийте GitHub Issue, щоб описати проблему або неочікувану поведінку.",
   "reportIssue.publicNotice": "Issues і вкладення є публічними. Не додавайте секрети або приватні дані.",
   "reportIssue.open": "Повідомити на GitHub",
   "reportIssue.openFailed": "Не вдалося відкрити GitHub. Відкрийте форму проблеми вручну.",
