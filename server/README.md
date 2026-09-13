@@ -61,7 +61,7 @@ The ASR workload runs on the server GPU; the optional LLM and PostgreSQL service
 
 ### Prerequisites
 
-- NVIDIA GPU; ≥16GB VRAM is recommended for the default Qwen3-ASR model (e.g., A10G, L4, RTX 4090)
+- NVIDIA GPU with CUDA support for hardware acceleration (lightweight engines like Sber GigaAM require only 2–4 GB VRAM or can run on CPU)
 - Docker with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 - An LLM API key is optional; without one, the server runs ASR-only. Ollama can run locally without an API key.
 

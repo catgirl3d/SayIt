@@ -117,19 +117,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-GPU speech recognition requires an NVIDIA GPU; 16 GB or more of VRAM is recommended for the default server model. See the [server guide](server/README.md) for configuration, deployment, security, and API details.
-
-## Performance reference
-
-The following upstream reference measurement is hardware- and configuration-dependent; it is not a performance guarantee. Qwen3-ASR-1.7B with vLLM on an AWS EC2 `g5.xlarge` (NVIDIA A10G 24 GB):
-
-| Audio length | ASR latency | RTF |
-| --- | --- | --- |
-| 30 seconds | ~0.8 s | 0.025 |
-| 1 minute | ~1.6 s | 0.026 |
-| 2 minutes | ~2.1 s | 0.017 |
-| 3 minutes | ~2.5 s | 0.014 |
-| 5 minutes | ~3.0 s | 0.010 |
+See the [server guide](server/README.md) for configuration, deployment, security, and API details.
 
 ## Development
 
