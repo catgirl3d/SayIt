@@ -5,16 +5,20 @@ import { getStats, type Stats, getSetting } from '@/services/store'
 import { SHORTCUTS_CHANGED_EVENT } from '@/services/bridge'
 import ReportIssueSection from '@/components/ReportIssueSection'
 import NoticeBanner from '@/components/NoticeBanner'
-import { displayShortcut } from '@/lib/shortcutKeys'
+import { resolveDictationTrigger } from '@/lib/shortcutKeys'
 import { getLocale } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
 /**
- * 把带 `{key}` 占位的文案渲染成「文字 + 键帽 + 文字」。
+ * Renders a `{key}` template as "text + keycap + text".
  *
- * 不能把整句塞进一个 t() 就完事：键帽是个带样式的 <span>，而中英文里键帽出现的
- * 位置不同（"按下 X 开始…" vs "Press X to start…"）。按占位符切分，位置就由
- * 译文自己决定，不用为每种语言各写一份 JSX。
+ * The whole sentence cannot just go through one t() call: the keycap is a styled
+ * <span>, and its position differs between languages ("press X to start" vs
+ * "Натисніть X"). Splitting on the placeholder lets each translation choose the
+ * position without a language-specific JSX branch.
+ *
+ * An empty keyLabel means the template has no usable key to show: render the text
+ * alone instead of leaving an empty keycap in the sentence.
  */
 function WithKeyChip({
   template,
@@ -25,6 +29,7 @@ function WithKeyChip({
   keyLabel: string
   chipClassName: string
 }) {
+  if (!keyLabel) return <>{template}</>
   const [before, after = ''] = template.split('{key}')
   return (
     <>
@@ -39,15 +44,22 @@ export default function Home() {
   const t = useT()
   const [stats, setStats] = useState<Stats>({ totalDurationSec: 0, totalChars: 0 })
   const [handsFreeKey, setHandsFreeKey] = useState('AltRight')
+  const [pttKey, setPttKey] = useState('ControlRight')
 
   useEffect(() => {
     getStats().then(setStats)
-    const loadHandsFreeKey = () =>
-      getSetting('shortcutHandsFree', 'AltRight').then((value) => setHandsFreeKey(value as string))
-    void loadHandsFreeKey()
-    // 快捷键变化时（向导 / 设置页修改）实时刷新首页提示，无需切换路由
-    window.addEventListener(SHORTCUTS_CHANGED_EVENT, loadHandsFreeKey)
-    return () => window.removeEventListener(SHORTCUTS_CHANGED_EVENT, loadHandsFreeKey)
+    const loadShortcutKeys = () =>
+      Promise.all([
+        getSetting('shortcutHandsFree', 'AltRight'),
+        getSetting('shortcutPTT', 'ControlRight'),
+      ]).then(([handsFree, ptt]) => {
+        setHandsFreeKey(handsFree as string)
+        setPttKey(ptt as string)
+      })
+    void loadShortcutKeys()
+    // Refresh the hint live when shortcuts change (wizard / settings page), without a route switch.
+    window.addEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
+    return () => window.removeEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
   }, [])
 
   // Format time display
@@ -78,7 +90,16 @@ export default function Home() {
   const avgWordsPerMin = stats.totalDurationSec > 60 ? Math.round(stats.totalChars / (stats.totalDurationSec / 60)) : 0
   const savedTime = formatTime(Math.round(stats.totalChars / 50) * 60)
 
-  const handsFreeKeyLabel = displayShortcut(handsFreeKey).join(' + ')
+  const dictation = resolveDictationTrigger(handsFreeKey, pttKey)
+  const dictationKeyLabel = dictation.keyLabels.join(' + ')
+  const subtitleTemplate = dictation.mode === 'handsFree'
+    ? t('home.subtitle')
+    : dictation.mode === 'ptt'
+      ? t('home.subtitleHold')
+      : t('shortcut.unsetHint')
+  const newUserHintTemplate = dictation.mode === 'handsFree'
+    ? t('home.newUserHint')
+    : t('home.newUserHintHold')
 
   const cards = [
     { icon: Clock, label: t('home.statTotalTime'), ...totalTime },
@@ -108,20 +129,20 @@ export default function Home() {
       <h1 className="mb-4 text-2xl font-bold">{t('home.title')}</h1>
       <p className="mb-8 text-sm text-muted-foreground">
         <WithKeyChip
-          template={t('home.subtitle')}
-          keyLabel={handsFreeKeyLabel}
+          template={subtitleTemplate}
+          keyLabel={dictationKeyLabel}
           chipClassName="px-1.5 py-0.5 text-muted-foreground bg-secondary border border-border rounded"
         />
       </p>
 
       <NoticeBanner />
 
-      {isNewUser && (
+      {isNewUser && dictation.mode !== 'none' && (
         <div className="mb-6 rounded-xl border border-border bg-muted/30 px-5 py-5 text-center">
           <p className="text-sm text-muted-foreground">
             <WithKeyChip
-              template={t('home.newUserHint')}
-              keyLabel={handsFreeKeyLabel}
+              template={newUserHintTemplate}
+              keyLabel={dictationKeyLabel}
               chipClassName="px-1.5 py-0.5 text-muted-foreground bg-secondary border border-border rounded text-xs"
             />
           </p>

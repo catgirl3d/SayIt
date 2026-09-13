@@ -10,6 +10,7 @@ import {
   displayShortcut,
   getSingleKeyDisplay,
   isSingleKeySetting,
+  resolveDictationTrigger,
 } from '@/lib/shortcutKeys'
 import { refreshPTTSetting } from '@/services/webviewKeyboardFallback'
 import appIconOnDark from '@/assets/icon-128.png'
@@ -112,7 +113,14 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
   const t = useT()
   const [step, setStep] = useState(0)
   const [hfKey, setHfKey] = useState('AltRight')
+  const [pttKey, setPttKey] = useState('ControlRight')
   const hfLabel = displayShortcut(hfKey).join(' + ')
+  // An unbound hands-free key is a valid state (the user may have cleared it on
+  // purpose), so every keycap has to fall back to an explicit label instead of
+  // rendering an empty chip.
+  const hfDisplay = hfLabel || t('shortcut.notSet')
+  const dictation = resolveDictationTrigger(hfKey, pttKey)
+  const dictationKeyLabel = dictation.keyLabels.join(' + ')
   const [workMode, setWorkMode] = useState('')
   const [serverOk, setServerOk] = useState<boolean | null>(null)
   const [testText, setTestText] = useState('')
@@ -130,6 +138,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
       setHfKey(key)
       hfKeyRef.current = key
     })
+    getSetting('shortcutPTT', 'ControlRight').then((value) => setPttKey(value as string))
     const mode = getWorkMode()
     setWorkMode(mode)
     if (mode === 'server') {
@@ -311,7 +320,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
                     : 'border-primary/40 bg-primary/5 text-primary animate-pulse'
                   }`}
               >
-                {keyPressed ? `${hfLabel} ⬇` : keyConfirmed ? `✓ ${hfLabel}` : hfLabel}
+                {keyPressed ? `${hfDisplay} ⬇` : keyConfirmed ? `✓ ${hfDisplay}` : hfDisplay}
               </div>
             </div>
 
@@ -358,7 +367,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
                     : 'border-border bg-muted/50 text-foreground hover:border-primary/50'
                     }`}
                 >
-                  {listeningKey ? t('welcome.pressNewKey') : hfLabel}
+                  {listeningKey ? t('welcome.pressNewKey') : hfDisplay}
                 </button>
               </CardContent>
             </Card>
@@ -389,22 +398,28 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
             <Card>
               <CardContent className="p-4">
                 <p className="mb-2 text-sm font-medium">{canTest ? t('welcome.voiceTestReady') : t('welcome.voiceTest')}</p>
-                {canTest && (
-                  <p className="mb-2 text-xs text-muted-foreground">{t('welcome.testHint', { key: hfLabel })}</p>
+                {canTest && dictation.mode !== 'none' && (
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    {dictation.mode === 'handsFree'
+                      ? t('welcome.testHint', { key: dictationKeyLabel })
+                      : t('home.subtitleHold', { key: dictationKeyLabel })}
+                  </p>
                 )}
                 <textarea
                   value={testText}
                   onChange={(e) => setTestText(e.target.value)}
-                  placeholder={canTest
-                    ? t('welcome.testPlaceholder', { key: hfLabel })
+                  placeholder={canTest && dictation.mode !== 'none'
+                    ? dictation.mode === 'handsFree'
+                      ? t('welcome.testPlaceholder', { key: dictationKeyLabel })
+                      : t('home.subtitleHold', { key: dictationKeyLabel })
                     : t('welcome.testUnavailable')}
                   className="w-full resize-none rounded-lg border border-input-border bg-input-bg p-3 text-sm leading-relaxed placeholder:text-muted-foreground/40 focus:border-input-focus-border focus:outline-none"
                   rows={4}
                   readOnly={!canTest}
                 />
-                {!canTest && (
+                {!canTest && dictation.mode !== 'none' && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {t('welcome.testUnavailableHint', { key: hfLabel })}
+                    {t('welcome.testUnavailableHint', { key: dictationKeyLabel })}
                   </p>
                 )}
               </CardContent>
@@ -420,10 +435,22 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
               <CheckCircle2 className="h-8 w-8 text-emerald-500" />
             </div>
             <h2 className="text-xl font-bold">{t('welcome.readyTitle')}</h2>
-            <p className="mt-3 text-sm text-muted-foreground">
-              <ReadyHint template={t('welcome.readyHint')} keyLabel={hfLabel} />
-            </p>
-            <p className="mt-1.5 text-xs text-muted-foreground/70">{t('welcome.readySubHint')}</p>
+            {dictation.mode === 'handsFree' && (
+              <>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  <ReadyHint template={t('welcome.readyHint')} keyLabel={dictationKeyLabel} />
+                </p>
+                <p className="mt-1.5 text-xs text-muted-foreground/70">{t('welcome.readySubHint')}</p>
+              </>
+            )}
+            {dictation.mode === 'ptt' && (
+              <p className="mt-3 text-sm text-muted-foreground">
+                <ReadyHint template={t('home.subtitleHold')} keyLabel={dictationKeyLabel} />
+              </p>
+            )}
+            {dictation.mode === 'none' && (
+              <p className="mt-3 text-sm text-muted-foreground">{t('shortcut.unsetHint')}</p>
+            )}
           </div>
         )
 

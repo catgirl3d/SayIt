@@ -215,6 +215,39 @@ export function displayShortcut(shortcut: string): string[] {
     : displayAccelerator(shortcut)
 }
 
+/**
+ * What actually starts dictation, and how its keycaps should be labeled.
+ *
+ * Hands-free wins when it is bound: the home screen and the wizard describe that
+ * key (press once to start, press again to stop). PTT is the fallback because a
+ * user may clear hands-free on purpose and still dictate by holding that key.
+ * `none` means neither setting is bound — callers must not render a keycap for it,
+ * otherwise the sentence ends up with an empty chip.
+ */
+export type DictationTrigger =
+  | { mode: 'handsFree'; keyLabels: string[] }
+  | { mode: 'ptt'; keyLabels: string[] }
+  | { mode: 'none'; keyLabels: [] }
+
+export function resolveDictationTrigger(
+  handsFreeSetting: string,
+  pttSetting: string,
+): DictationTrigger {
+  const handsFreeLabels = displayShortcut(handsFreeSetting)
+  if (handsFreeLabels.length > 0) return { mode: 'handsFree', keyLabels: handsFreeLabels }
+
+  // Invalid stored values are rejected even though the native hook silently falls
+  // back to ControlRight for them: showing the raw stored string as the dictation
+  // key would name a key that does not work. Legacy Shift bindings stay valid so
+  // unchanged old settings keep being displayed.
+  if (isValidPTTShortcut(pttSetting, { allowLegacyReservedKeys: true })) {
+    const pttLabels = displayPTTShortcut(pttSetting)
+    if (pttLabels.length > 0) return { mode: 'ptt', keyLabels: pttLabels }
+  }
+
+  return { mode: 'none', keyLabels: [] }
+}
+
 /** 拆分 PTT 设置；不在这里静默丢弃未知成员，交给校验器给出明确错误。 */
 export function parsePTTShortcut(setting: string): string[] {
   if (!setting.trim()) return []

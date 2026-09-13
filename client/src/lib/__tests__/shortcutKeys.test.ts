@@ -11,6 +11,7 @@ import {
   pttShortcutConflictsWithAccelerator,
   pttShortcutHasModifier,
   pttShortcutToAccelerator,
+  resolveDictationTrigger,
 } from '../shortcutKeys'
 
 describe('PTT 物理组合键', () => {
@@ -111,5 +112,58 @@ describe('PTT 物理组合键', () => {
     expect(
       pttShortcutConflictsWithAccelerator('ControlLeft+MetaLeft', 'CommandOrControl+K'),
     ).toBe(false)
+  })
+})
+
+describe('实际触发键的解析', () => {
+  it('免提与按住说话都绑定时以免提为准', () => {
+    expect(resolveDictationTrigger('AltRight', 'ControlRight')).toEqual({
+      mode: 'handsFree',
+      keyLabels: ['Right Alt'],
+    })
+  })
+
+  // 回归：首页原来只读免提键，而空字符串是**合法**的已保存值（用户手动清空过），
+  // getSetting 的默认值不会兜底，于是句子里渲染出一个空键帽。
+  it('免提被清空时回退到已绑定的按住说话键', () => {
+    const trigger = resolveDictationTrigger('', 'AltRight')
+    expect(trigger.mode).toBe('ptt')
+    expect(trigger.keyLabels).toEqual(['Right Alt'])
+  })
+
+  it('按住说话组合键经共享键表翻译成键帽', () => {
+    expect(resolveDictationTrigger('   ', 'ControlLeft+KeyK')).toEqual({
+      mode: 'ptt',
+      keyLabels: ['Left Ctrl', 'K'],
+    })
+  })
+
+  it('两者都未绑定时报告 none 且没有键帽', () => {
+    expect(resolveDictationTrigger('', '')).toEqual({ mode: 'none', keyLabels: [] })
+  })
+
+  // Rust 的 ptt_key_config() 对非法值静默回退到 ControlRight；界面不能把原始字符串
+  // 当成用户实际按得响的键展示出来。
+  it('非法的按住说话值不算已绑定，旧 Shift 绑定仍然照常显示', () => {
+    expect(resolveDictationTrigger('', 'ControlLeft+ControlRight')).toEqual({ mode: 'none', keyLabels: [] })
+    expect(resolveDictationTrigger('', 'NotAKey')).toEqual({ mode: 'none', keyLabels: [] })
+    expect(resolveDictationTrigger('', 'ShiftRight').mode).toBe('ptt')
+  })
+
+  it('只要报告了模式，键帽列表就不为空', () => {
+    // 界面直接拿 keyLabels 渲染键帽；非空保证提示句里不会再出现空白键帽。
+    for (const [handsFree, ptt] of [
+      ['AltRight', 'ControlRight'],
+      ['', 'AltRight'],
+      ['Alt+L', 'ControlLeft+KeyK'],
+      ['', ''],
+    ] as const) {
+      const trigger = resolveDictationTrigger(handsFree, ptt)
+      if (trigger.mode === 'none') {
+        expect(trigger.keyLabels).toEqual([])
+      } else {
+        expect(trigger.keyLabels.length).toBeGreaterThan(0)
+      }
+    }
   })
 })

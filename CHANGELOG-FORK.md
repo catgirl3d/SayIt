@@ -48,6 +48,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Reworked settings into routed pages instead of one large settings dialog, including dedicated Audio & Mic and Shortcuts pages.
 - Hardened startup initialization so configuration, locale, and provider failures do not block the main UI.
 - Added F13-F24 single-key shortcut support for programmable keyboards and remapping tools.
+- Fixed the home screen and setup guide showing a blank keycap when the hands-free hotkey had been cleared: they now fall back to the bound push-to-talk key with hold-to-talk wording, and state explicitly when no dictation hotkey is configured.
 
 ### Support and Diagnostics
 
