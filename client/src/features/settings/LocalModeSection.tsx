@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
 import { Feedback } from '@/components/ui/feedback'
 import { Segmented } from '@/components/ui/segmented'
+import { Select } from '@/components/ui/select'
 import { Modal } from '@/components/ui/modal'
 import { getSetting, setSetting } from '@/services/store'
 import { refreshModeStatus } from '@/stores/modeStatus'
@@ -763,22 +764,6 @@ export default function LocalModeSection({ speechLanguage }: Props) {
             <Feedback className="mb-3" tone="warning" message={t('local.notDownloadedWarning')} />
           )}
 
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <span id="download-source-label" className="text-sm text-muted-foreground">
-              {t('local.downloadSource')}
-            </span>
-            <Segmented
-              labelledBy="download-source-label"
-              size="sm"
-              value={effectiveSource}
-              options={sourceOptions.map((src) => ({ value: src, label: sourceLabel(src) }))}
-              onChange={(src) => {
-                setDownloadSource(src)
-                void setSetting('localAsr.downloadSource', src)
-              }}
-              className="shrink-0 justify-end"
-            />
-          </div>
 
           {/* Model filter bar: All / Downloaded tabs + quick search input */}
           <ModelFilterBar
@@ -1083,13 +1068,34 @@ export default function LocalModeSection({ speechLanguage }: Props) {
           )}
 
           {availableModels.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setOfflineGuideOpen(true)}
-              className="mt-3 text-xs text-muted-foreground underline decoration-muted-foreground/40 underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground/60"
-            >
-              {t('local.slowDownloadHint')}
-            </button>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-3">
+              <button
+                type="button"
+                onClick={() => setOfflineGuideOpen(true)}
+                className="text-xs text-muted-foreground underline decoration-muted-foreground/40 underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground/60"
+              >
+                {t('local.slowDownloadHint')}
+              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {t('local.downloadSource')}:
+                </span>
+                <div className="w-44 sm:w-52">
+                  <Select
+                    value={effectiveSource}
+                    onChange={(src) => {
+                      setDownloadSource(src)
+                      void setSetting('localAsr.downloadSource', src)
+                    }}
+                    options={sourceOptions.map((src) => ({
+                      value: src,
+                      label: sourceLabel(src),
+                    }))}
+                    className="[&>button]:h-7 [&>button]:text-xs [&>button]:px-2.5"
+                  />
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
