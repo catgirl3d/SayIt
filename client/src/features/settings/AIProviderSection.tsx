@@ -55,10 +55,10 @@ import {
   gradeLatency,
   isCheckFresh,
   isProfileComplete,
+  newDraftProfile,
   normalizeModelNames,
   profileSubtitle,
   profileTitle,
-  preferredAiProviderValue,
   providerLabel,
   resolveActiveProfile,
   type AiProfile,
@@ -487,16 +487,6 @@ export default function AIProviderSection() {
 
   function lastProfileOf(providerValue: string): AiProfile | undefined {
     return [...profiles].reverse().find((p) => p.provider === providerValue && p.apiUrl.trim() !== '')
-  }
-
-  function makeDraft(providerValue?: string): AiProfile {
-    const active = resolveActiveProfile(profiles, activeId)
-    const target = providerValue ?? active?.provider ?? preferredAiProviderValue()
-    const fresh = blankProfile(target)
-    const previous = lastProfileOf(target)
-    return previous
-      ? { ...fresh, apiUrl: previous.apiUrl, apiKey: previous.apiKey }
-      : fresh
   }
 
   async function runTest(profile: AiProfile): Promise<TestOutcome> {
@@ -932,7 +922,7 @@ export default function AIProviderSection() {
               variant="outline"
               size="sm"
               className="h-8 shrink-0"
-              onClick={() => openEditor(makeDraft(), true)}
+              onClick={() => openEditor(newDraftProfile(profiles, activeId), true)}
             >
               <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />
               {t('common.new')}

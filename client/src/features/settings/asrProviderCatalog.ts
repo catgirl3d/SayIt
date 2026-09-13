@@ -1,14 +1,17 @@
-// 云 API 语音识别的供应商目录、服务档案（profile）解析与延迟分档。
+// Cloud ASR provider catalog, service profile parsing, and latency tiers.
 //
-// 结构与「AI 服务」页对齐：一张卡 = 一份完整配置（供应商 + 该平台的凭据），可以存多份，
-// 同一家也能存多份（比如两个百炼账号、两套豆包密钥）。启用哪一份由 activeProfileId 决定。
+// The structure mirrors the "AI Services" page: one card = one complete configuration (provider +
+// credentials for its platform), several cards are possible, including several per provider
+// (e.g. two Bailian accounts, two sets of Doubao keys). The active card is chosen by activeProfileId.
 //
-// 和 AI 服务的唯一实质差别：供应商只能从内置清单里选，不能填任意地址 —— 每家 ASR 的
-// 协议都要一份专门的 Rust 实现（asr_doubao / asr_qwen / asr_qwen_omni / asr_mimo），
-// 不像 AI 整理那边只要是 OpenAI 兼容端点就能接。
+// The one substantive difference from AI services: the provider must come from the built-in
+// catalog, an arbitrary base URL cannot be entered — every ASR vendor needs a dedicated Rust
+// implementation (asr_doubao / asr_qwen / asr_qwen_omni / asr_mimo), unlike text cleanup where any
+// OpenAI-compatible endpoint works.
 //
-// 「同平台重复粘密钥」的问题不靠"按平台存"解决（那样一张卡就不再是一份完整配置了），
-// 而是照 AI 服务的做法：新建时若该平台已有配置，自动把密钥带过来，界面上说明它从哪来。
+// Re-pasting a key for the same platform is not solved by storing keys per platform (that would
+// stop a card from being a complete configuration). Instead, a new card seeds the credentials from
+// the platform's previously saved profile, and the editor states where they came from.
 
 import {
   describeDoubaoMissing,

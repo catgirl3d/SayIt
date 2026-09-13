@@ -298,6 +298,18 @@ export function resolveActiveProfile(profiles: AiProfile[], activeId: string): A
 }
 
 /**
+ * Draft for the "New" action.
+ *
+ * It deliberately never looks like a copy of an existing card: URL and key always come from the
+ * selected provider's own defaults, never from a saved profile. Adding another model on the same
+ * endpoint is done by editing the existing card, which saves several models per submit.
+ */
+export function newDraftProfile(profiles: AiProfile[], activeId: string): AiProfile {
+  const active = resolveActiveProfile(profiles, activeId)
+  return blankProfile(active?.provider)
+}
+
+/**
  * 检查 API Key 格式，返回提示文字（空字符串表示格式正常）。
  *
  * 只保留「几乎不会误报」的规则：粘贴时常带进来的空白字符，以及确定的前缀约定。

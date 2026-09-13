@@ -13,6 +13,7 @@ import {
   isCheckFresh,
   isProfileComplete,
   migrateLegacyProfiles,
+  newDraftProfile,
   normalizeModelNames,
   parseLegacyLatencies,
   parseProfiles,
@@ -307,6 +308,23 @@ describe('resolveActiveProfile', () => {
 
   it('空列表返回 null', () => {
     expect(resolveActiveProfile([], 'a')).toBeNull()
+  })
+})
+
+describe('newDraftProfile', () => {
+  it('never copies the URL or key of a saved profile', () => {
+    const saved = profile({ id: 'saved', apiUrl: 'https://custom.example/v1', apiKey: 'sk-saved' })
+    const draft = newDraftProfile([saved], saved.id)
+    expect(draft.provider).toBe('deepseek')
+    expect(draft.apiUrl).toBe(findProvider('deepseek').defaultUrl)
+    expect(draft.apiKey).toBe('')
+    expect(draft.id).not.toBe(saved.id)
+  })
+
+  it('follows the active provider even when its id is stale, and the preferred one with nothing saved', () => {
+    const saved = profile({ id: 'a', provider: 'qwen', apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode' })
+    expect(newDraftProfile([saved], 'deleted-id').provider).toBe('qwen')
+    expect(newDraftProfile([], '').provider).toBe(preferredAiProviderValue())
   })
 })
 
