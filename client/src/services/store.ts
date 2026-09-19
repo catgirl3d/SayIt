@@ -335,6 +335,10 @@ export async function getStats(): Promise<Stats> {
   }
 }
 
+export async function recordStats(charCount: number, durationSec: number): Promise<Stats> {
+  return api().recordStatsDelta(charCount, durationSec)
+}
+
 export async function getSetting<T>(key: string, fallback?: T): Promise<T> {
   const defaultValue = getDefault(key, fallback) as T
   const client = api()

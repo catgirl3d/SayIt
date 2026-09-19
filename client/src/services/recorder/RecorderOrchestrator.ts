@@ -8,6 +8,7 @@ import {
   getActivePresetId,
   getPromptPresets,
   getSetting,
+  recordStats,
   setActivePresetId,
   type HistoryFailReasonCode,
   type PromptPreset,
@@ -2360,6 +2361,14 @@ export class RecorderOrchestrator {
           return
         }
         void bridge.emit('history-updated')
+      } else if (hasText) {
+        // History retention is off: still count the completed dictation in usage stats.
+        try {
+          await recordStats(textToPaste.length, wallSec)
+          void bridge.emit('stats-updated')
+        } catch (error) {
+          addRuntimeEvent('warn', 'recorder', 'Failed to record usage stats while history disabled', { error: String(error), runId })
+        }
       }
     } catch (error) {
       if (historyArtifact) await this.discardCanceledHistory(historyArtifact)

@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -358,8 +358,9 @@ impl Storage {
             params![id, timestamp, favorite as i32, char_count, duration_sec, is_empty as i32, app_id, app_name, audio_file_path, raw_json],
         )?;
 
-        // Update stats
-        self.update_stats_delta(&db, char_count, duration_sec, 1);
+        // Update stats: empty records never contribute dictation time.
+        let stats_duration_sec = if is_empty { 0.0 } else { duration_sec };
+        let _ = self.update_stats_delta(&db, char_count, stats_duration_sec, 1);
         Ok(())
     }
 
@@ -380,6 +381,7 @@ impl Storage {
         let mut prev: serde_json::Map<String, Value> = serde_json::from_str(&raw_json).unwrap_or_default();
         let prev_chars = prev.get("charCount").and_then(|v| v.as_i64()).unwrap_or(0);
         let prev_dur = prev.get("durationSec").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let prev_is_empty = prev.get("isEmpty").and_then(|v| v.as_bool()).unwrap_or(false);
 
         if let Some(patch_obj) = patch.as_object() {
             for (k, v) in patch_obj {
@@ -403,8 +405,10 @@ impl Storage {
             params![timestamp, favorite as i32, char_count, duration_sec, is_empty as i32, app_id, app_name, audio_file_path, new_json, id],
         )?;
 
-        // Update stats: subtract old, add new
-        self.update_stats_replacement(&db, prev_chars, prev_dur, char_count, duration_sec);
+        // Update stats: subtract old, add new; empty states contribute no dictation time.
+        let prev_stats_dur = if prev_is_empty { 0.0 } else { prev_dur };
+        let next_stats_dur = if is_empty { 0.0 } else { duration_sec };
+        self.update_stats_replacement(&db, prev_chars, prev_stats_dur, char_count, next_stats_dur);
         Ok(())
     }
 
@@ -425,11 +429,13 @@ impl Storage {
         let obj: serde_json::Map<String, Value> = serde_json::from_str(&raw_json).unwrap_or_default();
         let char_count = obj.get("charCount").and_then(|v| v.as_i64()).unwrap_or(0);
         let duration_sec = obj.get("durationSec").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let is_empty = obj.get("isEmpty").and_then(|v| v.as_bool()).unwrap_or(false);
 
         db.execute("DELETE FROM history_records WHERE id = ?1", params![id])?;
         db.execute("UPDATE history_records SET list_order = list_order - 1 WHERE list_order > ?1", params![list_order])?;
 
-        self.update_stats_delta(&db, char_count, duration_sec, -1);
+        let stats_duration_sec = if is_empty { 0.0 } else { duration_sec };
+        let _ = self.update_stats_delta(&db, char_count, stats_duration_sec, -1);
         Ok(())
     }
 
@@ -584,11 +590,11 @@ impl Storage {
 
     // ─── Stats helpers ───
 
-    fn update_stats_delta(&self, db: &Connection, char_count: i64, duration_sec: f64, direction: i64) {
+    fn update_stats_delta(&self, db: &Connection, char_count: i64, duration_sec: f64, direction: i64) -> SqlResult<(f64, i64)> {
         let stats_json: Option<String> = db.query_row(
             "SELECT value_json FROM app_settings WHERE key = 'stats'",
             [], |row| row.get(0),
-        ).ok();
+        ).optional()?;
 
         let (mut total_dur, mut total_chars) = parse_stats(&stats_json);
         total_dur = (total_dur + duration_sec * direction as f64).max(0.0);
@@ -596,11 +602,12 @@ impl Storage {
 
         let new_stats = serde_json::json!({"totalDurationSec": total_dur, "totalChars": total_chars});
         let now = chrono::Utc::now().timestamp_millis();
-        let _ = db.execute(
+        db.execute(
             "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('stats', ?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
             params![new_stats.to_string(), now],
-        );
+        )?;
+        Ok((total_dur, total_chars))
     }
 
     fn update_stats_replacement(&self, db: &Connection, prev_chars: i64, prev_dur: f64, next_chars: i64, next_dur: f64) {
@@ -620,6 +627,14 @@ impl Storage {
              ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
             params![new_stats.to_string(), now],
         );
+    }
+
+    /// Atomically add one completed dictation to the usage stats, sharing the
+    /// same locked read-modify-write path as the history mutations.
+    pub fn record_stats_delta(&self, char_count: i64, duration_sec: f64) -> SqlResult<Value> {
+        let db = self.db.lock().unwrap();
+        let (total_dur, total_chars) = self.update_stats_delta(&db, char_count, duration_sec, 1)?;
+        Ok(serde_json::json!({"totalDurationSec": total_dur, "totalChars": total_chars}))
     }
 }
 
@@ -955,6 +970,124 @@ mod tests {
         ]);
         assert!(storage.set("promptPresets", &invalid).is_err());
         assert_eq!(storage.get("promptPresets", None), original);
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn record_stats_delta_shares_counters_with_history_writes() {
+        let path = test_db_path("record-stats-delta");
+        let storage = Storage::new(path.clone()).unwrap();
+        storage.set("stats", &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })).unwrap();
+
+        let first = storage.record_stats_delta(5, 1.5).unwrap();
+        assert_eq!(first, serde_json::json!({ "totalDurationSec": 11.5, "totalChars": 105 }));
+
+        storage.history_add(&serde_json::json!({
+            "id": "history-1",
+            "timestamp": 1,
+            "charCount": 7,
+            "durationSec": 2.0,
+        })).unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 13.5, "totalChars": 112 })
+        );
+
+        let second = storage.record_stats_delta(3, 0.5).unwrap();
+        assert_eq!(second, serde_json::json!({ "totalDurationSec": 14.0, "totalChars": 115 }));
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn concurrent_record_stats_deltas_accumulate_without_loss() {
+        let path = test_db_path("record-stats-delta-concurrent");
+        let storage = std::sync::Arc::new(Storage::new(path.clone()).unwrap());
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let storage = std::sync::Arc::clone(&storage);
+                std::thread::spawn(move || storage.record_stats_delta(5, 0.5).unwrap())
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 4.0, "totalChars": 40 })
+        );
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn empty_history_records_do_not_move_usage_stats() {
+        let path = test_db_path("empty-history-stats");
+        let storage = Storage::new(path.clone()).unwrap();
+        storage.set("stats", &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })).unwrap();
+
+        storage.history_add(&serde_json::json!({
+            "id": "empty-1",
+            "timestamp": 1,
+            "charCount": 0,
+            "durationSec": 2.5,
+            "isEmpty": true,
+        })).unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
+        );
+
+        storage.history_delete("empty-1").unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
+        );
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn history_edit_rebalances_usage_stats_across_empty_states() {
+        let path = test_db_path("history-edit-stats");
+        let storage = Storage::new(path.clone()).unwrap();
+
+        storage.history_add(&serde_json::json!({
+            "id": "edit-1",
+            "timestamp": 1,
+            "charCount": 5,
+            "durationSec": 1.0,
+        })).unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 1.0, "totalChars": 5 })
+        );
+
+        storage.history_update("edit-1", &serde_json::json!({
+            "charCount": 0,
+            "durationSec": 2.0,
+            "isEmpty": true,
+        })).unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 0.0, "totalChars": 0 })
+        );
+
+        storage.history_update("edit-1", &serde_json::json!({
+            "charCount": 3,
+            "durationSec": 0.5,
+            "isEmpty": false,
+        })).unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 0.5, "totalChars": 3 })
+        );
+
         drop(storage);
         let _ = fs::remove_file(path);
     }

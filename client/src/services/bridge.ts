@@ -201,6 +201,13 @@ export function storeDelete(key: string) {
   return invoke('store_delete', { key })
 }
 
+export function recordStatsDelta(charCount: number, durationSec: number) {
+  return invoke<{ totalDurationSec: number; totalChars: number }>('record_stats_delta', {
+    charCount,
+    durationSec,
+  })
+}
+
 // ─── History ───
 
 export function historyList(query?: { keyword?: string; favoriteOnly?: boolean; limit?: number; offset?: number }) {

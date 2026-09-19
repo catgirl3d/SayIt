@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Mic, Clock, Type, Zap } from 'lucide-react'
 import { getStats, type Stats, getSetting } from '@/services/store'
+import * as bridge from '@/services/bridge'
 import { SHORTCUTS_CHANGED_EVENT } from '@/services/bridge'
 import ReportIssueSection from '@/components/ReportIssueSection'
 import NoticeBanner from '@/components/NoticeBanner'
@@ -47,7 +48,11 @@ export default function Home() {
   const [pttKey, setPttKey] = useState('ControlRight')
 
   useEffect(() => {
-    getStats().then(setStats)
+    const refreshStats = () => void getStats().then(setStats)
+    refreshStats()
+    const unlistenStats = bridge.listen('stats-updated', refreshStats)
+    const unlistenHistory = bridge.listen('history-updated', refreshStats)
+
     const loadShortcutKeys = () =>
       Promise.all([
         getSetting('shortcutHandsFree', 'AltRight'),
@@ -59,7 +64,11 @@ export default function Home() {
     void loadShortcutKeys()
     // Refresh the hint live when shortcuts change (wizard / settings page), without a route switch.
     window.addEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
-    return () => window.removeEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
+    return () => {
+      window.removeEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
+      unlistenStats.then((fn) => fn()).catch(() => {})
+      unlistenHistory.then((fn) => fn()).catch(() => {})
+    }
   }, [])
 
   // Format time display

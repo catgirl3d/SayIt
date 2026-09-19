@@ -18,6 +18,22 @@ pub fn store_delete(key: String, storage: State<Storage>) -> Result<(), String> 
 }
 
 #[tauri::command]
+pub fn record_stats_delta(char_count: i64, duration_sec: f64, storage: State<Storage>) -> Result<Value, String> {
+    validate_stats_delta(char_count, duration_sec)?;
+    storage.record_stats_delta(char_count, duration_sec).map_err(|e| e.to_string())
+}
+
+fn validate_stats_delta(char_count: i64, duration_sec: f64) -> Result<(), String> {
+    if char_count < 0 {
+        return Err(format!("char_count must be non-negative, got {}", char_count));
+    }
+    if !duration_sec.is_finite() || duration_sec < 0.0 {
+        return Err(format!("duration_sec must be finite and non-negative, got {}", duration_sec));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn history_list(query: Option<Value>, storage: State<Storage>) -> Result<Vec<Value>, String> {
     let (keyword, favorite_only, limit, offset) = parse_history_query(&query);
     Ok(storage.history_list(keyword.as_deref(), favorite_only, limit, offset))
@@ -59,5 +75,20 @@ fn parse_history_query(query: &Option<Value>) -> (Option<String>, bool, Option<i
             (keyword, favorite_only, limit, offset)
         }
         None => (None, false, None, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_stats_delta;
+
+    #[test]
+    fn stats_delta_validation_rejects_negative_and_non_finite_values() {
+        assert!(validate_stats_delta(-1, 1.0).is_err());
+        assert!(validate_stats_delta(0, -0.5).is_err());
+        assert!(validate_stats_delta(0, f64::NAN).is_err());
+        assert!(validate_stats_delta(0, f64::INFINITY).is_err());
+        assert!(validate_stats_delta(0, 0.0).is_ok());
+        assert!(validate_stats_delta(5, 1.5).is_ok());
     }
 }
