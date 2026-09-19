@@ -1337,9 +1337,6 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
 /// 导入完成后由前端调用，重启应用使内存中的设置/供应商状态全量重载。
 #[tauri::command]
 pub fn restart_app(app: tauri::AppHandle) {
-    // 这次退出的意图是"重启回同一个版本"，不是更新。若让退出兜底安装跑起来，
-    // 重启拉起来的会是正在被安装程序覆盖的 exe。
-    crate::commands::system::suppress_exit_install();
     app.restart();
 }
 

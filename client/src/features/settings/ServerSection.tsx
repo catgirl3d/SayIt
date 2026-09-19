@@ -1,4 +1,4 @@
-// 服务器模式配置 — 服务地址 + 连接状态
+// Server mode settings — service address + connection status
 
 import { useEffect, useState } from 'react'
 import { Info } from 'lucide-react'
@@ -13,7 +13,6 @@ import {
   setBackendBaseUrl as persistBackendBaseUrl,
 } from '@/services/runtimeConfig'
 import { reconnectProvider } from '@/services/recorder'
-import { checkForUpdateNow, discardPendingForChannelSwitch } from '@/features/update/autoUpdate'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import { describeServerError } from '@/lib/errorMessages'
@@ -28,7 +27,7 @@ interface ServiceResult {
 export default function ServerSection({ speechLanguage }: { speechLanguage: SpeechInputLanguage }) {
   const t = useT()
   const [backendBaseUrl, setBackendBaseUrl] = useState('')
-  /** 已保存的地址。输入框与它不一致就是「未保存」 */
+  /** Saved address. Any difference from the input box means "unsaved" */
   const [savedBaseUrl, setSavedBaseUrl] = useState('')
   const [defaultBaseUrl, setDefaultBaseUrl] = useState('')
   const [result, setResult] = useState<ServiceResult | null>(null)
@@ -39,7 +38,7 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
     setBackendBaseUrl(current)
     setSavedBaseUrl(current)
     setDefaultBaseUrl(getDefaultBackendBaseUrl())
-    // 切走路由时把"有未保存改动"复位，别把脏状态留给下一次进入
+    // Reset the "unsaved changes" flag when leaving the route — do not leave the dirty state behind for the next visit
     return () => setEngineDraftDirty(false)
   }, [])
 
@@ -61,14 +60,14 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
     llm?: boolean
   }
 
-  /** 探一次 /healthz。成功返回后端上报的 ASR/LLM 开关及模型信息，失败抛出原始异常。 */
+  /** Probe /healthz once. On success returns the ASR/LLM switches and model info the backend reports; on failure throws the original error. */
   async function probeHealth(url: string): Promise<HealthPayload> {
     const response = await fetch(`${url}/healthz`, { cache: 'no-store' })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return await response.json() as HealthPayload
   }
 
-  /** 把 /healthz 的 asr/llm 及模型信息翻译成人话。 */
+  /** Translate the /healthz asr/llm and model info into plain language. */
   function describeHealth(payload: HealthPayload, prefix: string): ServiceResult {
     const modelDetail = payload.asr_model ? ` · ASR: ${payload.asr_model}` : ''
     const languageDetail = payload.asr_engine === 'qwen3'
@@ -100,11 +99,13 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
   }
 
   /**
-   * 保存并测试。
+   * Save and test.
    *
-   * 这里原来是两个同权重的按钮：「测试连接」只测不存（用输入框里的值），「保存」存了再测。
-   * 用户点前者看到「连接成功」，合理地以为配置生效了——它没有。两个动作合并成一个之后，
-   * 界面上就不再存在"测试通过但没保存"这种状态。
+   * This used to be two equally-weighted buttons: "Test connection" only tested (using
+   * the input value), "Save" saved and then tested. Users pressed the first, saw
+   * "connection successful", and reasonably assumed the configuration had taken effect —
+   * it had not. Merging both actions into one removes the "tested but not saved" state
+   * from the UI entirely.
    */
   async function handleSaveAndTest() {
     if (busy) return
@@ -130,15 +131,10 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
       setBackendBaseUrl(next)
       setSavedBaseUrl(next)
       setEngineDraftDirty(false)
-      // 地址已变更：无论下方健康检查成功与否，都按新地址强制重连，
-      // 让左下角连接状态反映新配置（改成错误地址后应显示未连接，而非仍旧"已连接"）
+      // The address changed: force a reconnect on the new address regardless of the
+      // health probe below, so the bottom-left connection indicator reflects the new
+      // configuration (a wrong address must show "disconnected", not a stale "connected").
       reconnectProvider()
-      // 更新检查跟随这个地址，所以换了地址就要重新查一次（见 getUpdateBaseUrl）。
-      // 必须先丢弃已下载的包：ensureDownloaded 只按版本号判断"已经在盘上了"，
-      // 版本号相同不代表来自同一台服务器，留着会让"指到测试服务器验一遍"
-      // 实际装的还是上一个来源那个包。
-      await discardPendingForChannelSwitch()
-      void checkForUpdateNow()
     } catch (error) {
       setResult({ tone: 'error', message: t('server.saveFailed'), detail: String(error) })
       setBusy(false)
@@ -160,7 +156,7 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
     }
   }
 
-  /** 恢复到内置默认地址并立刻重连，省得用户自己回忆默认值是什么 */
+  /** Restore the built-in default address and reconnect immediately, so the user does not have to remember the default */
   async function handleResetDefault() {
     if (busy) return
     setBusy(true)
@@ -171,8 +167,6 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
       setSavedBaseUrl(next)
       setEngineDraftDirty(false)
       reconnectProvider()
-      await discardPendingForChannelSwitch()
-      void checkForUpdateNow()
       const payload = await probeHealth(next)
       setResult(describeHealth(payload, t('server.restoredPrefix', { url: next })))
     } catch (error) {
@@ -207,15 +201,15 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
               <label htmlFor="server-base-url" className="text-sm text-muted-foreground">
                 {t('server.title')}
               </label>
-              {/* 输入框内容只活在 local state 里，切页就没了。原来这件事完全无提示，
-                  用户会以为改完就生效了。 */}
+              {/* The input value lives only in local state and is gone on page switch. This
+                  used to be completely unsignaled, so users assumed an edit took effect. */}
               {isDirty && (
                 <span className="rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning-strong">
                   {t('server.unsaved')}
                 </span>
               )}
             </div>
-            {/* flex-wrap：800×600 最小窗口下侧栏占掉 192px，输入框 + 按钮挤在一行会溢出 */}
+            {/* flex-wrap: at the 800×600 minimum window the sidebar takes 192px, so the input + buttons on one line would overflow */}
             <div className="flex flex-wrap items-center gap-2">
               <input
                 id="server-base-url"
@@ -238,10 +232,12 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
             </div>
           </div>
 
-          {/* 这里原来在失败提示里再挂一个「恢复默认地址（https://…）」按钮：
-              一是把整条 URL 塞进按钮文字，全应用没有第二处这么写；
-              二是它和输入框旁边那个「恢复默认」完全同义——而后者在地址被改过时一直都在，
-              正好覆盖会出现这条失败提示的全部情况。留一个就够。 */}
+          {/* The failure hint used to carry a second "restore default address (https://…)"
+              button: first, it stuffed the whole URL into the button label — nowhere else
+              in the app does that; second, it was exactly synonymous with the "restore
+              default" button next to the input, which is always present once the address
+              was changed and thus covers every case where this failure hint appears.
+              Keeping one button is enough. */}
           {result && (
             <Feedback
               className="mt-3"

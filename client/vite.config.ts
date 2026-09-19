@@ -48,7 +48,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // tests/ holds suites that need Node built-ins (e.g. the release generator
+    // contract test); src/ is the default home for app tests.
+    include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
   },
   build: {
     // 生产构建移除 console.log 和 debugger（保留 console.warn/error）

@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils'
 import { Tooltip } from '@/components/ui/tooltip'
 import { useConnectionStatus } from '@/hooks/useConnectionStatus'
 import { getModeStatus, refreshModeStatus, subscribeModeStatus } from '@/stores/modeStatus'
-import { hasPendingUpdate } from '@/features/update/autoUpdate'
+import { hasAvailableUpdate } from '@/features/update/autoUpdate'
 import { useUpdateState } from '@/features/update/useUpdateState'
 import type { TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
@@ -125,23 +125,23 @@ function IconOnlyNavItem({
 /**
  * Bottom sidebar icons.
  *
- * When an update is ready to install, we deliberately DO NOT add an extra icon.
- * Instead, we pulse the "About" icon in green and update its tooltip to "New version downloaded".
- * The About page is the natural place for updates where users can read release notes and click "Install now".
- * During background downloading, we deliberately keep the UI unchanged (silent background downloads are intentional).
- * Using green here does not violate the ModeIndicator neutrality rule because verified package readiness is a proven fact.
+ * When a newer version is available, we deliberately DO NOT add an extra icon.
+ * Instead, we pulse the "About" icon in green and update its tooltip to "New version available".
+ * The About page is the natural place for updates where users can read release notes and press "Download and install".
+ * Availability is metadata-only (nothing downloaded yet); the green highlight marks a
+ * verified fact — a newer fork release exists — so it does not violate the ModeIndicator neutrality rule.
  */
 function FooterIcons() {
   const t = useT()
   const update = useUpdateState()
-  const updateReady = hasPendingUpdate(update)
-  const nextVersion = update.pending?.version || ''
+  const updateAvailable = hasAvailableUpdate(update)
+  const nextVersion = update.versionInfo?.latestVersion || ''
 
   return (
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-1">
         {footerNavItems.map(({ to, icon, labelKey }) => {
-          const highlight = updateReady && to === '/about'
+          const highlight = updateAvailable && to === '/about'
           return (
             <IconOnlyNavItem
               key={to}

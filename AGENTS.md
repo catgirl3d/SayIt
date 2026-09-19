@@ -25,3 +25,9 @@
 - On this workstation a local, git-ignored `.cargo/config.toml` at the repository root pins the target directory; cargo discovers it from any directory under the checkout, including the nested Agent Manager worktrees under `.kilo/worktrees`. Worktrees created outside this path must pass `CARGO_TARGET_DIR` inline as above.
 - In Git Bash, inspect the inherited variable with `printf '%s\n' "$CARGO_TARGET_DIR"`; in PowerShell use `$env:CARGO_TARGET_DIR`. When the environment is uncertain, verify the effective directory with `cargo metadata --no-deps --format-version 1 --offline` before an expensive build.
 - Do not commit this machine-specific path to Cargo configuration, package scripts, CI workflows, or Agent Manager scripts. Other machines and CI must choose their own target directory.
+
+## 6. Cargo Load Discipline (this workstation freezes under full builds)
+- **NEVER chain two heavy Cargo invocations in one shell command** (e.g. `cargo test && cargo check`). The check profile is a separate build graph: a cold `cargo check` rebuilds 500+ crates plus the transcribe C++/Vulkan build scripts and froze this workstation for ~15 minutes (observed 2026-09-19). Run exactly one heavy cargo command per tool invocation.
+- Bound Cargo's parallelism on this machine: pass `CARGO_BUILD_JOBS=2` inline with cargo commands (same rationale as the release workflow's `CARGO_BUILD_JOBS: 2`).
+- `cargo test` and `cargo check` share no artifacts across profiles. Prefer `cargo test --no-run` / the targeted test filter to warm the test profile, and run `cargo check` as its own, separate invocation — never as an `&&` tail after a test run.
+- Frontend commands (`npm test`, `npx tsc --noEmit`) are cheap; batch them freely. The one-command-per-invocation rule applies to cargo/npm-install-scale builds only.

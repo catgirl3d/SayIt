@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Modal } from '@/components/ui/modal'
 import { refreshRecorderSettings } from '@/services/recorder'
 import { getSetting, setSetting } from '@/services/store'
+import { setAutomaticUpdateChecksEnabled } from '@/features/update/autoUpdate'
 import { Switch } from '@/components/ui/switch'
 import { Segmented } from '@/components/ui/segmented'
 import AppSection from './AppSection'
@@ -29,6 +30,7 @@ export default function GeneralSettingsPage() {
   const t = useT()
   const [languagePreference, setLanguagePreference] = useState<LanguagePreference>('auto')
   const [autoLaunch, setAutoLaunch] = useState(false)
+  const [autoCheckUpdate, setAutoCheckUpdate] = useState(true)
   const [protectClipboard, setProtectClipboard] = useState(true)
   const [contextAwareWriting, setContextAwareWriting] = useState(false)
   const [contextPromptOpen, setContextPromptOpen] = useState(false)
@@ -45,7 +47,7 @@ export default function GeneralSettingsPage() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const [launch, clip, contextAware, history, retention, audioDays, logDays] = await Promise.all([
+      const [launch, clip, contextAware, history, retention, audioDays, logDays, autoCheck] = await Promise.all([
         bridge.getAutoLaunch().catch(() => false),
         getSetting('protectClipboard', true).catch(() => true),
         getSetting('contextAwareWritingEnabled', false).catch(() => false),
@@ -53,9 +55,11 @@ export default function GeneralSettingsPage() {
         getSetting('audioRetentionEnabled', true).catch(() => true),
         getSetting('audioRetentionDays', -1).catch(() => -1),
         getSetting('logRetentionDays', 30).catch(() => 30),
+        getSetting('autoCheckUpdate', true).catch(() => true),
       ])
       if (cancelled) return
       setAutoLaunch(Boolean(launch))
+      setAutoCheckUpdate(Boolean(autoCheck))
       setProtectClipboard(Boolean(clip))
       setContextAwareWriting(Boolean(contextAware))
       setHistoryEnabled(Boolean(history))
@@ -98,6 +102,22 @@ export default function GeneralSettingsPage() {
     const next = !autoLaunch
     setAutoLaunch(next)
     await bridge.setAutoLaunch(next)
+  }
+
+  /**
+   * Optimistic toggle with rollback: the service persists the preference and moves
+   * the check timer; if persistence fails the UI must not keep claiming a state the
+   * stored truth does not have.
+   */
+  const toggleAutoCheckUpdate = async () => {
+    const previous = autoCheckUpdate
+    const next = !previous
+    setAutoCheckUpdate(next)
+    try {
+      await setAutomaticUpdateChecksEnabled(next)
+    } catch {
+      setAutoCheckUpdate(previous)
+    }
   }
 
   const toggleProtectClipboard = async () => {
@@ -296,7 +316,14 @@ export default function GeneralSettingsPage() {
         </Card>
 
         {/* Launch at startup */}
-        <AppSection autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} ready={ready} animate={animate} />
+        <AppSection
+          autoLaunch={autoLaunch}
+          onToggleAutoLaunch={toggleAutoLaunch}
+          autoCheckUpdate={autoCheckUpdate}
+          onToggleAutoCheckUpdate={toggleAutoCheckUpdate}
+          ready={ready}
+          animate={animate}
+        />
 
         {/* Backup and restore */}
         <BackupSection />

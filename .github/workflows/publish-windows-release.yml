@@ -105,12 +105,20 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # Every version source must agree (package.json, package-lock.json, tauri.conf.json,
+          # Cargo.toml via cargo metadata). A drifted lockfile is how an installer ends up
+          # carrying a version the update manifest does not describe.
+          node client/scripts/check-release-versions.mjs
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Release version sources disagree'
+          }
+
           $tauriConfig = Get-Content -LiteralPath 'client/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
           $packageConfig = Get-Content -LiteralPath 'client/package.json' -Raw | ConvertFrom-Json
           $version = [string]$tauriConfig.version
 
-          if ([string]::IsNullOrWhiteSpace($version) -or $version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
-            throw "Invalid Tauri version: '$version'"
+          if ([string]::IsNullOrWhiteSpace($version) -or $version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Invalid Tauri version: '$version' (expected numeric major.minor.patch)"
           }
           if ([string]$packageConfig.version -ne $version) {
             throw "Version mismatch: tauri.conf.json=$version, package.json=$($packageConfig.version)"
@@ -168,6 +176,52 @@ jobs:
           "path=$($installers[0].FullName)" >> $env:GITHUB_OUTPUT
           "name=$($installers[0].Name)" >> $env:GITHUB_OUTPUT
 
+      - name: Generate the update manifest
+        id: manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'latest-win32-x64.json'
+          $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+
+          node client/scripts/generate-update-manifest.mjs `
+            --version '${{ steps.meta.outputs.version }}' `
+            --repository '${{ github.repository }}' `
+            --installer '${{ steps.installer.outputs.path }}' `
+            --release-date $releaseDate `
+            --output $manifestPath
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not generate the update manifest'
+          }
+
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $expectedUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/${{ steps.installer.outputs.name }}"
+          if ($manifest.version -ne '${{ steps.meta.outputs.version }}') {
+            throw "Manifest version '$($manifest.version)' does not match the release version"
+          }
+          if ($manifest.url -ne $expectedUrl) {
+            throw "Manifest URL '$($manifest.url)' does not match the immutable release asset URL"
+          }
+          if ($manifest.sha512 -notmatch '^[A-Za-z0-9+/]{86}==$') {
+            throw 'Manifest sha512 is not canonical padded Base64 of 64 bytes'
+          }
+
+          # Independently recompute the installer digest and require it to equal the
+          # manifest value: the manifest is only trustworthy when its hash comes from a
+          # check that does not share code with the generator that wrote it.
+          $installerHashHex = (Get-FileHash -Algorithm SHA512 -LiteralPath '${{ steps.installer.outputs.path }}').Hash
+          $installerHashBytes = [byte[]]::new($installerHashHex.Length / 2)
+          for ($i = 0; $i -lt $installerHashHex.Length; $i += 2) {
+            $installerHashBytes[$i / 2] = [Convert]::ToByte($installerHashHex.Substring($i, 2), 16)
+          }
+          $installerHashBase64 = [Convert]::ToBase64String($installerHashBytes)
+          if ($manifest.sha512 -ne $installerHashBase64) {
+            throw 'Manifest sha512 does not match the independently computed installer digest'
+          }
+
+          "path=$manifestPath" >> $env:GITHUB_OUTPUT
+
       - name: Recreate the current-version GitHub release
         shell: pwsh
         env:
@@ -176,26 +230,38 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           NOTES_FILE: ${{ steps.meta.outputs.notes_file }}
           INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+          MANIFEST_PATH: ${{ steps.manifest.outputs.path }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          gh release view "$env:TAG" --repo "$env:GITHUB_REPOSITORY" *> $null
+          # `gh release view` exits nonzero both when the release is absent and when the
+          # API/auth fails; only the explicit not-found message may mean "create fresh".
+          $viewOutput = gh release view "$env:TAG" --repo "$env:GITHUB_REPOSITORY" 2>&1 | Out-String
           if ($LASTEXITCODE -eq 0) {
             gh release delete "$env:TAG" --yes --cleanup-tag --repo "$env:GITHUB_REPOSITORY"
             if ($LASTEXITCODE -ne 0) {
               throw "Could not delete existing release '$env:TAG'"
             }
+          } elseif ($viewOutput -notmatch 'release not found') {
+            throw "Could not check whether release '$env:TAG' exists: $viewOutput"
           }
 
+          # `git ls-remote --exit-code` returns 2 when the ref does not exist; any other
+          # nonzero code is a real Git failure and must not be read as "tag absent".
           git ls-remote --exit-code --refs origin "refs/tags/$($env:TAG)" *> $null
           if ($LASTEXITCODE -eq 0) {
             git push origin ":refs/tags/$($env:TAG)"
             if ($LASTEXITCODE -ne 0) {
               throw "Could not delete existing remote tag '$env:TAG'"
             }
+          } elseif ($LASTEXITCODE -ne 2) {
+            throw "Could not inspect the remote for tag '$env:TAG' (git ls-remote exit $LASTEXITCODE)"
           }
 
           git tag --force "$env:TAG" "$env:RELEASE_SHA"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not create the local tag '$env:TAG'"
+          }
           git push origin "refs/tags/$($env:TAG)" --force
           if ($LASTEXITCODE -ne 0) {
             throw "Could not push tag '$env:TAG'"
@@ -207,3 +273,30 @@ jobs:
           }
 
           gh release upload "$env:TAG" "$env:INSTALLER_PATH" --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not upload the installer for '$env:TAG'"
+          }
+
+          # Re-download the just-uploaded installer and compare it byte-for-byte with the
+          # built file BEFORE the manifest becomes visible. The manifest tells clients this
+          # exact immutable asset is the update; a partial, renamed, or replaced upload must
+          # fail here — never leave metadata pointing at an asset nobody verified.
+          $verifyDir = Join-Path $env:RUNNER_TEMP 'sayit-asset-verify'
+          New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
+          $installerName = Split-Path -Leaf $env:INSTALLER_PATH
+          gh release download "$env:TAG" --pattern $installerName --dir $verifyDir --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not re-download the uploaded installer for verification'
+          }
+          $builtHash = (Get-FileHash -Algorithm SHA512 -LiteralPath $env:INSTALLER_PATH).Hash
+          $uploadedHash = (Get-FileHash -Algorithm SHA512 -LiteralPath (Join-Path $verifyDir $installerName)).Hash
+          if ($builtHash -ne $uploadedHash) {
+            throw 'The uploaded installer differs from the built installer; refusing to publish the manifest'
+          }
+
+          # Manifest upload is LAST on purpose: clients only ever observe a manifest whose
+          # installer asset is already uploaded and hash-verified.
+          gh release upload "$env:TAG" "$env:MANIFEST_PATH" --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not upload the update manifest for '$env:TAG'"
+          }

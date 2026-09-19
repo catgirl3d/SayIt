@@ -1,12 +1,12 @@
 /**
- * 集中式默认配置
+ * Centralized default configuration
  *
- * 所有 getSetting() 的默认值统一在此定义。
- * 修改默认值只需改这一个文件，无需全局搜索替换。
+ * Every getSetting() default is defined here.
+ * Changing a default means editing this one file — no global search-and-replace.
  *
- * Prompt 相关配置（内容较长，单独存放）：
- *   - 内置润色模式 → src/services/store.ts 的 BUILTIN_PRESETS
- *   - 应用 Prompt 规则 → src/services/personalization/defaults.ts 的 BUILTIN_APP_RULES
+ * Prompt-related configuration (kept separately because it is long):
+ *   - Built-in polish presets → BUILTIN_PRESETS in src/services/store.ts
+ *   - App prompt rules → BUILTIN_APP_RULES in src/services/personalization/defaults.ts
  */
 
 export const MIC_BOOST_VALUES = ['1', '2', '3', '5', 'auto'] as const
@@ -47,74 +47,88 @@ export const DEFAULTS: Record<string, unknown> = {
   // and must not be named just `language`.
   'ui.language': 'auto', // 'auto' follows the system locale; otherwise 'en' | 'uk'
 
-  // ── 工作模式 ──
-  workMode: 'server', // 可选: 'server' | 'cloud_api' | 'local'
+  // ── Work mode ──
+  workMode: 'server', // Options: 'server' | 'cloud_api' | 'local'
 
-  // ── 快捷键 ──
-  // 按住说话。旧单键保持 DOM code；组合键使用物理 code 格式，如 'ControlLeft+MetaLeft' 或 'ControlLeft+KeyK'。
-  // ⚠️ 默认键不能用 Shift：长按右 Shift 约 8 秒会触发 Windows 筛选键，导致松开后录音停不下来
-  // （详见 lib/shortcutKeys.ts 的 PTT_FORBIDDEN_CODES）。这里曾经是 'ShiftRight'，
-  // 于是每台新装的机器开箱就绑在那个键上。右 Ctrl 位置相近、没有辅助功能陷阱，
-  // 也不和免提的默认键（右 Alt）撞。
-  // ⚠️ 改这里要同步 Rust：src-tauri/src/storage/mod.rs 的种子默认值、main.rs 的兜底、
-  // keyboard/mod.rs 的 PttKeyConfig::fallback()。
+  // ── Shortcuts ──
+  // Push-to-talk. Legacy single keys keep the DOM code; combos use the physical code
+  // format, e.g. 'ControlLeft+MetaLeft' or 'ControlLeft+KeyK'.
+  // ⚠️ The default key must not be Shift: holding the right Shift for ~8 seconds trips
+  // Windows FilterKeys, so recording never stops on key release (see PTT_FORBIDDEN_CODES
+  // in lib/shortcutKeys.ts). This used to be 'ShiftRight', which bound every fresh install
+  // to that key out of the box. Right Ctrl is nearby, has no accessibility trap, and does
+  // not collide with the hands-free default (right Alt).
+  // ⚠️ Changing this must be mirrored in Rust: the seed defaults in
+  // src-tauri/src/storage/mod.rs, the fallback in main.rs, and
+  // PttKeyConfig::fallback() in keyboard/mod.rs.
   shortcutPTT: 'ControlRight',
-  shortcutHandsFree: 'AltRight', // 免提模式。默认右 Alt 单键。也支持组合键格式如 'Control+Shift+S'
-  // AI 整理总开关。留空 = 不注册，避免升级时意外占用用户已有的全局组合键。
+  shortcutHandsFree: 'AltRight', // Hands-free mode. Defaults to the right Alt single key. Also accepts combos like 'Control+Shift+S'
+  // AI-cleanup master shortcut. Empty = not registered, so an upgrade never silently
+  // grabs a global combo the user already owns.
   shortcutToggleAi: '',
 
-  // ── 麦克风 ──
-  selectedMic: '', // 设备 ID，空字符串 = 系统默认
-  muteSystemAudioWhileRecording: false, // 按住说话期间静音系统其他声音（防外放被麦克风回采）。默认关闭
-  // 浏览器降噪。默认开（底噪大的机器需要）；降噪按"人听得舒服"优化，
-  // 可能削掉 ASR 要的细节，麦克风环境干净时可以关掉对比准确度。
+  // ── Microphone ──
+  selectedMic: '', // Device ID; empty string = system default
+  muteSystemAudioWhileRecording: false, // Mute other system audio while push-to-talk is held (prevents speaker bleed into the mic). Off by default
+  // Browser noise suppression. On by default (machines with a high noise floor need it);
+  // suppression is tuned for "comfortable to a human ear" and may shave off detail ASR
+  // wants, so users with a clean mic environment can turn it off to compare accuracy.
   micNoiseSuppression: true,
   micBoost: DEFAULT_MIC_BOOST, // '1' = off; '2', '3', '5' = fixed gain; 'auto' = browser AGC
 
-  // ── 文本插入 ──
-  protectClipboard: true, // 插入文本后自动还原剪贴板为插入前内容，避免占用用户剪贴板。默认开启
+  // ── Text insertion ──
+  protectClipboard: true, // After inserting text, restore the clipboard to its pre-insert content so the user's clipboard is not occupied. On by default
 
-  // ── AI 校对 ──
-  aiEnabled: true, // 是否开启 AI 校对。可选: true | false
-  // 0 = 每段语音都整理；大于 0 时，仅录音达到该秒数才调用 AI（最多 300 秒）。
+  // ── AI cleanup ──
+  aiEnabled: true, // Whether AI cleanup is enabled. Options: true | false
+  // 0 = clean every utterance; greater than 0 = call the AI only when the recording
+  // reaches that many seconds (max 300 seconds).
   aiMinDurationSec: 0,
-  // 读取光标附近文字/选区并交给 AI，用于上下文续写与语音编辑。涉及正文读取，默认关闭。
+  // Read text around the cursor / the selection and hand it to the AI for context-aware
+  // continuation and voice editing. Reads document content, so it is off by default.
   contextAwareWritingEnabled: false,
-  aiPromptAppend: '', // 全局附加 prompt
+  aiPromptAppend: '', // Global appended prompt
   'ai.builtinPromptLanguage': DEFAULT_BUILTIN_PROMPT_LANGUAGE, // First-run default follows the UI locale; saved choices remain independent.
 
-  // ── AI 供应商 ──
-  // 下面这四个是**运行时生效的那一份**，录音链路、历史重跑、诊断页、反馈上报都只认它们。
-  // 它们由「AI 服务」页在启用/保存时整份写入，不要在别处单独改其中一个
-  // （历史 bug：切了模型但地址和密钥还是上一家的）。
+  // ── AI providers ──
+  // These four are **the copy that is live at runtime**; the recording pipeline, history
+  // re-runs, the diagnostics page, and feedback reporting all read only them. The "AI
+  // Service" page writes them as one whole block on enable/save — never change one of them
+  // individually elsewhere (a historical bug: the model was switched but the URL and key
+  // still belonged to the previous provider).
   'cloudAi.provider': 'openai_compat', // Allowed values come from AI_PROVIDERS in features/settings/aiProviderCatalog.ts.
   'cloudAi.apiUrl': '',
   'cloudAi.apiKey': '',
   'cloudAi.model': '',
-  // 「AI 服务」列表本身：一条 = 供应商 + 地址 + 密钥 + 模型，只有设置页读写。
+  // The "AI Service" list itself: one entry = provider + URL + key + model, read and written only by the settings page.
   'cloudAi.profiles': [],
   'cloudAi.activeProfileId': '',
-  // 老的「每供应商一组配置」（cloudAi.<provider>.*）只摊平迁移一次。
-  // 没有这个标记，用户删光列表后下次进页面又会被"救回来"。老键一律不删，方便降级。
+  // The old "one config per provider" keys (cloudAi.<provider>.*) are flattened exactly
+  // once. Without this marker, deleting all entries would let the next visit "rescue" them
+  // back. The old keys are never deleted, so downgrades keep working.
   'cloudAi.profilesMigrated': false,
 
-  // ── ASR（云 API）──
-  // 可选值以 features/settings/asrProviderCatalog.ts 的 ASR_PROVIDERS 为准：
+  // ── ASR (cloud API) ──
+  // Allowed values come from ASR_PROVIDERS in features/settings/asrProviderCatalog.ts:
   // 'doubao_v2' | 'qwen' | 'qwen_audio_stream' | 'qwen_realtime' | 'qwen_omni_35_*' | 'mimo' | 'groq_whisper'
   'cloudAsr.provider': 'doubao_v2',
-  // 运行时读的「本次生效凭据」镜像。豆包按控制台代次算出来后写进这两个键：
-  // 新版控制台只有一个 API Key、appId 必为空串（Rust 侧靠它区分两代鉴权头）。
+  // Runtime mirror of the credentials that are in effect this run. Doubao computes its
+  // console generation and writes these two keys: the new console has only an API Key and
+  // appId is necessarily an empty string (Rust uses it to pick between the two auth
+  // header generations).
   'cloudAsr.apiKey': '',
-  'cloudAsr.appId': '', // 仅豆包旧版控制台需要
-  // 豆包控制台代次与各自的密钥（两代的密钥不是同一个东西，分开存，切换不丢）
-  'cloudAsr.doubao.console': 'new', // 'new' = 只要 API Key | 'legacy' = App ID + Access Token
-  'cloudAsr.doubao.consoleKey': '', // 新版控制台的 API Key
-  'cloudAsr.omniSystemPrompt': '', // 千问 Omni 模式的 system prompt
-  // 服务列表：一张卡 = 一份完整配置（供应商 + 该平台凭据），同一家可存多份
+  'cloudAsr.appId': '', // Only needed by the legacy Doubao console
+  // Doubao console generation and its own keys (the two generations do not share a key;
+  // stored separately so switching back does not lose either)
+  'cloudAsr.doubao.console': 'new', // 'new' = API Key only | 'legacy' = App ID + Access Token
+  'cloudAsr.doubao.consoleKey': '', // API Key of the new console
+  'cloudAsr.omniSystemPrompt': '', // System prompt for Qwen Omni mode
+  // Service list: one card = one full configuration (provider + that platform's credentials); the same provider can be stored multiple times
   'cloudAsr.profiles': [],
   'cloudAsr.activeProfileId': '',
-  // 已经自动补建过哪些服务。刻意不是「迁移完成」那种布尔标记 —— 记「补过谁」才能
-  // 既在逻辑修好后自愈，又不把用户主动删掉的卡救回来。
+  // Which services have already been auto-created. Deliberately not a boolean
+  // "migration done" marker — remembering "who was patched" both self-heals after logic
+  // fixes and refuses to resurrect cards the user deleted on purpose.
   'cloudAsr.autoCreatedProviders': [],
 
   // ── Speech input language ──
@@ -123,101 +137,113 @@ export const DEFAULTS: Record<string, unknown> = {
   // are separate concerns.
   'speechInput.language': 'auto',
 
-  // ── ASR（本地）──
-  // 可选值就是 catalog.rs 里那几个 id：'sensevoice-small-gguf'（默认，最快）
+  // ── ASR (local) ──
+  // Allowed values are the ids in catalog.rs: 'sensevoice-small-gguf' (default, fastest)
   // | 'funasr-nano-2512-gguf' | 'qwen3-asr-0.6b-gguf'
-  // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf'（最准）
+  // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf' (most accurate)
   // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf'
   'localAsr.modelId': 'sensevoice-small-gguf',
   // GGUF weights are published on HuggingFace. The value must match a catalog source.
   'localAsr.downloadSource': 'HuggingFace', // optional: 'HuggingFace'
   'localAsr.model': '',
-  // GGUF 引擎的计算后端偏好。'auto' = 有 GPU 用 GPU、没有自动用 CPU。
-  // 没装 GPU 加速包的机器永远是 CPU，这个值不影响功能，只影响速度。
-  'localAsr.accelerator': 'auto', // 可选: 'auto' | 'cpu' | 'gpu'
-  // 本地模型空闲多少分钟后卸载（实测释放 350 MB ~ 2.6 GB 内存）。0 = 从不卸载。
-  // 默认常驻，保证下一次识别无需重新付“加载 + 预热”的等待；内存紧张的用户可在
-  // 本地模式设置中选择空闲 10 / 30 / 60 分钟后自动释放。
+  // Compute backend preference for the GGUF engine. 'auto' = use the GPU when there is
+  // one, otherwise the CPU. Machines without the GPU acceleration pack are always on CPU;
+  // this value does not affect functionality, only speed.
+  'localAsr.accelerator': 'auto', // Options: 'auto' | 'cpu' | 'gpu'
+  // Unload the local model after this many idle minutes (measured release: 350 MB to
+  // 2.6 GB of memory). 0 = never unload. The default keeps it resident so the next
+  // recognition does not pay the "load + warm-up" wait again; memory-tight users can
+  // choose to release it after 10 / 30 / 60 idle minutes in the local mode settings.
   'localAsr.unloadIdleMinutes': 0,
 
-  // ── 服务器 ──
-  // 可选: 'auto' | 'zh' | 'en'。随每次识别发给服务端，由 asr.py 的 _resolve_language
-  // 映射成 Chinese / English；'auto' = 交给模型自检。
-  // （注释原来写的是 'Chinese' | 'English' | 'Cantonese'，那是服务端内部的取值，
-  //   客户端从来没写过这几个字符串。）
-  // 服务器模式下的 AI 来源。managed = 服务器内置；custom = 服务器只做 ASR，客户端调用当前 AI 档案。
-  'server.aiSource': 'managed', // 可选: 'managed' | 'custom'
+  // ── Server ──
+  // Options: 'auto' | 'zh' | 'en'. Sent with every recognition to the server, where
+  // asr.py's _resolve_language maps it to Chinese / English; 'auto' = let the model
+  // decide.
+  // (The comment used to say 'Chinese' | 'English' | 'Cantonese' — those are internal
+  // server-side values; the client never sent those strings.)
+  // AI source in server mode. managed = built into the server; custom = the server only
+  // does ASR and the client calls the current AI profile.
+  'server.aiSource': 'managed', // Options: 'managed' | 'custom'
 
-  // ── 悬浮窗 ──
-  overlayWaveTheme: 'black-rainbow', // 可选: 'black-rainbow' | 'black-blue' | 'black-white'
-  overlayShowDuration: true, // 是否显示录音时长。可选: true | false
-  overlayWidth: 'short', // 可选: 'short' | 'medium' | 'long'
+  // ── Overlay window ──
+  overlayWaveTheme: 'black-rainbow', // Options: 'black-rainbow' | 'black-blue' | 'black-white'
+  overlayShowDuration: true, // Whether to show the recording duration. Options: true | false
+  overlayWidth: 'short', // Options: 'short' | 'medium' | 'long'
 
-  // ── 流式实时显示 ──
-  // 打开后，支持流式的 ASR 模型（豆包、千问实时）在识别阶段会把实时文字显示在悬浮窗上。
-  // 识别完成后文本仍会照常交给 AI 处理。可选: true | false
+  // ── Streaming live display ──
+  // When on, streaming-capable ASR models (Doubao, Qwen realtime) show live text in the
+  // overlay during recognition. The finished text is still handed to the AI as usual.
+  // Options: true | false
   streamingDisplayEnabled: false,
 
-  // ── 热词注入 AI 提示词 ──
-  // 打开后，AI 整理时会收到你的热词表，帮助纠正/保留专有名词。默认关闭。可选: true | false
+  // ── Hotword injection into the AI prompt ──
+  // When on, AI cleanup receives your hotword list to help correct/keep proper nouns.
+  // Off by default. Options: true | false
   injectHotwordsToPrompt: false,
 
-  // ── 提示音 ──
-  readySoundEnabled: true, // 录音就绪提示音。可选: true | false
+  // ── Chimes ──
+  readySoundEnabled: true, // Recording-ready chime. Options: true | false
 
-  // ── 应用设置 ──
-  // autoCheckUpdate 在界面上已经没有开关了（更新是必走的：后台下载 + 用户点击或退出时安装）。
-  // 这里保留默认值与读取，是给更新链路自己出故障时留一条不用发新版的止血通道
-  // （0.0.8 那次更新器把用户锁在死循环里，当时只能靠这个开关关掉）。
-  autoCheckUpdate: true, // 是否检查更新。可选: true | false
-  // 已下载待安装的更新包 { version, filePath, sha512 }。Rust 侧退出时会读它做兜底安装。
-  pendingUpdate: null,
-  historyEnabled: true, // 保存历史记录（文本+录音）。关闭后不再保存新记录，适合共享电脑。可选: true | false
-  audioRetentionEnabled: true, // 保留录音文件。可选: true | false
-  audioRetentionDays: -1, // 录音保留天数。可选: 7 | 30 | 90 | -1（永久）
-  logRetentionDays: 30, // 日志保留天数。可选: 7 | 15 | 30 | 90
+  // ── App settings ──
+  // autoCheckUpdate controls ONLY the automatic metadata check (a small manifest GET
+  // at startup and every six hours). Downloading and installing always require the
+  // user's explicit "Download and install" action, so this switch cannot cause an
+  // install — it only decides whether the app notices new releases on its own.
+  autoCheckUpdate: true, // Whether to check for updates. Options: true | false
+  // pendingUpdate existed for the pre-fork install-on-exit flow; that flow is gone
+  // (see commands/system.rs clear_legacy_update_artifacts, which deletes any value
+  // left behind by older versions). Do not add a default for it back.
+  historyEnabled: true, // Save history (text + audio). When off, no new entries are stored — useful on shared computers. Options: true | false
+  audioRetentionEnabled: true, // Keep recording files. Options: true | false
+  audioRetentionDays: -1, // Recording retention in days. Options: 7 | 30 | 90 | -1 (forever)
+  logRetentionDays: 30, // Log retention in days. Options: 7 | 15 | 30 | 90
 
-  // ── WebDAV 备份 ──
-  // 备份包一定含配置，历史与录音可选。两个都默认 false：录音库能有几个 GB，而网盘
-  // （尤其坚果云免费版）有月流量额度，默认打开等于替用户做了一个很贵的决定。
-  // ⚠️ Rust 侧 commands/webdav.rs 里也有一份默认值（setting_bool 的 unwrap_or(false)
-  // 与 DEFAULT_KEEP_COUNT），改这里要一起改 —— 两份不一致时界面显示的和实际上传的
-  // 就不是一回事了。
-  'webdav.enabled': false, // 自动定期备份。可选: true | false
-  'webdav.url': '', // 目录地址，只接受 https（Basic 认证等于明文发密码）
+  // ── WebDAV backup ──
+  // A backup always contains configuration; history and recordings are optional. Both
+  // default to false: a recording library can be several GB, and cloud drives
+  // (especially the free Nutstore tier) have monthly traffic quotas — enabling them by
+  // default would make an expensive decision on the user's behalf.
+  // ⚠️ The Rust side (commands/webdav.rs) keeps its own copies of these defaults
+  // (setting_bool's unwrap_or(false) and DEFAULT_KEEP_COUNT); changing one side requires
+  // changing the other — when the two disagree, what the UI shows and what actually gets
+  // uploaded are not the same thing.
+  'webdav.enabled': false, // Automatic periodic backup. Options: true | false
+  'webdav.url': '', // Directory URL; HTTPS only (Basic auth means the password travels in clear text otherwise)
   'webdav.username': '',
-  'webdav.password': '', // 坚果云要用「应用密码」，不是登录密码
-  'webdav.includeHistory': false, // 备份含历史记录
-  'webdav.includeAudio': false, // 备份含录音文件（体积大，打开时会提醒）
-  'webdav.intervalHours': 24, // 备份间隔小时数。可选: 24 | 72 | 168
-  'webdav.keepCount': 5, // 服务器上保留的份数。可选: 3 | 5 | 10
-  'webdav.lastBackupAt': 0, // 上次**成功**的时刻（ms）。间隔判定只看这个
-  'webdav.lastAttemptAt': 0, // 上次尝试的时刻（ms），失败退避用
-  // 上次备份结果 { at, ok, fileName, bytes, includeHistory, includeAudio, error }。
-  // 失败也记：静默失败几个月的备份在界面上和正常备份长得一模一样。
+  'webdav.password': '', // Nutstore requires an "app password", not the login password
+  'webdav.includeHistory': false, // Back up history
+  'webdav.includeAudio': false, // Back up recording files (large; warns when enabled)
+  'webdav.intervalHours': 24, // Backup interval in hours. Options: 24 | 72 | 168
+  'webdav.keepCount': 5, // Copies kept on the server. Options: 3 | 5 | 10
+  'webdav.lastBackupAt': 0, // Time of the last **successful** backup (ms). The interval check reads only this
+  'webdav.lastAttemptAt': 0, // Time of the last attempt (ms), used for failure backoff
+  // Last backup result { at, ok, fileName, bytes, includeHistory, includeAudio, error }.
+  // Failures are recorded too: a backup that silently failed for months looks exactly
+  // like a healthy one in the UI.
   'webdav.lastResult': null,
 
-  // ── 文本后处理（不依赖 AI 的客户端文本规范化）──
+  // ── Text post-processing (client-side normalization that does not need AI) ──
   textPostProcess: {
-    autoSegment: true, // 智能分段（仅极速模式生效），默认开启
-    normalizeNumbers: true, // 数字规范化：百分之/小数/分之/结构化整数，默认开启
-    stripTrailingPunctuation: false, // 去除句末标点
-    punctuationToSpace: false, // 标点符号替换为空格
+    autoSegment: true, // Smart segmentation (fast mode only), on by default
+    normalizeNumbers: true, // Number normalization: percents/decimals/fractions/structured integers, on by default
+    stripTrailingPunctuation: false, // Strip sentence-final punctuation
+    punctuationToSpace: false, // Replace punctuation with spaces
   },
 
-  // ── 热词 ──
+  // ── Hotwords ──
   hotwordLearning: null,
 
-  // ── 引导 ──
-  onboardingVersion: '', // 已完成引导的版本号，空字符串 = 未完成
+  // ── Onboarding ──
+  onboardingVersion: '', // Version whose onboarding was completed; empty string = not completed
 
-  // ── 远程公告 ──
-  dismissedNoticeIds: [], // 已被用户关闭的公告 id 列表
+  // ── Remote notices ──
+  dismissedNoticeIds: [], // Ids of notices the user dismissed
 }
 
 /**
- * 获取指定 key 的默认值。
- * 如果 key 不在 DEFAULTS 中，返回提供的 fallback。
+ * Get the default value for a key.
+ * If the key is not in DEFAULTS, returns the provided fallback.
  */
 export function getDefault<T>(key: string, fallback?: T): T {
   if (key in DEFAULTS) {

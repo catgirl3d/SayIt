@@ -25,6 +25,11 @@ server/mytestwav.txt
 # ── Client dev artifacts ──
 client/scripts/*
 !client/scripts/check-i18n.mjs
+# Fork release tooling must be committed: the release workflow runs these scripts.
+!client/scripts/generate-update-manifest.mjs
+!client/scripts/generate-update-manifest.test.mjs
+!client/scripts/check-release-versions.mjs
+!client/scripts/check-release-versions.test.mjs
 client/dist/
 # build.rs 从 transcribe-cpp 的构建产物拷进来的 DLL，纯生成物
 client/src-tauri/transcribe-libs/

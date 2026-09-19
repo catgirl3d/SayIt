@@ -1,6 +1,9 @@
-// 前端版本检查 — 直接请求后端 manifest API 比较版本号
+// Frontend version check — fetch the pinned fork release manifest and compare version numbers.
 
-import { getOfficialUpdateBaseUrl, getUpdateBaseUrl, isOfficialUpdateChannel } from '@/services/runtimeConfig'
+import {
+  PROJECT_UPDATE_MANIFEST_URL,
+  projectReleaseInstallerUrl,
+} from '@/services/projectLinks'
 
 export interface VersionInfo {
   hasUpdate: boolean
@@ -8,19 +11,21 @@ export interface VersionInfo {
   latestVersion: string | null
   downloadUrl: string | null
   releaseDate: string | null
-  /** 安装包的 SHA-512（Base64）。下载后由 Rust 侧校验，manifest 没给就是 null。 */
+  /** Installer SHA-512 (Base64). Re-verified by the Rust side after download. */
   sha512: string | null
   error: string | null
-  /** 实际取到 manifest 的地址。回落发生时它是官方地址，不等于服务器设置里那个。 */
+  /** The URL the manifest was fetched from. The fork channel is fixed, so this is constant. */
   sourceUrl: string | null
 }
 
 /**
- * 返回 >0 表示 latest 比 current 新。
+ * Returns >0 when latest is newer than current.
  *
- * 只认纯数字的点分段。非数字段（预发布后缀之类）按 0 处理而不是让 NaN 传下去：
- * NaN 参与减法永远得 NaN，`NaN !== 0` 为真，会让循环在第一段就返回 NaN，
- * 而 `NaN > 0` 是 false —— 结果是"有更新也不报"，且没有任何报错。
+ * Only pure numeric dot-separated segments are recognized. Non-numeric segments
+ * (pre-release suffixes and the like) are treated as 0 instead of letting NaN
+ * propagate: NaN poisons every subtraction, so the loop would return NaN on the
+ * first segment, and `NaN > 0` is false — an available update would be silently
+ * swallowed with no error anywhere.
  */
 export function compareVersions(current: string, latest: string): number {
   const parse = (value: string) => value.split('.').map((segment) => {
@@ -36,27 +41,29 @@ export function compareVersions(current: string, latest: string): number {
   return 0
 }
 
+const NUMERIC_VERSION_PATTERN = /^\d+\.\d+\.\d+$/
+// Canonical Base64 of a 64-byte SHA-512 digest: exactly 88 characters, `==` padding.
+const SHA512_BASE64_PATTERN = /^[A-Za-z0-9+/]{86}==$/
+// Canonical UTC ISO timestamp, the exact shape `Date.toISOString()` emits (what the
+// release workflow's manifest generator writes): 2026-09-16T00:00:00.000Z.
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
 /**
- * 检查更新。先问服务器设置里那个地址，拿不到有效 manifest 就回落到官方地址。
+ * Check for updates against the pinned fork release manifest (PROJECT_UPDATE_MANIFEST_URL).
  *
- * **回落不是优化，是「更新地址跟随服务器地址」这个设计能成立的前提。**
- * 把服务器指向自建后端的用户，那台机器上不会有 manifest；没有这一步，他们每次检查都
- * 拿到 404、被当成"已是最新版"，从此永远收不到更新，而且毫无征兆。
+ * The source is deliberately fixed and independent of the speech-backend setting: the
+ * backend URL is user-configurable, and a user-configurable address must never decide
+ * which installer this machine is allowed to download and run. There is no fallback
+ * URL either — when the manifest is missing, the result is simply "no update", never a
+ * request to some other server.
  *
- * 只在「没拿到版本号」时回落 —— 包括 404、网络失败、以及返回了 JSON 但没有 version
- * 字段。已经拿到版本号就用它，哪怕版本比当前的旧（那是测试指向旧通道的正常情况，
- * 不该悄悄换成官方的答案）。
+ * The manifest fails closed: version, release date, installer URL, and SHA-512 are all
+ * mandatory, and the installer URL must be the canonical fork release asset for exactly
+ * the version the manifest declares. Any deviation returns the invalid-manifest result
+ * with every field null, so a half-valid manifest can never smuggle a download URL or
+ * a hash past this boundary.
  */
 export async function checkVersionUpdate(currentVersion: string): Promise<VersionInfo> {
-  const configured = await fetchManifest(currentVersion, getUpdateBaseUrl())
-  if (configured.latestVersion || isOfficialUpdateChannel()) return configured
-
-  const fallback = await fetchManifest(currentVersion, getOfficialUpdateBaseUrl())
-  // 两边都没拿到就报第一次的结果：错误信息应该指向用户实际配置的那个地址。
-  return fallback.latestVersion ? fallback : configured
-}
-
-async function fetchManifest(currentVersion: string, baseUrl: string): Promise<VersionInfo> {
   const base: VersionInfo = {
     hasUpdate: false,
     currentVersion,
@@ -65,37 +72,70 @@ async function fetchManifest(currentVersion: string, baseUrl: string): Promise<V
     releaseDate: null,
     sha512: null,
     error: null,
-    sourceUrl: baseUrl,
+    sourceUrl: PROJECT_UPDATE_MANIFEST_URL,
   }
 
   try {
-    const resp = await fetch(`${baseUrl}/api/desktop-updates/win32/x64/manifest`, {
+    const resp = await fetch(PROJECT_UPDATE_MANIFEST_URL, {
       cache: 'no-store',
       signal: AbortSignal.timeout(10000),
     })
     if (!resp.ok) {
+      // 404 simply means no release has been published yet; other statuses are real errors.
       base.error = resp.status === 404 ? null : `HTTP ${resp.status}`
       return base
     }
-    const manifest = await resp.json() as {
-      version?: string
-      releaseDate?: string
-      download_path?: string
-      sha512?: string
-    }
-    const latestVersion = manifest.version
-    if (!latestVersion) return base
-
-    base.latestVersion = latestVersion
-    base.releaseDate = manifest.releaseDate || null
-    base.sha512 = manifest.sha512 || null
-    base.downloadUrl = manifest.download_path
-      ? `${baseUrl}${manifest.download_path}`
-      : null
-    base.hasUpdate = compareVersions(currentVersion, latestVersion) > 0
-    return base
+    return validateManifest(base, currentVersion, await resp.json())
   } catch (err) {
     base.error = String(err)
     return base
+  }
+}
+
+function validateManifest(base: VersionInfo, currentVersion: string, raw: unknown): VersionInfo {
+  if (typeof raw !== 'object' || raw === null) return invalidManifest(base)
+  const manifest = raw as Record<string, unknown>
+  const version = manifest.version
+  const releaseDate = manifest.releaseDate
+  const url = manifest.url
+  const sha512 = manifest.sha512
+
+  if (
+    typeof version !== 'string' ||
+    !NUMERIC_VERSION_PATTERN.test(version) ||
+    typeof releaseDate !== 'string' ||
+    !ISO_TIMESTAMP_PATTERN.test(releaseDate) ||
+    Number.isNaN(new Date(releaseDate).getTime()) ||
+    typeof url !== 'string' ||
+    url !== projectReleaseInstallerUrl(version) ||
+    typeof sha512 !== 'string' ||
+    !isSixtyFourByteSha512Base64(sha512)
+  ) {
+    return invalidManifest(base)
+  }
+
+  base.latestVersion = version
+  base.releaseDate = releaseDate
+  base.sha512 = sha512
+  base.downloadUrl = url
+  base.hasUpdate = compareVersions(currentVersion, version) > 0
+  return base
+}
+
+function invalidManifest(base: VersionInfo): VersionInfo {
+  // Every field stays null: a manifest that violates any rule must not leave a
+  // partially valid download URL or hash behind for the install path to trust.
+  base.error = 'Invalid fork update manifest'
+  return base
+}
+
+function isSixtyFourByteSha512Base64(value: string): boolean {
+  // The length/padding pattern pins the canonical encoding of a 64-byte digest;
+  // the decode still runs so an inhumanly crafted pattern match cannot sneak through.
+  if (!SHA512_BASE64_PATTERN.test(value)) return false
+  try {
+    return atob(value).length === 64
+  } catch {
+    return false
   }
 }

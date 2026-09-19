@@ -150,9 +150,9 @@ export interface AppAPI {
   testShortcut: (accelerator: string) => Promise<{ valid: boolean }>
   getAutoLaunch: () => Promise<boolean>
   setAutoLaunch: (enable: boolean) => Promise<void>
-  installDownloadedUpdate: (filePath: string, relaunch: boolean) => Promise<void>
-  downloadUpdate: (url: string, sha512?: string | null) => Promise<string>
-  verifyUpdatePackage: (filePath: string, sha512?: string | null) => Promise<boolean>
+  installDownloadedUpdate: (version: string, sha512: string) => Promise<void>
+  downloadUpdate: (url: string, version: string, sha512: string) => Promise<void>
+  clearLegacyUpdateArtifacts: () => Promise<void>
   setPTTLabConfig: (data: unknown) => void
   getDiagnosticsPreview: (issueOccurrence: DiagnosticOccurrence) => Promise<DiagnosticsPreview>
   createPublicDiagnosticsBundle: (data: {

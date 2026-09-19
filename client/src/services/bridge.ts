@@ -296,22 +296,30 @@ export function setAutoLaunch(enable: boolean) {
 }
 
 /**
- * 拉起安装程序并退出应用。
- * relaunch=true 装完自动重开（用户主动点更新时）；退出路径上的兜底安装走 Rust 内部，
- * 传 false —— 用户是要关掉 SayIt，装完再拉起来会表现成"这软件关不掉"。
+ * Launch the installer and exit the app. Authorization lives entirely on the Rust
+ * side: it only installs the exact package this process downloaded and verified
+ * during this session, keyed by the manifest version/hash pair.
  */
-export function installDownloadedUpdate(filePath: string, relaunch: boolean) {
-  return invoke('install_downloaded_update', { filePath, relaunch })
+export function installDownloadedUpdate(version: string, sha512: string) {
+  return invoke<void>('install_downloaded_update', { version, sha512 })
 }
 
-/** 下载安装包到临时目录，返回完整路径。传了 sha512（Base64）就由 Rust 侧校验完整性。 */
-export function downloadUpdate(url: string, sha512?: string | null) {
-  return invoke<string>('download_update', { url, sha512: sha512 ?? null })
+/**
+ * Download the installer from the fork release manifest URL to a fixed temp
+ * directory. Rust validates the URL/version/hash again and authorizes the package
+ * in-memory on success; returns nothing.
+ */
+export function downloadUpdate(url: string, version: string, sha512: string) {
+  return invoke<void>('download_update', { url, version, sha512 })
 }
 
-/** 磁盘上那个安装包还能不能用（存在 + 哈希对得上）。用于启动时复用上次下载的包。 */
-export function verifyUpdatePackage(filePath: string, sha512?: string | null) {
-  return invoke<boolean>('verify_update_package', { filePath, sha512: sha512 ?? null })
+/**
+ * One-way startup migration from the pre-fork update flow: delete the legacy
+ * pendingUpdate setting without reading its file path and clear the fixed temp
+ * update directory. Idempotent.
+ */
+export function clearLegacyUpdateArtifacts() {
+  return invoke<void>('clear_legacy_update_artifacts')
 }
 
 // ─── Tray ───

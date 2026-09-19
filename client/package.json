@@ -1,6 +1,6 @@
 {
   "name": "sayit-tauri",
-  "version": "0.1.9",
+  "version": "0.2.1",
   "description": "SayIt - Voice to Text Desktop App (Tauri)",
   "type": "module",
   "scripts": {
@@ -10,6 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:release-manifest": "node --test scripts/generate-update-manifest.test.mjs scripts/check-release-versions.test.mjs",
+    "check:release-versions": "node scripts/check-release-versions.mjs",
     "lint": "eslint src --ext .ts,.tsx",
     "format": "prettier --write src",
     "i18n:check": "node scripts/check-i18n.mjs --strict"
