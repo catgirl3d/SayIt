@@ -62,6 +62,108 @@ fn get_instructions(config: &AsrProviderConfig) -> String {
         .to_string()
 }
 
+enum ResponseEnd {
+    Completed,
+    Closed(String),
+    StreamEnded,
+    ReceiveError(String),
+    TimedOut(String),
+    ServerError { code: String, message: String },
+}
+
+fn finish_response(
+    result_text: String,
+    input_transcript: String,
+    end: ResponseEnd,
+    elapsed_ms: u64,
+    context: &str,
+) -> Result<AsrResult, String> {
+    let has_transcript = !result_text.trim().is_empty() || !input_transcript.trim().is_empty();
+
+    match &end {
+        ResponseEnd::TimedOut(message) => {
+            return Err(diag::fail(SCOPE, "recv_timeout", message.clone()));
+        }
+        ResponseEnd::ServerError { code, message } => {
+            return Err(diag::fail(
+                SCOPE,
+                "server_error",
+                format!("Qwen Omni error [{}]: {}", code, message),
+            ));
+        }
+        ResponseEnd::Closed(reason) if !has_transcript => {
+            return Err(diag::fail(
+                SCOPE,
+                "closed_before_response",
+                format!(
+                    "Server closed the connection before response.done and returned no transcript ({}) {}",
+                    reason, context
+                ),
+            ));
+        }
+        ResponseEnd::StreamEnded if !has_transcript => {
+            return Err(diag::fail(
+                SCOPE,
+                "stream_ended_before_response",
+                format!(
+                    "WebSocket stream ended before response.done and returned no transcript; {}",
+                    context
+                ),
+            ));
+        }
+        ResponseEnd::ReceiveError(error) if !has_transcript => {
+            return Err(diag::fail(
+                SCOPE,
+                "recv",
+                format!("Failed to receive message: {}", error),
+            ));
+        }
+        ResponseEnd::ReceiveError(error) => {
+            diag::log(
+                SCOPE,
+                "recv_error_after_result",
+                &format!(
+                    "A result was already received; treating as success: {}",
+                    diag::truncate(error, 200)
+                ),
+            );
+        }
+        _ => {}
+    }
+
+    // If the model returned no answer, use the input transcript as a fallback.
+    let used_input_transcript =
+        result_text.trim().is_empty() && !input_transcript.trim().is_empty();
+    let final_text = if used_input_transcript {
+        input_transcript
+    } else {
+        result_text
+    };
+
+    if final_text.trim().is_empty() {
+        diag::empty_result(
+            SCOPE,
+            &format!("Conversation ended without any transcript {}", context),
+        );
+    } else {
+        diag::ok(SCOPE, elapsed_ms, final_text.chars().count());
+        if used_input_transcript {
+            // The input transcript remains usable when the model returns no answer, though this may
+            // mean the instructions had no effect.
+            diag::log(
+                SCOPE,
+                "used_input_transcript",
+                "Model produced no output; used the input transcript fallback",
+            );
+        }
+    }
+
+    Ok(AsrResult {
+        text: final_text,
+        elapsed_ms,
+    })
+}
+
 pub async fn transcribe(
     audio_pcm_b64: &str,
     _sample_rate: u32,
@@ -185,32 +287,22 @@ pub async fn transcribe(
     let mut input_transcript = String::new();
     let timeout = tokio::time::Duration::from_secs(60);
 
-    loop {
+    let end = 'receive: loop {
         let msg = match tokio::time::timeout(timeout, ws.next()).await {
             Err(_) => {
-                let _ = ws.close(None).await;
-                return Err(diag::fail(
-                    SCOPE,
-                    "recv_timeout",
-                    format!(
-                        "Timed out waiting for a response (60s); audio={:.1}s received_chars={}",
-                        audio_sec,
-                        result_text.chars().count()
-                    ),
+                break 'receive ResponseEnd::TimedOut(format!(
+                    "Timed out waiting for a response (60s); audio={:.1}s received_chars={}",
+                    audio_sec,
+                    result_text.chars().count()
                 ));
             }
-            Ok(None) => break, // 连接已关闭
+            Ok(None) => {
+                // EOF before response.done is a separate, incomplete end condition.
+                break 'receive ResponseEnd::StreamEnded;
+            }
             Ok(Some(Err(e))) => {
-                // 连接错误（包括对方关闭后仍发消息），跳出循环用已有结果
-                if !result_text.is_empty() || !input_transcript.is_empty() {
-                    diag::log(
-                        SCOPE,
-                        "recv_error_after_result",
-                        &format!("A result was already received; treating as success: {}", diag::truncate(&e.to_string(), 200)),
-                    );
-                    break;
-                }
-                return Err(diag::fail(SCOPE, "recv", format!("Failed to receive message: {}", e)));
+                // A receive error may follow peer closure; the finalizer preserves usable partial text.
+                break 'receive ResponseEnd::ReceiveError(e.to_string());
             }
             Ok(Some(Ok(m))) => m,
         };
@@ -255,9 +347,7 @@ pub async fn transcribe(
                             }
                         }
                     }
-                    "response.done" => {
-                        break;
-                    }
+                    "response.done" => break 'receive ResponseEnd::Completed,
                     "error" => {
                         let err_msg = event
                             .get("error")
@@ -269,12 +359,10 @@ pub async fn transcribe(
                             .and_then(|e| e.get("code"))
                             .and_then(|c| c.as_str())
                             .unwrap_or("-");
-                        let _ = ws.close(None).await;
-                        return Err(diag::fail(
-                            SCOPE,
-                            "server_error",
-                            format!("Qwen Omni error [{}]: {}", err_code, err_msg),
-                        ));
+                        break 'receive ResponseEnd::ServerError {
+                            code: err_code.to_string(),
+                            message: err_msg.to_string(),
+                        };
                     }
                     _ => {}
                 }
@@ -284,43 +372,25 @@ pub async fn transcribe(
                     .map(|f| format!("code={} reason={}", f.code, diag::truncate(&f.reason, 200)))
                     .unwrap_or_else(|| "No details".to_string());
                 diag::log(SCOPE, "close", &reason);
-                break;
+                break 'receive ResponseEnd::Closed(reason);
             }
             _ => {}
         }
-    }
+    };
 
     let _ = ws.close(None).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    // 如果 AI 没有输出文本但有输入转录，使用输入转录
-    let used_input_transcript = result_text.trim().is_empty() && !input_transcript.is_empty();
-    let final_text = if used_input_transcript {
-        input_transcript
-    } else {
-        result_text
-    };
-
-    if final_text.trim().is_empty() {
-        diag::empty_result(
-            SCOPE,
-            &format!(
-                "Conversation ended without any transcript audio_sec={:.1} elapsed={}ms model={} chunks={}",
-                audio_sec, elapsed_ms, model, total_chunks
-            ),
-        );
-    } else {
-        diag::ok(SCOPE, elapsed_ms, final_text.chars().count());
-        if used_input_transcript {
-            // 模型没给回答、只给了输入转写。结果可用，但说明 instructions 可能没生效
-            diag::log(SCOPE, "used_input_transcript", "Model produced no output; used the input transcript fallback");
-        }
-    }
-
-    Ok(AsrResult {
-        text: final_text,
+    finish_response(
+        result_text,
+        input_transcript,
+        end,
         elapsed_ms,
-    })
+        &format!(
+            "audio_sec={:.1} elapsed={}ms model={} chunks={}",
+            audio_sec, elapsed_ms, model, total_chunks
+        ),
+    )
 }
 
 /// 等待指定类型的事件
@@ -450,5 +520,103 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
                 detail: String::new(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod response_end_tests {
+    use super::{finish_response, ResponseEnd};
+
+    fn finish(result_text: &str, end: ResponseEnd) -> Result<super::AsrResult, String> {
+        finish_response(
+            result_text.to_string(),
+            String::new(),
+            end,
+            1,
+            "audio_sec=1.0",
+        )
+    }
+
+    #[test]
+    fn completed_response_with_empty_text_remains_successful() {
+        let result = finish("", ResponseEnd::Completed).expect("response.done completed");
+        assert_eq!(result.text, "");
+    }
+
+    #[test]
+    fn close_with_empty_text_is_an_error_with_close_cause() {
+        let error = finish(
+            "",
+            ResponseEnd::Closed("code=1011 reason=server failure".to_string()),
+        )
+        .expect_err("a close before response.done is incomplete");
+        assert!(
+            error.contains("code=1011"),
+            "close code missing from error: {error}"
+        );
+        assert!(
+            error.contains("server failure"),
+            "close reason missing from error: {error}"
+        );
+    }
+
+    #[test]
+    fn eof_with_empty_text_is_an_error_with_end_cause() {
+        let error = finish("", ResponseEnd::StreamEnded)
+            .expect_err("EOF before response.done is incomplete");
+        assert!(
+            error.to_lowercase().contains("stream"),
+            "EOF cause missing from error: {error}"
+        );
+    }
+
+    #[test]
+    fn nonempty_partial_text_survives_close_eof_and_receive_error() {
+        for end in [
+            ResponseEnd::Closed("code=1006".to_string()),
+            ResponseEnd::StreamEnded,
+            ResponseEnd::ReceiveError("socket reset".to_string()),
+        ] {
+            let result =
+                finish("partial transcript", end).expect("nonempty partial is retained");
+            assert_eq!(result.text, "partial transcript");
+        }
+    }
+
+    #[test]
+    fn whitespace_only_partial_is_not_useful_after_close() {
+        let error = finish(
+            " \n\t ",
+            ResponseEnd::Closed("code=1006 reason=abnormal close".to_string()),
+        )
+        .expect_err("whitespace is empty when the caller trims text");
+        assert!(
+            error.contains("code=1006"),
+            "close cause missing from error: {error}"
+        );
+    }
+
+    #[test]
+    fn explicit_server_error_remains_an_error() {
+        let error = finish(
+            "partial transcript",
+            ResponseEnd::ServerError {
+                code: "quota_exceeded".to_string(),
+                message: "insufficient balance".to_string(),
+            },
+        )
+        .expect_err("explicit server errors are not partial successes");
+        assert!(error.contains("quota_exceeded"));
+        assert!(error.contains("insufficient balance"));
+    }
+
+    #[test]
+    fn timeout_remains_an_error_even_after_partial_text() {
+        let error = finish(
+            "partial transcript",
+            ResponseEnd::TimedOut("Timed out waiting for a response (60s)".to_string()),
+        )
+        .expect_err("timeouts remain errors even when partial text exists");
+        assert!(error.contains("Timed out waiting for a response"));
     }
 }

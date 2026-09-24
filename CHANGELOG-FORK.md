@@ -11,6 +11,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added Russian as a selectable recognition language in the client.
 - Added Ukrainian as a selectable recognition language in the client.
 - Added Sber GigaAM as a Russian speech-recognition provider for the server, with configurable RNNT and CTC variants.
+- Treat empty Qwen Omni results after a premature WebSocket close or stream end as errors; nonempty partial transcripts remain successful.
 - Added selectable and downloadable local GGUF ASR options for GigaAM v3 e2e RNN-T and Whisper Small, Large v3 Turbo, and Large v2.
 - Promoted existing Parakeet Unified English and Nemotron local ASR models into the default visible model list.
 - Added one shared speech-input language setting for local, server, and cloud ASR, migrating legacy mode-specific settings and applying it to compatible recognition requests, history reprocessing, and built-in cleanup prompts.
