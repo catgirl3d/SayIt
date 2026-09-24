@@ -70,18 +70,21 @@ export interface AsrProviderEntry {
  * label 刻意不带模型名后缀（模型名单独一行小字），否则卡片标题会被
  * 「千问 3.5 Omni Plus（qwen3.5-omni-plus，ASR+AI）」这种括号串撑爆。
  *
- * ── blurb 的口径（改文案前先读这段）──
- * 每条只回答一件事：**什么时候该选它**，而且七条放在一起要能相互区分。
- * 早期的文案是各写各的优点（「准确率高、速度快」同时挂在两家上），等于没给出
- * 选择依据 —— 用户看完还是不知道该点哪一张。现在的口径：
- *   · 准确率的结论是**有条件的**，条件要写出来。豆包只有在**关掉实时字幕**时
- *     才是中文最准的一档，一开字幕就掉档；Audio 3.0 反过来，开着字幕也是第一档。
- *     少了这个前提，两张卡的「最准」会互相矛盾。
- *   · 不如别家的地方照实写（千问 realtime 不及 Audio 3.0、MiMo 准确率一般），
- *     但用词留余地 —— 目录里留着它们是因为有人的账号/网络只有那一家能用。
- *   · 引用别的卡一律用**产品名**（"Audio 3.0"、"Omni Plus"），不要用「上面那个」
- *     「同上」：顺序会变，位置指代改一次顺序就错。
- *   · 这些准确率结论来自实际使用对比，不是跑分。改结论前先真用一遍。
+ * Each blurb should answer when to choose that provider and distinguish it from
+ * the others. Earlier copy listed strengths independently (such as accuracy and
+ * speed on multiple entries), leaving users without a useful selection reason.
+ *
+ * Accuracy comparisons are conditional. Doubao was the strongest for Chinese
+ * with live captions off; enabling captions dropped it by a tier. Historical
+ * Qwen Audio 3.0 comparisons showed the reverse, with captions on. Lower-ranked
+ * services were described honestly (Qwen realtime below Audio 3.0, MiMo with
+ * middling accuracy), but are retained because some users may only have an
+ * account or network that works with that provider.
+ *
+ * Refer to other entries by product name, never relative catalog position.
+ * These conclusions came from hands-on use, not benchmarks. The Qwen Audio
+ * accuracy comparison covered 3.0 only and provides no accuracy or latency
+ * evidence for 3.1.
  */
 export const ASR_PROVIDERS: AsrProviderEntry[] = [
   {
@@ -92,14 +95,15 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     availability: 'mainland_china',
     get blurb() { return t('asrProvider.doubaoBlurb') },
   },
-  // 第二位（豆包之后）：实测**开着实时字幕**时它比豆包更准 —— 豆包最准的用法是
-  // 关掉实时字幕，一开就掉一档；这一家开着字幕也是第一档。它也不需要业务空间 ID
-  // （通用域名可用，见 providers/asr_qwen_audio_stream.rs 的文件头），
-  // 所以是"填了密钥就能用"的那张卡。
+  // Second after Doubao as the streaming-caption option. The historical comparison
+  // found Audio 3.0 stronger than Doubao with captions on; Doubao's strongest
+  // Chinese accuracy required captions off, and enabling them dropped it a tier.
+  // That comparison says nothing about 3.1 accuracy or latency. This UI flow does
+  // not require a workspace ID; the generic-host probe verified 3.0 only, not 3.1.
   {
     id: 'qwen_audio_stream',
     get label() { return t('asrProvider.qwenAudioStream') },
-    model: 'qwen-audio-3.0-asr-flash-streaming',
+    model: 'qwen-audio-3.1-asr-flash-streaming',
     platform: 'qwen',
     availability: 'mainland_china',
     get blurb() { return t('asrProvider.qwenAudioStreamBlurb') },

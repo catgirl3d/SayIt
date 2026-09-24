@@ -45,6 +45,7 @@ describe('resolveAsrDisplayModel', () => {
   it('映射已知供应商', () => {
     expect(resolveAsrDisplayModel('doubao_v2')).toBe('Doubao-Seed-ASR-2.0')
     expect(resolveAsrDisplayModel('qwen')).toBe('qwen3-asr-flash')
+    expect(resolveAsrDisplayModel('qwen_audio_stream')).toBe('qwen-audio-3.1-asr-flash-streaming')
     expect(resolveAsrDisplayModel('mimo')).toBe('mimo-v2.5-asr')
     expect(resolveAsrDisplayModel('qwen_omni_35_plus')).toBe('qwen3.5-omni-plus-realtime')
   })

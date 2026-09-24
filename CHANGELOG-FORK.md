@@ -7,6 +7,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### Speech Recognition
 
+- Updated the built-in Qwen Audio streaming ASR model to `qwen-audio-3.1-asr-flash-streaming`.
 - Added Russian as a selectable recognition language in the client.
 - Added Ukrainian as a selectable recognition language in the client.
 - Added Sber GigaAM as a Russian speech-recognition provider for the server, with configurable RNNT and CTC variants.

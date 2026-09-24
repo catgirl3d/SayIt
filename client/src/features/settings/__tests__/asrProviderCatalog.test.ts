@@ -67,14 +67,22 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
   })
 
   /** 清单顺序就是推荐顺序（卡片顺序 + 新建下拉的顺序），前两名钉住 */
-  it('推荐顺序：豆包第一，千问 Audio 3.0 第二', () => {
+  it('推荐顺序：豆包第一，千问 Audio 3.1 第二', () => {
     expect(ASR_PROVIDERS.slice(0, 2).map((p) => p.id)).toEqual(['doubao_v2', 'qwen_audio_stream'])
   })
 
+  it('Qwen Audio catalog identifies the active 3.1 model without unverified quality claims', () => {
+    const provider = findAsrProvider('qwen_audio_stream')
+
+    expect(provider?.model).toBe('qwen-audio-3.1-asr-flash-streaming')
+    expect(provider?.label).toContain('Qwen Audio 3.1')
+    expect(provider?.blurb.toLowerCase()).not.toMatch(/accuracy|accurate|fast|quick/)
+  })
+
   /**
-   * 只有 qwen3-asr-flash-realtime 需要业务空间 ID。
-   * qwen-audio-3.0-asr-flash-streaming 用通用域名就能跑（实测），加卡时照抄
-   * needsWorkspaceId 会让用户以为不填就用不了 —— 这条钉住这个区别。
+   * Only qwen3-asr-flash-realtime requires a workspace ID. The existing
+   * no-workspace behavior is preserved for Qwen Audio; the historical generic-host
+   * probe covered 3.0 and is not evidence of a live 3.1 connection.
    */
   it('只有 qwen_realtime 需要业务空间 ID', () => {
     expect(ASR_PROVIDERS.filter((p) => p.needsWorkspaceId).map((p) => p.id)).toEqual([

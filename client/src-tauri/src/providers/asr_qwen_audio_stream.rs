@@ -1,23 +1,29 @@
-// 千问 Qwen-Audio-3.0 流式语音识别 — qwen-audio-3.0-asr-flash-streaming
+// Qwen Audio 3.1 streaming speech recognition: qwen-audio-3.1-asr-flash-streaming
 //
-// ⚠️ 协议与 asr_qwen_realtime.rs **不是同一套**，别指望改个模型名就能复用：
-//   · asr_qwen_realtime → `/api-ws/v1/realtime`，OpenAI-Realtime 风格事件
-//     （session.update / input_audio_buffer.append，音频 base64 塞进 JSON）；
-//   · 这一份            → `/api-ws/v1/inference`，DashScope 原生 duplex 指令
-//     （run-task → task-started → 裸二进制音频帧 → result-generated →
-//      finish-task → task-finished）。
+// This protocol differs from asr_qwen_realtime.rs; changing only the model name
+// is not enough to reuse that implementation:
+//   - asr_qwen_realtime uses `/api-ws/v1/realtime` with OpenAI-Realtime events
+//     (session.update / input_audio_buffer.append, with base64 audio in JSON).
+//   - This provider uses `/api-ws/v1/inference` with DashScope native duplex
+//     commands (run-task -> task-started -> binary audio frames ->
+//     result-generated -> finish-task -> task-finished).
 //
-// 实测结论（`dev-scripts/probe_qwen_audio30_stream.py`，打的是真实接口）：
-//   · 通用域名 `dashscope.aliyuncs.com` 与业务空间专属域名都能用 —— 这个模型
-//     **不需要 WorkspaceId**（qwen3-asr-flash-realtime 才需要）。填了就走专属域名
-//     （阿里官方称更稳），没填照样工作，所以设置页不把它列为必填项。
-//   · `result-generated` 里 `sentence.text` 是**当前句的全量文本**，不是增量。
-//   · 开头十几条 `result-generated` 的 text 是空串（VAD 还没判出语音），必须丢掉，
-//     否则悬浮窗会先闪一下空字幕。
-//   · 每个 `sentence_end=true` 的句子自带句尾标点（中文「。」、英文 ". "），
-//     所以分句拼接**不加分隔符**；asr_qwen_realtime 那边补「，」是因为它的分句不带标点。
-//   · 音频不按实时节奏发也能用（10.84s 音频一次性推完，2.6s 出全文），
-//     所以一次性识别那条路不需要 sleep 假装实时。
+// Historical Qwen Audio 3.0 probe results (`dev-scripts/probe_qwen_audio30_stream.py`)
+// are retained as protocol references; they are not a live check of 3.1:
+//   - Both the generic `dashscope.aliyuncs.com` host and the workspace-specific
+//     host worked for 3.0, so that version did not require a WorkspaceId.
+//     Supplying one selected the dedicated host, which Alibaba describes as
+//     more stable. `qwen3-asr-flash-realtime` does require a WorkspaceId.
+//   - `sentence.text` in `result-generated` contains the full current sentence,
+//     not a delta.
+//   - The first dozen or so `result-generated` events have empty text while VAD has
+//     not detected speech. Drop them to avoid briefly showing an empty caption.
+//   - Sentences with `sentence_end=true` include trailing punctuation, so join
+//     them without a separator. `asr_qwen_realtime` needs a comma because its
+//     sentence events do not include punctuation.
+//   - Audio works when sent faster than real time: a 10.84-second clip was sent
+//     in one batch and returned in 2.6 seconds. The buffered path therefore
+//     does not need sleeps to simulate real-time delivery.
 
 use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
@@ -34,10 +40,11 @@ use tungstenite::client::IntoClientRequest;
 use tungstenite::http::header::{AUTHORIZATION, USER_AGENT};
 use tungstenite::http::HeaderValue;
 
-const MODEL: &str = "qwen-audio-3.0-asr-flash-streaming";
-const SCOPE: &str = "qwen/audio30";
+const MODEL: &str = "qwen-audio-3.1-asr-flash-streaming";
+const SCOPE: &str = "qwen/audio31";
 const WS_PATH: &str = "/api-ws/v1/inference";
-/// 没配业务空间时的通用域名。实测与专属域名同样可用。
+/// Generic host when no workspace ID is supplied. The historical 3.0 probe
+/// confirmed it; 3.1 has not been live-tested.
 const GENERIC_HOST: &str = "dashscope.aliyuncs.com";
 
 /// 音频帧大小：16kHz 单声道 16-bit 下正好 100ms。
@@ -394,8 +401,9 @@ where
 
 /// 录完再发：整段 PCM 推完 → finish-task → 收全文。
 ///
-/// 设置页的「识别测试」和关掉实时字幕时的录音都走这里，而它们都不传业务空间 ID，
-/// 所以这条路必须能用通用域名 —— 已实测可用。
+/// The settings-page recognition test and recording with live captions disabled
+/// use this route without a workspace ID. The generic-host fallback was live-
+/// probed with 3.0 only; 3.1 has not been live-tested.
 pub async fn transcribe(
     audio_pcm_b64: &str,
     sample_rate: u32,
@@ -456,7 +464,9 @@ pub async fn transcribe(
     })?;
 
     let mut transcript = Transcript::default();
-    // 上限按音频长度放宽：10.8s 音频实测 2.6s 收全，长音频线性长一些。
+    // The historical 3.0 probe collected a 10.84-second clip in 2.6 seconds.
+    // Allow proportionally more time for longer recordings; this is not a 3.1
+    // live measurement.
     let collect_budget = Duration::from_secs(20) + Duration::from_secs_f64(audio_sec.min(300.0));
     let closed_early = tokio::time::timeout(collect_budget, async {
         while let Some(msg) = ws.next().await {
@@ -845,7 +855,10 @@ mod tests {
         assert_eq!(payload["payload"]["task_group"], "audio");
         assert_eq!(payload["payload"]["task"], "asr");
         assert_eq!(payload["payload"]["function"], "recognition");
-        assert_eq!(payload["payload"]["model"], MODEL);
+        assert_eq!(
+            payload["payload"]["model"],
+            "qwen-audio-3.1-asr-flash-streaming"
+        );
         assert_eq!(payload["payload"]["parameters"]["format"], "pcm");
         assert_eq!(payload["payload"]["parameters"]["sample_rate"], 16000);
         // input 是必填，没有上下文时也要是一个空对象
