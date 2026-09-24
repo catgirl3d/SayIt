@@ -596,6 +596,7 @@ fn main() {
             commands::system::set_auto_launch,
             commands::system::install_downloaded_update,
             commands::system::download_update,
+            commands::system::check_update_manifest,
             commands::system::clear_legacy_update_artifacts,
             commands::system::append_debug_log,
             commands::system::save_audio_to_downloads,

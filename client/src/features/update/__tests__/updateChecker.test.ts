@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PROJECT_RELEASES_URL, PROJECT_UPDATE_MANIFEST_URL } from '@/services/projectLinks'
 import { checkVersionUpdate, compareVersions, type VersionInfo } from '../updateChecker'
+import * as bridge from '@/services/bridge'
 
 // Every manifest fixture starts from one canonical valid payload; a rejection case
 // overrides exactly one field so a failure pins the violated rule, not a typo cascade.
@@ -20,24 +21,16 @@ function manifestWith(overrides: Record<string, unknown>) {
 }
 
 function respondWith(manifest: unknown, status = 200) {
-  const fetchMock = vi.fn()
-  vi.stubGlobal('fetch', fetchMock)
-  fetchMock.mockResolvedValue({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => manifest,
-  })
-  return fetchMock
+  const invokeMock = vi.spyOn(bridge, 'checkUpdateManifest')
+  invokeMock.mockResolvedValue({ status, body: status >= 200 && status < 300 ? manifest : null })
+  return invokeMock
 }
 
 async function check(currentVersion: string, manifest: unknown, status = 200): Promise<VersionInfo> {
-  const fetchMock = respondWith(manifest, status)
+  const invokeMock = respondWith(manifest, status)
   const info = await checkVersionUpdate(currentVersion)
-  expect(fetchMock, 'a check must hit exactly one URL, the pinned fork manifest').toHaveBeenCalledTimes(1)
-  expect(fetchMock).toHaveBeenCalledWith(
-    PROJECT_UPDATE_MANIFEST_URL,
-    expect.objectContaining({ cache: 'no-store' }),
-  )
+  expect(invokeMock, 'a check must hit exactly one URL, the pinned fork manifest').toHaveBeenCalledTimes(1)
+  expect(invokeMock).toHaveBeenCalledWith(PROJECT_UPDATE_MANIFEST_URL)
   return info
 }
 
@@ -76,7 +69,7 @@ describe('compareVersions', () => {
 
 describe('checkVersionUpdate', () => {
   afterEach(() => {
-    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('reports an available update with the immutable installer URL and hash', async () => {
@@ -190,9 +183,8 @@ describe('checkVersionUpdate', () => {
     expect(info.downloadUrl).toBeNull()
   })
 
-  it('surfaces a network failure without partial metadata', async () => {
-    respondWith(validManifest())
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
+  it('surfaces a bridge failure without partial metadata', async () => {
+    vi.spyOn(bridge, 'checkUpdateManifest').mockRejectedValue(new Error('network down'))
     const info = await checkVersionUpdate('0.1.9')
     expect(info.hasUpdate).toBe(false)
     expect(info.error).toContain('network down')

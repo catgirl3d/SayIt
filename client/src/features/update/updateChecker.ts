@@ -4,6 +4,7 @@ import {
   PROJECT_UPDATE_MANIFEST_URL,
   projectReleaseInstallerUrl,
 } from '@/services/projectLinks'
+import * as bridge from '@/services/bridge'
 
 export interface VersionInfo {
   hasUpdate: boolean
@@ -76,16 +77,20 @@ export async function checkVersionUpdate(currentVersion: string): Promise<Versio
   }
 
   try {
-    const resp = await fetch(PROJECT_UPDATE_MANIFEST_URL, {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(10000),
-    })
-    if (!resp.ok) {
-      // 404 simply means no release has been published yet; other statuses are real errors.
-      base.error = resp.status === 404 ? null : `HTTP ${resp.status}`
+    // The manifest must be fetched through Rust: GitHub's release-asset redirect
+    // chain sends no Access-Control-Allow-Origin, so a WebView fetch() fails CORS
+    // unconditionally (all 0.2.1 checks failed this way). The bridge returns the
+    // final HTTP status plus the raw JSON body; validation stays below.
+    const { status, body } = await bridge.checkUpdateManifest(PROJECT_UPDATE_MANIFEST_URL)
+    if (status === 404) {
+      // 404 simply means no release has been published yet.
       return base
     }
-    return validateManifest(base, currentVersion, await resp.json())
+    if (status < 200 || status >= 300) {
+      base.error = `HTTP ${status}`
+      return base
+    }
+    return validateManifest(base, currentVersion, body)
   } catch (err) {
     base.error = String(err)
     return base

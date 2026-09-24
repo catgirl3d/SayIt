@@ -557,6 +557,104 @@ fn emit_update_progress(app: &AppHandle, downloaded: u64, total: u64, status: &s
     );
 }
 
+/// The raw fork update manifest as served by GitHub. Field-level validation
+/// (version shape, installer URL identity, SHA-512 encoding) stays in the
+/// frontend validator so the manifest contract has exactly one source of truth.
+#[derive(Serialize, Clone)]
+pub struct UpdateManifestFetch {
+    /// HTTP status of the final response; 404 means "no release published yet".
+    status: u16,
+    /// Manifest body, present only for 2xx responses.
+    body: Option<Value>,
+}
+
+/// The only manifest URL this command accepts: the fork's own pinned
+/// latest-release manifest, byte-for-byte. Unlike the host-allowlist check used
+/// for redirects, the frontend-supplied URL itself must be exactly this string —
+/// the command must not become a generic fetch primitive into the release hosts.
+const FORK_MANIFEST_URL: &str = "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json";
+
+/// A release manifest is a few hundred bytes; anything larger is not a manifest.
+/// The cap bounds memory before JSON parsing so an oversized or malicious asset
+/// on an allowed host can never exhaust the native process.
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+
+/// Fetch the pinned fork update manifest server-side (reqwest).
+///
+/// The frontend cannot fetch this URL itself: GitHub's release-asset redirect
+/// chain (github.com → release-assets.githubusercontent.com) sends no
+/// `Access-Control-Allow-Origin` header, so every WebView `fetch()` fails CORS
+/// and the update check reports "Failed to fetch" forever (observed in the
+/// 0.2.1 logs: all checks since 2026-09-19 failed this way). Native code has
+/// no origin, so no CORS applies.
+///
+/// Validation matches the installer download: HTTPS fork hosts only, at most
+/// five redirects, the same redirect policy — plus an exact-URL check on the
+/// frontend-supplied address, so the command serves exactly one purpose. The
+/// response body is size-capped and parsed as JSON here but NOT validated — the
+/// frontend validator owns the manifest contract and fails closed on anything
+/// unexpected.
+#[tauri::command]
+pub async fn check_update_manifest(url: String) -> Result<UpdateManifestFetch, String> {
+    if url != FORK_MANIFEST_URL {
+        return Err("Manifest URL is not the pinned fork update manifest".to_string());
+    }
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid manifest URL: {}", e))?;
+    if !redirect_target_allowed(&parsed) {
+        return Err("Manifest URL host is outside the fork release infrastructure".to_string());
+    }
+
+    // Same User-Agent rule as the installer download: production AWS WAF's
+    // NoUserAgent_HEADER rule rejects UA-less requests with 403.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("SayIt/", env!("CARGO_PKG_VERSION")))
+        .redirect(update_redirect_policy())
+        .build()
+        .map_err(|e| format!("Failed to initialize update check client: {}", e))?;
+
+    let resp = client
+        .get(parsed)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Manifest request failed: {}", e))?;
+
+    let status = resp.status().as_u16();
+    if !resp.status().is_success() {
+        // 404 means "no release published yet" and is a normal result for the
+        // frontend; other statuses are surfaced the same way and handled there.
+        return Ok(UpdateManifestFetch { status, body: None });
+    }
+
+    // Reject oversized bodies BEFORE reading them, using the declared
+    // Content-Length when present; a missing length still gets bounded by the
+    // byte-collect limit below, so neither path can buffer an unbounded asset.
+    if let Some(len) = resp.content_length() {
+        if len > MAX_MANIFEST_BYTES {
+            return Err(format!(
+                "Manifest response too large: {} bytes (limit {})",
+                len, MAX_MANIFEST_BYTES
+            ));
+        }
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Manifest request failed: {}", e))?;
+    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(format!(
+            "Manifest response too large: {} bytes (limit {})",
+            bytes.len(),
+            MAX_MANIFEST_BYTES
+        ));
+    }
+
+    let body: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("Manifest response is not valid JSON: {}", e))?;
+    Ok(UpdateManifestFetch { status, body: Some(body) })
+}
+
 /// Download the fork release installer into the fixed temp directory, reporting real
 /// byte progress through the update-download-progress event.
 ///
@@ -1136,6 +1234,35 @@ mod update_tests {
         ));
         assert!(!redirect_target_allowed(&parse("https://evil.example.com/x").unwrap()));
         assert!(!redirect_target_allowed(&parse("http://github.com/x").unwrap()));
+    }
+
+    #[test]
+    fn manifest_url_must_stay_on_the_fork_release_hosts() {
+        // The manifest fetch reuses the installer download's redirect/initial-host
+        // validation: the pinned manifest URL is accepted, everything else fails closed.
+        assert!(redirect_target_allowed(
+            &reqwest::Url::parse("https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json")
+                .unwrap()
+        ));
+        assert!(!redirect_target_allowed(
+            &reqwest::Url::parse("https://evil.example.com/latest-win32-x64.json").unwrap()
+        ));
+        assert!(!redirect_target_allowed(
+            &reqwest::Url::parse("http://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json")
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn manifest_command_accepts_only_the_pinned_manifest_url() {
+        // The command must serve exactly one purpose: the pinned fork manifest.
+        // Any other URL — even a legitimate GitHub release asset — is refused,
+        // so the command cannot become a generic fetch primitive.
+        assert_eq!(FORK_MANIFEST_URL, "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json");
+        assert!(redirect_target_allowed(&reqwest::Url::parse(FORK_MANIFEST_URL).unwrap()));
+        assert!(redirect_target_allowed(&reqwest::Url::parse(
+            "https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe"
+        ).unwrap()) && FORK_MANIFEST_URL != "https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe");
     }
 
     #[test]

@@ -314,6 +314,17 @@ export function downloadUpdate(url: string, version: string, sha512: string) {
 }
 
 /**
+ * Fetch the fork update manifest through Rust (reqwest). The WebView cannot
+ * fetch the GitHub release-asset redirect chain itself: GitHub sends no
+ * Access-Control-Allow-Origin on that chain, so a frontend fetch always fails
+ * CORS. The returned body is the raw manifest JSON; field validation stays in
+ * updateChecker.ts.
+ */
+export function checkUpdateManifest(url: string) {
+  return invoke<{ status: number; body: unknown | null }>('check_update_manifest', { url })
+}
+
+/**
  * One-way startup migration from the pre-fork update flow: delete the legacy
  * pendingUpdate setting without reading its file path and clear the fixed temp
  * update directory. Idempotent.
