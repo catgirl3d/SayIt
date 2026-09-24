@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import { listHistory, type HistoryRecord } from '@/services/store'
+import { estimateTypingTimeSec, listHistory, type HistoryRecord } from '@/services/store'
 import { createDefaultUserStats } from '@/services/personalization/defaults'
 import { getUserStats } from '@/services/personalization/store'
 import type { UserStats } from '@/services/personalization/types'
@@ -119,7 +119,7 @@ function computeFullStats(records: HistoryRecord[], rangeDays: number): FullStat
     recordCount: records.length,
     avgCharsPerSession: validCount > 0 ? Math.round(totalChars / validCount) : 0,
     avgSpeed: totalDurationSec > 60 ? Math.round(totalChars / (totalDurationSec / 60)) : 0,
-    savedTimeSec: Math.round(totalChars / 50) * 60,
+    savedTimeSec: estimateTypingTimeSec(totalChars),
     maxDurationSec: Math.round(maxDurationSec),
     dailyAvgRecords: Math.round((records.length / activeDays) * 10) / 10,
     dailyAvgChars: Math.round(totalChars / activeDays),

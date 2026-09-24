@@ -50,6 +50,8 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added F13-F24 single-key shortcut support for programmable keyboards and remapping tools.
 - Fixed the home screen and setup guide showing a blank keycap when the hands-free hotkey had been cleared: they now fall back to the bound push-to-talk key with hold-to-talk wording, and state explicitly when no dictation hotkey is configured.
 - Record usage statistics for completed dictations when history retention is disabled, applying the increment atomically in the native store and refreshing the home screen live; recordings without text no longer add dictation time in either history mode. Time already accumulated by older no-text entries stays in the totals and is not recalculated when those entries are deleted.
+- Added a confirmation-protected action to clear home-screen usage totals without deleting history or audio recordings.
+- Corrected equivalent typing-time estimates to use 50 words per minute (250 standardized characters per minute) instead of 50 characters per minute, and show seconds for short Home statistics.
 - Updates are now fork-only and consent-based: SayIt checks this fork's own GitHub releases for new versions, and a version is downloaded and installed only when you press "Download and install" — closing the app never installs anything. A "Check for updates automatically" switch was added to General settings, and the About page now shows a fork build marker.
 
 ### Support and Diagnostics

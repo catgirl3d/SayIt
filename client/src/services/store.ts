@@ -339,6 +339,17 @@ export async function recordStats(charCount: number, durationSec: number): Promi
   return api().recordStatsDelta(charCount, durationSec)
 }
 
+export async function clearStats(): Promise<void> {
+  await api().storeSet('stats', { totalDurationSec: 0, totalChars: 0 })
+}
+
+const TYPING_WORDS_PER_MINUTE = 50
+const STANDARD_TYPING_CHARS_PER_WORD = 5
+
+export function estimateTypingTimeSec(charCount: number): number {
+  return Math.round((charCount * 60) / (TYPING_WORDS_PER_MINUTE * STANDARD_TYPING_CHARS_PER_WORD))
+}
+
 export async function getSetting<T>(key: string, fallback?: T): Promise<T> {
   const defaultValue = getDefault(key, fallback) as T
   const client = api()

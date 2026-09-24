@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { Mic, Clock, Type, Zap } from 'lucide-react'
-import { getStats, type Stats, getSetting } from '@/services/store'
+import { clearStats, estimateTypingTimeSec, getStats, type Stats, getSetting } from '@/services/store'
 import * as bridge from '@/services/bridge'
 import { SHORTCUTS_CHANGED_EVENT } from '@/services/bridge'
 import ReportIssueSection from '@/components/ReportIssueSection'
@@ -44,11 +46,21 @@ function WithKeyChip({
 export default function Home() {
   const t = useT()
   const [stats, setStats] = useState<Stats>({ totalDurationSec: 0, totalChars: 0 })
+  const statsRefreshVersion = useRef(0)
+  const [isClearStatsDialogOpen, setIsClearStatsDialogOpen] = useState(false)
+  const [isClearingStats, setIsClearingStats] = useState(false)
+  const [clearStatsError, setClearStatsError] = useState(false)
   const [handsFreeKey, setHandsFreeKey] = useState('AltRight')
   const [pttKey, setPttKey] = useState('ControlRight')
 
+  const refreshStats = useCallback(() => {
+    const refreshVersion = ++statsRefreshVersion.current
+    void getStats().then((nextStats) => {
+      if (refreshVersion === statsRefreshVersion.current) setStats(nextStats)
+    })
+  }, [])
+
   useEffect(() => {
-    const refreshStats = () => void getStats().then(setStats)
     refreshStats()
     const unlistenStats = bridge.listen('stats-updated', refreshStats)
     const unlistenHistory = bridge.listen('history-updated', refreshStats)
@@ -69,11 +81,18 @@ export default function Home() {
       unlistenStats.then((fn) => fn()).catch(() => {})
       unlistenHistory.then((fn) => fn()).catch(() => {})
     }
-  }, [])
+  }, [refreshStats])
 
   // Format time display
   const formatTime = (seconds: number) => {
-    const totalMinutes = Math.round(seconds / 60)
+    const totalSeconds = Math.round(seconds)
+    const totalMinutes = Math.floor(totalSeconds / 60)
+    const remainingSeconds = totalSeconds % 60
+
+    if (totalSeconds < 60) {
+      return { value: `${totalSeconds}`, extraValue: null, unit: t('home.unitSeconds'), extraUnit: null }
+    }
+
     if (totalMinutes >= 60) {
       const hours = Math.floor(totalMinutes / 60)
       const minutes = totalMinutes % 60
@@ -84,7 +103,12 @@ export default function Home() {
         extraUnit: minutes > 0 ? t('home.unitMinutes') : null,
       }
     }
-    return { value: `${totalMinutes}`, extraValue: null, unit: t('home.unitMinutes'), extraUnit: null }
+    return {
+      value: `${totalMinutes}`,
+      extraValue: remainingSeconds > 0 ? `${remainingSeconds}` : null,
+      unit: t('home.unitMinutes'),
+      extraUnit: remainingSeconds > 0 ? t('home.unitSeconds') : null,
+    }
   }
 
   /** Format large values using the active UI locale. */
@@ -97,7 +121,22 @@ export default function Home() {
 
   const totalTime = formatTime(stats.totalDurationSec)
   const avgWordsPerMin = stats.totalDurationSec > 60 ? Math.round(stats.totalChars / (stats.totalDurationSec / 60)) : 0
-  const savedTime = formatTime(Math.round(stats.totalChars / 50) * 60)
+  const savedTime = formatTime(estimateTypingTimeSec(stats.totalChars))
+
+  const handleClearStats = async () => {
+    statsRefreshVersion.current += 1
+    setIsClearingStats(true)
+    setClearStatsError(false)
+    try {
+      await clearStats()
+      refreshStats()
+    } catch (error) {
+      console.error('[home] Failed to clear usage stats:', error)
+      setClearStatsError(true)
+    } finally {
+      setIsClearingStats(false)
+    }
+  }
 
   const dictation = resolveDictationTrigger(handsFreeKey, pttKey)
   const dictationKeyLabel = dictation.keyLabels.join(' + ')
@@ -167,20 +206,60 @@ export default function Home() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="text-2xl font-bold">
-                  {value} <span className="text-sm font-normal text-muted-foreground">{unit}</span>
+                <div className="mt-0.5 flex items-baseline gap-3 text-foreground">
+                  <span className="inline-flex items-baseline gap-1">
+                    <span className="text-2xl font-bold tracking-tight tabular-nums">{value}</span>
+                    <span className="text-base font-semibold text-foreground/80">{unit}</span>
+                  </span>
                   {extraValue && (
-                    <>
-                      {' '}
-                      {extraValue} <span className="text-sm font-normal text-muted-foreground">{extraUnit}</span>
-                    </>
+                    <span className="inline-flex items-baseline gap-1">
+                      <span className="text-2xl font-bold tracking-tight tabular-nums">{extraValue}</span>
+                      <span className="text-base font-semibold text-foreground/80">{extraUnit}</span>
+                    </span>
                   )}
-                </p>
+                </div>
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
+
+      <div className="mt-3 flex flex-col items-end gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={isClearingStats}
+          onClick={() => {
+            setClearStatsError(false)
+            setIsClearStatsDialogOpen(true)
+          }}
+        >
+          {t('home.clearStats')}
+        </Button>
+      </div>
+
+      {isClearStatsDialogOpen && (
+        <Modal
+          title={t('home.clearStatsTitle')}
+          onClose={() => setIsClearStatsDialogOpen(false)}
+          locked={isClearingStats}
+          panelClassName="w-[420px]"
+        >
+          <div className="mt-3 space-y-4">
+            <p className="text-sm leading-relaxed text-muted-foreground">{t('home.clearStatsConfirm')}</p>
+            {clearStatsError && <p role="alert" className="text-sm text-destructive">{t('home.clearStatsError')}</p>}
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="outline" size="sm" disabled={isClearingStats} onClick={() => setIsClearStatsDialogOpen(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button type="button" variant="destructive" size="sm" disabled={isClearingStats} onClick={() => void handleClearStats()}>
+                {isClearingStats ? t('home.clearStatsLoading') : t('home.clearStats')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <div className="mt-6">
         <ReportIssueSection />
