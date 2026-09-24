@@ -30,6 +30,9 @@ const ASR_DISPLAY_MODEL_MAP: Record<string, string> = {
   qwen_audio_stream: 'qwen-audio-3.1-asr-flash-streaming',
   mimo: 'mimo-v2.5-asr',
   groq_whisper: 'whisper-large-v3-turbo',
+  openai_transcribe: 'gpt-transcribe',
+  gemini_transcribe: 'gemini-3.5-transcribe',
+  openrouter_transcribe: 'openai/gpt-transcribe',
   ...QWEN_OMNI_MODEL_MAP,
 }
 
@@ -136,9 +139,16 @@ export function buildCloudAsrExtra(
   provider: string,
   language: SpeechInputLanguage,
   omniInstructions?: string,
+  selectedModel?: string,
 ): Record<string, unknown> | undefined {
   if (isQwenOmniProvider(provider)) {
     return { model: resolveQwenOmniModel(provider), instructions: omniInstructions }
+  }
+  if (provider === 'openai_transcribe' || provider === 'gemini_transcribe' || provider === 'openrouter_transcribe') {
+    return {
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(language === 'auto' ? {} : { language }),
+    }
   }
   const requestLanguage = resolveCloudAsrLanguageRequest(provider, language)
   return requestLanguage ? { language: requestLanguage } : undefined

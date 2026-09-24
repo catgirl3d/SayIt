@@ -21,6 +21,7 @@ import {
   emptyAsrProfile,
   parseAsrProfiles,
   resolveActiveAsrProfile,
+  type AsrCheck,
   type AsrPlatform,
   type AsrProfile,
 } from './asrProviderCatalog'
@@ -42,6 +43,33 @@ export const ASR_ACTIVE_PROFILE_KEY = 'cloudAsr.activeProfileId'
  */
 export const ASR_AUTO_CREATED_KEY = 'cloudAsr.autoCreatedProviders'
 
+let profileOperationQueue: Promise<void> = Promise.resolve()
+let profileSaveFailed = false
+let profileSaveError: unknown
+
+function enqueueProfileRead<T>(operation: () => Promise<T>): Promise<T> {
+  const result = profileOperationQueue.then(async () => {
+    if (profileSaveFailed) {
+      throw new Error(`ASR profile storage is unavailable after a failed save: ${String(profileSaveError)}`)
+    }
+    return operation()
+  })
+  profileOperationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+function enqueueProfileSave<T>(operation: () => Promise<T>): Promise<T> {
+  const result = profileOperationQueue.then(operation, operation)
+  profileOperationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+async function waitForSettingWrites(writes: Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(writes)
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failed) throw failed.reason
+}
+
 export interface AsrProfileState {
   profiles: AsrProfile[]
   activeId: string
@@ -56,7 +84,7 @@ export interface AsrProfileState {
  */
 async function syncRuntimeActive(profile: AsrProfile | null): Promise<void> {
   const creds = profile ? effectiveAsrCredentials(profile) : { apiKey: '', appId: '' }
-  await Promise.all([
+  await waitForSettingWrites([
     setSetting('cloudAsr.provider', profile?.provider ?? ''),
     setSetting('cloudAsr.apiKey', creds.apiKey),
     setSetting('cloudAsr.appId', creds.appId),
@@ -154,7 +182,7 @@ export function topUpProfiles(
  * 返回前会归一化 activeId（指向已不存在的 id 时回落到第一条），并在确实写过东西时
  * 顺手同步运行时键 —— 否则会出现「列表里高亮着 A，实际在用 B」。
  */
-export async function loadAsrProfiles(): Promise<AsrProfileState> {
+async function loadAsrProfilesUnlocked(): Promise<AsrProfileState> {
   const [rawProfiles, storedActiveId, rawAuto] = await Promise.all([
     getSetting(ASR_PROFILES_KEY, [] as unknown[]) as Promise<unknown>,
     getSetting(ASR_ACTIVE_PROFILE_KEY, '') as Promise<string>,
@@ -197,17 +225,77 @@ export async function loadAsrProfiles(): Promise<AsrProfileState> {
     needsWrite = true
   }
 
-  if (needsWrite) await saveAsrProfiles({ profiles, activeId })
+  if (needsWrite) await saveAsrProfilesUnlocked({ profiles, activeId })
 
   return { profiles, activeId }
 }
 
-/** 落盘列表 + 启用项，并同步运行时键。所有写路径都必须走这里。 */
-export async function saveAsrProfiles(state: AsrProfileState): Promise<void> {
+export function loadAsrProfiles(): Promise<AsrProfileState> {
+  return enqueueProfileRead(loadAsrProfilesUnlocked)
+}
+
+/** Load one detached copy of the currently selected profile for a single operation. */
+export function loadActiveAsrProfile(): Promise<AsrProfile | null> {
+  return enqueueProfileRead(async () => {
+    const state = await loadAsrProfilesUnlocked()
+    const active = resolveActiveAsrProfile(state.profiles, state.activeId)
+    return active ? { ...active } : null
+  })
+}
+
+async function saveAsrProfilesUnlocked(state: AsrProfileState): Promise<AsrProfileState> {
   const active = resolveActiveAsrProfile(state.profiles, state.activeId)
-  await Promise.all([
-    setSetting(ASR_PROFILES_KEY, state.profiles),
-    setSetting(ASR_ACTIVE_PROFILE_KEY, active?.id ?? ''),
-  ])
-  await syncRuntimeActive(active)
+  try {
+    await waitForSettingWrites([
+      setSetting(ASR_PROFILES_KEY, state.profiles),
+      setSetting(ASR_ACTIVE_PROFILE_KEY, active?.id ?? ''),
+    ])
+    await syncRuntimeActive(active)
+    profileSaveFailed = false
+    profileSaveError = undefined
+    return { profiles: state.profiles, activeId: active?.id ?? '' }
+  } catch (error) {
+    profileSaveFailed = true
+    profileSaveError = error
+    throw error
+  }
+}
+
+/** Persist a profile list and active ID as one ordered operation for every frontend caller. */
+export function saveAsrProfiles(state: AsrProfileState): Promise<AsrProfileState> {
+  return enqueueProfileSave(() => saveAsrProfilesUnlocked(state))
+}
+
+export interface AsrProfileCheckUpdate {
+  profile: AsrProfile
+  check: AsrCheck
+}
+
+function sameAsrProfileConfiguration(left: AsrProfile, right: AsrProfile): boolean {
+  return left.id === right.id
+    && left.provider === right.provider
+    && left.model === right.model
+    && left.apiKey === right.apiKey
+    && left.otherKey === right.otherKey
+    && left.appId === right.appId
+    && left.console === right.console
+    && left.workspaceId === right.workspaceId
+    && left.omniPrompt === right.omniPrompt
+}
+
+/** Apply completed checks to current profiles without restoring a stale list or active ID. */
+export function saveAsrProfileChecks(updates: AsrProfileCheckUpdate[]): Promise<AsrProfileState> {
+  return enqueueProfileRead(async () => {
+    const current = await loadAsrProfilesUnlocked()
+    const byId = new Map(updates.map((update) => [update.profile.id, update]))
+    let changed = false
+    const profiles = current.profiles.map((profile) => {
+      const update = byId.get(profile.id)
+      if (!update || !sameAsrProfileConfiguration(profile, update.profile)) return profile
+      changed = true
+      return { ...profile, check: update.check }
+    })
+    if (!changed) return current
+    return saveAsrProfilesUnlocked({ profiles, activeId: current.activeId })
+  })
 }

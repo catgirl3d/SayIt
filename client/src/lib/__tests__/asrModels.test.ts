@@ -152,11 +152,39 @@ describe('buildCloudAsrExtra', () => {
     expect(buildCloudAsrExtra('mimo', 'uk')).toBeUndefined()
   })
 
+  it('keeps language capability unknown for buffered providers while sending selected hints', () => {
+    const providers = ['openai_transcribe', 'gemini_transcribe', 'openrouter_transcribe']
+    for (const provider of providers) {
+      expect(getCloudAsrSupportedLanguages(provider)).toBeNull()
+    }
+    expect(buildCloudAsrExtra('openai_transcribe', 'uk', undefined, 'gpt-transcribe')).toEqual({
+      model: 'gpt-transcribe',
+      language: 'uk',
+    })
+    expect(buildCloudAsrExtra('openrouter_transcribe', 'auto', undefined, 'openai/gpt-transcribe')).toEqual({
+      model: 'openai/gpt-transcribe',
+    })
+  })
+
   it('providers without explicit language support get no extra payload', () => {
     for (const provider of ['doubao_v2', 'qwen', 'qwen_realtime']) {
       for (const language of ['auto', 'ru', 'uk', 'en', 'zh'] as const) {
         expect(buildCloudAsrExtra(provider, language)).toBeUndefined()
       }
     }
+  })
+
+  it('sends the selected buffered model and explicit language, omitting auto', () => {
+    expect(buildCloudAsrExtra('openai_transcribe', 'uk', undefined, 'gpt-4o-transcribe')).toEqual({
+      model: 'gpt-4o-transcribe',
+      language: 'uk',
+    })
+    expect(buildCloudAsrExtra('gemini_transcribe', 'auto', undefined, 'gemini-3.5-transcribe')).toEqual({
+      model: 'gemini-3.5-transcribe',
+    })
+    expect(buildCloudAsrExtra('openrouter_transcribe', 'zh', undefined, 'qwen/qwen3-asr-1.7b')).toEqual({
+      model: 'qwen/qwen3-asr-1.7b',
+      language: 'zh',
+    })
   })
 })

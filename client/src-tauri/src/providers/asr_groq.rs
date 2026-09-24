@@ -1,54 +1,67 @@
-// Groq Whisper ASR — whisper-large-v3-turbo
+// Buffered ASR for Groq Whisper and OpenAI.
 //
-// 走 OpenAI 的 `POST /audio/transcriptions`：**multipart 上传音频文件**，
-// 这是本项目第一个用这种形态的 ASR 供应商。其余几家（豆包 / 千问 / MiMo）要么是
-// WebSocket 协议，要么是 chat/completions + base64 data URL，都不是这个端点。
+// Both providers use `POST /audio/transcriptions` and upload the WAV file as
+// multipart data. Other providers use WebSocket or chat/completions with a
+// base64 data URL; those are different protocols and are implemented separately.
 //
-// 与 asr_mimo.rs 的差异：
-//   · 鉴权是 Bearer（MiMo 是 api-key 头）；
-//   · 音频以 multipart 的 file 字段上传，不是塞进 JSON 的 data URL —— 十几秒的音频
-//     用 base64 塞 JSON 会膨胀 1/3，multipart 是原始字节；
-//   · 响应是 `{"text": "..."}`，不是 OpenAI chat 的 choices[0].message.content。
+// Compared with asr_mimo.rs:
+//   - Authentication uses Bearer (MiMo uses an api-key header).
+//   - Audio is uploaded as raw bytes in the multipart `file` field instead of a
+//     JSON data URL; base64 would inflate a multi-second recording by one third.
+//   - The response is `{"text": "..."}`, not chat/completions content.
 //
-// 端点写死在这里而不做成可配置项：ASR 侧的约定是「供应商只能从内置清单里选」，
-// 因为每家的协议都要一份专门实现，能填任意地址只会让用户以为随便填个地址就能用。
+// Endpoints are fixed by provider ID. A custom URL would imply that any server
+// using a similar path is compatible, although each provider has its own contract.
 
 use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
 use std::time::Instant;
 
 const API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const MODEL: &str = "whisper-large-v3-turbo";
 const SCOPE: &str = "groq/asr";
+const OPENAI_DEFAULT_MODEL: &str = "gpt-transcribe";
+const OPENAI_SCOPE: &str = "openai/asr";
 
-/// 标点引导。**这不是可选的润色，缺了它短句中文转写会一个标点都没有。**
+/// Punctuation guidance. This is not optional polishing: without it, short
+/// Chinese transcripts can contain no punctuation at all.
 ///
-/// Whisper 的 `prompt` 不是指令，而是「上文样例」：解码时模型会模仿它的书写风格。
-/// 所以想要标点，prompt 自己就必须是**带标点的句子** —— 写成「请加标点」毫无作用。
+/// Whisper treats `prompt` as an example of preceding text, not as an
+/// instruction, and imitates its writing style while decoding. To guide
+/// punctuation, the prompt itself must be a punctuated sentence; an instruction
+/// such as "please add punctuation" has no effect.
 ///
-/// 实测（dev-scripts/groq-asr-punct-probe.mjs，打的是真实接口）：
-///   · 中文短句、不带 prompt   → "语音输入法测试成功"     一个标点都没有
-///   · 中文短句、带这个 prompt → "语音输入法测试成功。"
-///   · 英文                   → 两种情况都带标点，加了不变差
+/// Measured against the real endpoint with
+/// `dev-scripts/groq-asr-punct-probe.mjs`:
+///   - A short Chinese utterance without a prompt returned no punctuation.
+///   - The same utterance with this prompt returned a full-width final period.
+///   - English output had punctuation with or without the prompt and did not
+///     regress when the prompt was included.
 ///
-/// 为什么写成中英混排：默认语言是 auto。实测纯中文 prompt 并不会把英文音频带偏
-/// （输出仍是纯英文），而混排能让两种语言都拿到标点，且都不会被改写成另一种语言。
+/// The prompt mixes Chinese and English because the default language is auto.
+/// Tests showed that a Chinese-only prompt did not bias English audio (the
+/// output remained English), while the mixed prompt guides both languages
+/// without rewriting either into the other.
 ///
-/// **它管不了全角还是半角。** 另一轮实测（groq-asr-comma-probe.mjs，用一段真的需要
-/// 逗号的中文语音）显示：四种 prompt 连同完全不给 prompt，输出一字不差 ——
-/// 逗号和问号是半角、句号是全角，混着来。那是模型自身行为，改 prompt 没有任何影响。
-/// 半角转全角在前端 textPostProcess.ts 的 normalizeChinesePunctuation 里做。
+/// It cannot control full-width versus half-width punctuation. Another real
+/// endpoint probe, `groq-asr-comma-probe.mjs`, used Chinese audio that required
+/// a comma. Four prompts and no prompt produced identical output: commas and
+/// question marks were half-width while the final period was full-width. That
+/// is model behavior, unaffected by prompt wording. The frontend normalizes
+/// punctuation width in `textPostProcess.ts` via `normalizeChinesePunctuation`.
 ///
-/// 另外验证过静音不会把这段文字当成转写结果吐回来（那会被直接插进用户的文档）。
+/// Silence was also tested to ensure the prompt is not emitted as a transcript
+/// and inserted into the user's document.
+///
+/// OpenAI receives this prompt only for explicit Chinese and only for models
+/// that support prompting. Auto-detected and non-Chinese requests omit it.
 const PUNCTUATION_PROMPT: &str = "以下是中文转写，使用全角标点，例如逗号、句号和问号。The following is an English transcript with half-width punctuation, such as commas, periods, and question marks.";
 
-/// 将 16kHz 单声道 16-bit PCM 封装为 WAV 容器。
-///
-/// 前端一路传下来的都是裸 PCM（见 types.rs 的 CloudTranscribeRequest），而
-/// /audio/transcriptions 按文件名与内容嗅探格式，裸 PCM 它认不出来。
-/// 这 18 行与 asr_mimo.rs 里那份是同一个 WAV 头，刻意各留一份：抽成公共函数后
-/// 任何一家改采样格式都会牵动另一家，而它们本来毫无关系。
-fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
+/// Wrap the frontend's raw mono 16-bit PCM in the WAV container required by
+/// buffered transcription endpoints. This helper is shared only by providers
+/// that consume the same PCM format; MiMo retains its independent encoding.
+pub(super) fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
     let ds = pcm.len() as u32;
     let mut w = Vec::with_capacity(44 + pcm.len());
     w.extend_from_slice(b"RIFF");
@@ -67,11 +80,13 @@ fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
     w
 }
 
-/// 识别语言：设置里存的是 auto|zh|en，Whisper 只接受 ISO-639-1。
+/// Resolve the configured `auto|zh|en` language hint. Whisper accepts ISO-639-1.
 ///
-/// auto 必须**整个省略 language 字段**，不能传字符串 "auto" —— Whisper 会把它当成
-/// 一个不存在的语言代码，行为不确定（可能报 400，也可能默默按英语转写）。
-/// 返回 None 表示让服务端自己检测。
+/// `auto` must omit the language field entirely, not send the literal string
+/// "auto". Whisper treats it as an unknown language code, which may produce a
+/// 400 or silently bias recognition toward English. `None` delegates detection
+/// to the provider. `gpt-transcribe` uses `languages[]`; other supported OpenAI
+/// transcription models use the singular `language` field.
 fn resolve_language(config: &AsrProviderConfig) -> Option<String> {
     let raw = config
         .extra
@@ -86,26 +101,91 @@ fn resolve_language(config: &AsrProviderConfig) -> Option<String> {
     }
 }
 
-fn build_form(wav: Vec<u8>, language: Option<&str>) -> Result<reqwest::multipart::Form, String> {
+fn resolve_openai_model(config: &AsrProviderConfig) -> String {
+    config
+        .extra
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(OPENAI_DEFAULT_MODEL)
+        .to_string()
+}
+
+fn openai_language_field(model: &str) -> &'static str {
+    if model == "gpt-transcribe" {
+        "languages[]"
+    } else {
+        "language"
+    }
+}
+
+fn openai_supports_prompt(model: &str) -> bool {
+    matches!(
+        model,
+        "gpt-transcribe" | "gpt-4o-transcribe" | "gpt-4o-mini-transcribe" | "whisper-1"
+    )
+}
+
+fn openai_should_include_prompt(model: &str, language: Option<&str>) -> bool {
+    language == Some("zh") && openai_supports_prompt(model)
+}
+
+fn build_form(
+    wav: Vec<u8>,
+    model: &str,
+    language: Option<&str>,
+    language_field: &'static str,
+    with_prompt: bool,
+    scope: &str,
+) -> Result<reqwest::multipart::Form, String> {
     let part = reqwest::multipart::Part::bytes(wav)
         .file_name("audio.wav")
         .mime_str("audio/wav")
-        .map_err(|e| diag::fail(SCOPE, "build_form", format!("Failed to build the audio part: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                scope,
+                "build_form",
+                format!("Failed to build the audio part: {}", e),
+            )
+        })?;
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", part)
-        .text("model", MODEL)
+        .text("model", model.to_string())
         .text("response_format", "json");
     if let Some(lang) = language {
-        form = form.text("language", lang.to_string());
-        if lang == "zh" {
+        form = form.text(language_field, lang.to_string());
+        if with_prompt {
             form = form.text("prompt", PUNCTUATION_PROMPT);
         }
     }
     Ok(form)
 }
 
-/// 响应形状是 `{"text": "..."}`，比 chat/completions 简单得多。
+fn request_builder(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    form: reqwest::multipart::Form,
+    timeout: std::time::Duration,
+) -> reqwest::RequestBuilder {
+    client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .timeout(timeout)
+}
+
+fn request_client(is_openai: bool) -> Result<&'static reqwest::Client, &'static str> {
+    if is_openai {
+        super::http_client::shared_no_redirect()
+    } else {
+        Ok(super::http_client::shared())
+    }
+}
+
+/// Extract the `{"text": "..."}` response used by buffered transcription.
 fn extract_text(data: &serde_json::Value) -> String {
     data.get("text")
         .and_then(|t| t.as_str())
@@ -114,33 +194,144 @@ fn extract_text(data: &serde_json::Value) -> String {
         .to_string()
 }
 
+fn parse_transcription_response(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    scope: &str,
+) -> Result<String, String> {
+    if !status.is_success() {
+        return Err(transcription_http_error(status, headers, body, scope));
+    }
+
+    let data: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        let message = if scope == OPENAI_SCOPE {
+            format!("OpenAI returned malformed transcription JSON: {}", error)
+        } else {
+            format!(
+                "Failed to parse response: {} [{}] response excerpt: {}",
+                error,
+                diag::http_summary(status, headers),
+                diag::truncate(body, 200)
+            )
+        };
+        diag::fail(scope, "parse_json", message)
+    })?;
+    if scope == OPENAI_SCOPE {
+        return data
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(|text| text.trim().to_string())
+            .ok_or_else(|| {
+                diag::fail(
+                    scope,
+                    "parse_response",
+                    "OpenAI returned an invalid transcription response: missing string text field"
+                        .to_string(),
+                )
+            });
+    }
+    Ok(extract_text(&data))
+}
+
+fn transcription_http_error(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    scope: &str,
+) -> String {
+    if scope == OPENAI_SCOPE {
+        return diag::fail(
+            scope,
+            "http_status",
+            format!(
+                "OpenAI transcription request returned HTTP status {}",
+                status.as_u16()
+            ),
+        );
+    }
+
+    let provider_name = "Groq";
+    diag::fail(
+        scope,
+        "http_status",
+        format!(
+            "{} ASR error {} [{}]: {}",
+            provider_name,
+            status,
+            diag::http_summary(status, headers),
+            diag::truncate(body, 300)
+        ),
+    )
+}
+
 pub async fn transcribe(
     audio_pcm_b64: &str,
     sample_rate: u32,
     config: &AsrProviderConfig,
     _hotwords: &[String],
 ) -> Result<AsrResult, String> {
-    let pcm = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        audio_pcm_b64,
-    )
-    .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+    let is_openai = config.provider == "openai_transcribe";
+    let scope = if is_openai { OPENAI_SCOPE } else { SCOPE };
+    if is_openai && config.api_key.trim().is_empty() {
+        return Err(diag::fail_code(
+            scope,
+            "credentials",
+            "provider_bad_key",
+            "OpenAI transcription is missing the API Key; complete it in Settings".to_string(),
+        ));
+    }
+
+    let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64)
+        .map_err(|e| {
+            diag::fail(
+                scope,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
 
     if pcm.is_empty() {
-        diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
-        return Ok(AsrResult { text: String::new(), elapsed_ms: 0 });
+        diag::empty_result(scope, "Input audio was empty; provider request was skipped");
+        return Ok(AsrResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
     }
 
     let audio_sec = pcm.len() as f64 / (sample_rate.max(1) as f64 * 2.0);
     let language = resolve_language(config);
+    let model = if is_openai {
+        resolve_openai_model(config)
+    } else {
+        MODEL.to_string()
+    };
+    let api_url = if is_openai { OPENAI_API_URL } else { API_URL };
+    let language_field = if is_openai {
+        openai_language_field(&model)
+    } else {
+        "language"
+    };
+    let with_prompt = if is_openai {
+        openai_should_include_prompt(&model, language.as_deref())
+    } else {
+        language.as_deref() == Some("zh")
+    };
+    if is_openai && language.as_deref() == Some("zh") && !openai_supports_prompt(&model) {
+        diag::log(
+            scope,
+            "prompt_omitted",
+            &format!("model={} does not support the transcription prompt", model),
+        );
+    }
     let wav = pcm_to_wav(&pcm, sample_rate);
 
     diag::log(
-        SCOPE,
+        scope,
         "start",
         &format!(
             "model={} wav_bytes={} audio_sec={:.1} rate={} language={}",
-            MODEL,
+            model,
             wav.len(),
             audio_sec,
             sample_rate,
@@ -148,82 +339,225 @@ pub async fn transcribe(
         ),
     );
 
-    let form = build_form(wav, language.as_deref())?;
-    let client = super::http_client::shared();
-    let start = Instant::now();
-
-    let resp = client
-        .post(API_URL)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .multipart(form)
-        .timeout(std::time::Duration::from_secs(60))
-        .send()
-        .await
-        .map_err(|e| diag::fail(SCOPE, "http_send", format!("Request failed: {}", e)))?;
-
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-    let http_summary = diag::http_summary(resp.status(), resp.headers());
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(diag::fail(
-            SCOPE,
-            "http_status",
-            format!(
-                "Groq ASR error {} [{}]: {}",
-                status,
-                http_summary,
-                diag::truncate(&body, 300)
-            ),
-        ));
-    }
-
-    let body_text = resp
-        .text()
-        .await
-        .map_err(|e| diag::fail(SCOPE, "read_body", format!("Failed to read response: {}", e)))?;
-    let data: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+    let form = build_form(
+        wav,
+        &model,
+        language.as_deref(),
+        language_field,
+        with_prompt,
+        scope,
+    )?;
+    let client = request_client(is_openai).map_err(|error| {
         diag::fail(
-            SCOPE,
-            "parse_json",
-            format!(
-                "Failed to parse response: {} [{}] response excerpt: {}",
-                e,
-                http_summary,
-                diag::truncate(&body_text, 200)
-            ),
+            scope,
+            "client",
+            format!("Could not initialize the provider HTTP client: {}", error),
         )
     })?;
+    let start = Instant::now();
 
-    let text = extract_text(&data);
+    let api_key = if is_openai {
+        config.api_key.trim()
+    } else {
+        &config.api_key
+    };
+    let resp = request_builder(
+        client,
+        api_url,
+        api_key,
+        form,
+        std::time::Duration::from_secs(60),
+    )
+    .send()
+    .await
+    .map_err(|e| diag::fail(scope, "http_send", format!("Request failed: {}", e)))?;
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let http_summary = if is_openai {
+        format!("http={}", status.as_u16())
+    } else {
+        diag::http_summary(status, &headers)
+    };
+    if !status.is_success() {
+        if is_openai {
+            return Err(transcription_http_error(status, &headers, "", scope));
+        }
+        let body = resp.text().await.unwrap_or_default();
+        return Err(transcription_http_error(status, &headers, &body, scope));
+    }
+
+    let body_text = resp.text().await.map_err(|e| {
+        diag::fail(
+            scope,
+            "read_body",
+            format!("Failed to read response: {}", e),
+        )
+    })?;
+    let text = parse_transcription_response(status, &headers, &body_text, scope)?;
     if text.is_empty() {
-        // 空结果走成功路径，前端只会显示「未检测到有效声音」。不留这条日志的话，
-        // 「真的没说话」和「这次调用其实失败了」就再也分不开（见 pitfalls #15）。
+        // Empty output is a successful transcription and the frontend displays
+        // "No valid speech detected". Without this log, genuine silence cannot
+        // be distinguished from an unnoticed provider failure (pitfalls #15).
+        let response_detail = if is_openai {
+            format!("response_bytes={}", body_text.len())
+        } else {
+            diag::describe_json(&body_text)
+        };
         diag::empty_result(
-            SCOPE,
+            scope,
             &format!(
                 "Response contained no transcript audio_sec={:.1} elapsed={}ms [{}] {}",
-                audio_sec,
-                elapsed_ms,
-                http_summary,
-                diag::describe_json(&body_text)
+                audio_sec, elapsed_ms, http_summary, response_detail
             ),
         );
     } else {
-        diag::ok(SCOPE, elapsed_ms, text.chars().count());
+        diag::ok(scope, elapsed_ms, text.chars().count());
     }
 
     Ok(AsrResult { text, elapsed_ms })
 }
 
 pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
-    // 0.5s 静音：Whisper 会返回空文本但 HTTP 200，足以验证密钥与网络是否可用。
-    // 音频再短会被服务端以「too short」拒掉，那就分不清是密钥问题还是音频问题了。
+    if config.provider == "openai_transcribe" {
+        return test_openai_connection(config).await;
+    }
+
+    test_groq_connection(config).await
+}
+
+fn openai_connection_result(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    elapsed_ms: u64,
+    model: &str,
+) -> TestResult {
+    let result = parse_transcription_response(status, headers, body, OPENAI_SCOPE);
+    match result {
+        Ok(_) => TestResult {
+            ok: true,
+            message: format!("Connection successful ({}ms)", elapsed_ms),
+            elapsed_ms,
+            detail: format!("Model: {}", model),
+        },
+        Err(message) => TestResult {
+            ok: false,
+            message,
+            elapsed_ms,
+            detail: format!("Model: {}", model),
+        },
+    }
+}
+
+async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
+    let scope = "openai/asr-test";
+    let model = resolve_openai_model(config);
+    if config.api_key.trim().is_empty() {
+        return TestResult {
+            ok: false,
+            message: diag::fail_code(
+                scope,
+                "credentials",
+                "provider_bad_key",
+                "OpenAI transcription is missing the API Key; complete it in Settings".to_string(),
+            ),
+            elapsed_ms: 0,
+            detail: format!("Model: {}", model),
+        };
+    }
+
+    let silence = vec![0u8; 16000];
+    let wav = pcm_to_wav(&silence, 16000);
+    let form = match build_form(
+        wav,
+        &model,
+        None,
+        openai_language_field(&model),
+        false,
+        scope,
+    ) {
+        Ok(form) => form,
+        Err(message) => {
+            return TestResult {
+                ok: false,
+                message,
+                elapsed_ms: 0,
+                detail: format!("Model: {}", model),
+            }
+        }
+    };
+
+    let client = match request_client(true) {
+        Ok(client) => client,
+        Err(error) => {
+            return TestResult {
+                ok: false,
+                message: diag::fail(
+                    scope,
+                    "client",
+                    format!("Could not initialize the provider HTTP client: {}", error),
+                ),
+                elapsed_ms: 0,
+                detail: format!("Model: {}", model),
+            }
+        }
+    };
+    let start = Instant::now();
+    let result = request_builder(
+        client,
+        OPENAI_API_URL,
+        config.api_key.trim(),
+        form,
+        std::time::Duration::from_secs(15),
+    )
+    .send()
+    .await;
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    match result {
+        Ok(response) => {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = if status.is_success() {
+                match response.text().await {
+                    Ok(body) => body,
+                    Err(_) => {
+                        return TestResult {
+                            ok: false,
+                            message: diag::fail(
+                                scope,
+                                "read_body",
+                                "Could not read the OpenAI connection-test response".to_string(),
+                            ),
+                            elapsed_ms,
+                            detail: format!("Model: {}", model),
+                        }
+                    }
+                }
+            } else {
+                String::new()
+            };
+            openai_connection_result(status, &headers, &body, elapsed_ms, &model)
+        }
+        Err(error) => TestResult {
+            ok: false,
+            message: diag::fail(scope, "http_send", format!("Connection failed: {}", error)),
+            elapsed_ms,
+            detail: format!("Model: {}", model),
+        },
+    }
+}
+
+async fn test_groq_connection(config: &AsrProviderConfig) -> TestResult {
+    // Half a second of silence yields HTTP 200 with an empty transcript and is
+    // sufficient to verify credentials and connectivity. Shorter audio may be
+    // rejected as "too short", which would conflate audio and key failures.
     let silence = vec![0u8; 16000];
     let wav = pcm_to_wav(&silence, 16000);
 
-    let form = match build_form(wav, None) {
+    let form = match build_form(wav, MODEL, None, "language", true, SCOPE) {
         Ok(f) => f,
         Err(e) => {
             return TestResult {
@@ -238,13 +572,15 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     let client = super::http_client::shared();
     let start = Instant::now();
 
-    let result = client
-        .post(API_URL)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .multipart(form)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await;
+    let result = request_builder(
+        client,
+        API_URL,
+        &config.api_key,
+        form,
+        std::time::Duration::from_secs(15),
+    )
+    .send()
+    .await;
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -277,7 +613,11 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
         }
         Err(e) => TestResult {
             ok: false,
-            message: diag::fail("groq/asr-test", "http_send", format!("Connection failed: {}", e)),
+            message: diag::fail(
+                "groq/asr-test",
+                "http_send",
+                format!("Connection failed: {}", e),
+            ),
             elapsed_ms,
             detail: String::new(),
         },
@@ -289,20 +629,29 @@ mod tests {
     use super::*;
 
     fn config_with_language(value: serde_json::Value) -> AsrProviderConfig {
+        config_for("groq_whisper", value)
+    }
+
+    fn config_for(provider: &str, value: serde_json::Value) -> AsrProviderConfig {
         AsrProviderConfig {
-            provider: "groq_whisper".to_string(),
+            provider: provider.to_string(),
             api_key: String::new(),
             app_id: String::new(),
             extra: value,
         }
     }
 
-    /// auto 必须省略 language 字段，而不是把 "auto" 当语言代码发出去。
+    /// `auto` must omit the language field rather than being sent as a language code.
     #[test]
     fn auto_language_is_omitted() {
-        assert_eq!(resolve_language(&config_with_language(serde_json::json!({}))), None);
         assert_eq!(
-            resolve_language(&config_with_language(serde_json::json!({"language": "auto"}))),
+            resolve_language(&config_with_language(serde_json::json!({}))),
+            None
+        );
+        assert_eq!(
+            resolve_language(&config_with_language(
+                serde_json::json!({"language": "auto"})
+            )),
             None
         );
         assert_eq!(
@@ -319,8 +668,9 @@ mod tests {
         );
     }
 
-    /// WAV 头必须是 44 字节，且长度字段要跟数据长度对得上 —— 写错的话服务端只会回
-    /// 一个含义模糊的 400，很难往回定位到这里。
+    /// The WAV header must be 44 bytes and its size fields must match the audio
+    /// payload; otherwise the provider returns an ambiguous 400 that is hard to
+    /// trace back to this encoder.
     #[test]
     fn wav_header_is_well_formed() {
         let pcm = vec![0u8; 320];
@@ -334,25 +684,37 @@ mod tests {
         assert_eq!(data_size as usize, pcm.len());
     }
 
-    /// 这个 prompt 是靠「示范」生效的：它自己不带标点就一点作用都没有，
-    /// 而少了其中一种文字，auto 路径下那种语言就会失去引导。
-    /// 有人图省事把它改短时，这条会拦住。
+    /// The prompt works by example and is ineffective unless it contains
+    /// punctuation itself. Removing either language would stop guiding that
+    /// language on the auto-detection path; this test protects both examples.
     ///
-    /// 注意它**不负责**全角/半角 —— 实测改 prompt 对宽度毫无影响，
-    /// 那件事在前端 normalizeChinesePunctuation 里做。
+    /// It does not control punctuation width: tests showed that changing the
+    /// prompt has no effect on width. The frontend handles that in
+    /// `normalizeChinesePunctuation`.
     #[test]
     fn punctuation_prompt_demonstrates_punctuation_in_both_scripts() {
-        assert!(PUNCTUATION_PROMPT.contains('。'), "缺中文句号，中文转写会没有标点");
-        assert!(PUNCTUATION_PROMPT.contains('，'), "缺中文逗号");
-        assert!(PUNCTUATION_PROMPT.contains('.'), "缺英文句号");
-        assert!(PUNCTUATION_PROMPT.contains(','), "缺英文逗号");
         assert!(
-            PUNCTUATION_PROMPT.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
-            "缺中文字符"
+            PUNCTUATION_PROMPT.contains('。'),
+            "Chinese full-width period is missing; Chinese transcription may have no punctuation"
+        );
+        assert!(
+            PUNCTUATION_PROMPT.contains('，'),
+            "Chinese comma is missing"
+        );
+        assert!(
+            PUNCTUATION_PROMPT.contains('.'),
+            "English period is missing"
+        );
+        assert!(PUNCTUATION_PROMPT.contains(','), "English comma is missing");
+        assert!(
+            PUNCTUATION_PROMPT
+                .chars()
+                .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+            "Chinese text is missing"
         );
         assert!(
             PUNCTUATION_PROMPT.chars().any(|c| c.is_ascii_alphabetic()),
-            "缺英文字符"
+            "English text is missing"
         );
     }
 
@@ -362,4 +724,353 @@ mod tests {
         assert_eq!(extract_text(&data), "hello there");
         assert_eq!(extract_text(&serde_json::json!({})), "");
     }
+
+    #[test]
+    fn openai_model_uses_the_selected_value_or_its_default() {
+        assert_eq!(
+            resolve_openai_model(&config_for("openai_transcribe", serde_json::json!({}))),
+            "gpt-transcribe"
+        );
+        assert_eq!(
+            resolve_openai_model(&config_for(
+                "openai_transcribe",
+                serde_json::json!({ "model": "  " })
+            )),
+            "gpt-transcribe"
+        );
+        assert_eq!(
+            resolve_openai_model(&config_for(
+                "openai_transcribe",
+                serde_json::json!({ "model": "whisper-1" })
+            )),
+            "whisper-1"
+        );
+    }
+
+    #[test]
+    fn only_new_openai_traffic_uses_the_no_redirect_client() {
+        let groq_client = super::super::http_client::shared();
+        let openai_client = request_client(true).unwrap();
+        assert!(std::ptr::eq(request_client(false).unwrap(), groq_client));
+        assert!(!std::ptr::eq(openai_client, groq_client));
+    }
+
+    #[test]
+    fn openai_language_field_matches_the_selected_model_contract() {
+        assert_eq!(
+            OPENAI_API_URL,
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(openai_language_field("gpt-transcribe"), "languages[]");
+        assert_eq!(openai_language_field("gpt-4o-transcribe"), "language");
+        assert_eq!(openai_language_field("gpt-4o-mini-transcribe"), "language");
+        assert_eq!(openai_language_field("whisper-1"), "language");
+        assert!(openai_supports_prompt("gpt-transcribe"));
+        assert!(openai_supports_prompt("gpt-4o-transcribe"));
+        assert!(openai_supports_prompt("gpt-4o-mini-transcribe"));
+        assert!(openai_supports_prompt("whisper-1"));
+        assert!(!openai_supports_prompt("unknown-model"));
+    }
+
+    #[test]
+    fn openai_punctuation_prompt_is_limited_to_supported_models_and_explicit_chinese() {
+        assert!(openai_should_include_prompt("gpt-transcribe", Some("zh")));
+        assert!(!openai_should_include_prompt("gpt-transcribe", None));
+        assert!(!openai_should_include_prompt("gpt-transcribe", Some("en")));
+        assert!(!openai_should_include_prompt("unknown-model", Some("zh")));
+        assert_eq!(
+            PUNCTUATION_PROMPT,
+            "以下是中文转写，使用全角标点，例如逗号、句号和问号。The following is an English transcript with half-width punctuation, such as commas, periods, and question marks."
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_connection_test_uses_selected_model_and_requires_a_key() {
+        let config = AsrProviderConfig {
+            provider: "openai_transcribe".to_string(),
+            api_key: String::new(),
+            app_id: String::new(),
+            extra: serde_json::json!({ "model": "gpt-4o-mini-transcribe" }),
+        };
+        let result = test_connection(&config).await;
+        assert!(!result.ok);
+        assert!(result.message.contains("API Key"));
+        assert!(result.detail.contains("gpt-4o-mini-transcribe"));
+    }
+
+    #[tokio::test]
+    async fn groq_multipart_contract_is_unchanged_for_auto_chinese_and_english() {
+        for (language, expected_prompt) in [(None, false), (Some("zh"), true), (Some("en"), false)]
+        {
+            let (url, server) = spawn_http_fixture();
+            let client = reqwest::Client::new();
+            let form = build_form(
+                pcm_to_wav(&[1, 2, 3, 4], 16000),
+                MODEL,
+                language,
+                "language",
+                language == Some("zh"),
+                SCOPE,
+            )
+            .unwrap();
+            let request = request_builder(
+                &client,
+                &url,
+                "groq-test-key",
+                form,
+                std::time::Duration::from_secs(5),
+            )
+            .build()
+            .unwrap();
+            let response = client.execute(request).await.unwrap();
+            assert!(response.status().is_success());
+            let wire = server.join().unwrap();
+            assert!(wire
+                .to_ascii_lowercase()
+                .contains("authorization: bearer groq-test-key"));
+            assert!(wire.contains("name=\"file\"; filename=\"audio.wav\""));
+            assert!(wire.contains("Content-Type: audio/wav"));
+            assert!(wire.contains("RIFF"));
+            assert!(wire.as_bytes().windows(4).any(|part| part == [1, 2, 3, 4]));
+            assert!(wire.contains("name=\"model\"\r\n\r\nwhisper-large-v3-turbo"));
+            assert!(wire.contains("name=\"response_format\"\r\n\r\njson"));
+            assert_eq!(wire.contains("name=\"prompt\""), expected_prompt);
+            assert_eq!(wire.contains("name=\"language\""), language.is_some());
+            if expected_prompt {
+                assert!(wire.contains(PUNCTUATION_PROMPT));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_multipart_uses_selected_model_language_and_header_auth() {
+        let (url, server) = spawn_http_fixture();
+        let client = reqwest::Client::new();
+        let form = build_form(
+            pcm_to_wav(&[1, 2, 3, 4], 16000),
+            "gpt-transcribe",
+            Some("zh"),
+            openai_language_field("gpt-transcribe"),
+            openai_should_include_prompt("gpt-transcribe", Some("zh")),
+            OPENAI_SCOPE,
+        )
+        .unwrap();
+        let request = request_builder(
+            &client,
+            &url,
+            "openai-test-key",
+            form,
+            std::time::Duration::from_secs(5),
+        )
+        .build()
+        .unwrap();
+        assert!(!request.url().as_str().contains("openai-test-key"));
+        let response = client.execute(request).await.unwrap();
+        assert!(response.status().is_success());
+        let wire = server.join().unwrap();
+        assert!(wire
+            .to_ascii_lowercase()
+            .contains("authorization: bearer openai-test-key"));
+        assert!(wire.contains("name=\"model\"\r\n\r\ngpt-transcribe"));
+        assert!(wire.contains("name=\"languages[]\"\r\n\r\nzh"));
+        assert!(wire.contains("name=\"response_format\"\r\n\r\njson"));
+        assert!(wire.contains("name=\"prompt\""));
+        assert!(wire.contains(PUNCTUATION_PROMPT));
+    }
+
+    #[tokio::test]
+    async fn openai_auto_omits_language_and_english_has_no_chinese_prompt() {
+        for (language, expected_language_field) in [(None, false), (Some("en"), true)] {
+            let (url, server) = spawn_http_fixture();
+            let client = reqwest::Client::new();
+            let form = build_form(
+                pcm_to_wav(&[1, 2, 3, 4], 16000),
+                "gpt-transcribe",
+                language,
+                openai_language_field("gpt-transcribe"),
+                openai_should_include_prompt("gpt-transcribe", language),
+                OPENAI_SCOPE,
+            )
+            .unwrap();
+            let request = request_builder(
+                &client,
+                &url,
+                "openai-test-key",
+                form,
+                std::time::Duration::from_secs(5),
+            )
+            .build()
+            .unwrap();
+            let response = client.execute(request).await.unwrap();
+            assert!(response.status().is_success());
+            let wire = server.join().unwrap();
+            assert_eq!(
+                wire.contains("name=\"languages[]\""),
+                expected_language_field
+            );
+            assert!(!wire.contains("name=\"prompt\""));
+        }
+    }
+
+    #[test]
+    fn transcription_response_rejects_http_and_malformed_json_errors() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert!(parse_transcription_response(
+            reqwest::StatusCode::UNAUTHORIZED,
+            &headers,
+            r#"{"error":"invalid key"}"#,
+            OPENAI_SCOPE,
+        )
+        .unwrap_err()
+        .contains("401"));
+        assert!(parse_transcription_response(
+            reqwest::StatusCode::OK,
+            &headers,
+            "not json",
+            OPENAI_SCOPE,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn openai_transcription_parser_rejects_malformed_success_but_accepts_empty_text() {
+        let headers = reqwest::header::HeaderMap::new();
+        let marker = "untrusted-provider-message-marker";
+        for body in [
+            "{}",
+            r#"{"text":null}"#,
+            r#"{"text":123}"#,
+            r#"{"text":null,"error":{"message":"untrusted-provider-message-marker"}}"#,
+        ] {
+            let error =
+                parse_transcription_response(reqwest::StatusCode::OK, &headers, body, OPENAI_SCOPE)
+                    .unwrap_err();
+            assert!(!error.contains(marker));
+        }
+        assert_eq!(
+            parse_transcription_response(
+                reqwest::StatusCode::OK,
+                &headers,
+                r#"{"text":""}"#,
+                OPENAI_SCOPE,
+            )
+            .unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn openai_connection_result_rejects_2xx_without_a_string_transcript() {
+        let marker = "connection-response-private-marker";
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            reqwest::header::HeaderValue::from_static("connection-header-marker"),
+        );
+        for (status, body) in [
+            (reqwest::StatusCode::NO_CONTENT, ""),
+            (reqwest::StatusCode::OK, "{}"),
+            (reqwest::StatusCode::OK, r#"{"text":null}"#),
+            (reqwest::StatusCode::OK, r#"{"text":123}"#),
+            (
+                reqwest::StatusCode::OK,
+                r#"{"error":{"message":"connection-response-private-marker"}}"#,
+            ),
+        ] {
+            let result = openai_connection_result(status, &headers, body, 13, "gpt-4o-transcribe");
+            assert!(!result.ok, "accepted {} response: {}", status, body);
+            assert!(!result.message.contains(marker));
+            assert!(!result.message.contains("connection-header-marker"));
+            assert!(result.detail.contains("gpt-4o-transcribe"));
+        }
+    }
+
+    #[test]
+    fn openai_connection_result_accepts_a_valid_empty_transcript() {
+        let result = openai_connection_result(
+            reqwest::StatusCode::OK,
+            &reqwest::header::HeaderMap::new(),
+            r#"{"text":""}"#,
+            13,
+            "gpt-transcribe",
+        );
+        assert!(result.ok);
+        assert!(result.message.contains("Connection successful"));
+        assert_eq!(result.elapsed_ms, 13);
+        assert!(result.detail.contains("gpt-transcribe"));
+    }
+
+    #[test]
+    fn openai_http_error_does_not_return_provider_body_markers() {
+        let marker = "private-transcript-and-key-marker";
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            reqwest::header::HeaderValue::from_static("response-header-marker"),
+        );
+        let error = transcription_http_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            &headers,
+            marker,
+            OPENAI_SCOPE,
+        );
+        assert!(error.contains("400"));
+        assert!(!error.contains(marker));
+        assert!(!error.contains("response-header-marker"));
+    }
+}
+
+#[cfg(test)]
+fn spawn_http_fixture() -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+            let body_start = header_end + 4;
+            let complete = if headers.contains("transfer-encoding: chunked") {
+                request[body_start..]
+                    .windows(5)
+                    .any(|part| part == b"0\r\n\r\n")
+            } else {
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                request.len() >= body_start + length
+            };
+            if complete {
+                break;
+            }
+        }
+        let wire = String::from_utf8_lossy(&request).into_owned();
+        let body = r#"{"text":"ok"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+        wire
+    });
+    (format!("http://{address}/audio/transcriptions"), server)
 }

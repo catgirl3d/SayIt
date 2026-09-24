@@ -3,6 +3,7 @@ import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
   asrAvailabilityLabel,
+  buildAsrProviderConfig,
   describeAsrMissing,
   effectiveAsrCredentials,
   emptyAsrProfile,
@@ -94,6 +95,56 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     expect(findAsrProvider('doubao_v2')?.platform).toBe('doubao')
     expect(findAsrProvider('nope')).toBeUndefined()
   })
+
+  it('exposes the frozen buffered provider defaults and model choices', () => {
+    expect(findAsrProvider('openai_transcribe')).toMatchObject({
+      platform: 'openai',
+      model: 'gpt-transcribe',
+      models: ['gpt-transcribe', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1'],
+    })
+    expect(findAsrProvider('gemini_transcribe')).toMatchObject({
+      platform: 'gemini',
+      model: 'gemini-3.5-transcribe',
+      models: ['gemini-3.5-transcribe'],
+    })
+    expect(findAsrProvider('openrouter_transcribe')).toMatchObject({
+      platform: 'openrouter',
+      model: 'openai/gpt-transcribe',
+      models: [
+        'openai/gpt-transcribe',
+        'qwen/qwen3-asr-flash-2026-02-10',
+        'qwen/qwen3-asr-1.7b',
+        'qwen/qwen3-asr-0.6b',
+        'microsoft/mai-transcribe-2',
+        'google/chirp-3',
+        'microsoft/mai-transcribe-1.5',
+        'openai/gpt-4o-transcribe',
+        'openai/gpt-4o-mini-transcribe',
+        'openai/whisper-large-v3-turbo',
+        'openai/whisper-large-v3',
+        'openai/whisper-1',
+        'deepgram/nova-3',
+        'meta/muse-voice-transcribe-1.0',
+        'x-ai/grok-stt-1.0',
+        'mistralai/voxtral-mini-transcribe',
+        'mistralai/voxtral-small-24b-2507-stt',
+        'mistralai/voxtral-mini-3b-2507',
+        'nvidia/parakeet-tdt-0.6b-v3',
+        'nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b',
+        'fish-audio/transcribe-1',
+      ],
+    })
+  })
+
+  it('keeps existing Groq profile credentials and language payload intact', () => {
+    const groq = profile({ provider: 'groq_whisper', apiKey: 'groq-profile-key' })
+    expect(buildAsrProviderConfig(groq, 'uk')).toEqual({
+      provider: 'groq_whisper',
+      api_key: 'groq-profile-key',
+      app_id: '',
+      extra: { language: 'uk' },
+    })
+  })
 })
 
 describe('parseAsrProfiles 容错', () => {
@@ -128,6 +179,18 @@ describe('parseAsrProfiles 容错', () => {
     expect(p.workspaceId).toBe('')
     expect(p.omniPrompt).toBe('')
     expect(p.console).toBe('new')
+  })
+
+  it('fills each provider-specific default when a saved profile has no model', () => {
+    expect(parseAsrProfiles([
+      { id: 'legacy-openai', provider: 'openai_transcribe', apiKey: 'openai-key' },
+      { id: 'legacy-gemini', provider: 'gemini_transcribe', apiKey: 'gemini-key' },
+      { id: 'legacy-openrouter', provider: 'openrouter_transcribe', apiKey: 'openrouter-key' },
+    ]).map((profile) => profile.model)).toEqual([
+      'gpt-transcribe',
+      'gemini-3.5-transcribe',
+      'openai/gpt-transcribe',
+    ])
   })
 
   it('console 只认 new / legacy，其它值回落到 new', () => {

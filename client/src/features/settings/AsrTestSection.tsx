@@ -8,7 +8,9 @@ import { Button } from '@/components/ui/button'
 import { Feedback } from '@/components/ui/feedback'
 import { getSetting } from '@/services/store'
 import { getEngineDraftDirty, subscribeEngineDraft } from '@/stores/engineDraft'
-import { buildCloudAsrExtra, isQwenOmniProvider, resolveAsrDisplayModel, resolveQwenOmniModel } from '@/lib/asrModels'
+import { resolveAsrDisplayModel, resolveQwenOmniModel } from '@/lib/asrModels'
+import { buildAsrProviderConfig, findAsrProvider } from './asrProviderCatalog'
+import { loadActiveAsrProfile } from './asrProfileStore'
 import { describeProviderError, describeServerError } from '@/lib/errorMessages'
 import type { WorkMode } from '@/services/transcription'
 import { useT } from '@/i18n/useT'
@@ -71,6 +73,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
     setError(null)
 
     try {
+      const cloudProfile = workMode === 'cloud_api' ? await loadActiveAsrProfile() : null
       // 获取测试音频并计算时长
       const wavB64 = await invoke<string>('get_test_audio_b64')
       const wavBytes = Uint8Array.from(atob(wavB64), (c) => c.charCodeAt(0))
@@ -92,31 +95,17 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
         }
         pcmB64 = btoa(pcmB64)
 
-        const asrProvider = await getSetting('cloudAsr.provider', 'doubao_v2') as string
-        const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
-        const asrAppId = await getSetting('cloudAsr.appId', '') as string
-
-        // 模型解析一律走 @/lib/asrModels。这里原来自己抄了一份映射表，还留着几个
-        // 已经不在 ASR_PROVIDERS 里的旧 key——测试可能用与实际配置不同的模型。
-        const isOmni = isQwenOmniProvider(asrProvider)
-        const qwenOmniModel = resolveQwenOmniModel(asrProvider)
-        let omniInstructions: string | undefined
-        if (isOmni) {
-          const savedPrompt = await getSetting('cloudAsr.omniSystemPrompt', '') as string
-          omniInstructions = savedPrompt || undefined
-        }
+        const profile = cloudProfile
+        if (!profile) throw new Error('No cloud ASR profile is active')
+        const entry = findAsrProvider(profile.provider)
+        const qwenOmniModel = entry?.omni ? resolveQwenOmniModel(profile.provider) : undefined
 
         const start = performance.now()
         const r = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
           request: {
             audio_b64: pcmB64,
             sample_rate: 16000,
-            asr_config: {
-              provider: isOmni ? 'qwen_omni' : asrProvider,
-              api_key: asrApiKey,
-              app_id: asrAppId,
-              extra: buildCloudAsrExtra(asrProvider, speechLanguage, omniInstructions),
-            },
+            asr_config: buildAsrProviderConfig(profile, speechLanguage),
           },
         })
         const totalMs = Math.round(performance.now() - start)
@@ -124,7 +113,9 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
           text: r.text,
           asrMs: totalMs,
           mode: 'cloud_api',
-          model: isOmni ? (qwenOmniModel || asrProvider) : resolveAsrDisplayModel(asrProvider),
+          model: entry?.omni
+            ? qwenOmniModel || profile.model
+            : entry?.models ? profile.model : resolveAsrDisplayModel(profile.provider),
           audioDurationSec,
         })
       } else {

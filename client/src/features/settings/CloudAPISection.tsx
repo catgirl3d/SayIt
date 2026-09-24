@@ -25,7 +25,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
-import { getCloudAsrSupportedLanguages, resolveQwenOmniModel } from '@/lib/asrModels'
+import { getCloudAsrSupportedLanguages } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { describeProviderError } from '@/lib/errorMessages'
 import { doubaoKeyLabel } from '@/lib/cloudAsrCreds'
@@ -34,6 +34,7 @@ import {
   ASR_PROVIDERS,
   asrAvailabilityLabel,
   describeAsrMissing,
+  buildAsrProviderConfig,
   effectiveAsrCredentials,
   emptyAsrProfile,
   findAsrProvider,
@@ -42,7 +43,7 @@ import {
   type AsrCheck,
   type AsrProfile,
 } from './asrProviderCatalog'
-import { loadAsrProfiles, saveAsrProfiles } from './asrProfileStore'
+import { loadAsrProfiles, saveAsrProfileChecks, saveAsrProfiles } from './asrProfileStore'
 import { formatCheckedAt, formatLatency, isCheckFresh } from './aiProviderCatalog'
 import { t, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
@@ -118,27 +119,19 @@ async function prepareTestPcm(): Promise<{ pcmB64: string; audioSec: number }> {
 async function runAsrTest(
   profile: AsrProfile,
   audio: { pcmB64: string; audioSec: number },
+  language: SpeechInputLanguage,
 ): Promise<AsrTestOutcome> {
   const entry = findAsrProvider(profile.provider)
   if (!entry) {
     return { ok: false, check: { ok: false, at: Date.now(), reason: t('asr.err.unknownProvider') }, message: t('asr.err.unknownProvider') }
   }
   try {
-    const creds = effectiveAsrCredentials(profile)
-    const omniModel = resolveQwenOmniModel(profile.provider)
     const start = performance.now()
     const r = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
       request: {
         audio_b64: audio.pcmB64,
         sample_rate: 16000,
-        asr_config: {
-          provider: entry.omni ? 'qwen_omni' : profile.provider,
-          api_key: creds.apiKey,
-          app_id: creds.appId,
-          ...(entry.omni && {
-            extra: { model: omniModel, instructions: profile.omniPrompt || undefined },
-          }),
-        },
+        asr_config: buildAsrProviderConfig(profile, language),
       },
     })
     const latencyMs = Math.round(performance.now() - start)
@@ -196,10 +189,14 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   const [draftIsNew, setDraftIsNew] = useState(false)
   const [draftBaseline, setDraftBaseline] = useState('')
   const [saving, setSaving] = useState(false)
+  const [activating, setActivating] = useState(false)
 
-  const busy = testingId !== '' || saving || batch !== null
+  const busy = testingId !== '' || saving || activating || batch !== null
   const activeProvider = profiles.find((profile) => profile.id === activeId)?.provider
   const supportedLanguages = activeProvider ? getCloudAsrSupportedLanguages(activeProvider) : null
+  const sendsLanguageHint = activeProvider === 'openai_transcribe'
+    || activeProvider === 'gemini_transcribe'
+    || activeProvider === 'openrouter_transcribe'
   /** 这张卡正在测吗 —— 单张测试和并发批量测试都要算上 */
   const isTesting = (id: string) => testingId === id || testingIds.includes(id)
   const draftEntry = draft ? findAsrProvider(draft.provider) : undefined
@@ -237,16 +234,36 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   }
 
   async function persist(next: AsrProfile[], nextActiveId: string) {
-    setProfiles(next)
-    setActiveId(nextActiveId)
-    await saveAsrProfiles({ profiles: next, activeId: nextActiveId })
+    const committed = await saveAsrProfiles({ profiles: next, activeId: nextActiveId })
+    setProfiles(committed.profiles)
+    setActiveId(committed.activeId)
+    void refreshModeStatus()
+  }
+
+  async function persistChecks(updates: Array<{ profile: AsrProfile; check: AsrCheck }>) {
+    const state = await saveAsrProfileChecks(updates)
+    setProfiles(state.profiles)
+    setActiveId(state.activeId)
     void refreshModeStatus()
   }
 
   async function handleActivate(id: string) {
-    if (id === activeId) return
-    setNotice(null)
-    await persist(profiles, id)
+    if (id === activeId || activating) return
+    setActivating(true)
+    setNotice({ tone: 'info', message: t('asr.msg.activationPending') })
+    try {
+      await persist(profiles, id)
+      setNotice(null)
+    } catch (err) {
+      const friendly = describeProviderError(err)
+      setNotice({
+        tone: 'error',
+        message: t('asr.msg.activationFailed', { message: friendly.message }),
+        detail: friendly.detail,
+      })
+    } finally {
+      setActivating(false)
+    }
   }
 
   // ─────────────────────── 测试 ───────────────────────
@@ -270,11 +287,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     setTestingId(profile.id)
     setNotice(null)
     try {
-      const outcome = await runAsrTest(profile, await prepareTestPcm())
-      await persist(
-        profiles.map((p) => (p.id === profile.id ? { ...p, check: outcome.check } : p)),
-        activeId,
-      )
+      const outcome = await runAsrTest(profile, await prepareTestPcm(), speechLanguage)
+      await persistChecks([{ profile, check: outcome.check }])
       if (!outcome.ok) {
         setNotice({ tone: 'error', message: `${entry.label} ${outcome.message}`, detail: outcome.detail })
         return
@@ -330,7 +344,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       const audio = await prepareTestPcm()
       let done = 0
       const results = await Promise.all(targets.map(async (target) => {
-        const outcome = await runAsrTest(target, audio)
+        const outcome = await runAsrTest(target, audio, speechLanguage)
         // 每张自己测完就把图标停下、进度加一，不用等整批结束
         done += 1
         setBatch({ done, total: targets.length })
@@ -338,14 +352,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
         return { target, outcome }
       }))
 
-      const checks = new Map(results.map((r) => [r.target.id, r.outcome.check]))
-      await persist(
-        profiles.map((p) => {
-          const check = checks.get(p.id)
-          return check ? { ...p, check } : p
-        }),
-        activeId,
-      )
+      await persistChecks(results.map(({ target, outcome }) => ({ profile: target, check: outcome.check })))
 
       let okCount = 0
       let failCount = 0
@@ -426,13 +433,14 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     const nextPlatform = findAsrProvider(providerId)?.platform
     const prevPlatform = findAsrProvider(draft.provider)?.platform
     if (nextPlatform === prevPlatform) {
-      patchDraft({ provider: providerId })
+      patchDraft({ provider: providerId, model: findAsrProvider(providerId)?.model ?? '' })
       return
     }
     // 平台变了，旧密钥对新家没有意义 —— 留着只会被当成"已配置"而实际发不出去
     const prev = lastProfileOfPlatform(providerId, draft.id)
     patchDraft({
       provider: providerId,
+      model: findAsrProvider(providerId)?.model ?? '',
       apiKey: prev?.apiKey ?? '',
       otherKey: prev?.otherKey ?? '',
       appId: prev?.appId ?? '',
@@ -455,9 +463,10 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       // 改过凭据就把旧结论作废：否则卡上那枚用旧 key 测出来的「可用」还挂着，
       // 等于拿过期结论替新配置作保
       const before = profiles.find((p) => p.id === draft.id)
-      const credsChanged = !before
+      const configurationChanged = !before
         || JSON.stringify(effectiveAsrCredentials(before)) !== JSON.stringify(effectiveAsrCredentials(draft))
-      const saved: AsrProfile = { ...draft, check: credsChanged ? undefined : before?.check }
+        || before.model !== draft.model
+      const saved: AsrProfile = { ...draft, check: configurationChanged ? undefined : before?.check }
 
       const next = draftIsNew
         ? [...profiles, saved]
@@ -566,6 +575,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     const siblings = profiles.filter((p) => p.provider === profile.provider).length
     const title = profileTitle(profile, siblings)
     const availability = asrAvailabilityLabel(entry)
+    const model = entry.models ? profile.model : entry.model
     return (
       <div
         key={profile.id}
@@ -580,7 +590,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
           type="button"
           role="radio"
           aria-checked={isActive}
-          aria-label={t('common.cardStatusAria', { title, subtitle: entry.model, status: status.spoken })}
+          aria-label={t('common.cardStatusAria', { title, subtitle: model, status: status.spoken })}
+          disabled={activating}
           onClick={() => void handleActivate(profile.id)}
           className="absolute inset-0 rounded-lg"
         />
@@ -598,8 +609,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
           </Tooltip>
         </div>
         <div className="mt-1 flex items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={entry.model}>
-            {entry.model}
+          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={model}>
+            {model}
           </span>
           {/* 待配置的卡片按钮常驻：它正在等用户去填东西，把唯一的入口藏进 hover
               等于让人对着一张没有可点之处的卡发呆。配好之后回到 hover 显隐 */}
@@ -624,6 +635,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
               <button
                 type="button"
                 onClick={() => openEditor({ ...profile }, false)}
+                disabled={activating}
                 aria-label={t('asr.editAria', { title })}
                 className={cardIconButtonClass}
               >
@@ -684,6 +696,17 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
               {draftAvailability !== '' && <> <span className="font-medium">{draftAvailability}</span></>}
             </p>
           </div>
+
+          {draftEntry?.models && draftEntry.models.length > 1 && (
+            <div>
+              <label htmlFor="asr-model" className="mb-1 block text-sm text-muted-foreground">{t('asr.model')}</label>
+              <Select
+                value={draft.model}
+                onChange={(model) => patchDraft({ model })}
+                options={draftEntry.models.map((model) => ({ value: model, label: model }))}
+              />
+            </div>
+          )}
 
           {draftIsDoubao && (
             <div>
@@ -878,7 +901,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
           </p>
         )}
         {activeProvider && !supportedLanguages && (
-          <p className="mt-3 text-xs text-muted-foreground">{t('asr.lang.autoOnly')}</p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            {t(sendsLanguageHint ? 'asr.lang.hintSent' : 'asr.lang.autoOnly')}
+          </p>
         )}
       </CardContent>
 

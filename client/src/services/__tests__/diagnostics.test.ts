@@ -11,7 +11,10 @@ const bridge = vi.hoisted(() => ({
   copyDiagnosticsZip: vi.fn(),
 }))
 
+const native = vi.hoisted(() => ({ invoke: vi.fn() }))
+
 vi.mock('@/services/bridge', () => bridge)
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => native.invoke(...args) }))
 vi.mock('@/services/store', () => ({
   getSetting: vi.fn(async (key: string, fallback: unknown) => state.settings.get(key) ?? fallback),
 }))
@@ -34,6 +37,7 @@ describe('public diagnostics', () => {
   beforeEach(() => {
     state.settings.clear()
     state.mode = 'cloud_api'
+    native.invoke.mockReset()
     bridge.getDiagnosticsPreview.mockReset()
     bridge.createPublicDiagnosticsBundle.mockReset()
     bridge.copyDiagnosticsZip.mockReset()
@@ -143,5 +147,34 @@ describe('public diagnostics', () => {
     bridge.getDiagnosticsPreview.mockResolvedValue(null)
 
     await expect(getDiagnosticsPreview('today')).rejects.toThrow('Failed to collect diagnostics preview')
+  })
+
+  it('tests the selected profile key, model, and language without reading runtime mirrors', async () => {
+    const module = await import('../diagnostics') as unknown as {
+      testAsrConnection?: (profile: Record<string, unknown>, language: 'uk') => Promise<unknown>
+    }
+    expect(typeof module.testAsrConnection).toBe('function')
+    if (!module.testAsrConnection) return
+
+    native.invoke.mockResolvedValue({ ok: true, message: '' })
+    const profile = {
+      id: 'openai-account-b',
+      provider: 'openai_transcribe',
+      apiKey: 'key-account-b',
+      appId: '',
+      model: 'whisper-1',
+      omniPrompt: '',
+    }
+
+    await module.testAsrConnection(profile, 'uk')
+
+    expect(native.invoke).toHaveBeenCalledWith('test_asr_connection', {
+      config: {
+        provider: 'openai_transcribe',
+        api_key: 'key-account-b',
+        app_id: '',
+        extra: { model: 'whisper-1', language: 'uk' },
+      },
+    })
   })
 })

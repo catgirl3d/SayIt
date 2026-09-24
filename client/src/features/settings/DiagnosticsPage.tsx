@@ -9,7 +9,10 @@ import { getWorkMode } from '@/services/transcription'
 import { FolderOpen, RefreshCw, CheckCircle2, XCircle, MinusCircle, CircleSlash, Info, HelpCircle, ChevronDown } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { providerLabel } from './aiProviderCatalog'
-import { findAsrProvider } from './asrProviderCatalog'
+import { effectiveAsrCredentials, findAsrProvider, type AsrProfile } from './asrProviderCatalog'
+import { loadActiveAsrProfile } from './asrProfileStore'
+import { getSpeechInputLanguage } from '@/services/speechInputLanguage'
+import { testAsrConnection } from '@/services/diagnostics'
 import DiagnosticsReportPanel from './DiagnosticsReportPanel'
 import { t } from '@/i18n'
 import { useLocale } from '@/i18n/useT'
@@ -21,6 +24,39 @@ interface HealthItem {
   label: string
   status: HealthStatus
   detail: string
+}
+
+export async function checkCloudAsrHealth(profile: AsrProfile | null): Promise<HealthItem> {
+  if (!profile) {
+    return { id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: t('diagnostics.notConfiguredProvider') }
+  }
+
+  const provider = findAsrProvider(profile.provider)
+  const model = provider?.models ? profile.model : provider?.model
+  const displayName = provider ? `${provider.label} (${model})` : profile.provider
+  if (!effectiveAsrCredentials(profile).apiKey) {
+    return { id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: t('diagnostics.missingKey', { provider: displayName }) }
+  }
+
+  if (
+    profile.provider === 'openai_transcribe'
+    || profile.provider === 'gemini_transcribe'
+    || profile.provider === 'openrouter_transcribe'
+  ) {
+    return { id: 'asr', label: t('diagnostics.health.asr'), status: 'unknown', detail: t('diagnostics.asrManualOnly') }
+  }
+
+  try {
+    const result = await testAsrConnection(profile, await getSpeechInputLanguage())
+    return {
+      id: 'asr',
+      label: t('diagnostics.health.asr'),
+      status: result.ok ? 'ok' : 'error',
+      detail: result.ok ? displayName : `${displayName} — ${result.message}`,
+    }
+  } catch (err) {
+    return { id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: `${displayName} — ${String(err)}` }
+  }
 }
 
 // 本地 GGUF 引擎的诊断信息（Rust 命令 gguf_asr_diagnostics）
@@ -116,37 +152,8 @@ export default function DiagnosticsPage() {
 
     // ASR 检查
     if (workMode === 'cloud_api') {
-      const asrProvider = await getSetting('cloudAsr.provider', '') as string
-      if (!asrProvider) {
-        items.push({ id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: t('diagnostics.notConfiguredProvider') })
-      } else {
-        const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
-        const provider = findAsrProvider(asrProvider)
-        const displayName = provider ? `${provider.label} (${provider.model})` : asrProvider
-        if (!asrApiKey) {
-          items.push({ id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: t('diagnostics.missingKey', { provider: displayName }) })
-        } else {
-          // 实际测试连通性
-          try {
-            const isQwenOmni = asrProvider.startsWith('qwen_omni')
-            const qwenOmniModel = asrProvider === 'qwen_omni_35_plus' ? 'qwen3.5-omni-plus-realtime'
-              : asrProvider === 'qwen_omni_35_flash' ? 'qwen3.5-omni-flash-realtime'
-                : asrProvider === 'qwen_omni_flash' ? 'qwen3-omni-flash-realtime'
-                  : asrProvider === 'qwen_omni_turbo' ? 'qwen-omni-turbo-realtime' : undefined
-            const result = await invoke<{ ok: boolean; message: string }>('test_asr_connection', {
-              config: {
-                provider: isQwenOmni ? 'qwen_omni' : asrProvider,
-                api_key: asrApiKey,
-                app_id: await getSetting('cloudAsr.appId', '') as string,
-                ...(isQwenOmni && qwenOmniModel && { extra: { model: qwenOmniModel } }),
-              },
-            })
-            items.push({ id: 'asr', label: t('diagnostics.health.asr'), status: result.ok ? 'ok' : 'error', detail: result.ok ? displayName : `${displayName} — ${result.message}` })
-          } catch (err) {
-            items.push({ id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: `${displayName} — ${String(err)}` })
-          }
-        }
-      }
+      const profile = await loadActiveAsrProfile()
+      items.push(await checkCloudAsrHealth(profile))
     } else if (workMode === 'local') {
       const modelId = await getSetting('localAsr.modelId', '') as string
       items.push({ id: 'asr', label: t('diagnostics.health.asr'), status: modelId ? 'ok' : 'error', detail: modelId || t('diagnostics.noModel') })

@@ -1,7 +1,9 @@
 import * as bridge from './bridge'
+import { invoke } from '@tauri-apps/api/core'
 import { getSetting } from './store'
 import { getSpeechInputLanguage } from './speechInputLanguage'
 import { getWorkMode } from './transcription'
+import { buildAsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
 import type { DiagnosticOccurrence, DiagnosticsPreview, PublicDiagnosticsEnvironment } from '@/types/appApi'
 
 const WORK_MODES = new Set(['local', 'server', 'cloud_api'])
@@ -74,6 +76,15 @@ export async function collectPublicDiagnosticsEnvironment(): Promise<PublicDiagn
       : 'none',
     localAccelerator: normalizeAccelerator(acceleratorValue),
   }
+}
+
+export async function testAsrConnection(
+  profile: AsrProfile,
+  language: Awaited<ReturnType<typeof getSpeechInputLanguage>>,
+): Promise<{ ok: boolean; message: string }> {
+  return invoke<{ ok: boolean; message: string }>('test_asr_connection', {
+    config: buildAsrProviderConfig(profile, language),
+  })
 }
 
 export async function getDiagnosticsPreview(issueOccurrence: DiagnosticOccurrence): Promise<DiagnosticsPreview> {

@@ -930,6 +930,12 @@ export class RecorderOrchestrator {
           this.currentPromptResolution,
           this.currentActiveAppContext,
         )
+        const hasModelListProviderMetadata = Boolean(result.asrModel)
+          && (
+            result.asrEngine === 'openai_transcribe'
+            || result.asrEngine === 'gemini_transcribe'
+            || result.asrEngine === 'openrouter_transcribe'
+          )
         void (async () => {
           let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
           try {
@@ -973,6 +979,7 @@ export class RecorderOrchestrator {
                 aiSource: result.aiSource,
                 aiStatus: result.aiStatus,
                 audioFilePath: historyArtifact.audioFilePath,
+                ...(hasModelListProviderMetadata && { asrProvider: result.asrModel }),
                 ...historyMeta,
               })
               // 写记录后同样验代；取消/新 run 会清掉刚写入的文件与记录。
@@ -2202,7 +2209,12 @@ export class RecorderOrchestrator {
         qwen_omni_turbo: 'qwen-omni-turbo-realtime',
         qwen_omni_plus: 'qwen3.5-omni-plus-realtime',
       }
-      const asrProvider = ASR_MODEL_ID_MAP[asrProviderKey] || asrProviderKey || 'cloud'
+      const selectedModelProvider = finalResult?.asrEngine === 'openai_transcribe'
+        || finalResult?.asrEngine === 'gemini_transcribe'
+        || finalResult?.asrEngine === 'openrouter_transcribe'
+      const asrProvider = selectedModelProvider && finalResult?.asrModel
+        ? finalResult.asrModel
+        : ASR_MODEL_ID_MAP[asrProviderKey] || asrProviderKey || 'cloud'
       const aiProvider = finalResult?.aiProvider || await getSetting('cloudAi.provider', '') as string
       const aiModel = finalResult?.aiModel || await getSetting('cloudAi.model', '') as string
       return { asrProvider, aiProvider: aiProvider || undefined, aiModel: aiModel || undefined, ...executionMeta }

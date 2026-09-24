@@ -2,7 +2,15 @@
 // 豆包 ASR：边录边发（实时流式）
 // 其他 ASR：录完再发（BufferedProvider）
 
-import { buildCloudAsrExtra, isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
+import { isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
+import {
+  buildAsrProviderConfig,
+  effectiveAsrCredentials,
+  findAsrProvider,
+  type AsrProviderConfig,
+  type AsrProfile,
+} from '@/features/settings/asrProviderCatalog'
+import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { invoke } from '@tauri-apps/api/core'
@@ -18,13 +26,6 @@ import type {
   StopOptions,
   WorkMode,
 } from './types'
-
-interface AsrProviderConfig {
-  provider: string
-  api_key: string
-  app_id: string
-  extra?: Record<string, unknown>
-}
 
 interface AsrResult { text: string; elapsed_ms: number }
 
@@ -69,6 +70,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private sessionActive = false
   private activeRunId = 0
   private activeStartOpts: Readonly<StartOptions> | undefined
+  private activeProfileSnapshot: Promise<AsrProfile | null> | null = null
   private ready = false
 
   // 豆包/千问流式状态
@@ -111,10 +113,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
     if (this.activeRunId !== 0) this.cancel()
 
     const runOpts = this.snapshotStartOptions(opts)
+    const profileSnapshot = loadActiveAsrProfile()
     this.pcmBuffers = []
     this.sessionActive = true
     this.activeRunId = runOpts.runId
     this.activeStartOpts = runOpts
+    this.activeProfileSnapshot = profileSnapshot
     this.isDoubaoStream = false
     this.isQwenStream = false
     this.doubaoStreamReady = false
@@ -126,7 +130,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.sendLock = Promise.resolve()
 
     // 异步判断供应商并建连；所有异步步骤只使用本次 run 的 StartOptions 快照。
-    void this.tryStartRealtimeStream(runOpts.runId, runOpts)
+    void this.tryStartRealtimeStream(runOpts.runId, runOpts, profileSnapshot)
 
     return true
   }
@@ -149,6 +153,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     // 先让本次 run 失效，后续迟到结果一律丢弃；close 在队列中等待旧发送链排空。
     this.activeRunId = 0
     this.activeStartOpts = undefined
+    this.activeProfileSnapshot = null
     const sendLockToDrain = this.sendLock
     this.sessionActive = false
     this.pcmBuffers = []
@@ -262,9 +267,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
     if (!this.sessionActive) return false
     const runId = this.activeRunId
     const runOpts = this.activeStartOpts
-    if (!runOpts || runOpts.runId !== runId) return false
+    const profileSnapshot = this.activeProfileSnapshot
+    if (!runOpts || runOpts.runId !== runId || !profileSnapshot) return false
     this.sessionActive = false
-    void this.runProcess(runId, runOpts)
+    void this.runProcess(runId, runOpts, profileSnapshot)
     return true
   }
 
@@ -272,6 +278,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     // 必须先使 run 失效，再清理前端状态；close 最后入队且等待此刻的旧发送链。
     this.activeRunId = 0
     this.activeStartOpts = undefined
+    this.activeProfileSnapshot = null
     const sendLockToDrain = this.sendLock
     this.sessionActive = false
     this.pcmBuffers = []
@@ -303,10 +310,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private async tryStartRealtimeStream(
     runId: number,
     startOpts: Readonly<StartOptions>,
+    profileSnapshot: Promise<AsrProfile | null>,
   ): Promise<void> {
     try {
-      const asrProvider = await getSetting('cloudAsr.provider', 'doubao') as string
-      const qwenWorkspaceId = await getSetting('cloudAsr.qwen.workspaceId', '') as string
+      const profile = await profileSnapshot
+      const asrProvider = profile?.provider ?? ''
+      const qwenWorkspaceId = profile?.workspaceId ?? ''
       if (!this.isRunCurrent(runId)) return
 
       // 是否为本次会话开启「流式实时显示」：直接读设置（单一真源，避免录音器缓存过期），
@@ -323,14 +332,13 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
       if (asrProvider === 'doubao_v2') {
         // 豆包流式
+        if (!profile) return
         this.isDoubaoStream = true
-        const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
-        const asrAppId = await getSetting('cloudAsr.appId', '') as string
-        if (!this.isRunCurrent(runId)) return
+        const credentials = effectiveAsrCredentials(profile)
 
         addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: connecting', { realtime })
         const opened = await this.invokeNativeOpen(runId, 'doubao_stream_open', {
-          config: { provider: 'doubao_v2', api_key: asrApiKey, app_id: asrAppId },
+          config: { provider: 'doubao_v2', api_key: credentials.apiKey, app_id: credentials.appId },
           sampleRate: 16000,
           hotwords: startOpts.hotwords ?? [],
           realtime,
@@ -345,12 +353,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
         // qwen3-asr-flash（非实时）与未开启实时显示时都不进此分支，走下面的一次性识别。
         this.isQwenStream = true
         this.qwenCommands = QWEN_STREAM_COMMANDS[asrProvider]
-        const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
-        if (!this.isRunCurrent(runId)) return
+        if (!profile) return
+        const credentials = effectiveAsrCredentials(profile)
 
         addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: connecting', { asrProvider, hasWorkspace: Boolean(qwenWorkspaceId) })
         const opened = await this.invokeNativeOpen(runId, this.qwenCommands.open, {
-          config: { provider: asrProvider, api_key: asrApiKey, app_id: '' },
+          config: { provider: asrProvider, api_key: credentials.apiKey, app_id: '' },
           hotwords: startOpts.hotwords ?? [],
           realtime,
           workspaceId: qwenWorkspaceId,
@@ -426,6 +434,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private async runProcess(
     runId: number,
     startOpts: Readonly<StartOptions>,
+    profileSnapshot: Promise<AsrProfile | null>,
   ): Promise<void> {
     const stopTime = performance.now() // stop 时刻，用于计算流式模式的等待时间
     const startTime = this.streamStartTime || stopTime
@@ -447,10 +456,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
         return
       }
 
-      // 读取 ASR 配置
-      const asrProvider = await getSetting('cloudAsr.provider', 'doubao') as string
+      const profile = await profileSnapshot
+      if (!profile) throw new Error('No active cloud ASR profile')
       if (!this.isRunCurrent(runId)) return
+      const asrProvider = profile.provider
       const isQwenOmni = isQwenOmniProvider(asrProvider)
+      const selectedModel = findAsrProvider(asrProvider)?.models ? profile.model : undefined
 
       let asrText = ''
       let asrMs = 0
@@ -495,22 +506,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
         }
         const audioB64 = uint8ArrayToBase64(merged)
 
-        const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
-        const asrAppId = await getSetting('cloudAsr.appId', '') as string
-        if (!this.isRunCurrent(runId)) return
-        let omniInstructions: string | undefined
-        if (isQwenOmni) {
-          const savedPrompt = await getSetting('cloudAsr.omniSystemPrompt', '') as string
-          if (!this.isRunCurrent(runId)) return
-          omniInstructions = savedPrompt || undefined
-        }
-
-        const asrConfig: AsrProviderConfig = {
-          provider: isQwenOmni ? 'qwen_omni' : asrProvider,
-          api_key: asrApiKey,
-          app_id: asrAppId,
-          extra: buildCloudAsrExtra(asrProvider, normalizeSpeechInputLanguage(startOpts.language), omniInstructions),
-        }
+        const asrConfig: AsrProviderConfig = buildAsrProviderConfig(
+          profile,
+          normalizeSpeechInputLanguage(startOpts.language),
+        )
 
         addRuntimeEvent('info', 'cloud_api', 'ASR started', { provider: asrProvider, durationSec })
         const asrResult = await invoke<AsrResult>('cloud_transcribe', {
@@ -534,10 +533,22 @@ export class CloudAPIProvider implements TranscriptionProvider {
       asrText = restoreHotwordSpacing(asrText, startOpts.hotwords ?? [])
 
       // 发送 ASR 中间结果
-      this.callbacks.onASR?.({ text: asrText, asrMs, durationSec })
+      this.callbacks.onASR?.({
+        text: asrText,
+        asrMs,
+        durationSec,
+        ...(!asrText.trim() && selectedModel && { asrEngine: asrProvider, asrModel: selectedModel }),
+      })
 
       if (!asrText.trim()) {
-        this.callbacks.onFinal?.({ asrText: '', llmText: '', asrMs, llmMs: 0, durationSec })
+        this.callbacks.onFinal?.({
+          asrText: '',
+          llmText: '',
+          asrMs,
+          llmMs: 0,
+          durationSec,
+          ...(selectedModel && { asrEngine: asrProvider, asrModel: selectedModel }),
+        })
         this.callbacks.onDone?.()
         return
       }
@@ -577,6 +588,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         durationSec,
         ...polish,
         ...(isQwenOmni && { asrEngine: 'qwen_omni', asrModel: omniModel }),
+        ...(selectedModel && { asrEngine: asrProvider, asrModel: selectedModel }),
       })
       this.callbacks.onDone?.()
     } catch (err) {

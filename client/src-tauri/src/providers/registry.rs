@@ -2,8 +2,8 @@
 
 use super::types::*;
 use super::{
-    ai_ollama, ai_openai_compat, asr_doubao, asr_doubao_stream, asr_groq, asr_mimo, asr_qwen,
-    asr_qwen_audio_stream, asr_qwen_omni,
+    ai_ollama, ai_openai_compat, asr_doubao, asr_doubao_stream, asr_gemini, asr_groq, asr_mimo,
+    asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
 };
 use crate::error_protocol;
 
@@ -173,6 +173,33 @@ pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResu
             )
             .await
         }
+        "openai_transcribe" => {
+            asr_groq::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await
+        }
+        "gemini_transcribe" => {
+            asr_gemini::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await
+        }
+        "openrouter_transcribe" => {
+            asr_openrouter::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await
+        }
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
@@ -191,6 +218,9 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
         "qwen_omni" => Ok(asr_qwen_omni::test_connection(&config).await),
         "mimo" => Ok(asr_mimo::test_connection(&config).await),
         "groq_whisper" => Ok(asr_groq::test_connection(&config).await),
+        "openai_transcribe" => Ok(asr_groq::test_connection(&config).await),
+        "gemini_transcribe" => Ok(asr_gemini::test_connection(&config).await),
+        "openrouter_transcribe" => Ok(asr_openrouter::test_connection(&config).await),
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
@@ -202,6 +232,15 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
 mod tests {
     use super::*;
 
+    fn asr_config(provider: &str, api_key: &str) -> AsrProviderConfig {
+        AsrProviderConfig {
+            provider: provider.to_string(),
+            api_key: api_key.to_string(),
+            app_id: String::new(),
+            extra: serde_json::json!({}),
+        }
+    }
+
     #[test]
     fn openai_compat_list_covers_the_shared_dispatch() {
         for provider in OPENAI_COMPAT_PROVIDERS {
@@ -212,5 +251,85 @@ mod tests {
         }
         assert!(!is_openai_compat_provider("ollama"));
         assert!(!is_openai_compat_provider("unknown_provider"));
+    }
+
+    #[tokio::test]
+    async fn buffered_transcription_routes_to_provider_specific_key_validation() {
+        for (provider, expected_error) in [
+            (
+                "openai_transcribe",
+                "OpenAI transcription is missing the API Key",
+            ),
+            (
+                "gemini_transcribe",
+                "Gemini transcription is missing the API Key",
+            ),
+            (
+                "openrouter_transcribe",
+                "OpenRouter transcription is missing the API Key",
+            ),
+        ] {
+            let error = cloud_transcribe(CloudTranscribeRequest {
+                audio_b64: "%%%not-base64%%%".to_string(),
+                sample_rate: 16000,
+                asr_config: asr_config(provider, ""),
+                hotwords: Vec::new(),
+            })
+            .await
+            .unwrap_err();
+
+            assert!(
+                error.contains(expected_error),
+                "{provider} returned an unexpected error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_connection_tests_route_to_provider_specific_key_validation() {
+        for (provider, expected_error) in [
+            (
+                "openai_transcribe",
+                "OpenAI transcription is missing the API Key",
+            ),
+            (
+                "gemini_transcribe",
+                "Gemini transcription is missing the API Key",
+            ),
+            (
+                "openrouter_transcribe",
+                "OpenRouter transcription is missing the API Key",
+            ),
+        ] {
+            let result = test_asr_connection(asr_config(provider, "")).await.unwrap();
+
+            assert!(!result.ok, "{provider} accepted a missing API key");
+            assert!(
+                result.message.contains(expected_error),
+                "{provider} returned an unexpected message: {}",
+                result.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_asr_providers_keep_the_existing_error() {
+        let provider = "unknown_asr_provider";
+        let expected_error =
+            "sayit_error:connect_failed:ASR provider \"unknown_asr_provider\" is not implemented";
+        let transcription_error = cloud_transcribe(CloudTranscribeRequest {
+            audio_b64: String::new(),
+            sample_rate: 16000,
+            asr_config: asr_config(provider, ""),
+            hotwords: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+        let connection_error = test_asr_connection(asr_config(provider, ""))
+            .await
+            .unwrap_err();
+
+        assert_eq!(transcription_error, expected_error);
+        assert_eq!(connection_error, expected_error);
     }
 }

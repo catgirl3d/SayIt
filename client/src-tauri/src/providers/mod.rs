@@ -13,6 +13,8 @@ pub mod asr_qwen;
 pub mod asr_qwen_omni;
 pub mod asr_mimo;
 pub mod asr_groq;
+pub mod asr_gemini;
+pub mod asr_openrouter;
 pub mod asr_qwen_realtime;
 pub mod asr_qwen_audio_stream;
 pub mod doubao_auth;

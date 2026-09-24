@@ -1,13 +1,11 @@
 // Cloud ASR provider catalog, service profile parsing, and latency tiers.
 //
-// The structure mirrors the "AI Services" page: one card = one complete configuration (provider +
-// credentials for its platform), several cards are possible, including several per provider
+// The structure mirrors the "AI Services" page: one card = one complete configuration (provider,
+// platform credentials, and a selected model where supported), including several per provider
 // (e.g. two Bailian accounts, two sets of Doubao keys). The active card is chosen by activeProfileId.
 //
-// The one substantive difference from AI services: the provider must come from the built-in
-// catalog, an arbitrary base URL cannot be entered — every ASR vendor needs a dedicated Rust
-// implementation (asr_doubao / asr_qwen / asr_qwen_omni / asr_mimo), unlike text cleanup where any
-// OpenAI-compatible endpoint works.
+// Unlike text cleanup, ASR providers must use a dedicated built-in Rust transport selected by its
+// native provider ID. Arbitrary base URLs are not accepted, even for OpenAI-compatible services.
 //
 // Re-pasting a key for the same platform is not solved by storing keys per platform (that would
 // stop a card from being a complete configuration). Instead, a new card seeds the credentials from
@@ -19,11 +17,13 @@ import {
   type DoubaoConsole,
   type DoubaoCredentials,
 } from '@/lib/cloudAsrCreds'
+import { buildCloudAsrExtra } from '@/lib/asrModels'
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
 /** 凭据归属的平台。同平台的服务用同一种密钥形态。 */
 import { t } from '@/i18n'
 
-export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq'
+export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemini' | 'openrouter'
 
 export interface AsrPlatformInfo {
   label: string
@@ -38,6 +38,9 @@ export const ASR_PLATFORMS: Record<AsrPlatform, AsrPlatformInfo> = {
   qwen: { get label() { return t('asrPlatform.qwen') }, consoleUrl: 'https://bailian.console.aliyun.com' },
   mimo: { get label() { return t('asrPlatform.mimo') }, consoleUrl: 'https://xiaoai.mi.com' },
   groq: { label: 'Groq', consoleUrl: 'https://console.groq.com/keys' },
+  openai: { label: 'OpenAI', consoleUrl: 'https://platform.openai.com/api-keys' },
+  gemini: { label: 'Gemini', consoleUrl: 'https://aistudio.google.com/app/apikey' },
+  openrouter: { label: 'OpenRouter', consoleUrl: 'https://openrouter.ai/settings/keys' },
 }
 
 export interface AsrProviderEntry {
@@ -45,15 +48,17 @@ export interface AsrProviderEntry {
   id: string
   /** 卡片标题，短 */
   label: string
-  /** 实际模型名，小字 */
+  /** Default model ID shown in the provider catalog. */
   model: string
+  /** Selectable models supported by this provider. */
+  models?: readonly string[]
   platform: AsrPlatform
   /** 一句定位，说清「什么时候选它」 */
   blurb: string
   /**
-   * 当前内置端点与控制台所面向的账号地区。
-   * `global` 是海外端点（Groq），国内直连可能不稳定，卡片上要如实标出来 ——
-   * 否则用户会把「连不上」当成自己密钥填错。
+   * Region for the built-in endpoint and provider account.
+   * Global services may be less reliable to reach from mainland China, so label them to
+   * distinguish network availability from invalid credentials.
    */
   availability: 'mainland_china' | 'global'
   /** 边说边出字（实时字幕） */
@@ -63,6 +68,40 @@ export interface AsrProviderEntry {
   /** 需要百炼「业务空间 ID」才能用 */
   needsWorkspaceId?: boolean
 }
+
+const OPENAI_TRANSCRIPTION_MODELS = [
+  'gpt-transcribe',
+  'gpt-4o-transcribe',
+  'gpt-4o-mini-transcribe',
+  'whisper-1',
+] as const
+
+const GEMINI_TRANSCRIPTION_MODELS = ['gemini-3.5-transcribe'] as const
+
+// OpenRouter API slugs do not reliably match their display names.
+const OPENROUTER_TRANSCRIPTION_MODELS = [
+  'openai/gpt-transcribe',
+  'qwen/qwen3-asr-flash-2026-02-10',
+  'qwen/qwen3-asr-1.7b',
+  'qwen/qwen3-asr-0.6b',
+  'microsoft/mai-transcribe-2',
+  'google/chirp-3',
+  'microsoft/mai-transcribe-1.5',
+  'openai/gpt-4o-transcribe',
+  'openai/gpt-4o-mini-transcribe',
+  'openai/whisper-large-v3-turbo',
+  'openai/whisper-large-v3',
+  'openai/whisper-1',
+  'deepgram/nova-3',
+  'meta/muse-voice-transcribe-1.0',
+  'x-ai/grok-stt-1.0',
+  'mistralai/voxtral-mini-transcribe',
+  'mistralai/voxtral-small-24b-2507-stt',
+  'mistralai/voxtral-mini-3b-2507',
+  'nvidia/parakeet-tdt-0.6b-v3',
+  'nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b',
+  'fish-audio/transcribe-1',
+] as const
 
 /**
  * 内置服务清单。顺序即卡片顺序，也是新建时下拉的顺序：把最推荐的放前面。
@@ -161,6 +200,33 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     availability: 'global',
     get blurb() { return t('asrProvider.groqBlurb') },
   },
+  {
+    id: 'openai_transcribe',
+    get label() { return t('asrProvider.openai') },
+    model: OPENAI_TRANSCRIPTION_MODELS[0],
+    models: OPENAI_TRANSCRIPTION_MODELS,
+    platform: 'openai',
+    availability: 'global',
+    get blurb() { return t('asrProvider.openaiBlurb') },
+  },
+  {
+    id: 'gemini_transcribe',
+    get label() { return t('asrProvider.gemini') },
+    model: GEMINI_TRANSCRIPTION_MODELS[0],
+    models: GEMINI_TRANSCRIPTION_MODELS,
+    platform: 'gemini',
+    availability: 'global',
+    get blurb() { return t('asrProvider.geminiBlurb') },
+  },
+  {
+    id: 'openrouter_transcribe',
+    get label() { return t('asrProvider.openrouter') },
+    model: OPENROUTER_TRANSCRIPTION_MODELS[0],
+    models: OPENROUTER_TRANSCRIPTION_MODELS,
+    platform: 'openrouter',
+    availability: 'global',
+    get blurb() { return t('asrProvider.openrouterBlurb') },
+  },
 ]
 
 export function findAsrProvider(id: string): AsrProviderEntry | undefined {
@@ -229,7 +295,7 @@ function parseCheck(raw: unknown): AsrCheck | undefined {
 // ─────────────────────────── 服务档案 ───────────────────────────
 
 /**
- * 一份语音识别服务配置 = 选定的供应商 + 该平台需要的凭据。
+ * A speech-recognition profile contains its provider, platform credentials, and selected model.
  *
  * 凭据直接挂在档案上（而不是按平台共享），这样一张卡就是一份自洽的完整配置，
  * 也才可能同时存两个账号。重复粘密钥的问题由「新建时自动沿用同平台上一份」解决。
@@ -238,6 +304,8 @@ export interface AsrProfile {
   id: string
   /** 供应商 id，必须是 ASR_PROVIDERS 里的一个 */
   provider: string
+  /** Selected model for providers that expose model choices. */
+  model: string
   /** 千问 / 小米：API Key；豆包：当前控制台代次那一份密钥 */
   apiKey: string
   /** 豆包旧版控制台的 App ID */
@@ -260,9 +328,11 @@ export function makeAsrProfileId(): string {
 
 /** 一份空白档案。provider 默认给最推荐的那个。 */
 export function emptyAsrProfile(provider = ASR_PROVIDERS[0].id): AsrProfile {
+  const entry = findAsrProvider(provider)
   return {
     id: makeAsrProfileId(),
     provider,
+    model: entry?.model ?? '',
     apiKey: '',
     appId: '',
     console: 'new',
@@ -290,7 +360,9 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
     if (!item || typeof item !== 'object') continue
     const v = item as Record<string, unknown>
     const provider = str(v.provider)
-    if (!findAsrProvider(provider)) continue
+    const entry = findAsrProvider(provider)
+    if (!entry) continue
+    const model = str(v.model).trim()
     const id = str(v.id) || makeAsrProfileId()
     if (seen.has(id)) continue
     seen.add(id)
@@ -298,6 +370,9 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
     out.push({
       id,
       provider,
+      model: entry.models
+        ? entry.models.includes(model) ? model : entry.model
+        : entry.model,
       apiKey: str(v.apiKey),
       appId: str(v.appId),
       console: consoleRaw === 'legacy' ? 'legacy' : 'new',
@@ -308,6 +383,32 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
     })
   }
   return out
+}
+
+export interface AsrProviderConfig {
+  provider: string
+  api_key: string
+  app_id: string
+  extra?: Record<string, unknown>
+}
+
+export function buildAsrProviderConfig(
+  profile: AsrProfile,
+  language: SpeechInputLanguage,
+): AsrProviderConfig {
+  const entry = findAsrProvider(profile.provider)
+  const credentials = effectiveAsrCredentials(profile)
+  return {
+    provider: entry?.omni ? 'qwen_omni' : profile.provider,
+    api_key: credentials.apiKey,
+    app_id: credentials.appId,
+    extra: buildCloudAsrExtra(
+      profile.provider,
+      language,
+      entry?.omni ? profile.omniPrompt || undefined : undefined,
+      profile.model,
+    ),
+  }
 }
 
 /** 启用项归一化：指向不存在的 id 时回落到第一条 */

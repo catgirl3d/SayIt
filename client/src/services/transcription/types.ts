@@ -15,7 +15,9 @@ export interface ASRResult {
   text: string
   asrMs: number
   durationSec: number
-  /** 空 ASR 会先于 final 触发专用收尾，执行元数据必须随它一起落库。 */
+  /** Empty ASR is handled before final, so execution metadata must be persisted with this result. */
+  asrEngine?: string
+  asrModel?: string
   aiSource?: AiExecutionSource
   aiStatus?: AiExecutionStatus
 }

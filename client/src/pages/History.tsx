@@ -1,6 +1,8 @@
 import * as bridge from '@/services/bridge'
 import { cn } from '@/lib/utils'
-import { resolveAsrDisplayModel, isQwenOmniProvider, buildCloudAsrExtra, resolveQwenOmniModel } from '@/lib/asrModels'
+import { resolveAsrDisplayModel, isQwenOmniProvider, resolveQwenOmniModel } from '@/lib/asrModels'
+import { buildAsrProviderConfig, findAsrProvider } from '@/features/settings/asrProviderCatalog'
+import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
@@ -209,7 +211,7 @@ async function reprocessViaServer(
 }
 
 /** 云 API 模式重新识别：调用 cloud_transcribe + 可选 cloud_polish，与 CloudAPIProvider 一致 */
-async function reprocessViaCloudApi(
+export async function reprocessViaCloudApi(
   chunk: ArrayBuffer,
   hotwords: string[],
   aiEnabled: boolean,
@@ -219,24 +221,13 @@ async function reprocessViaCloudApi(
   const durationSec = (chunk.byteLength / 2) / 16000
   const audioB64 = uint8ArrayToBase64(new Uint8Array(chunk))
 
-  const asrProvider = await getSetting('cloudAsr.provider', 'doubao') as string
+  const profile = await loadActiveAsrProfile()
+  if (!profile) throw new Error('No cloud ASR profile is active')
+  const entry = findAsrProvider(profile.provider)
+  const asrProvider = profile.provider
   const isQwenOmni = isQwenOmniProvider(asrProvider)
-  const asrApiKey = await getSetting('cloudAsr.apiKey', '') as string
-  const asrAppId = await getSetting('cloudAsr.appId', '') as string
   const qwenOmniModel = resolveQwenOmniModel(asrProvider)
-
-  let omniInstructions: string | undefined
-  if (isQwenOmni) {
-    const savedPrompt = await getSetting('cloudAsr.omniSystemPrompt', '') as string
-    omniInstructions = savedPrompt || undefined
-  }
-
-  const asrConfig: Record<string, unknown> = {
-    provider: isQwenOmni ? 'qwen_omni' : asrProvider,
-    api_key: asrApiKey,
-    app_id: asrAppId,
-    extra: buildCloudAsrExtra(asrProvider, language, omniInstructions),
-  }
+  const asrConfig = buildAsrProviderConfig(profile, language)
 
   const asrStart = performance.now()
   const asrResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
@@ -276,6 +267,7 @@ async function reprocessViaCloudApi(
     llmMs,
     durationSec,
     ...(isQwenOmni && { asrEngine: 'qwen_omni', asrModel: qwenOmniModel }),
+    ...(entry?.models && { asrEngine: asrProvider, asrModel: profile.model }),
   }
 }
 
@@ -339,11 +331,12 @@ async function buildReprocessMetadata(
   aiStatus?: AiExecutionStatus
 }> {
   if (workMode === 'cloud_api') {
-    const asrProviderKey = await getSetting('cloudAsr.provider', '') as string
+    const asrProvider = result.asrModel
+      || resolveAsrDisplayModel(await getSetting('cloudAsr.provider', '') as string)
     const aiProvider = await getSetting('cloudAi.provider', '') as string
     const aiModel = await getSetting('cloudAi.model', '') as string
     return {
-      asrProvider: resolveAsrDisplayModel(asrProviderKey),
+      asrProvider,
       aiProvider: aiProvider || undefined,
       aiModel: aiModel || undefined,
     }
