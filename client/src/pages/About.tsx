@@ -77,7 +77,6 @@ export default function About() {
                 SayIt
               </h2>
               <p className="text-sm text-muted-foreground">{t('about.tagline')}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground/60">by Liu Qianglong & Claude</p>
               <div className="mt-1.5 flex items-center gap-2">
                 {/* The version number is the same pill-button style as the GitHub icon
                     next to it: clicking it opens the releases page, which is exactly
