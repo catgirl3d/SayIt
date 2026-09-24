@@ -283,7 +283,7 @@ pub fn is_likely_editable_pub(ctx: &context::AppContext) -> bool {
         // 与 code/devenv 同类，文本区可编辑，按进程名兜底放行
         "trae", "cursor", "windsurf", "kiro",
         "chrome", "msedge", "firefox", "opera", "brave",
-        "teams", "wechat", "dingtalk", "slack",
+        "teams", "wechat", "weixin", "dingtalk", "slack",
         "windowsterminal", "cmd", "powershell",
         "mobaxterm", "putty", "securecrt", "xshell",
     ];
@@ -919,4 +919,45 @@ unsafe fn native_get_clipboard_text() -> Option<String> {
 
     let _ = CloseClipboard();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_likely_editable_pub;
+    use crate::context::AppContext;
+
+    #[test]
+    fn process_allowlist_accepts_weixin_without_allowing_arbitrary_qt_windows() {
+        let weixin = AppContext {
+            process_name: "Weixin.exe".to_string(),
+            window_class: "Qt4QWindowIcon".to_string(),
+            focus_class: "QWidget".to_string(),
+            ..Default::default()
+        };
+
+        assert!(!weixin.has_caret);
+        assert!(weixin.control_type.is_empty());
+        assert!(!weixin.is_value_pattern_available);
+        assert!(is_likely_editable_pub(&weixin));
+
+        let wechat = AppContext {
+            process_name: "WeChat.exe".to_string(),
+            ..weixin.clone()
+        };
+        assert!(is_likely_editable_pub(&wechat));
+
+        let unrelated_qt = AppContext {
+            process_name: "unrelated.exe".to_string(),
+            ..weixin.clone()
+        };
+        assert!(!is_likely_editable_pub(&unrelated_qt));
+
+        let explorer_desktop = AppContext {
+            process_name: "explorer.exe".to_string(),
+            window_class: "Progman".to_string(),
+            focus_class: "SysListView32".to_string(),
+            ..Default::default()
+        };
+        assert!(!is_likely_editable_pub(&explorer_desktop));
+    }
 }

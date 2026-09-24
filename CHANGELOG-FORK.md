@@ -48,6 +48,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Reworked settings into routed pages instead of one large settings dialog, including dedicated Audio & Mic and Shortcuts pages.
 - Hardened startup initialization so configuration, locale, and provider failures do not block the main UI.
 - Added F13-F24 single-key shortcut support for programmable keyboards and remapping tools.
+- Recognize `Weixin.exe` (WeChat 4.x) in the existing editability allowlist without generally allowing Qt windows.
 - Fixed the home screen and setup guide showing a blank keycap when the hands-free hotkey had been cleared: they now fall back to the bound push-to-talk key with hold-to-talk wording, and state explicitly when no dictation hotkey is configured.
 - Record usage statistics for completed dictations when history retention is disabled, applying the increment atomically in the native store and refreshing the home screen live; recordings without text no longer add dictation time in either history mode. Time already accumulated by older no-text entries stays in the totals and is not recalculated when those entries are deleted.
 - Added a confirmation-protected action to clear home-screen usage totals without deleting history or audio recordings.
