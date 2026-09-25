@@ -185,6 +185,15 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     omni: true,
   },
   {
+    id: 'qwen_omni_38_realtime',
+    get label() { return t('asrProvider.omni38Realtime') },
+    model: 'qwen3.8-omni-flash-realtime',
+    platform: 'qwen',
+    availability: 'mainland_china',
+    get blurb() { return t('asrProvider.omni38RealtimeBlurb') },
+    omni: true,
+  },
+  {
     id: 'mimo',
     get label() { return t('asrProvider.mimo') },
     model: 'mimo-v2.5-asr',

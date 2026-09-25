@@ -844,6 +844,8 @@
   "asrProvider.omniPlusBlurb": "Recognition and cleanup in one step — no separate AI service needed.",
   "asrProvider.omniFlash": "Qwen 3.5 Omni Flash",
   "asrProvider.omniFlashBlurb": "Like Omni Plus, faster and cheaper, slightly lower quality.",
+  "asrProvider.omni38Realtime": "Qwen 3.8 Omni Flash Realtime",
+  "asrProvider.omni38RealtimeBlurb": "Buffered recognition after you finish speaking, with cleanup in the same request. The Realtime model name does not mean live captions in SayIt.",
   "asrProvider.mimo": "Xiaomi MiMo",
   "asrProvider.mimoBlurb": "A fallback. Accuracy is middling; worth a try if you already have a Xiaomi API key.",
   "asrProvider.groq": "Groq Whisper",

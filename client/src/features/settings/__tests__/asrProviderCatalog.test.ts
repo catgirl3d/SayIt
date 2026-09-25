@@ -61,10 +61,26 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     }
   })
 
-  it('5 个千问变体归到同一个平台', () => {
+  it('6 Qwen profiles share the same credential platform', () => {
     expect(providersOfPlatform('qwen').map((p) => p.id)).toEqual([
       'qwen_audio_stream', 'qwen', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_35_flash',
+      'qwen_omni_38_realtime',
     ])
+  })
+
+  it('describes Qwen 3.8 Omni as buffered without unverified quality claims', () => {
+    const provider = findAsrProvider('qwen_omni_38_realtime')
+
+    expect(provider).toMatchObject({
+      id: 'qwen_omni_38_realtime',
+      model: 'qwen3.8-omni-flash-realtime',
+      platform: 'qwen',
+      omni: true,
+    })
+    expect(provider?.label).toContain('Qwen 3.8 Omni Flash')
+    expect(provider?.blurb).toMatch(/after you finish speaking/i)
+    expect(provider?.blurb).toMatch(/does not mean live captions/i)
+    expect(provider?.blurb).not.toMatch(/more accurate|faster|cheaper|superior/i)
   })
 
   /** 清单顺序就是推荐顺序（卡片顺序 + 新建下拉的顺序），前两名钉住 */
@@ -143,6 +159,42 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
       api_key: 'groq-profile-key',
       app_id: '',
       extra: { language: 'uk' },
+    })
+  })
+
+  it('round-trips the 3.8 profile and sends its exact model through qwen_omni', () => {
+    const [profile] = parseAsrProfiles([{
+      id: 'qwen38-account-a',
+      provider: 'qwen_omni_38_realtime',
+      apiKey: 'qwen38-key',
+      omniPrompt: 'Transcribe faithfully.',
+    }])
+
+    expect(profile).toMatchObject({
+      id: 'qwen38-account-a',
+      provider: 'qwen_omni_38_realtime',
+      model: 'qwen3.8-omni-flash-realtime',
+      apiKey: 'qwen38-key',
+    })
+    expect(buildAsrProviderConfig(profile, 'uk')).toEqual({
+      provider: 'qwen_omni',
+      api_key: 'qwen38-key',
+      app_id: '',
+      extra: {
+        model: 'qwen3.8-omni-flash-realtime',
+        instructions: 'Transcribe faithfully.',
+      },
+    })
+
+    const [qwen35] = parseAsrProfiles([{
+      id: 'qwen35-account-a',
+      provider: 'qwen_omni_35_flash',
+      apiKey: 'qwen35-key',
+    }])
+    expect(qwen35.model).toBe('qwen3.5-omni-flash')
+    expect(buildAsrProviderConfig(qwen35, 'uk').extra).toEqual({
+      model: 'qwen3.5-omni-flash-realtime',
+      instructions: undefined,
     })
   })
 })

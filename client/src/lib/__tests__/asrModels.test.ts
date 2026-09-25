@@ -16,6 +16,7 @@ describe('isQwenOmniProvider', () => {
     expect(isQwenOmniProvider('qwen_omni_plus')).toBe(true)
     expect(isQwenOmniProvider('qwen_omni_35_plus')).toBe(true)
     expect(isQwenOmniProvider('qwen_omni_35_flash')).toBe(true)
+    expect(isQwenOmniProvider('qwen_omni_38_realtime')).toBe(true)
     expect(isQwenOmniProvider('qwen_omni_flash')).toBe(true)
     expect(isQwenOmniProvider('qwen_omni_turbo')).toBe(true)
   })
@@ -31,6 +32,7 @@ describe('resolveQwenOmniModel', () => {
   it('返回正确的模型 ID', () => {
     expect(resolveQwenOmniModel('qwen_omni_35_plus')).toBe('qwen3.5-omni-plus-realtime')
     expect(resolveQwenOmniModel('qwen_omni_35_flash')).toBe('qwen3.5-omni-flash-realtime')
+    expect(resolveQwenOmniModel('qwen_omni_38_realtime')).toBe('qwen3.8-omni-flash-realtime')
     expect(resolveQwenOmniModel('qwen_omni_flash')).toBe('qwen3-omni-flash-realtime')
     expect(resolveQwenOmniModel('qwen_omni_turbo')).toBe('qwen-omni-turbo-realtime')
   })
@@ -48,6 +50,7 @@ describe('resolveAsrDisplayModel', () => {
     expect(resolveAsrDisplayModel('qwen_audio_stream')).toBe('qwen-audio-3.1-asr-flash-streaming')
     expect(resolveAsrDisplayModel('mimo')).toBe('mimo-v2.5-asr')
     expect(resolveAsrDisplayModel('qwen_omni_35_plus')).toBe('qwen3.5-omni-plus-realtime')
+    expect(resolveAsrDisplayModel('qwen_omni_38_realtime')).toBe('qwen3.8-omni-flash-realtime')
   })
 
   it('未知供应商返回原始 key', () => {
@@ -143,6 +146,13 @@ describe('buildCloudAsrExtra', () => {
     const omniExtra = buildCloudAsrExtra('qwen_omni_35_flash', 'ru')
     expect(omniExtra).toEqual({ model: 'qwen3.5-omni-flash-realtime', instructions: undefined })
     expect(omniExtra).not.toHaveProperty('language')
+  })
+
+  it('routes the 3.8 Omni provider with one exact realtime suffix', () => {
+    expect(buildCloudAsrExtra('qwen_omni_38_realtime', 'uk', 'Keep the transcript faithful.')).toEqual({
+      model: 'qwen3.8-omni-flash-realtime',
+      instructions: 'Keep the transcript faithful.',
+    })
   })
 
   it('explicit-language providers carry the resolved language code', () => {

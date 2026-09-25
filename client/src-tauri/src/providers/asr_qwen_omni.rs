@@ -62,6 +62,23 @@ fn get_instructions(config: &AsrProviderConfig) -> String {
         .to_string()
 }
 
+fn build_session_update(model: &str, instructions: &str) -> serde_json::Value {
+    let mut update = serde_json::json!({
+        "type": "session.update",
+        "session": {
+            "modalities": ["text"],
+            "instructions": instructions,
+            "input_audio_format": "pcm",
+            "turn_detection": null
+        }
+    });
+    if model == "qwen3.8-omni-flash-realtime" {
+        // Qwen 3.8 requires an accepted output voice even for text-only responses.
+        update["session"]["audio"] = serde_json::json!({ "output": { "voice": "Tina" } });
+    }
+    update
+}
+
 enum ResponseEnd {
     Completed,
     Closed(String),
@@ -226,15 +243,7 @@ pub async fn transcribe(
     wait_for_event(&mut ws, "session.created", SCOPE).await?;
 
     // 发送 session.update — 仅输出文本，禁用 VAD（Manual 模式）
-    let session_update = serde_json::json!({
-        "type": "session.update",
-        "session": {
-            "modalities": ["text"],
-            "instructions": instructions,
-            "input_audio_format": "pcm",
-            "turn_detection": null
-        }
-    });
+    let session_update = build_session_update(&model, &instructions);
     ws.send(tungstenite::Message::Text(session_update.to_string().into()))
         .await
         .map_err(|e| {
@@ -618,5 +627,65 @@ mod response_end_tests {
         )
         .expect_err("timeouts remain errors even when partial text exists");
         assert!(error.contains("Timed out waiting for a response"));
+    }
+}
+
+#[cfg(test)]
+mod session_configuration_tests {
+    use super::{build_session_update, ws_url, DEFAULT_MODEL};
+
+    #[test]
+    fn only_the_exact_qwen38_model_adds_tina_and_other_session_fields_stay_unchanged() {
+        let instructions = "Transcribe faithfully.";
+        let qwen38 = build_session_update("qwen3.8-omni-flash-realtime", instructions);
+        assert_eq!(
+            qwen38,
+            serde_json::json!({
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text"],
+                    "instructions": instructions,
+                    "input_audio_format": "pcm",
+                    "turn_detection": null,
+                    "audio": { "output": { "voice": "Tina" } }
+                }
+            })
+        );
+
+        let old_session = serde_json::json!({
+            "type": "session.update",
+            "session": {
+                "modalities": ["text"],
+                "instructions": instructions,
+                "input_audio_format": "pcm",
+                "turn_detection": null
+            }
+        });
+        for model in [
+            DEFAULT_MODEL,
+            "qwen3.5-omni-plus-realtime",
+            "qwen3.5-omni-flash-realtime",
+            "qwen3-omni-flash-realtime",
+            "qwen-omni-turbo-realtime",
+            "qwen3.8-omni-flash-realtime-test",
+        ] {
+            assert_eq!(
+                build_session_update(model, instructions),
+                old_session,
+                "model={model}"
+            );
+        }
+    }
+
+    #[test]
+    fn realtime_websocket_url_contains_the_exact_model_once() {
+        for model in ["qwen3.8-omni-flash-realtime", "qwen3.5-omni-flash-realtime"] {
+            let url = ws_url(model);
+            assert_eq!(
+                url,
+                format!("wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model={model}")
+            );
+            assert_eq!(url.matches("model=").count(), 1);
+        }
     }
 }

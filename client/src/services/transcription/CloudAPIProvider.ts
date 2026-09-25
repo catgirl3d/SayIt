@@ -462,6 +462,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
       const asrProvider = profile.provider
       const isQwenOmni = isQwenOmniProvider(asrProvider)
       const selectedModel = findAsrProvider(asrProvider)?.models ? profile.model : undefined
+      const emptyResultModel = asrProvider === 'qwen_omni_38_realtime'
+        ? resolveQwenOmniModel(asrProvider)
+        : selectedModel
+      const emptyResultEngine = asrProvider === 'qwen_omni_38_realtime' ? 'qwen_omni' : asrProvider
 
       let asrText = ''
       let asrMs = 0
@@ -537,7 +541,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
         text: asrText,
         asrMs,
         durationSec,
-        ...(!asrText.trim() && selectedModel && { asrEngine: asrProvider, asrModel: selectedModel }),
+        ...(!asrText.trim() && emptyResultModel && {
+          asrEngine: emptyResultEngine,
+          asrModel: emptyResultModel,
+        }),
       })
 
       if (!asrText.trim()) {
@@ -547,7 +554,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
           asrMs,
           llmMs: 0,
           durationSec,
-          ...(selectedModel && { asrEngine: asrProvider, asrModel: selectedModel }),
+          ...(emptyResultModel && {
+            asrEngine: emptyResultEngine,
+            asrModel: emptyResultModel,
+          }),
         })
         this.callbacks.onDone?.()
         return

@@ -64,6 +64,7 @@ function cloudProviderShort(provider: string): string {
     case 'qwen_audio_stream': return t('modeStatus.qwenAudioStream')
     case 'qwen_omni_35_plus':
     case 'qwen_omni_35_flash':
+    case 'qwen_omni_38_realtime':
     case 'qwen_omni_flash':
     case 'qwen_omni_turbo': return t('modeStatus.qwenOmni')
     case 'mimo': return 'MiMo'

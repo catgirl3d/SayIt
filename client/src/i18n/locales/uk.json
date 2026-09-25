@@ -835,6 +835,8 @@
   "asrProvider.omniPlusBlurb": "Розпізнавання та очищення за один крок — окремий AI-провайдер не потрібен.",
   "asrProvider.omniFlash": "Qwen 3.5 Omni Flash",
   "asrProvider.omniFlashBlurb": "Аналогічний підхід, швидше і дешевше, але з дещо нижчою якістю.",
+  "asrProvider.omni38Realtime": "Qwen 3.8 Omni Flash Realtime",
+  "asrProvider.omni38RealtimeBlurb": "Розпізнавання після завершення мовлення з очищенням тексту в тому самому запиті. Назва Realtime не означає живі субтитри в SayIt.",
   "asrProvider.mimo": "Xiaomi MiMo",
   "asrProvider.mimoBlurb": "Альтернативний варіант. Потрібен API-ключ Xiaomi.",
   "asrProvider.groq": "Groq Whisper",

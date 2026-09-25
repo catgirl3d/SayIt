@@ -8,6 +8,7 @@ const QWEN_OMNI_MODEL_MAP: Record<string, string> = {
   qwen_omni_plus: 'qwen3.5-omni-plus-realtime',
   qwen_omni_35_plus: 'qwen3.5-omni-plus-realtime',
   qwen_omni_35_flash: 'qwen3.5-omni-flash-realtime',
+  qwen_omni_38_realtime: 'qwen3.8-omni-flash-realtime',
   qwen_omni_flash: 'qwen3-omni-flash-realtime',
   qwen_omni_turbo: 'qwen-omni-turbo-realtime',
 }

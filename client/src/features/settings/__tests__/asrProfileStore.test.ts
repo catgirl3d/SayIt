@@ -1,6 +1,7 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 import {
   ASR_ACTIVE_PROFILE_KEY,
+  ASR_AUTO_CREATED_KEY,
   ASR_PROFILES_KEY,
   loadActiveAsrProfile,
   loadAsrProfiles,
@@ -61,15 +62,16 @@ describe('topUpProfiles', () => {
     const r = topUpProfiles([], { qwen: creds({ apiKey: 'sk-1' }) })
     expect(r.profiles.map((p) => p.provider)).toEqual([
       'qwen_audio_stream', 'qwen', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_35_flash',
+      'qwen_omni_38_realtime',
     ])
-    expect(r.added).toHaveLength(5)
+    expect(r.added).toHaveLength(6)
   })
 
   it('三个平台都有密钥时补出全部 7 个服务', () => {
     const r = topUpProfiles([], {
       doubao: creds(), qwen: creds({ apiKey: 'sk-1' }), mimo: creds(),
     })
-    expect(r.profiles).toHaveLength(7)
+    expect(r.profiles).toHaveLength(8)
   })
 
   it('没填密钥的平台不建卡 —— 新用户应看到空状态引导，而不是一堆空卡', () => {
@@ -87,15 +89,17 @@ describe('topUpProfiles', () => {
     const r = topUpProfiles(existing, {
       doubao: creds(), qwen: creds({ apiKey: 'sk-1' }), mimo: creds(),
     })
-    expect(r.added).toEqual(['qwen_audio_stream', 'qwen', 'qwen_omni_35_plus', 'qwen_omni_35_flash'])
-    expect(r.profiles).toHaveLength(7)
+    expect(r.added).toEqual([
+      'qwen_audio_stream', 'qwen', 'qwen_omni_35_plus', 'qwen_omni_35_flash', 'qwen_omni_38_realtime',
+    ])
+    expect(r.profiles).toHaveLength(8)
     expect(r.profiles.slice(0, 3)).toEqual(existing) // 原有三份原样不动
   })
 
   it('只补缺的，已有档案原样不动（对已经自己建过卡的用户幂等）', () => {
     const existing = [profile('qwen', { apiKey: 'MY-OWN' })]
     const r = topUpProfiles(existing, { qwen: creds({ apiKey: 'sk-1' }) })
-    expect(r.profiles).toHaveLength(5)
+    expect(r.profiles).toHaveLength(6)
     expect(r.profiles[0]).toBe(existing[0]) // 同一个对象，没被替换
     expect(r.profiles.filter((p) => p.provider === 'qwen')).toHaveLength(1)
   })
@@ -113,7 +117,9 @@ describe('topUpProfiles', () => {
    */
   it('已经自动补过又被删掉的服务不再重建', () => {
     const r = topUpProfiles([], { qwen: creds({ apiKey: 'sk-1' }) }, ['qwen', 'qwen_omni_35_flash'])
-    expect(r.added).toEqual(['qwen_audio_stream', 'qwen_realtime', 'qwen_omni_35_plus'])
+    expect(r.added).toEqual([
+      'qwen_audio_stream', 'qwen_realtime', 'qwen_omni_35_plus', 'qwen_omni_38_realtime',
+    ])
   })
 
   it('豆包的控制台代次与两代密钥都带过去', () => {
@@ -166,6 +172,30 @@ describe('ASR profile persistence', () => {
     })
     expect(state.activeId).toBe(state.profiles[0].id)
     expect(storedSettings.get(ASR_PROFILES_KEY)).toEqual(state.profiles)
+  })
+
+  it('tops up the 3.8 profile once without changing the active profile', async () => {
+    const active = profile('qwen_omni_35_flash', {
+      id: 'qwen35-account-a',
+      apiKey: 'profile-key',
+    })
+    storedSettings.set(ASR_PROFILES_KEY, [active])
+    storedSettings.set(ASR_ACTIVE_PROFILE_KEY, active.id)
+    storedSettings.set('cloudAsr.qwen.apiKey', 'shared-qwen-key')
+
+    const firstLoad = await loadAsrProfiles()
+    expect(firstLoad.activeId).toBe(active.id)
+    expect(firstLoad.profiles.find(({ provider }) => provider === 'qwen_omni_38_realtime')).toMatchObject({
+      provider: 'qwen_omni_38_realtime',
+      model: 'qwen3.8-omni-flash-realtime',
+      apiKey: 'shared-qwen-key',
+    })
+    expect(storedSettings.get(ASR_AUTO_CREATED_KEY)).toContain('qwen_omni_38_realtime')
+
+    const secondLoad = await loadAsrProfiles()
+    expect(secondLoad.activeId).toBe(active.id)
+    expect(secondLoad.profiles.filter(({ provider }) => provider === 'qwen_omni_38_realtime')).toHaveLength(1)
+    expect(secondLoad.profiles.filter(({ provider }) => provider.startsWith('qwen_omni'))).toHaveLength(3)
   })
 
   it('loads the selected same-vendor profile with its own key and model', async () => {

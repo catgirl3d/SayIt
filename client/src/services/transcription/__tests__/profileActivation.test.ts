@@ -246,4 +246,143 @@ describe('ASR profile activation and recording ordering', () => {
     expect(legacyHistory).not.toHaveProperty('asrProvider')
     expect(harness.addHistory).toHaveBeenCalledTimes(2)
   })
+
+  it('records the captured Qwen 3.8 model once for empty and completed Omni requests', async () => {
+    const qwen38 = {
+      ...emptyAsrProfile('qwen_omni_38_realtime'),
+      id: 'qwen38-account-a',
+      apiKey: 'qwen38-key',
+      omniPrompt: 'Transcribe faithfully.',
+    }
+    const qwen35 = {
+      ...emptyAsrProfile('qwen_omni_35_flash'),
+      id: 'qwen35-account-b',
+      apiKey: 'qwen35-key',
+    }
+    const profiles = [qwen38, qwen35]
+    await saveAsrProfiles({ profiles, activeId: qwen38.id })
+
+    const transcriptions = [
+      deferred<{ text: string; elapsed_ms: number }>(),
+      deferred<{ text: string; elapsed_ms: number }>(),
+    ]
+    const requestStarted = [deferred<void>(), deferred<void>()]
+    const providerDone = [deferred<void>(), deferred<void>()]
+    const historySaved = [deferred<Record<string, unknown>>(), deferred<Record<string, unknown>>()]
+    let requestIndex = 0
+    let doneIndex = 0
+    let historyIndex = 0
+    harness.invoke.mockImplementation((command: string) => {
+      if (command === 'cloud_transcribe') {
+        const index = requestIndex++
+        requestStarted[index].resolve()
+        return transcriptions[index].promise
+      }
+      return undefined
+    })
+    harness.addHistory.mockImplementation(async (record: Record<string, unknown>) => {
+      historySaved[historyIndex++].resolve(record)
+    })
+
+    const provider = await switchProvider('cloud_api')
+    const recorder = new RecorderOrchestrator()
+    const overlay = {
+      showNoSpeech: vi.fn(),
+      showFallback: vi.fn(),
+      disableEscapeAction: vi.fn(async () => {}),
+      stopListeningTicker: vi.fn(),
+      resetWarnings: vi.fn(),
+      resetStreamingText: vi.fn(),
+      clearFallbackHideTimer: vi.fn(),
+      hide: vi.fn(),
+    }
+    Reflect.set(recorder, 'overlayService', overlay)
+    Reflect.set(recorder, 'pasteService', {
+      getProbeResult: async () => ({ editable: true }),
+      pasteText: async () => ({ ok: true, strategy: 'test', detail: '', attempts: 1 }),
+    })
+    Reflect.set(recorder, 'updatePersonalizationFromFinal', async () => {})
+    const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
+      this: RecorderOrchestrator,
+    ) => Parameters<typeof provider.connect>[0]
+    const callbacks = createCallbacks.call(recorder)
+    const callbackOrder: string[] = []
+    const asrResults: Array<{ text: string; asrEngine?: string; asrModel?: string }> = []
+    const finalResults: Array<{ asrText: string; asrEngine?: string; asrModel?: string }> = []
+    const originalOnASR = callbacks.onASR
+    const originalOnFinal = callbacks.onFinal
+    const originalOnDone = callbacks.onDone
+    callbacks.onASR = (result) => {
+      callbackOrder.push('onASR')
+      asrResults.push(result)
+      originalOnASR?.(result)
+    }
+    callbacks.onFinal = (result) => {
+      callbackOrder.push('onFinal')
+      finalResults.push(result)
+      originalOnFinal?.(result)
+    }
+    callbacks.onDone = () => {
+      callbackOrder.push('onDone')
+      originalOnDone?.()
+      providerDone[doneIndex++].resolve()
+    }
+    await provider.connect(callbacks)
+
+    const prepareRun = (runId: number) => {
+      Reflect.set(recorder, 'state', 'processing')
+      Reflect.set(recorder, 'activeRunId', runId)
+      Reflect.set(recorder, 'audioSentSamples', 8000)
+      Reflect.set(recorder, 'wallTimeAtStopSec', 0.5)
+    }
+    const startRun = (runId: number) => {
+      prepareRun(runId)
+      expect(provider.start({ runId, language: 'uk' })).toBe(true)
+      provider.sendAudio(new ArrayBuffer(16000))
+      expect(provider.stop()).toBe(true)
+    }
+
+    startRun(4)
+    await requestStarted[0].promise
+    const firstRequest = harness.invoke.mock.calls.find(([command]) => command === 'cloud_transcribe')
+    expect((firstRequest?.[1] as { request: { asr_config: Record<string, unknown> } }).request.asr_config).toEqual({
+      provider: 'qwen_omni',
+      api_key: 'qwen38-key',
+      app_id: '',
+      extra: { model: 'qwen3.8-omni-flash-realtime', instructions: 'Transcribe faithfully.' },
+    })
+    await saveAsrProfiles({ profiles, activeId: qwen35.id })
+    transcriptions[0].resolve({ text: '', elapsed_ms: 12 })
+    await providerDone[0].promise
+    const emptyHistory = await historySaved[0].promise
+    await vi.waitFor(() => expect(recorder.getState()).toBe('idle'))
+
+    expect(callbackOrder.slice(0, 3)).toEqual(['onASR', 'onFinal', 'onDone'])
+    expect(asrResults[0]).toMatchObject({
+      text: '',
+      asrEngine: 'qwen_omni',
+      asrModel: 'qwen3.8-omni-flash-realtime',
+    })
+    expect(finalResults[0]).toMatchObject({
+      asrText: '',
+      asrEngine: 'qwen_omni',
+      asrModel: 'qwen3.8-omni-flash-realtime',
+    })
+    expect(emptyHistory).toMatchObject({ asrProvider: 'qwen3.8-omni-flash-realtime', isEmpty: true })
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(harness.polish).not.toHaveBeenCalled()
+
+    await saveAsrProfiles({ profiles, activeId: qwen38.id })
+    startRun(5)
+    await requestStarted[1].promise
+    await saveAsrProfiles({ profiles, activeId: qwen35.id })
+    transcriptions[1].resolve({ text: 'recognized with Qwen 3.8', elapsed_ms: 15 })
+    await providerDone[1].promise
+    const completedHistory = await historySaved[1].promise
+    await vi.waitFor(() => expect(recorder.getState()).toBe('idle'))
+
+    expect(completedHistory).toMatchObject({ asrText: 'recognized with Qwen 3.8', asrProvider: 'qwen3.8-omni-flash-realtime' })
+    expect(harness.addHistory).toHaveBeenCalledTimes(2)
+    expect(harness.polish).not.toHaveBeenCalled()
+  })
 })
