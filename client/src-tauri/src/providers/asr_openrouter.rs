@@ -87,14 +87,20 @@ fn parse_response_status(
 }
 
 fn http_status_error(status: reqwest::StatusCode) -> String {
-    diag::fail(
-        SCOPE,
-        "http_status",
-        format!(
-            "OpenRouter transcription request returned HTTP status {}",
-            status.as_u16()
-        ),
-    )
+    let message = format!(
+        "OpenRouter transcription request returned HTTP status {}",
+        status.as_u16()
+    );
+    if status == reqwest::StatusCode::PAYMENT_REQUIRED {
+        diag::fail_code(
+            SCOPE,
+            "http_status",
+            "provider_insufficient_balance",
+            message,
+        )
+    } else {
+        diag::fail(SCOPE, "http_status", message)
+    }
 }
 
 fn describe_usage(data: &serde_json::Value) -> String {
@@ -378,12 +384,21 @@ mod tests {
         assert!(!error.contains("response-header-marker"));
     }
 
+    #[test]
+    fn only_http_402_uses_the_insufficient_balance_code() {
+        let payment_required = http_status_error(reqwest::StatusCode::PAYMENT_REQUIRED);
+        let unauthorized = http_status_error(reqwest::StatusCode::UNAUTHORIZED);
+
+        assert!(payment_required.starts_with("sayit_error:provider_insufficient_balance:"));
+        assert!(unauthorized.starts_with("sayit_error:provider_bad_key:"));
+    }
+
     #[tokio::test]
-    async fn synthetic_http_error_body_is_not_exposed_by_the_transcribe_pipeline() {
+    async fn synthetic_http_402_error_does_not_expose_the_response_body() {
         let marker = "server-echoed-private-transcript-marker";
         let body = format!(r#"{{"error":{{"message":"{}"}}}}"#, marker);
         let (url, server) =
-            super::super::http_client::test_support::spawn_response_server(401, body);
+            super::super::http_client::test_support::spawn_response_server(402, body);
         let error = transcribe_to_endpoint(
             &url,
             "AQIDBA==",
@@ -393,7 +408,8 @@ mod tests {
         .await
         .unwrap_err();
         let _request = server.join().unwrap();
-        assert!(error.contains("401"));
+        assert!(error.starts_with("sayit_error:provider_insufficient_balance:"));
+        assert!(error.contains("402"));
         assert!(!error.contains(marker));
         assert!(!error.contains("response-header-marker"));
     }

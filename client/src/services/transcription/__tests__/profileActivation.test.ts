@@ -448,4 +448,45 @@ describe('ASR profile activation and recording ordering', () => {
       asrModel: 'local-whisper',
     })).resolves.toMatchObject({ asrProvider: 'openai_compat:local-whisper' })
   })
+
+  it('persists the OpenRouter insufficient-balance category for eligible ASR failures', async () => {
+    harness.settings.set('historyEnabled', true)
+    harness.settings.set('audioRetentionEnabled', false)
+    const historySaved = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation(async (record: Record<string, unknown>) => {
+      historySaved.resolve(record)
+    })
+
+    const recorder = new RecorderOrchestrator()
+    Reflect.set(recorder, 'overlayService', {
+      disableEscapeAction: vi.fn(async () => {}),
+      stopListeningTicker: vi.fn(),
+      resetWarnings: vi.fn(),
+      resetStreamingText: vi.fn(),
+      clearFallbackHideTimer: vi.fn(),
+      hide: vi.fn(),
+    })
+    Reflect.set(recorder, 'state', 'processing')
+    Reflect.set(recorder, 'activeRunId', 42)
+    Reflect.set(recorder, 'audioSentSamples', 8000)
+    Reflect.set(recorder, 'recordedChunks', [new ArrayBuffer(16)])
+
+    const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
+      this: RecorderOrchestrator,
+    ) => { onError?: (message: string) => void }
+    const callbacks = createCallbacks.call(recorder)
+    callbacks.onError?.(
+      'sayit_error:provider_insufficient_balance:OpenRouter transcription request returned HTTP status 402',
+    )
+
+    const record = await historySaved.promise
+    await vi.waitFor(() => expect(recorder.getState()).toBe('idle'))
+
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(record).toMatchObject({
+      isEmpty: true,
+      failReason: 'OpenRouter transcription request returned HTTP status 402',
+      failReasonCode: 'provider_insufficient_balance',
+    })
+  })
 })

@@ -101,6 +101,7 @@ function classifyHistoryProviderFailure(message: string): HistoryFailReasonCode 
     case 'provider_timeout':
     case 'provider_unreachable':
     case 'provider_bad_key':
+    case 'provider_insufficient_balance':
     case 'provider_forbidden':
     case 'provider_rate_limit':
     case 'provider_no_model':

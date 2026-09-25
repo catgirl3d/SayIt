@@ -114,6 +114,7 @@ const HISTORY_FAILURE_KEYS: Record<HistoryFailReasonCode, TranslationKey> = {
   provider_timeout: 'err.provider.timeout',
   provider_unreachable: 'err.provider.unreachable',
   provider_bad_key: 'err.provider.badKey',
+  provider_insufficient_balance: 'err.provider.insufficientBalance',
   provider_forbidden: 'err.provider.forbidden',
   provider_rate_limit: 'err.provider.rateLimit',
   provider_no_model: 'err.provider.noModel',

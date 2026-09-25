@@ -210,6 +210,24 @@ describe('历史失败原因显示', () => {
     expect(historyFailureReasonDisplay(record)).toBe(en['err.provider.badKey'])
   })
 
+  it('localizes the insufficient-balance history category in the active locale', () => {
+    const record = {
+      failReasonCode: 'provider_insufficient_balance' as const,
+      failReason: 'OpenRouter transcription request returned HTTP status 402',
+    }
+
+    setLocale('en')
+    const english = historyFailureReasonDisplay(record)
+    expect(english).toBe(en['err.provider.insufficientBalance'])
+    expect(english).not.toBe(record.failReason)
+
+    setLocale('uk')
+    const ukrainian = historyFailureReasonDisplay(record)
+    expect(ukrainian).toBe(uk['err.provider.insufficientBalance'])
+    expect(ukrainian).not.toBe(english)
+    expect(ukrainian).not.toBe(record.failReason)
+  })
+
   it('老记录没有 code 时原样显示', () => {
     setLocale('en')
     expect(historyFailureReasonDisplay({ failReason: '旧版失败原因' })).toBe('旧版失败原因')

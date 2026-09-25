@@ -21,6 +21,7 @@ export type FriendlyErrorCode =
   | 'provider_timeout'
   | 'provider_unreachable'
   | 'provider_bad_key'
+  | 'provider_insufficient_balance'
   | 'provider_forbidden'
   | 'provider_rate_limit'
   | 'provider_no_model'
@@ -61,6 +62,7 @@ const FRIENDLY_ERROR_CODES = new Set<FriendlyErrorCode>([
   'provider_timeout',
   'provider_unreachable',
   'provider_bad_key',
+  'provider_insufficient_balance',
   'provider_forbidden',
   'provider_rate_limit',
   'provider_no_model',
@@ -180,6 +182,14 @@ export function describeProviderError(error: unknown): FriendlyError {
   const { code: stableCode, text } = decodeError(error)
   const status = extractHttpStatus(text)
 
+  if (stableCode === 'provider_insufficient_balance') {
+    return {
+      code: 'provider_insufficient_balance',
+      message: t('err.provider.insufficientBalance'),
+      detail: text,
+      action: 'none',
+    }
+  }
   if (stableCode === 'provider_timeout' || isTimeout(text)) {
     return { code: 'provider_timeout', message: t('err.provider.timeout'), detail: text, action: 'retry' }
   }

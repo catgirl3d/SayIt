@@ -372,6 +372,8 @@ fn stable_error_code(message: &str) -> Option<&'static str> {
         ("invalid api key", "provider_bad_key"),
         ("forbidden", "provider_forbidden"),
         ("rate limit", "provider_rate_limit"),
+        ("insufficient_balance", "provider_insufficient_balance"),
+        ("insufficient balance", "provider_insufficient_balance"),
         ("no model", "provider_no_model"),
         ("model not found", "provider_no_model"),
         ("connect failed", "connect_failed"),
@@ -672,6 +674,21 @@ mod tests {
         let value = serde_json::to_value(&events[0]).unwrap();
         assert_eq!(value["category"], "network");
         assert_eq!(value["errorCode"], "provider_bad_key");
+        assert_eq!(value.as_object().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn insufficient_balance_emits_stable_code() {
+        let now = chrono::Local::now();
+        let line = format!(
+            "[{}] [ERROR] [provider] openrouter_transcribe http_status FAILED code=provider_insufficient_balance OpenRouter transcription request returned HTTP status 402",
+            now.format("%Y-%m-%d %H:%M:%S")
+        );
+        let events = public_events_from_bytes(line.as_bytes(), "older", now);
+        assert_eq!(events.len(), 1);
+        let value = serde_json::to_value(&events[0]).unwrap();
+        assert_eq!(value["category"], "network");
+        assert_eq!(value["errorCode"], "provider_insufficient_balance");
         assert_eq!(value.as_object().unwrap().len(), 5);
     }
 
