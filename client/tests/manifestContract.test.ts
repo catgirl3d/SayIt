@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkVersionUpdate } from '@/features/update/updateChecker'
+import * as bridge from '@/services/bridge'
 import { PROJECT_UPDATE_MANIFEST_URL } from '@/services/projectLinks'
 import { UPDATE_MANIFEST_FILENAME } from '../scripts/generate-update-manifest.mjs'
 
@@ -26,7 +27,7 @@ const GENERATOR_PATH = fileURLToPath(new URL('../scripts/generate-update-manifes
 
 describe('release generator output satisfies the runtime manifest validator', () => {
   afterEach(() => {
-    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('accepts a generated manifest and reports the update', async () => {
@@ -50,22 +51,19 @@ describe('release generator output satisfies the runtime manifest validator', ()
       ])
 
       const generated = JSON.parse(readFileSync(manifestPath, 'utf8'))
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
+      const checkManifestMock = vi.spyOn(bridge, 'checkUpdateManifest').mockResolvedValue({
         status: 200,
-        json: async () => generated,
+        body: generated,
       })
-      vi.stubGlobal('fetch', fetchMock)
 
       const info = await checkVersionUpdate('0.2.0')
 
-      expect(fetchMock).toHaveBeenCalledWith(
-        PROJECT_UPDATE_MANIFEST_URL,
-        expect.objectContaining({ cache: 'no-store' }),
-      )
+      expect(checkManifestMock).toHaveBeenCalledOnce()
+      expect(checkManifestMock).toHaveBeenCalledWith(PROJECT_UPDATE_MANIFEST_URL)
       expect(info.error).toBeNull()
       expect(info.hasUpdate).toBe(true)
-      expect(info.latestVersion).toBe('0.2.1')
+      expect(info.latestVersion).toBe(generated.version)
+      expect(info.releaseDate).toBe(generated.releaseDate)
       expect(info.downloadUrl).toBe(generated.url)
       expect(info.sha512).toBe(generated.sha512)
     } finally {

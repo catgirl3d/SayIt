@@ -50,6 +50,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 ### Desktop Client
 
 - Reworked settings into routed pages instead of one large settings dialog, including dedicated Audio & Mic and Shortcuts pages.
+- Added an accessible microphone selector label with the full device name on hover; local formatting controls are disabled while AI cleanup is enabled without resetting saved options.
 - Hardened startup initialization so configuration, locale, and provider failures do not block the main UI.
 - Added F13-F24 single-key shortcut support for programmable keyboards and remapping tools.
 - Recognize `Weixin.exe` (WeChat 4.x) in the existing editability allowlist without generally allowing Qt windows.

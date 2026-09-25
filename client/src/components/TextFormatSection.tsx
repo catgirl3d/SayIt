@@ -12,6 +12,7 @@ import {
 } from '@/services/textPostProcess'
 import type { TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { useAiEnabled } from '@/hooks/useAiEnabled'
 
 interface ToggleDef {
   key: keyof TextPostProcessOptions
@@ -57,6 +58,7 @@ const TOGGLES: ToggleDef[] = [
 
 export default function TextFormatSection() {
   const t = useT()
+  const aiEnabled = useAiEnabled()
   const [opts, setOpts] = useState<TextPostProcessOptions>(DEFAULT_POST_PROCESS)
   const initialized = useRef(false)
   // 读到已保存值之前，开关先隐藏、且不放动画：避免先画出默认值再跳到已保存值（闪一下）。
@@ -101,25 +103,30 @@ export default function TextFormatSection() {
       </div>
       <div className="divide-y divide-border/60">
         {/* 变量名从 t 改成 def：t 现在是翻译函数，同名会被遮蔽掉 */}
-        {TOGGLES.map((def) => (
-          <div key={def.key} className="flex items-center gap-2.5 px-4 py-2.5">
-            <Switch
-              checked={opts[def.key]}
-              onChange={() => toggle(def.key)}
-              size="sm"
-              noAnimation={!animate}
-              hidden={!ready}
-              className="shrink-0"
-            />
-            <span className="shrink-0 text-sm font-medium">{t(def.titleKey)}</span>
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              <span className="min-w-0 truncate text-xs text-muted-foreground">{t(def.hintKey)}</span>
-              <Tooltip content={`${t(def.detailKey)}${t('textFormat.aiNote')}`} variant="light">
-                <HelpCircle className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 hover:text-muted-foreground" />
-              </Tooltip>
+        {TOGGLES.map((def) => {
+          const labelId = `text-format-${def.key}-label`
+          return (
+            <div key={def.key} className="flex items-center gap-2.5 px-4 py-2.5">
+              <Switch
+                checked={opts[def.key]}
+                onChange={() => toggle(def.key)}
+                labelledBy={labelId}
+                disabled={aiEnabled}
+                size="sm"
+                noAnimation={!animate}
+                hidden={!ready}
+                className="shrink-0"
+              />
+              <span id={labelId} className="shrink-0 text-sm font-medium">{t(def.titleKey)}</span>
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="min-w-0 truncate text-xs text-muted-foreground">{t(def.hintKey)}</span>
+                <Tooltip content={`${t(def.detailKey)}${t('textFormat.aiNote')}`} variant="light">
+                  <HelpCircle className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 hover:text-muted-foreground" />
+                </Tooltip>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

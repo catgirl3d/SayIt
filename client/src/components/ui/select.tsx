@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils'
 export interface SelectOption {
   value: string
   label: string
+  /** Optional full label for hover when the visible option may be truncated. */
+  title?: string
 }
 
 export interface SelectProps {
@@ -17,6 +19,8 @@ export interface SelectProps {
   className?: string
   placeholder?: string
   disabled?: boolean
+  /** Associates the trigger with a visible label because a button has no htmlFor. */
+  labelledBy?: string
 }
 
 interface OptionElementProps {
@@ -25,7 +29,7 @@ interface OptionElementProps {
 }
 
 const Select = forwardRef<HTMLButtonElement, SelectProps>(
-  ({ value, onChange, options, children, className, placeholder, disabled = false }, ref) => {
+  ({ value, onChange, options, children, className, placeholder, disabled = false, labelledBy }, ref) => {
     const t = useT()
     const [isOpen, setIsOpen] = useState(false)
     const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
@@ -133,7 +137,7 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
                   : 'text-foreground hover:bg-accent',
               )}
             >
-              <span className="truncate">{option.label}</span>
+              <span className="truncate" title={option.title}>{option.label}</span>
               {option.value === value && <Check className="ml-2 h-4 w-4 shrink-0" />}
             </button>
           ))}
@@ -153,6 +157,8 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
           type="button"
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
+          aria-labelledby={labelledBy}
+          aria-expanded={isOpen}
           className={cn(
             'flex h-9 w-full items-center justify-between rounded-md border border-input-border bg-input-bg px-3 text-sm text-foreground transition-colors',
             'hover:border-muted-foreground/40 focus:border-input-focus-border focus:outline-none focus:ring-2 focus:ring-input-focus-ring/20',
@@ -160,7 +166,10 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
             isOpen && 'border-input-focus-border ring-2 ring-input-focus-ring/20',
           )}
         >
-          <span className={cn('truncate', !selectedOption && 'text-input-placeholder')}>
+          <span
+            className={cn('truncate', !selectedOption && 'text-input-placeholder')}
+            title={selectedOption?.title}
+          >
             {selectedOption?.label || placeholder || t('ui.selectPlaceholder')}
           </span>
           <ChevronDown

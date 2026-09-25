@@ -51,8 +51,9 @@ export default function MicrophoneSection({
       { value: '', label: t('mic.systemDefault') },
       ...mics.map((mic) => ({
         value: mic.deviceId,
-        // 设备名来自系统，不翻译；只有"读不到名字"时的兜底标签跟界面语言。
+        // System device names stay untranslated; only unreadable names use a localized fallback.
         label: cleanMicLabel(mic.label) || t('mic.unnamed', { id: mic.deviceId.slice(0, 8) }),
+        title: mic.label || undefined,
       })),
     ]
   }, [mics, t])
@@ -73,12 +74,13 @@ export default function MicrophoneSection({
         <h2 className="mb-4 text-lg font-semibold">{t('mic.title')}</h2>
         <div className="space-y-4">
           <div>
-            <label className="mb-2 block text-sm text-foreground">{t('mic.select')}</label>
+            <label id="mic-select-label" className="mb-2 block text-sm text-foreground">{t('mic.select')}</label>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Select
                 value={selectedMic}
                 onChange={onMicChange}
                 options={micOptions}
+                labelledBy="mic-select-label"
                 className="sm:flex-1"
               />
               <Button variant="outline" size="sm" onClick={onTestMic} disabled={testing} className="h-9 shrink-0 px-4">
