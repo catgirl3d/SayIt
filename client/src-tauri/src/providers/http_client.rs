@@ -70,7 +70,7 @@ pub(super) mod test_support {
         (format!("http://{}/response", address), server)
     }
 
-    pub(super) fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    pub fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
         stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut request = Vec::new();
         let mut buffer = [0u8; 4096];

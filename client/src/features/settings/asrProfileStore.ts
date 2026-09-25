@@ -275,6 +275,8 @@ function sameAsrProfileConfiguration(left: AsrProfile, right: AsrProfile): boole
   return left.id === right.id
     && left.provider === right.provider
     && left.model === right.model
+    && left.baseUrl === right.baseUrl
+    && left.protocol === right.protocol
     && left.apiKey === right.apiKey
     && left.otherKey === right.otherKey
     && left.appId === right.appId

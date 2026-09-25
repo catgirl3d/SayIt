@@ -1,11 +1,17 @@
 import * as bridge from '@/services/bridge'
 import { cn } from '@/lib/utils'
-import { resolveAsrDisplayModel, isQwenOmniProvider, resolveQwenOmniModel } from '@/lib/asrModels'
-import { buildAsrProviderConfig, findAsrProvider } from '@/features/settings/asrProviderCatalog'
+import {
+  resolveAsrDisplayModel,
+  isQwenOmniProvider,
+  resolveQwenOmniModel,
+  formatCustomAsrHistoryProvider,
+} from '@/lib/asrModels'
+import { buildAsrProviderConfig, CUSTOM_ASR_PROVIDER, findAsrProvider } from '@/features/settings/asrProviderCatalog'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
+import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
 import { SERVER_AI_SOURCE_KEY } from '@/services/transcription/serverAiSource'
 import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/transcription'
 import { useCallback, useEffect, useState } from 'react'
@@ -221,8 +227,9 @@ export async function reprocessViaCloudApi(
   const durationSec = (chunk.byteLength / 2) / 16000
   const audioB64 = uint8ArrayToBase64(new Uint8Array(chunk))
 
-  const profile = await loadActiveAsrProfile()
-  if (!profile) throw new Error('No cloud ASR profile is active')
+  const loadedProfile = await loadActiveAsrProfile()
+  if (!loadedProfile) throw new Error('No cloud ASR profile is active')
+  const profile = { ...loadedProfile }
   const entry = findAsrProvider(profile.provider)
   const asrProvider = profile.provider
   const isQwenOmni = isQwenOmniProvider(asrProvider)
@@ -230,9 +237,19 @@ export async function reprocessViaCloudApi(
   const asrConfig = buildAsrProviderConfig(profile, language)
 
   const asrStart = performance.now()
-  const asrResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
-    request: { audio_b64: audioB64, sample_rate: 16000, asr_config: asrConfig, hotwords },
-  })
+  const asrResult = asrProvider === CUSTOM_ASR_PROVIDER
+    ? await transcribeCustomAsr({
+      profile,
+      audioB64,
+      sampleRate: 16000,
+      language,
+      hotwords,
+      isCurrent: () => true,
+    })
+    : await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
+      request: { audio_b64: audioB64, sample_rate: 16000, asr_config: asrConfig, hotwords },
+    })
+  if (!asrResult) throw new Error('History reprocessing no longer has an active custom ASR request')
   // 还原被 ASR 拆开加空格的无空格热词（如豆包把 "SayIt" 识别成 "Say It"）
   const asrText = restoreHotwordSpacing(asrResult.text, hotwords)
   const asrMs = asrResult.elapsed_ms || Math.round(performance.now() - asrStart)
@@ -267,7 +284,7 @@ export async function reprocessViaCloudApi(
     llmMs,
     durationSec,
     ...(isQwenOmni && { asrEngine: 'qwen_omni', asrModel: qwenOmniModel }),
-    ...(entry?.models && { asrEngine: asrProvider, asrModel: profile.model }),
+    ...((entry?.models || entry?.customEndpoint) && { asrEngine: asrProvider, asrModel: profile.model }),
   }
 }
 
@@ -331,7 +348,11 @@ async function buildReprocessMetadata(
   aiStatus?: AiExecutionStatus
 }> {
   if (workMode === 'cloud_api') {
-    const asrProvider = result.asrModel
+    const customProvider = result.asrEngine === CUSTOM_ASR_PROVIDER && result.asrModel
+      ? formatCustomAsrHistoryProvider(result.asrModel)
+      : undefined
+    const asrProvider = customProvider
+      || result.asrModel
       || resolveAsrDisplayModel(await getSetting('cloudAsr.provider', '') as string)
     const aiProvider = await getSetting('cloudAi.provider', '') as string
     const aiModel = await getSetting('cloudAi.model', '') as string

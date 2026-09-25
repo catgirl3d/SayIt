@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
   invoke: vi.fn(),
+  loadAsrProfiles: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: state.invoke }))
 vi.mock('../../services/store', () => ({
   getSetting: vi.fn(async (key: string, fallback: unknown) => state.settings.get(key) ?? fallback),
 }))
+vi.mock('../../features/settings/asrProfileStore', () => ({ loadAsrProfiles: state.loadAsrProfiles }))
 vi.mock('../../features/settings/asrProviderCatalog', () => ({
   describeAsrMissing: vi.fn(),
   findAsrProvider: vi.fn(),
@@ -19,6 +21,11 @@ vi.mock('@/i18n', () => ({
   t: vi.fn((key: string) => key),
 }))
 
+import {
+  describeAsrMissing,
+  findAsrProvider,
+  resolveActiveAsrProfile,
+} from '../../features/settings/asrProviderCatalog'
 import { getModeStatus, refreshModeStatus } from '../modeStatus'
 
 function configureLocal(
@@ -48,6 +55,10 @@ describe('mode status local readiness', () => {
   beforeEach(() => {
     state.settings.clear()
     state.invoke.mockReset()
+    state.loadAsrProfiles.mockReset()
+    vi.mocked(describeAsrMissing).mockReset()
+    vi.mocked(findAsrProvider).mockReset()
+    vi.mocked(resolveActiveAsrProfile).mockReset()
   })
 
   it('keeps an ordinary complete model ready with auto', async () => {
@@ -94,5 +105,28 @@ describe('mode status local readiness', () => {
     state.settings.set('workMode', 'server')
     await refreshModeStatus()
     expect(getModeStatus()).toMatchObject({ mode: 'server', ready: null, detail: '', blockedReason: '' })
+  })
+
+  it('shows a localized provider label and readiness for a valid keyless custom endpoint', async () => {
+    const profile = {
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      model: 'local-model',
+      apiKey: '',
+    }
+    state.settings.set('workMode', 'cloud_api')
+    state.loadAsrProfiles.mockResolvedValue({ profiles: [profile], activeId: 'custom' })
+    vi.mocked(resolveActiveAsrProfile).mockReturnValue(profile as never)
+    vi.mocked(findAsrProvider).mockReturnValue({ customEndpoint: true } as never)
+    vi.mocked(describeAsrMissing).mockReturnValue('')
+
+    await refreshModeStatus()
+
+    expect(getModeStatus()).toMatchObject({
+      mode: 'cloud_api',
+      detail: 'asrProvider.openaiCompat',
+      ready: true,
+      blockedReason: '',
+    })
   })
 })

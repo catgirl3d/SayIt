@@ -1,7 +1,12 @@
 import * as bridge from '../bridge'
 import { startCapture, stopCapture } from '../audio'
 import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult } from '../transcription'
-import { isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
+import {
+  CUSTOM_ASR_PROVIDER,
+  formatCustomAsrHistoryProvider,
+  isStreamingDisplayReady,
+  resolveQwenOmniModel,
+} from '@/lib/asrModels'
 import {
   addHistory,
   deleteHistory,
@@ -938,6 +943,7 @@ export class RecorderOrchestrator {
             || result.asrEngine === 'openai_transcribe'
             || result.asrEngine === 'gemini_transcribe'
             || result.asrEngine === 'openrouter_transcribe'
+            || result.asrEngine === CUSTOM_ASR_PROVIDER
           )
         void (async () => {
           let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
@@ -982,7 +988,11 @@ export class RecorderOrchestrator {
                 aiSource: result.aiSource,
                 aiStatus: result.aiStatus,
                 audioFilePath: historyArtifact.audioFilePath,
-                ...(shouldPersistAsrModel && { asrProvider: result.asrModel }),
+                ...(shouldPersistAsrModel && {
+                  asrProvider: result.asrEngine === CUSTOM_ASR_PROVIDER
+                    ? formatCustomAsrHistoryProvider(result.asrModel ?? '')
+                    : result.asrModel,
+                }),
                 ...historyMeta,
               })
               // 写记录后同样验代；取消/新 run 会清掉刚写入的文件与记录。
@@ -2215,11 +2225,16 @@ export class RecorderOrchestrator {
       const selectedModelProvider = finalResult?.asrEngine === 'openai_transcribe'
         || finalResult?.asrEngine === 'gemini_transcribe'
         || finalResult?.asrEngine === 'openrouter_transcribe'
+        || finalResult?.asrEngine === CUSTOM_ASR_PROVIDER
+      const customAsrModel = finalResult?.asrEngine === CUSTOM_ASR_PROVIDER && finalResult.asrModel
+        ? formatCustomAsrHistoryProvider(finalResult.asrModel)
+        : undefined
       const qwen38OmniModel = finalResult?.asrEngine === 'qwen_omni'
         && finalResult.asrModel === resolveQwenOmniModel('qwen_omni_38_realtime')
         ? finalResult.asrModel
         : undefined
-      const asrProvider = qwen38OmniModel
+      const asrProvider = customAsrModel
+        || qwen38OmniModel
         || (selectedModelProvider && finalResult?.asrModel
           ? finalResult.asrModel
           : ASR_MODEL_ID_MAP[asrProviderKey] || asrProviderKey || 'cloud')

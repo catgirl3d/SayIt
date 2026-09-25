@@ -18,6 +18,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added persistent microphone input boost with 1x, 2x, 3x, 5x, and browser-managed automatic gain modes.
 - Limited Groq's Chinese punctuation hint to explicitly selected Chinese, preventing it from being injected into automatic or other-language requests.
 - Added buffered OpenAI, Gemini, and OpenRouter transcription profiles with per-profile model selection and language-aware requests.
+- Added per-profile OpenAI-compatible ASR endpoints for multipart transcriptions and chat input_audio, with optional local-service keys and opt-in Auto fallback only on an explicit structured route-mismatch response. Auto can incur a charge on its first request; new profiles default to one transcriptions request.
 - Added Qwen 3.8 Omni Flash Realtime as a selectable buffered recognition and cleanup profile; live captions are not provided by this route.
 - Show per-model language badges in the local model list indicating whether each model supports your language (selected speech language, or interface language when speech is set to Auto).
 - Added interactive language badges and popover dialogs to the local model catalog: users can inspect full localized language lists with instant search, see active speech-language compatibility pills, and clearly distinguish supported languages across all multilingual models (Parakeet, Nemotron, Qwen3, Whisper, SenseVoice).

@@ -18,6 +18,7 @@ import {
 } from '../features/settings/asrProviderCatalog'
 import { subscribeLocale, t } from '@/i18n'
 import { localModelDisplayName } from '@/i18n/displayNames'
+import { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 
 export type ModeStatusMode = 'server' | 'cloud_api' | 'local'
 
@@ -69,6 +70,7 @@ function cloudProviderShort(provider: string): string {
     case 'qwen_omni_turbo': return t('modeStatus.qwenOmni')
     case 'mimo': return 'MiMo'
     case 'groq_whisper': return 'Groq'
+    case CUSTOM_ASR_PROVIDER: return t('asrProvider.openaiCompat')
     default: return provider
   }
 }

@@ -4,12 +4,15 @@ import {
   ASR_PROVIDERS,
   asrAvailabilityLabel,
   buildAsrProviderConfig,
+  changeAsrProfileProvider,
+  CUSTOM_ASR_PROVIDER,
   describeAsrMissing,
   effectiveAsrCredentials,
   emptyAsrProfile,
   findAsrProvider,
   gradeAsrLatency,
   keyFingerprint,
+  normalizeAsrProfileForSave,
   parseAsrProfiles,
   providersOfPlatform,
   resolveActiveAsrProfile,
@@ -29,9 +32,9 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
   it('每项都有标题、模型名、一句定位', () => {
     for (const p of ASR_PROVIDERS) {
       expect(p.label.trim()).not.toBe('')
-      expect(p.model.trim()).not.toBe('')
+      if (!p.customEndpoint) expect(p.model.trim()).not.toBe('')
       expect(p.blurb.trim()).not.toBe('')
-      expect(['mainland_china', 'global']).toContain(p.availability)
+      expect(['mainland_china', 'global', 'custom']).toContain(p.availability)
     }
   })
 
@@ -57,7 +60,7 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
   it('标题不带括号与模型名', () => {
     for (const p of ASR_PROVIDERS) {
       expect(p.label).not.toMatch(/[（(]/)
-      expect(p.label).not.toContain(p.model)
+      if (p.model) expect(p.label).not.toContain(p.model)
     }
   })
 
@@ -160,6 +163,83 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
       app_id: '',
       extra: { language: 'uk' },
     })
+  })
+
+  it('keeps providers without extra payloads unchanged', () => {
+    expect(buildAsrProviderConfig(profile({ provider: 'doubao_v2' }), 'auto').extra).toBeUndefined()
+  })
+
+  it('round-trips custom endpoint settings and defaults old profiles to one explicit protocol', () => {
+    expect(emptyAsrProfile(CUSTOM_ASR_PROVIDER).protocol).toBe('transcriptions')
+    const [custom, oldCustom] = parseAsrProfiles([
+      {
+        id: 'custom-chat',
+        provider: 'openai_compat',
+        baseUrl: 'http://localhost:8090/v1',
+        model: 'local-audio-model',
+        apiKey: 'profile-key',
+        protocol: 'chat',
+      },
+      {
+        id: 'custom-legacy',
+        provider: 'openai_compat',
+        baseUrl: 'https://asr.example.test/v1',
+      },
+    ])
+
+    expect(custom).toMatchObject({
+      id: 'custom-chat',
+      baseUrl: 'http://localhost:8090/v1',
+      model: 'local-audio-model',
+      apiKey: 'profile-key',
+      protocol: 'chat',
+    })
+    expect(oldCustom).toMatchObject({
+      id: 'custom-legacy',
+      baseUrl: 'https://asr.example.test/v1',
+      model: '',
+      apiKey: '',
+      protocol: 'transcriptions',
+    })
+    expect(buildAsrProviderConfig(custom, 'uk')).toEqual({
+      provider: 'openai_compat',
+      api_key: 'profile-key',
+      app_id: '',
+      extra: {
+        model: 'local-audio-model',
+        base_url: 'http://localhost:8090/v1',
+        protocol: 'chat',
+        language: 'uk',
+      },
+    })
+  })
+
+  it('trims freeform custom model names in the actual provider request payload', () => {
+    const custom = profile({
+      provider: CUSTOM_ASR_PROVIDER,
+      baseUrl: 'http://localhost:8090/v1',
+      model: '  local-audio-model  ',
+    })
+
+    expect(buildAsrProviderConfig(custom, 'uk').extra?.model).toBe('local-audio-model')
+    expect(buildAsrProviderConfig(profile({ provider: 'openai_transcribe', model: 'whisper-1' }), 'uk').extra?.model)
+      .toBe('whisper-1')
+  })
+
+  it('canonicalizes custom model whitespace at the profile save boundary without changing built-ins', () => {
+    const custom = profile({
+      provider: CUSTOM_ASR_PROVIDER,
+      model: '  local-audio-model  ',
+      check: { ok: true, at: 123, latencyMs: 100, audioSec: 2 },
+    })
+    const savedCustom = normalizeAsrProfileForSave(custom)
+    const savedOpenAi = normalizeAsrProfileForSave(profile({ provider: 'openai_transcribe', model: 'whisper-1' }))
+
+    expect(savedCustom).toMatchObject({
+      model: 'local-audio-model',
+      check: custom.check,
+    })
+    expect(savedOpenAi.model).toBe('whisper-1')
   })
 
   it('round-trips the 3.8 profile and sends its exact model through qwen_omni', () => {
@@ -317,6 +397,65 @@ describe('describeAsrMissing', () => {
   it('其它平台只要 API Key', () => {
     expect(describeAsrMissing(profile({ provider: 'mimo' }))).toBe('no API key yet')
     expect(describeAsrMissing(profile({ provider: 'mimo', apiKey: 'k' }))).toBe('')
+  })
+
+  it('custom endpoints require a safe HTTP(S) URL and model, but not an API key', () => {
+    expect(describeAsrMissing(profile({ provider: 'openai_compat' }))).toBe('base URL is required')
+    expect(describeAsrMissing(profile({
+      provider: 'openai_compat',
+      baseUrl: 'ftp://asr.example.test/v1',
+      model: 'local-model',
+    }))).toMatch(/HTTP\(S\)/)
+    expect(describeAsrMissing(profile({
+      provider: 'openai_compat',
+      baseUrl: 'https://user:secret@asr.example.test/v1',
+      model: 'local-model',
+    }))).toMatch(/without username or password/)
+    expect(describeAsrMissing(profile({
+      provider: 'openai_compat',
+      baseUrl: 'https://asr.example.test/v1?token=secret',
+      model: 'local-model',
+    }))).toMatch(/without username or password/)
+    expect(describeAsrMissing(profile({
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      model: '',
+    }))).toBe('model is required')
+    expect(describeAsrMissing(profile({
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      model: 'local-model',
+    }))).toBe('')
+  })
+})
+
+describe('changeAsrProfileProvider', () => {
+  it('clears custom route, model, and key when switching providers', () => {
+    const custom = profile({
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      model: 'private-model',
+      apiKey: 'custom-key',
+      protocol: 'chat',
+    })
+    const builtIn = changeAsrProfileProvider(custom, 'openai_transcribe')
+
+    expect(builtIn).toMatchObject({
+      provider: 'openai_transcribe',
+      model: 'gpt-transcribe',
+      apiKey: '',
+    })
+    expect(builtIn).not.toHaveProperty('baseUrl')
+    expect(builtIn).not.toHaveProperty('protocol')
+
+    const freshCustom = changeAsrProfileProvider(builtIn, 'openai_compat')
+    expect(freshCustom).toMatchObject({
+      provider: 'openai_compat',
+      model: '',
+      apiKey: '',
+      baseUrl: '',
+      protocol: 'transcriptions',
+    })
   })
 })
 

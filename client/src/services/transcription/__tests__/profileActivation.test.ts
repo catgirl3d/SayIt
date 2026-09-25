@@ -385,4 +385,67 @@ describe('ASR profile activation and recording ordering', () => {
     expect(harness.addHistory).toHaveBeenCalledTimes(2)
     expect(harness.polish).not.toHaveBeenCalled()
   })
+
+  it('persists the custom provider and model for empty history and final-result metadata', async () => {
+    const custom = {
+      ...emptyAsrProfile('openai_compat'),
+      id: 'custom-profile',
+      baseUrl: 'http://localhost:8090/v1',
+      apiKey: '',
+      model: 'local-whisper',
+      protocol: 'transcriptions' as const,
+    }
+    await saveAsrProfiles({ profiles: [custom], activeId: custom.id })
+    const transcription = deferred<{ text: string; elapsed_ms: number }>()
+    const requestStarted = deferred<void>()
+    const historySaved = deferred<Record<string, unknown>>()
+    harness.invoke.mockImplementation((command: string) => {
+      if (command === 'cloud_transcribe') {
+        requestStarted.resolve()
+        return transcription.promise
+      }
+      return undefined
+    })
+    harness.addHistory.mockImplementation(async (record: Record<string, unknown>) => historySaved.resolve(record))
+
+    const provider = await switchProvider('cloud_api')
+    const recorder = new RecorderOrchestrator()
+    Reflect.set(recorder, 'overlayService', {
+      showNoSpeech: vi.fn(),
+      stopListeningTicker: vi.fn(),
+      resetWarnings: vi.fn(),
+      resetStreamingText: vi.fn(),
+      clearFallbackHideTimer: vi.fn(),
+      hide: vi.fn(),
+    })
+    const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
+      this: RecorderOrchestrator,
+    ) => Parameters<typeof provider.connect>[0]
+    await provider.connect(createCallbacks.call(recorder))
+    Reflect.set(recorder, 'state', 'processing')
+    Reflect.set(recorder, 'activeRunId', 41)
+    Reflect.set(recorder, 'audioSentSamples', 8000)
+    Reflect.set(recorder, 'wallTimeAtStopSec', 0.5)
+
+    expect(provider.start({ runId: 41, language: 'uk' })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    expect(provider.stop()).toBe(true)
+    await requestStarted.promise
+    transcription.resolve({ text: '', elapsed_ms: 8 })
+    const record = await historySaved.promise
+
+    expect(record).toMatchObject({
+      asrProvider: 'openai_compat:local-whisper',
+      isEmpty: true,
+      failReasonCode: 'no_transcript',
+    })
+    const buildProviderMetadata = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderMetadata') as (
+      this: RecorderOrchestrator,
+      result: { asrEngine: string; asrModel: string },
+    ) => Promise<{ asrProvider?: string }>
+    await expect(buildProviderMetadata.call(recorder, {
+      asrEngine: 'openai_compat',
+      asrModel: 'local-whisper',
+    })).resolves.toMatchObject({ asrProvider: 'openai_compat:local-whisper' })
+  })
 })

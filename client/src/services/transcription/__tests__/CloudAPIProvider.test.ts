@@ -185,4 +185,86 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')).toEqual([])
     expect(errors).toEqual(['Error: activation save failed'])
   })
+
+  it('uses the custom profile snapshot for Auto and preserves provider/model on empty results', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'local-custom-asr',
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      apiKey: '',
+      appId: '',
+      model: 'local-whisper',
+      protocol: 'auto',
+      omniPrompt: '',
+    })
+    const calls: Array<{ asr_config: { extra?: Record<string, unknown> } }> = []
+    mocks.invoke.mockImplementation(async (command: string, args: unknown) => {
+      if (command !== 'cloud_transcribe') return undefined
+      const request = (args as { request: { asr_config: { extra?: Record<string, unknown> } } }).request
+      calls.push(request)
+      if (calls.length === 1) throw 'sayit_error:asr_protocol_mismatch:route mismatch'
+      return { text: '', elapsed_ms: 15 }
+    })
+
+    const provider = new CloudAPIProvider()
+    const asrResults: Array<{ asrEngine?: string; asrModel?: string }> = []
+    const finalResults: Array<{ asrEngine?: string; asrModel?: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({
+      onASR: (result) => asrResults.push(result),
+      onFinal: (result) => finalResults.push(result),
+      onDone: () => resolveDone(),
+    })
+
+    expect(provider.start({ runId: 8, language: 'uk' })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    expect(provider.stop()).toBe(true)
+    await done
+
+    expect(calls).toHaveLength(2)
+    expect(calls.map((request) => request.asr_config.extra)).toEqual([
+      { model: 'local-whisper', language: 'uk', base_url: 'http://localhost:8090/v1', protocol: 'transcriptions' },
+      { model: 'local-whisper', language: 'uk', base_url: 'http://localhost:8090/v1', protocol: 'chat' },
+    ])
+    expect(asrResults[0]).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'local-whisper' })
+    expect(finalResults[0]).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'local-whisper' })
+  })
+
+  it('does not dispatch Auto chat after cancellation while multipart is pending', async () => {
+    let rejectMultipart!: (reason: string) => void
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'cancel-custom-asr',
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      apiKey: 'cancel-key',
+      appId: '',
+      model: 'cancel-model',
+      protocol: 'auto',
+      omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'cloud_transcribe') {
+        return new Promise((_resolve, reject) => { rejectMultipart = reject })
+      }
+      return Promise.resolve(undefined)
+    })
+    const callbacks = { onASR: vi.fn(), onFinal: vi.fn(), onError: vi.fn(), onDone: vi.fn() }
+    const provider = new CloudAPIProvider()
+    await provider.connect(callbacks)
+    expect(provider.start({ runId: 9, language: 'uk' })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    expect(provider.stop()).toBe(true)
+
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(true))
+    provider.cancel()
+    rejectMultipart('sayit_error:asr_protocol_mismatch:route mismatch')
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(true))
+    await Promise.resolve()
+
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')).toHaveLength(1)
+    expect(callbacks.onASR).not.toHaveBeenCalled()
+    expect(callbacks.onFinal).not.toHaveBeenCalled()
+    expect(callbacks.onError).not.toHaveBeenCalled()
+  })
 })

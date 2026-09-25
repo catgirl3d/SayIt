@@ -9,12 +9,13 @@ import { Feedback } from '@/components/ui/feedback'
 import { getSetting } from '@/services/store'
 import { getEngineDraftDirty, subscribeEngineDraft } from '@/stores/engineDraft'
 import { resolveAsrDisplayModel, resolveQwenOmniModel } from '@/lib/asrModels'
-import { buildAsrProviderConfig, findAsrProvider } from './asrProviderCatalog'
+import { buildAsrProviderConfig, CUSTOM_ASR_PROVIDER, findAsrProvider } from './asrProviderCatalog'
 import { loadActiveAsrProfile } from './asrProfileStore'
 import { describeProviderError, describeServerError } from '@/lib/errorMessages'
 import type { WorkMode } from '@/services/transcription'
 import { useT } from '@/i18n/useT'
 import { type SpeechInputLanguage } from '@/services/speechInputLanguage'
+import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
 
 interface TestResult {
   text: string
@@ -38,12 +39,15 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
   // 外面还配着「ASR 0ms」的徽标——失败长得像"成功识别出了『测试失败:』这几个字"。
   const [error, setError] = useState<TestError | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const testRunIdRef = useRef(0)
 
   // 上方配置有未保存改动时，这里读到的还是旧值，测出来的结果没有意义
   const draftDirty = useSyncExternalStore(subscribeEngineDraft, getEngineDraftDirty)
 
   // 换了工作模式，旧结果就不再说明任何事情，直接作废
   useEffect(() => {
+    testRunIdRef.current += 1
+    setTesting(false)
     setResult(null)
     setError(null)
   }, [workMode])
@@ -68,9 +72,12 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
   }
 
   async function handleTest() {
+    const testRunId = ++testRunIdRef.current
+    const isCurrentTest = () => testRunIdRef.current === testRunId
     setTesting(true)
     setResult(null)
     setError(null)
+    let customProfileTest = false
 
     try {
       const cloudProfile = workMode === 'cloud_api' ? await loadActiveAsrProfile() : null
@@ -97,17 +104,28 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
 
         const profile = cloudProfile
         if (!profile) throw new Error('No cloud ASR profile is active')
+        customProfileTest = profile.provider === CUSTOM_ASR_PROVIDER
         const entry = findAsrProvider(profile.provider)
         const qwenOmniModel = entry?.omni ? resolveQwenOmniModel(profile.provider) : undefined
 
         const start = performance.now()
-        const r = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
-          request: {
-            audio_b64: pcmB64,
-            sample_rate: 16000,
-            asr_config: buildAsrProviderConfig(profile, speechLanguage),
-          },
-        })
+        const r = profile.provider === CUSTOM_ASR_PROVIDER
+          ? await transcribeCustomAsr({
+            profile,
+            audioB64: pcmB64,
+            sampleRate: 16000,
+            language: speechLanguage,
+            hotwords: [],
+            isCurrent: isCurrentTest,
+          })
+          : await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
+            request: {
+              audio_b64: pcmB64,
+              sample_rate: 16000,
+              asr_config: buildAsrProviderConfig(profile, speechLanguage),
+            },
+          })
+        if (!r || !isCurrentTest()) return
         const totalMs = Math.round(performance.now() - start)
         setResult({
           text: r.text,
@@ -115,7 +133,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
           mode: 'cloud_api',
           model: entry?.omni
             ? qwenOmniModel || profile.model
-            : entry?.models ? profile.model : resolveAsrDisplayModel(profile.provider),
+            : entry?.models || entry?.customEndpoint ? profile.model : resolveAsrDisplayModel(profile.provider),
           audioDurationSec,
         })
       } else {
@@ -160,12 +178,13 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
         setResult({ text: r.text, asrMs: r.asrMs, mode: 'server', model: '', audioDurationSec })
       }
     } catch (err) {
+      if (customProfileTest && !isCurrentTest()) return
       const friendly = workMode === 'server'
         ? describeServerError(err, true)
         : describeProviderError(err)
       setError({ message: friendly.message, detail: friendly.detail })
     } finally {
-      setTesting(false)
+      if (isCurrentTest()) setTesting(false)
     }
   }
 

@@ -9,6 +9,7 @@ import { loadAudioAsDataUrl } from '@/services/audioFileService'
 import { invoke } from '@tauri-apps/api/core'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 import { historyFailureReasonDisplay } from '@/i18n/displayNames'
 import { useRecordingPlayback } from './useRecordingPlayback'
 import { AudioProgressBar } from './AudioProgressBar'
@@ -24,6 +25,14 @@ const ASR_PROVIDER_DISPLAY: Record<string, string> = {
   qwen_omni_flash: 'qwen3-omni-flash-realtime',
   qwen_omni_turbo: 'qwen-omni-turbo-realtime',
   qwen_omni_plus: 'qwen3.5-omni-plus-realtime',
+}
+
+function asrProviderDisplay(provider: string): string {
+  const prefix = `${CUSTOM_ASR_PROVIDER}:`
+  if (provider.startsWith(prefix)) {
+    return `${t('asrProvider.openaiCompat')} · ${provider.slice(prefix.length)}`
+  }
+  return ASR_PROVIDER_DISPLAY[provider] || provider
 }
 
 interface HistoryRecordListProps {
@@ -383,7 +392,7 @@ function HistoryItem({
                         {record.workMode === 'server' ? t('record.modeServer') : record.workMode === 'cloud_api' ? t('record.modeCloudApi') : t('record.modeLocal')}
                       </span>
                       {record.asrProvider && (
-                        <span className="text-xs">ASR: {ASR_PROVIDER_DISPLAY[record.asrProvider] || record.asrProvider}</span>
+                        <span className="text-xs">ASR: {asrProviderDisplay(record.asrProvider)}</span>
                       )}
                       {record.aiProvider && record.aiProvider !== 'server' && record.llmMs > 0 && (
                         <span className="text-xs">

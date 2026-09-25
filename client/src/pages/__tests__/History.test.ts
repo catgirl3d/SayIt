@@ -62,4 +62,70 @@ describe('history cloud ASR reprocessing', () => {
     })
     expect(result.asrModel).toBe('whisper-1')
   })
+
+  it('reprocesses with one captured custom profile across Auto fallback and returns provider/model metadata', async () => {
+    const profile = {
+      id: 'custom-history-profile',
+      provider: 'openai_compat',
+      baseUrl: 'http://localhost:8090/v1',
+      apiKey: 'history-key',
+      appId: '',
+      model: 'history-audio-model',
+      protocol: 'auto',
+      omniPrompt: '',
+    }
+    mocks.loadActiveAsrProfile.mockResolvedValue(profile)
+    let rejectFirst!: (reason: string) => void
+    let startFirst!: () => void
+    const firstStarted = new Promise<void>((resolve) => { startFirst = resolve })
+    mocks.invoke.mockImplementationOnce(() => {
+      startFirst()
+      return new Promise((_resolve, reject) => { rejectFirst = reject })
+    }).mockResolvedValueOnce({ text: 'recognized again', elapsed_ms: 18 })
+
+    const pending = reprocessViaCloudApi(
+      new ArrayBuffer(32000),
+      ['SayIt'],
+      false,
+      undefined,
+      'uk',
+    )
+    await firstStarted
+    profile.baseUrl = 'https://other.example.test/v1'
+    profile.apiKey = 'wrong-key'
+    profile.model = 'wrong-model'
+    rejectFirst('sayit_error:asr_protocol_mismatch:route mismatch')
+    const result = await pending
+
+    expect(mocks.invoke).toHaveBeenCalledTimes(2)
+    const requests = mocks.invoke.mock.calls.map(([, args]) => (args as {
+      request: {
+        audio_b64: string
+        hotwords: string[]
+        asr_config: {
+          provider: string
+          api_key: string
+          extra?: Record<string, unknown>
+        }
+      }
+    }).request)
+    expect(requests[0]).toMatchObject({
+      hotwords: ['SayIt'],
+      asr_config: {
+        provider: 'openai_compat',
+        api_key: 'history-key',
+        extra: { model: 'history-audio-model', base_url: 'http://localhost:8090/v1', protocol: 'transcriptions', language: 'uk' },
+      },
+    })
+    expect(requests[1]).toMatchObject({
+      audio_b64: requests[0].audio_b64,
+      hotwords: requests[0].hotwords,
+      asr_config: {
+        provider: 'openai_compat',
+        api_key: 'history-key',
+        extra: { model: 'history-audio-model', base_url: 'http://localhost:8090/v1', protocol: 'chat', language: 'uk' },
+      },
+    })
+    expect(result).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'history-audio-model' })
+  })
 })

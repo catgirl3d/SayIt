@@ -1,5 +1,11 @@
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
+export const CUSTOM_ASR_PROVIDER = 'openai_compat' as const
+
+export function formatCustomAsrHistoryProvider(model: string): string {
+  return `${CUSTOM_ASR_PROVIDER}:${model}`
+}
+
 /**
  * ASR 供应商 key → 实际模型 ID 映射
  */
@@ -145,7 +151,12 @@ export function buildCloudAsrExtra(
   if (isQwenOmniProvider(provider)) {
     return { model: resolveQwenOmniModel(provider), instructions: omniInstructions }
   }
-  if (provider === 'openai_transcribe' || provider === 'gemini_transcribe' || provider === 'openrouter_transcribe') {
+  if (
+    provider === 'openai_transcribe'
+    || provider === 'gemini_transcribe'
+    || provider === 'openrouter_transcribe'
+    || provider === CUSTOM_ASR_PROVIDER
+  ) {
     return {
       ...(selectedModel ? { model: selectedModel } : {}),
       ...(language === 'auto' ? {} : { language }),

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import * as asrModels from '../asrModels'
 import {
   buildCloudAsrExtra,
   getCloudAsrSupportedLanguages,
@@ -196,5 +197,13 @@ describe('buildCloudAsrExtra', () => {
       model: 'qwen/qwen3-asr-1.7b',
       language: 'zh',
     })
+    expect(buildCloudAsrExtra('openai_compat', 'uk', undefined, 'local-audio-model')).toEqual({
+      model: 'local-audio-model',
+      language: 'uk',
+    })
+  })
+
+  it('encodes custom provider and model together in the existing history provider field', () => {
+    expect(asrModels.formatCustomAsrHistoryProvider('local-whisper')).toBe('openai_compat:local-whisper')
   })
 })

@@ -9,7 +9,7 @@ import { getWorkMode } from '@/services/transcription'
 import { FolderOpen, RefreshCw, CheckCircle2, XCircle, MinusCircle, CircleSlash, Info, HelpCircle, ChevronDown } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { providerLabel } from './aiProviderCatalog'
-import { effectiveAsrCredentials, findAsrProvider, type AsrProfile } from './asrProviderCatalog'
+import { describeAsrMissing, effectiveAsrCredentials, findAsrProvider, type AsrProfile } from './asrProviderCatalog'
 import { loadActiveAsrProfile } from './asrProfileStore'
 import { getSpeechInputLanguage } from '@/services/speechInputLanguage'
 import { testAsrConnection } from '@/services/diagnostics'
@@ -32,8 +32,17 @@ export async function checkCloudAsrHealth(profile: AsrProfile | null): Promise<H
   }
 
   const provider = findAsrProvider(profile.provider)
-  const model = provider?.models ? profile.model : provider?.model
+  const model = provider?.models || provider?.customEndpoint ? profile.model : provider?.model
   const displayName = provider ? `${provider.label} (${model})` : profile.provider
+  if (provider?.customEndpoint) {
+    const missing = describeAsrMissing(profile)
+    return {
+      id: 'asr',
+      label: t('diagnostics.health.asr'),
+      status: missing ? 'error' : 'unknown',
+      detail: missing ? `${displayName} — ${missing}` : t('diagnostics.asrManualOnly'),
+    }
+  }
   if (!effectiveAsrCredentials(profile).apiKey) {
     return { id: 'asr', label: t('diagnostics.health.asr'), status: 'error', detail: t('diagnostics.missingKey', { provider: displayName }) }
   }

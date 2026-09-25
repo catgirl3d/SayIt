@@ -3,7 +3,7 @@
 use super::types::*;
 use super::{
     ai_ollama, ai_openai_compat, asr_doubao, asr_doubao_stream, asr_gemini, asr_groq, asr_mimo,
-    asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
+    asr_openai_compat, asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
 };
 use crate::error_protocol;
 
@@ -200,6 +200,15 @@ pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResu
             )
             .await
         }
+        "openai_compat" => {
+            asr_openai_compat::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await
+        }
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
@@ -221,6 +230,7 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
         "openai_transcribe" => Ok(asr_groq::test_connection(&config).await),
         "gemini_transcribe" => Ok(asr_gemini::test_connection(&config).await),
         "openrouter_transcribe" => Ok(asr_openrouter::test_connection(&config).await),
+        "openai_compat" => Ok(asr_openai_compat::test_connection(&config).await),
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
@@ -286,6 +296,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_asr_transcription_dispatches_to_the_selected_transcriptions_route() {
+        let (endpoint, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            r#"{"text":"registry fixture transcript"}"#.to_string(),
+        );
+        let mut config = asr_config("openai_compat", "fixture-api-key");
+        config.extra = serde_json::json!({
+            "base_url": format!("{}/v1", endpoint.trim_end_matches("/response")),
+            "model": "registry-fixture-model",
+            "protocol": "transcriptions"
+        });
+        let audio_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"audio-marker",
+        );
+
+        let result = cloud_transcribe(CloudTranscribeRequest {
+            audio_b64,
+            sample_rate: 16000,
+            asr_config: config,
+            hotwords: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let request = String::from_utf8_lossy(&server.join().unwrap()).to_string();
+
+        assert_eq!(result.text, "registry fixture transcript");
+        assert!(request.starts_with("POST /v1/audio/transcriptions HTTP/1.1"));
+        assert!(request.contains("registry-fixture-model"));
+        assert!(request.contains("audio-marker"));
+    }
+
+    #[tokio::test]
     async fn buffered_connection_tests_route_to_provider_specific_key_validation() {
         for (provider, expected_error) in [
             (
@@ -310,6 +353,18 @@ mod tests {
                 result.message
             );
         }
+    }
+
+    #[tokio::test]
+    async fn custom_asr_connection_test_accepts_an_optional_key_and_checks_route_configuration() {
+        let mut config = asr_config("openai_compat", "");
+        config.extra = serde_json::json!({ "base_url": "", "model": "local-model" });
+
+        let result = test_asr_connection(config).await.unwrap();
+
+        assert!(!result.ok);
+        assert!(result.message.contains("base URL"));
+        assert!(!result.message.contains("API Key"));
     }
 
     #[tokio::test]

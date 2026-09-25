@@ -4,8 +4,8 @@
 // platform credentials, and a selected model where supported), including several per provider
 // (e.g. two Bailian accounts, two sets of Doubao keys). The active card is chosen by activeProfileId.
 //
-// Unlike text cleanup, ASR providers must use a dedicated built-in Rust transport selected by its
-// native provider ID. Arbitrary base URLs are not accepted, even for OpenAI-compatible services.
+// Cloud providers use dedicated Rust transports; only the OpenAI-compatible profile accepts a
+// per-profile base URL, which is validated before credentials or audio are sent.
 //
 // Re-pasting a key for the same platform is not solved by storing keys per platform (that would
 // stop a card from being a complete configuration). Instead, a new card seeds the credentials from
@@ -17,13 +17,14 @@ import {
   type DoubaoConsole,
   type DoubaoCredentials,
 } from '@/lib/cloudAsrCreds'
-import { buildCloudAsrExtra } from '@/lib/asrModels'
+import { buildCloudAsrExtra, CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
+export { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
 /** 凭据归属的平台。同平台的服务用同一种密钥形态。 */
 import { t } from '@/i18n'
 
-export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemini' | 'openrouter'
+export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemini' | 'openrouter' | 'custom'
 
 export interface AsrPlatformInfo {
   label: string
@@ -41,6 +42,7 @@ export const ASR_PLATFORMS: Record<AsrPlatform, AsrPlatformInfo> = {
   openai: { label: 'OpenAI', consoleUrl: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'Gemini', consoleUrl: 'https://aistudio.google.com/app/apikey' },
   openrouter: { label: 'OpenRouter', consoleUrl: 'https://openrouter.ai/settings/keys' },
+  custom: { get label() { return t('asrPlatform.openaiCompat') }, consoleUrl: '' },
 }
 
 export interface AsrProviderEntry {
@@ -60,14 +62,17 @@ export interface AsrProviderEntry {
    * Global services may be less reliable to reach from mainland China, so label them to
    * distinguish network availability from invalid credentials.
    */
-  availability: 'mainland_china' | 'global'
+  availability: 'mainland_china' | 'global' | 'custom'
   /** 边说边出字（实时字幕） */
   streaming?: boolean
   /** 识别与 AI 整理一步完成，不需要单独配 AI 服务 */
   omni?: boolean
   /** 需要百炼「业务空间 ID」才能用 */
   needsWorkspaceId?: boolean
+  customEndpoint?: boolean
 }
+
+export type CustomAsrProtocol = 'transcriptions' | 'chat' | 'auto'
 
 const OPENAI_TRANSCRIPTION_MODELS = [
   'gpt-transcribe',
@@ -236,6 +241,15 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     availability: 'global',
     get blurb() { return t('asrProvider.openrouterBlurb') },
   },
+  {
+    id: CUSTOM_ASR_PROVIDER,
+    get label() { return t('asrProvider.openaiCompat') },
+    model: '',
+    platform: 'custom',
+    availability: 'custom',
+    get blurb() { return t('asrProvider.openaiCompatBlurb') },
+    customEndpoint: true,
+  },
 ]
 
 export function findAsrProvider(id: string): AsrProviderEntry | undefined {
@@ -251,6 +265,7 @@ export function findAsrProvider(id: string): AsrProviderEntry | undefined {
  * 只是这一条不值得占界面上的字。
  */
 export function asrAvailabilityLabel(entry: AsrProviderEntry): string {
+  if (entry.customEndpoint) return ''
   switch (entry.availability) {
     case 'global': return t('asrProvider.regionGlobal')
     default: return ''
@@ -315,6 +330,10 @@ export interface AsrProfile {
   provider: string
   /** Selected model for providers that expose model choices. */
   model: string
+  /** Custom OpenAI-compatible endpoint base URL. Present only for custom profiles. */
+  baseUrl?: string
+  /** Custom OpenAI-compatible request protocol. Present only for custom profiles. */
+  protocol?: CustomAsrProtocol
   /** 千问 / 小米：API Key；豆包：当前控制台代次那一份密钥 */
   apiKey: string
   /** 豆包旧版控制台的 App ID */
@@ -342,6 +361,7 @@ export function emptyAsrProfile(provider = ASR_PROVIDERS[0].id): AsrProfile {
     id: makeAsrProfileId(),
     provider,
     model: entry?.model ?? '',
+    ...(entry?.customEndpoint && { baseUrl: '', protocol: 'transcriptions' as const }),
     apiKey: '',
     appId: '',
     console: 'new',
@@ -379,9 +399,15 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
     out.push({
       id,
       provider,
-      model: entry.models
-        ? entry.models.includes(model) ? model : entry.model
-        : entry.model,
+      model: entry.customEndpoint
+        ? model
+        : entry.models
+          ? entry.models.includes(model) ? model : entry.model
+          : entry.model,
+      ...(entry.customEndpoint && {
+        baseUrl: str(v.baseUrl),
+        protocol: v.protocol === 'chat' || v.protocol === 'auto' ? v.protocol : 'transcriptions',
+      }),
       apiKey: str(v.apiKey),
       appId: str(v.appId),
       console: consoleRaw === 'legacy' ? 'legacy' : 'new',
@@ -407,16 +433,65 @@ export function buildAsrProviderConfig(
 ): AsrProviderConfig {
   const entry = findAsrProvider(profile.provider)
   const credentials = effectiveAsrCredentials(profile)
+  const model = entry?.customEndpoint ? profile.model.trim() : profile.model
+  const extra = buildCloudAsrExtra(
+    profile.provider,
+    language,
+    entry?.omni ? profile.omniPrompt || undefined : undefined,
+    model,
+  )
   return {
     provider: entry?.omni ? 'qwen_omni' : profile.provider,
     api_key: credentials.apiKey,
     app_id: credentials.appId,
-    extra: buildCloudAsrExtra(
-      profile.provider,
-      language,
-      entry?.omni ? profile.omniPrompt || undefined : undefined,
-      profile.model,
-    ),
+    extra: entry?.customEndpoint
+      ? {
+        ...extra,
+        base_url: profile.baseUrl?.trim() ?? '',
+        protocol: profile.protocol ?? 'transcriptions',
+      }
+      : extra,
+  }
+}
+
+export function normalizeAsrProfileForSave(profile: AsrProfile): AsrProfile {
+  if (!findAsrProvider(profile.provider)?.customEndpoint) return { ...profile }
+  return { ...profile, model: profile.model.trim() }
+}
+
+export function isValidCustomAsrBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim())
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && Boolean(url.hostname)
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash
+  } catch {
+    return false
+  }
+}
+
+export function changeAsrProfileProvider(profile: AsrProfile, provider: string): AsrProfile {
+  if (provider === profile.provider) return { ...profile }
+  const nextEntry = findAsrProvider(provider)
+  const crossedCustomEndpoint = findAsrProvider(profile.provider)?.customEndpoint || nextEntry?.customEndpoint
+  const withoutCustomRoute = { ...profile }
+  delete withoutCustomRoute.baseUrl
+  delete withoutCustomRoute.protocol
+  return {
+    ...withoutCustomRoute,
+    provider,
+    model: nextEntry?.model ?? '',
+    ...(crossedCustomEndpoint && {
+      apiKey: '',
+      otherKey: '',
+      appId: '',
+      console: 'new' as const,
+      workspaceId: '',
+    }),
+    ...(nextEntry?.customEndpoint && { baseUrl: '', protocol: 'transcriptions' as const }),
   }
 }
 
@@ -464,7 +539,14 @@ export function effectiveAsrCredentials(profile: AsrProfile): { apiKey: string; 
  * 同屏出现，差一个空格就露馅。同一句用户可见文案只该有一个出处。
  */
 export function describeAsrMissing(profile: AsrProfile): string {
-  if (findAsrProvider(profile.provider)?.platform === 'doubao') {
+  const entry = findAsrProvider(profile.provider)
+  if (entry?.customEndpoint) {
+    if (!profile.baseUrl?.trim()) return t('asrProvider.missingCustomUrl')
+    if (!isValidCustomAsrBaseUrl(profile.baseUrl)) return t('asrProvider.invalidCustomUrl')
+    if (!profile.model.trim()) return t('asrProvider.missingCustomModel')
+    return ''
+  }
+  if (entry?.platform === 'doubao') {
     return describeDoubaoMissing(toDoubaoCreds(profile))
   }
   return profile.apiKey.trim() ? '' : t('asrProvider.missingKey')

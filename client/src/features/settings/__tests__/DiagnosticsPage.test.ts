@@ -44,6 +44,21 @@ describe('passive cloud ASR diagnostics', () => {
     expect(mocks.testAsrConnection).not.toHaveBeenCalled()
   })
 
+  it('treats a valid keyless custom endpoint as unknown without sending billable audio', async () => {
+    const profile = {
+      ...emptyAsrProfile('openai_compat'),
+      baseUrl: 'http://localhost:8090/v1',
+      model: 'local-model',
+      apiKey: '',
+    }
+
+    await expect(checkCloudAsrHealth(profile)).resolves.toMatchObject({
+      status: 'unknown',
+      detail: expect.stringContaining('Test from ASR settings'),
+    })
+    expect(mocks.testAsrConnection).not.toHaveBeenCalled()
+  })
+
   it('keeps existing automatic checks and missing-key errors', async () => {
     const groq = { ...emptyAsrProfile('groq_whisper'), apiKey: 'groq-key' }
     await expect(checkCloudAsrHealth(groq)).resolves.toMatchObject({ status: 'ok' })

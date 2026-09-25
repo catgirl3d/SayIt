@@ -33,13 +33,16 @@ import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
   asrAvailabilityLabel,
+  changeAsrProfileProvider,
   describeAsrMissing,
   buildAsrProviderConfig,
+  CUSTOM_ASR_PROVIDER,
   effectiveAsrCredentials,
   emptyAsrProfile,
   findAsrProvider,
   gradeAsrLatency,
   keyFingerprint,
+  normalizeAsrProfileForSave,
   type AsrCheck,
   type AsrProfile,
 } from './asrProviderCatalog'
@@ -47,6 +50,7 @@ import { loadAsrProfiles, saveAsrProfileChecks, saveAsrProfiles } from './asrPro
 import { formatCheckedAt, formatLatency, isCheckFresh } from './aiProviderCatalog'
 import { t, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
 
 const DOUBAO_CONSOLE_OPTIONS = [
   { value: 'new', labelKey: 'asr.console.new' },
@@ -127,13 +131,23 @@ async function runAsrTest(
   }
   try {
     const start = performance.now()
-    const r = await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
-      request: {
-        audio_b64: audio.pcmB64,
-        sample_rate: 16000,
-        asr_config: buildAsrProviderConfig(profile, language),
-      },
-    })
+    const r = profile.provider === CUSTOM_ASR_PROVIDER
+      ? await transcribeCustomAsr({
+        profile,
+        audioB64: audio.pcmB64,
+        sampleRate: 16000,
+        language,
+        hotwords: [],
+        isCurrent: () => true,
+      })
+      : await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
+        request: {
+          audio_b64: audio.pcmB64,
+          sample_rate: 16000,
+          asr_config: buildAsrProviderConfig(profile, language),
+        },
+      })
+    if (!r) throw new Error(t('asr.msg.testCanceled'))
     const latencyMs = Math.round(performance.now() - start)
     const text = r.text.trim()
     if (!text) {
@@ -197,6 +211,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   const sendsLanguageHint = activeProvider === 'openai_transcribe'
     || activeProvider === 'gemini_transcribe'
     || activeProvider === 'openrouter_transcribe'
+    || activeProvider === CUSTOM_ASR_PROVIDER
   /** 这张卡正在测吗 —— 单张测试和并发批量测试都要算上 */
   const isTesting = (id: string) => testingId === id || testingIds.includes(id)
   const draftEntry = draft ? findAsrProvider(draft.provider) : undefined
@@ -241,7 +256,10 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   }
 
   async function persistChecks(updates: Array<{ profile: AsrProfile; check: AsrCheck }>) {
-    const state = await saveAsrProfileChecks(updates)
+    const state = await saveAsrProfileChecks(updates.map((update) => ({
+      ...update,
+      profile: normalizeAsrProfileForSave(update.profile),
+    })))
     setProfiles(state.profiles)
     setActiveId(state.activeId)
     void refreshModeStatus()
@@ -432,6 +450,10 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     if (!draft) return
     const nextPlatform = findAsrProvider(providerId)?.platform
     const prevPlatform = findAsrProvider(draft.provider)?.platform
+    if (nextPlatform === 'custom' || prevPlatform === 'custom') {
+      patchDraft(changeAsrProfileProvider(draft, providerId))
+      return
+    }
     if (nextPlatform === prevPlatform) {
       patchDraft({ provider: providerId, model: findAsrProvider(providerId)?.model ?? '' })
       return
@@ -462,11 +484,14 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     try {
       // 改过凭据就把旧结论作废：否则卡上那枚用旧 key 测出来的「可用」还挂着，
       // 等于拿过期结论替新配置作保
-      const before = profiles.find((p) => p.id === draft.id)
+      const savedProfile = normalizeAsrProfileForSave(draft)
+      const before = profiles.find((p) => p.id === savedProfile.id)
       const configurationChanged = !before
-        || JSON.stringify(effectiveAsrCredentials(before)) !== JSON.stringify(effectiveAsrCredentials(draft))
-        || before.model !== draft.model
-      const saved: AsrProfile = { ...draft, check: configurationChanged ? undefined : before?.check }
+        || JSON.stringify(effectiveAsrCredentials(before)) !== JSON.stringify(effectiveAsrCredentials(savedProfile))
+        || before.model !== savedProfile.model
+        || before.baseUrl !== savedProfile.baseUrl
+        || before.protocol !== savedProfile.protocol
+      const saved: AsrProfile = { ...savedProfile, check: configurationChanged ? undefined : before?.check }
 
       const next = draftIsNew
         ? [...profiles, saved]
@@ -575,7 +600,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     const siblings = profiles.filter((p) => p.provider === profile.provider).length
     const title = profileTitle(profile, siblings)
     const availability = asrAvailabilityLabel(entry)
-    const model = entry.models ? profile.model : entry.model
+    const model = entry.customEndpoint ? profile.model || t('asr.customModelPlaceholder') : entry.models ? profile.model : entry.model
     return (
       <div
         key={profile.id}
@@ -688,7 +713,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
               onChange={(value) => handleDraftProvider(value)}
               options={ASR_PROVIDERS.map((p) => ({
                 value: p.id,
-                label: `${p.label} · ${p.model}`,
+                label: p.model ? `${p.label} · ${p.model}` : p.label,
               }))}
             />
             <p className="mt-1 text-xs text-muted-foreground">
@@ -696,6 +721,57 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
               {draftAvailability !== '' && <> <span className="font-medium">{draftAvailability}</span></>}
             </p>
           </div>
+
+          {draftEntry?.customEndpoint && (
+            <>
+              <div>
+                <label htmlFor="asr-base-url" className="mb-1 block text-sm text-muted-foreground">{t('asr.baseUrl')}</label>
+                <input
+                  id="asr-base-url"
+                  value={draft.baseUrl ?? ''}
+                  onChange={(e) => patchDraft({ baseUrl: e.target.value })}
+                  placeholder={t('asr.baseUrlPlaceholder')}
+                  className={inputClass}
+                  autoComplete="url"
+                  spellCheck={false}
+                />
+                {/^http:\/\//i.test(draft.baseUrl?.trim() ?? '') && draft.apiKey.trim() !== '' && (
+                  <p className="mt-1.5 text-xs text-warning-strong">
+                    {/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(draft.baseUrl?.trim() ?? '')
+                      ? t('asr.customHttpKeyWarningLocal')
+                      : t('asr.customHttpKeyWarningRemote')}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label htmlFor="asr-custom-model" className="mb-1 block text-sm text-muted-foreground">{t('asr.model')}</label>
+                <input
+                  id="asr-custom-model"
+                  value={draft.model}
+                  onChange={(e) => patchDraft({ model: e.target.value })}
+                  placeholder={t('asr.modelPlaceholder')}
+                  className={inputClass}
+                  spellCheck={false}
+                />
+              </div>
+              <div>
+                <label id="asr-custom-protocol-label" className="mb-1 block text-sm text-muted-foreground">{t('asr.protocol')}</label>
+                <Select
+                  value={draft.protocol ?? 'transcriptions'}
+                  onChange={(protocol) => patchDraft({ protocol: protocol as AsrProfile['protocol'] })}
+                  labelledBy="asr-custom-protocol-label"
+                  options={[
+                    { value: 'transcriptions', label: t('asr.protocolTranscriptions') },
+                    { value: 'chat', label: t('asr.protocolChat') },
+                    { value: 'auto', label: t('asr.protocolAuto') },
+                  ]}
+                />
+                {draft.protocol === 'auto' && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">{t('asr.protocolAutoHelp')}</p>
+                )}
+              </div>
+            </>
+          )}
 
           {draftEntry?.models && draftEntry.models.length > 1 && (
             <div>
@@ -747,10 +823,12 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
           {/* data-modal-autofocus：弹窗打开时焦点落在密钥上（这才是要干的事），
               而不是第一个可聚焦元素 */}
           <div data-modal-autofocus>
-            <label htmlFor="asr-api-key" className="mb-1 block text-sm text-muted-foreground">{keyLabel}</label>
+            <label htmlFor="asr-api-key" className="mb-1 block text-sm text-muted-foreground">
+              {draftEntry?.customEndpoint ? t('asr.customApiKeyOptional') : keyLabel}
+            </label>
             <PasswordInput
               id="asr-api-key"
-              label={keyLabel}
+              label={draftEntry?.customEndpoint ? t('asr.customApiKeyOptional') : keyLabel}
               value={draft.apiKey}
               onChange={(v) => patchDraft({ apiKey: v })}
               onSubmit={() => void handleSaveDraft()}
@@ -769,12 +847,14 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
                 {t('asr.keyReused')}
               </p>
             )}
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
-              <button type="button" onClick={() => void shellOpen(platformInfo.consoleUrl)} className={linkClass}>
-                {t('asr.openConsole', { platform: platformInfo.label })}
-                <ExternalLink className="h-3 w-3" aria-hidden />
-              </button>
-            </div>
+            {platformInfo.consoleUrl !== '' && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <button type="button" onClick={() => void shellOpen(platformInfo.consoleUrl)} className={linkClass}>
+                  {t('asr.openConsole', { platform: platformInfo.label })}
+                  <ExternalLink className="h-3 w-3" aria-hidden />
+                </button>
+              </div>
+            )}
           </div>
 
           {draftEntry?.needsWorkspaceId && (

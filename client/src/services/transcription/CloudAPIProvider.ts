@@ -5,6 +5,7 @@
 import { isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
 import {
   buildAsrProviderConfig,
+  CUSTOM_ASR_PROVIDER,
   effectiveAsrCredentials,
   findAsrProvider,
   type AsrProviderConfig,
@@ -19,6 +20,7 @@ import { getSetting } from '../store'
 import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
 import { polishWithClientAi } from './clientAiPolish'
+import { transcribeCustomAsr } from './customAsrRequest'
 import type {
   TranscriptionProvider,
   TranscriptionCallbacks,
@@ -461,7 +463,9 @@ export class CloudAPIProvider implements TranscriptionProvider {
       if (!this.isRunCurrent(runId)) return
       const asrProvider = profile.provider
       const isQwenOmni = isQwenOmniProvider(asrProvider)
-      const selectedModel = findAsrProvider(asrProvider)?.models ? profile.model : undefined
+      const selectedModel = findAsrProvider(asrProvider)?.models || asrProvider === CUSTOM_ASR_PROVIDER
+        ? profile.model
+        : undefined
       const emptyResultModel = asrProvider === 'qwen_omni_38_realtime'
         ? resolveQwenOmniModel(asrProvider)
         : selectedModel
@@ -516,15 +520,24 @@ export class CloudAPIProvider implements TranscriptionProvider {
         )
 
         addRuntimeEvent('info', 'cloud_api', 'ASR started', { provider: asrProvider, durationSec })
-        const asrResult = await invoke<AsrResult>('cloud_transcribe', {
-          request: {
-            audio_b64: audioB64,
-            sample_rate: 16000,
-            asr_config: asrConfig,
+        const asrResult = asrProvider === CUSTOM_ASR_PROVIDER
+          ? await transcribeCustomAsr({
+            profile,
+            audioB64,
+            sampleRate: 16000,
+            language: normalizeSpeechInputLanguage(startOpts.language),
             hotwords: startOpts.hotwords ?? [],
-          },
-        })
-        if (!this.isRunCurrent(runId)) return
+            isCurrent: () => this.isRunCurrent(runId),
+          })
+          : await invoke<AsrResult>('cloud_transcribe', {
+            request: {
+              audio_b64: audioB64,
+              sample_rate: 16000,
+              asr_config: asrConfig,
+              hotwords: startOpts.hotwords ?? [],
+            },
+          })
+        if (!this.isRunCurrent(runId) || !asrResult) return
         asrText = asrResult.text
         asrMs = asrResult.elapsed_ms
       }

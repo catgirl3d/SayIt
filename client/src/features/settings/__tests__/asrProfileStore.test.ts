@@ -9,7 +9,13 @@ import {
   saveAsrProfiles,
   topUpProfiles,
 } from '../asrProfileStore'
-import { emptyAsrProfile, type AsrCheck, type AsrProfile } from '../asrProviderCatalog'
+import {
+  buildAsrProviderConfig,
+  emptyAsrProfile,
+  normalizeAsrProfileForSave,
+  type AsrCheck,
+  type AsrProfile,
+} from '../asrProviderCatalog'
 import en from '@/i18n/locales/en.json'
 import uk from '@/i18n/locales/uk.json'
 
@@ -238,6 +244,61 @@ describe('ASR profile persistence', () => {
     })
   })
 
+  it('switches between custom profiles without carrying endpoint credentials across', async () => {
+    const first = profile('openai_compat', {
+      id: 'custom-account-a',
+      baseUrl: 'http://localhost:8090/v1',
+      apiKey: 'local-key-a',
+      model: 'model-a',
+      protocol: 'auto',
+    })
+    const second = profile('openai_compat', {
+      id: 'custom-account-b',
+      baseUrl: 'https://asr.example.test/v1',
+      apiKey: 'remote-key-b',
+      model: 'model-b',
+      protocol: 'chat',
+    })
+    await saveAsrProfiles({ profiles: [first, second], activeId: first.id })
+
+    await expect(loadActiveAsrProfile()).resolves.toMatchObject(first)
+    await saveAsrProfiles({ profiles: [first, second], activeId: second.id })
+    await expect(loadActiveAsrProfile()).resolves.toMatchObject(second)
+
+    expect(storedSettings.get('cloudAsr.provider')).toBe('openai_compat')
+    expect(storedSettings.get('cloudAsr.apiKey')).toBe('remote-key-b')
+  })
+
+  it('saves, tests, and matches custom profiles using the canonical trimmed model', async () => {
+    const previousCheck = { ok: true, at: 123, latencyMs: 90, audioSec: 2 }
+    const entered = profile('openai_compat', {
+      id: 'custom-trimmed-model',
+      baseUrl: 'http://localhost:8090/v1',
+      apiKey: '',
+      model: '  local-whisper  ',
+      protocol: 'transcriptions',
+      check: previousCheck,
+    })
+    const saved = normalizeAsrProfileForSave(entered)
+    await saveAsrProfiles({ profiles: [saved], activeId: saved.id })
+
+    const active = await loadActiveAsrProfile()
+    expect(active).not.toBeNull()
+    if (!active) throw new Error('Expected a saved custom profile')
+    expect(active.model).toBe('local-whisper')
+    expect(buildAsrProviderConfig(active, 'uk').extra?.model).toBe('local-whisper')
+    expect(active.check).toEqual(previousCheck)
+
+    const testedProfile = normalizeAsrProfileForSave({ ...active, model: ' local-whisper ' })
+    const updatedCheck = { ok: true, at: 456, latencyMs: 80, audioSec: 2 }
+    await saveAsrProfileChecks([{ profile: testedProfile, check: updatedCheck }])
+
+    await expect(loadActiveAsrProfile()).resolves.toMatchObject({
+      model: 'local-whisper',
+      check: updatedCheck,
+    })
+  })
+
   it('holds a profile snapshot behind a submitted activation until the new profile is committed', async () => {
     const first = profile('openai_transcribe', {
       id: 'openai-account-a', apiKey: 'key-account-a', model: 'gpt-transcribe',
@@ -392,5 +453,31 @@ describe('ASR profile persistence', () => {
       expect.objectContaining({ id: first.id, check }),
       expect.objectContaining({ id: second.id, apiKey: 'key-account-b', model: 'whisper-1' }),
     ]))
+  })
+
+  it('does not attach a late custom endpoint check to a changed URL or protocol', async () => {
+    const original = profile('openai_compat', {
+      id: 'custom-endpoint',
+      baseUrl: 'http://localhost:8090/v1',
+      model: 'local-model',
+      protocol: 'auto',
+    })
+    await saveAsrProfiles({ profiles: [original], activeId: original.id })
+    const changed = { ...original, baseUrl: 'http://localhost:8091/v1', protocol: 'chat' as const }
+    await saveAsrProfiles({ profiles: [changed], activeId: changed.id })
+
+    await saveAsrProfileChecks([{
+      profile: original,
+      check: { ok: true, at: 555, latencyMs: 100, audioSec: 2 },
+    }])
+
+    await expect(loadAsrProfiles()).resolves.toMatchObject({
+      profiles: [expect.objectContaining({
+        id: original.id,
+        baseUrl: changed.baseUrl,
+        protocol: changed.protocol,
+        check: undefined,
+      })],
+    })
   })
 })
