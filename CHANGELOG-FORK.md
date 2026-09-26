@@ -7,6 +7,8 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### Speech Recognition
 
+- Fixed history records being labeled with whichever ASR profile was active when the entry was written: a completed recording now keeps the provider and model that actually recognized it, even if the active profile was switched while recognition was still running. History reprocessing writes the same snapshot-backed metadata.
+- Cleared outdated ASR test verdicts when a saved profile's model is no longer current: profiles migrated or imported from an older catalog no longer show a green "available" result measured against a model they no longer use.
 - Updated the built-in Qwen Audio streaming ASR model to `qwen-audio-3.1-asr-flash-streaming`.
 - Added Russian as a selectable recognition language in the client.
 - Added Ukrainian as a selectable recognition language in the client.

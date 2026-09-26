@@ -332,9 +332,11 @@ describe('parseAsrProfiles 容错', () => {
 
   it('坏的检测结论被丢掉，好的保留', () => {
     const r = parseAsrProfiles([
-      { id: 'a', provider: 'qwen', check: { ok: true, at: 100, latencyMs: 800, audioSec: 3 } },
-      { id: 'b', provider: 'qwen', check: { ok: true } },
-      { id: 'c', provider: 'qwen', check: 'nope' },
+      // Valid saved models: the malformed-check filter must be tested independently
+      // from the model reconciliation that drops a check for a substituted model.
+      { id: 'a', provider: 'qwen', model: 'qwen3-asr-flash', check: { ok: true, at: 100, latencyMs: 800, audioSec: 3 } },
+      { id: 'b', provider: 'qwen', model: 'qwen3-asr-flash', check: { ok: true } },
+      { id: 'c', provider: 'qwen', model: 'qwen3-asr-flash', check: 'nope' },
     ])
     expect(r[0].check).toEqual({ ok: true, at: 100, latencyMs: 800, audioSec: 3, reason: undefined })
     expect(r[1].check).toBeUndefined()
@@ -345,6 +347,71 @@ describe('parseAsrProfiles 容错', () => {
     const r = parseAsrProfiles([{ provider: 'qwen', apiKey: 'sk-1' }])
     expect(r).toHaveLength(1)
     expect(r[0].id).not.toBe('')
+  })
+})
+
+describe('parseAsrProfiles check invalidation on model substitution', () => {
+  it('drops the previous check when the saved model is no longer selectable', () => {
+    const at = Date.now()
+    const [p] = parseAsrProfiles([{
+      id: 'openai-a',
+      provider: 'openai_transcribe',
+      apiKey: 'key',
+      model: 'whisper-1-removed-from-catalog',
+      check: { ok: true, at, latencyMs: 120, audioSec: 2 },
+    }])
+
+    expect(p.model).toBe('gpt-transcribe')
+    expect(p.check).toBeUndefined()
+  })
+
+  it('drops the previous check when a fixed-model provider switched catalog models', () => {
+    const at = Date.now()
+    const [p] = parseAsrProfiles([{
+      id: 'qwen-audio',
+      provider: 'qwen_audio_stream',
+      apiKey: 'key',
+      model: 'qwen-audio-3.0-asr-flash-streaming',
+      check: { ok: true, at, latencyMs: 120, audioSec: 2 },
+    }])
+
+    expect(p.model).toBe('qwen-audio-3.1-asr-flash-streaming')
+    expect(p.check).toBeUndefined()
+  })
+
+  it('drops a failed check as well when the model changed', () => {
+    const [p] = parseAsrProfiles([{
+      id: 'openai-b',
+      provider: 'openai_transcribe',
+      apiKey: 'key',
+      model: 'gone-model',
+      check: { ok: false, at: Date.now(), reason: 'old failure' },
+    }])
+
+    expect(p.check).toBeUndefined()
+  })
+
+  it('keeps a check while the saved model is still current', () => {
+    const at = Date.now()
+    const check = { ok: true, at, latencyMs: 80, audioSec: 2 }
+    const [selectable, fixed] = parseAsrProfiles([
+      { id: 'openai-c', provider: 'openai_transcribe', apiKey: 'key', model: 'whisper-1', check },
+      { id: 'doubao-a', provider: 'doubao_v2', apiKey: 'key', model: 'Doubao-Seed-ASR-2.0', check },
+    ])
+
+    expect(selectable.check).toEqual({ ...check, reason: undefined })
+    expect(fixed.check).toEqual({ ...check, reason: undefined })
+  })
+
+  it('drops a check when the tested model cannot be established', () => {
+    const [p] = parseAsrProfiles([{
+      id: 'legacy-qwen',
+      provider: 'qwen',
+      apiKey: 'key',
+      check: { ok: true, at: Date.now(), latencyMs: 100, audioSec: 2 },
+    }])
+
+    expect(p.check).toBeUndefined()
   })
 })
 

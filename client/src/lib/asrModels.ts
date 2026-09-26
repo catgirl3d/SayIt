@@ -7,6 +7,16 @@ export function formatCustomAsrHistoryProvider(model: string): string {
 }
 
 /**
+ * Persisted ASR label for a result. Custom endpoints keep their model prefix;
+ * every other provider records the model the request actually used, falling back
+ * to the engine key and then to the generic cloud marker.
+ */
+export function formatAsrHistoryProvider(engine?: string, model?: string): string {
+  if (engine === CUSTOM_ASR_PROVIDER && model) return formatCustomAsrHistoryProvider(model)
+  return model || engine || 'cloud'
+}
+
+/**
  * ASR 供应商 key → 实际模型 ID 映射
  */
 

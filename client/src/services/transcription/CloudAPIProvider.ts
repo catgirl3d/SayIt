@@ -2,12 +2,12 @@
 // 豆包 ASR：边录边发（实时流式）
 // 其他 ASR：录完再发（BufferedProvider）
 
-import { isQwenOmniProvider, isStreamingDisplayReady, resolveQwenOmniModel } from '@/lib/asrModels'
+import { isQwenOmniProvider, isStreamingDisplayReady } from '@/lib/asrModels'
 import {
   buildAsrProviderConfig,
   CUSTOM_ASR_PROVIDER,
   effectiveAsrCredentials,
-  findAsrProvider,
+  resolveAsrRequestMetadata,
   type AsrProviderConfig,
   type AsrProfile,
 } from '@/features/settings/asrProviderCatalog'
@@ -463,13 +463,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
       if (!this.isRunCurrent(runId)) return
       const asrProvider = profile.provider
       const isQwenOmni = isQwenOmniProvider(asrProvider)
-      const selectedModel = findAsrProvider(asrProvider)?.models || asrProvider === CUSTOM_ASR_PROVIDER
-        ? profile.model
-        : undefined
-      const emptyResultModel = asrProvider === 'qwen_omni_38_realtime'
-        ? resolveQwenOmniModel(asrProvider)
-        : selectedModel
-      const emptyResultEngine = asrProvider === 'qwen_omni_38_realtime' ? 'qwen_omni' : asrProvider
+      // Stamp every result with the model this run's request snapshot actually used.
+      // Consumers (history, reprocessing) must never re-read the active profile: it
+      // can be switched while a recognition is still in flight.
+      const { engine: requestEngine, model: requestModel } = resolveAsrRequestMetadata(profile)
 
       let asrText = ''
       let asrMs = 0
@@ -554,9 +551,9 @@ export class CloudAPIProvider implements TranscriptionProvider {
         text: asrText,
         asrMs,
         durationSec,
-        ...(!asrText.trim() && emptyResultModel && {
-          asrEngine: emptyResultEngine,
-          asrModel: emptyResultModel,
+        ...(!asrText.trim() && requestModel && {
+          asrEngine: requestEngine,
+          asrModel: requestModel,
         }),
       })
 
@@ -567,9 +564,9 @@ export class CloudAPIProvider implements TranscriptionProvider {
           asrMs,
           llmMs: 0,
           durationSec,
-          ...(emptyResultModel && {
-            asrEngine: emptyResultEngine,
-            asrModel: emptyResultModel,
+          ...(requestModel && {
+            asrEngine: requestEngine,
+            asrModel: requestModel,
           }),
         })
         this.callbacks.onDone?.()
@@ -603,15 +600,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
         runId,
       })
 
-      const omniModel = isQwenOmni ? resolveQwenOmniModel(asrProvider) : undefined
-
       this.callbacks.onFinal?.({
         asrText,
         asrMs,
         durationSec,
         ...polish,
-        ...(isQwenOmni && { asrEngine: 'qwen_omni', asrModel: omniModel }),
-        ...(selectedModel && { asrEngine: asrProvider, asrModel: selectedModel }),
+        ...(requestModel && { asrEngine: requestEngine, asrModel: requestModel }),
       })
       this.callbacks.onDone?.()
     } catch (err) {

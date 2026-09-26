@@ -20,7 +20,7 @@ vi.mock('@/services/store', () => ({
   getSetting: (...args: unknown[]) => mocks.getSetting(...args),
 }))
 
-import { reprocessViaCloudApi } from '../History'
+import { buildReprocessMetadata, reprocessViaCloudApi } from '../History'
 
 describe('history cloud ASR reprocessing', () => {
   beforeEach(() => {
@@ -127,5 +127,43 @@ describe('history cloud ASR reprocessing', () => {
       },
     })
     expect(result).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'history-audio-model' })
+  })
+
+  it('stamps the captured provider model on a fixed-model reprocess result', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'qwen-history-profile',
+      provider: 'qwen',
+      apiKey: 'qwen-key',
+      appId: '',
+      model: 'qwen3-asr-flash',
+      omniPrompt: '',
+    })
+
+    const result = await reprocessViaCloudApi(
+      new ArrayBuffer(32000),
+      [],
+      false,
+      undefined,
+      'uk',
+    )
+
+    expect(result).toMatchObject({ asrEngine: 'qwen', asrModel: 'qwen3-asr-flash' })
+  })
+
+  it('does not relabel cloud reprocess metadata from the runtime provider setting', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'cloudAsr.provider' ? 'groq_whisper' : fallback
+    ))
+
+    const meta = await buildReprocessMetadata('cloud_api', {
+      asrText: 'recognized again',
+      llmText: 'recognized again',
+      asrMs: 10,
+      llmMs: 0,
+      durationSec: 1,
+      asrEngine: 'qwen',
+    })
+
+    expect(meta.asrProvider).toBe('qwen')
   })
 })

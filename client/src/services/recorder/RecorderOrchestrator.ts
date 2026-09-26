@@ -3,6 +3,7 @@ import { startCapture, stopCapture } from '../audio'
 import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult } from '../transcription'
 import {
   CUSTOM_ASR_PROVIDER,
+  formatAsrHistoryProvider,
   formatCustomAsrHistoryProvider,
   isStreamingDisplayReady,
   resolveQwenOmniModel,
@@ -2210,35 +2211,10 @@ export class RecorderOrchestrator {
       }
     }
     if (mode === 'cloud_api') {
-      const asrProviderKey = await getSetting('cloudAsr.provider', '') as string
-      // 映射内部 key 到实际模型 ID
-      const ASR_MODEL_ID_MAP: Record<string, string> = {
-        doubao_v2: 'Doubao-Seed-ASR-2.0',
-        qwen: 'qwen3-asr-flash',
-        mimo: 'mimo-v2.5-asr',
-        groq_whisper: 'whisper-large-v3-turbo',
-        qwen_omni_35_plus: 'qwen3.5-omni-plus-realtime',
-        qwen_omni_35_flash: 'qwen3.5-omni-flash-realtime',
-        qwen_omni_flash: 'qwen3-omni-flash-realtime',
-        qwen_omni_turbo: 'qwen-omni-turbo-realtime',
-        qwen_omni_plus: 'qwen3.5-omni-plus-realtime',
-      }
-      const selectedModelProvider = finalResult?.asrEngine === 'openai_transcribe'
-        || finalResult?.asrEngine === 'gemini_transcribe'
-        || finalResult?.asrEngine === 'openrouter_transcribe'
-        || finalResult?.asrEngine === CUSTOM_ASR_PROVIDER
-      const customAsrModel = finalResult?.asrEngine === CUSTOM_ASR_PROVIDER && finalResult.asrModel
-        ? formatCustomAsrHistoryProvider(finalResult.asrModel)
-        : undefined
-      const qwen38OmniModel = finalResult?.asrEngine === 'qwen_omni'
-        && finalResult.asrModel === resolveQwenOmniModel('qwen_omni_38_realtime')
-        ? finalResult.asrModel
-        : undefined
-      const asrProvider = customAsrModel
-        || qwen38OmniModel
-        || (selectedModelProvider && finalResult?.asrModel
-          ? finalResult.asrModel
-          : ASR_MODEL_ID_MAP[asrProviderKey] || asrProviderKey || 'cloud')
+      // Provenance travels with the result. Never fall back to the runtime
+      // `cloudAsr.provider` here: the active profile can be switched while the
+      // recognition is still being written, which would mislabel the record.
+      const asrProvider = formatAsrHistoryProvider(finalResult?.asrEngine, finalResult?.asrModel)
       const aiProvider = finalResult?.aiProvider || await getSetting('cloudAi.provider', '') as string
       const aiModel = finalResult?.aiModel || await getSetting('cloudAi.model', '') as string
       return { asrProvider, aiProvider: aiProvider || undefined, aiModel: aiModel || undefined, ...executionMeta }

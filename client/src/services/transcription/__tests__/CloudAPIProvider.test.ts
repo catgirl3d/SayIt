@@ -231,6 +231,74 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(finalResults[0]).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'local-whisper' })
   })
 
+  it('stamps the snapshot engine and model for fixed-model providers', async () => {
+    const cases = [
+      { id: 'qwen', model: 'qwen3-asr-flash' },
+      { id: 'mimo', model: 'mimo-v2.5-asr' },
+      { id: 'groq_whisper', model: 'whisper-large-v3-turbo' },
+    ]
+
+    for (const { id, model } of cases) {
+      mocks.invoke.mockReset()
+      mocks.invoke.mockImplementation(async (command: string) => (
+        command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
+      ))
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: `account-${id}`,
+        provider: id,
+        apiKey: 'key',
+        appId: '',
+        model,
+        omniPrompt: '',
+      })
+
+      const provider = new CloudAPIProvider()
+      const finals: Array<{ asrEngine?: string; asrModel?: string }> = []
+      let resolveDone = () => {}
+      const done = new Promise<void>((resolve) => { resolveDone = resolve })
+      await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+      expect(provider.start({ runId: 11, language: 'uk' })).toBe(true)
+      provider.sendAudio(new ArrayBuffer(16000))
+      expect(provider.stop()).toBe(true)
+      await done
+
+      expect(finals[0]).toMatchObject({ asrEngine: id, asrModel: model })
+    }
+  })
+
+  it('stamps the Doubao catalog model on a streamed result', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'doubao-account',
+      provider: 'doubao_v2',
+      apiKey: 'doubao-key',
+      appId: '',
+      model: 'Doubao-Seed-ASR-2.0',
+      omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'doubao_stream_finish' ? 'recognized' : undefined
+    ))
+
+    const provider = new CloudAPIProvider()
+    const finals: Array<{ asrEngine?: string; asrModel?: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+    expect(provider.start({ runId: 12, language: 'uk' })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    // The Doubao stream opens asynchronously; stop only takes the streaming path once ready.
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'doubao_stream_open')).toBe(true)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(provider.stop()).toBe(true)
+    await done
+
+    expect(finals[0]).toMatchObject({ asrEngine: 'doubao_v2', asrModel: 'Doubao-Seed-ASR-2.0' })
+  })
+
   it('does not dispatch Auto chat after cancellation while multipart is pending', async () => {
     let rejectMultipart!: (reason: string) => void
     mocks.loadActiveAsrProfile.mockResolvedValue({

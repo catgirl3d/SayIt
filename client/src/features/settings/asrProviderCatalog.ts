@@ -17,7 +17,12 @@ import {
   type DoubaoConsole,
   type DoubaoCredentials,
 } from '@/lib/cloudAsrCreds'
-import { buildCloudAsrExtra, CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
+import {
+  buildCloudAsrExtra,
+  CUSTOM_ASR_PROVIDER,
+  isQwenOmniProvider,
+  resolveQwenOmniModel,
+} from '@/lib/asrModels'
 export { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
@@ -376,10 +381,18 @@ function str(v: unknown): string {
 }
 
 /**
- * 容错解析存储里的档案列表。
+ * Tolerant parser for the stored profile list.
  *
- * 存储可能被手改过、也可能是更早版本写的，坏条目一律丢弃而不是让整页崩掉。
- * provider 不在内置清单里的条目也丢掉 —— 留着只会渲染出一张点不动的卡。
+ * Storage may have been hand-edited or written by an older version; bad entries are
+ * dropped entirely instead of taking the whole page down. Entries whose provider is
+ * not in the built-in catalog are dropped too — keeping them would only render a
+ * card that cannot be clicked.
+ *
+ * Replacing the stored model with the current catalog default invalidates the stored
+ * check: the verdict belongs to the model that was actually tested, so it must not
+ * survive a substitution. The same rule drops a check when the tested model cannot be
+ * established (legacy entries without a saved model) — a check whose provenance is
+ * unknown is not treated as valid.
  */
 export function parseAsrProfiles(raw: unknown): AsrProfile[] {
   if (!Array.isArray(raw)) return []
@@ -391,7 +404,12 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
     const provider = str(v.provider)
     const entry = findAsrProvider(provider)
     if (!entry) continue
-    const model = str(v.model).trim()
+    const storedModel = str(v.model).trim()
+    const model = entry.customEndpoint
+      ? storedModel
+      : entry.models
+        ? entry.models.includes(storedModel) ? storedModel : entry.model
+        : entry.model
     const id = str(v.id) || makeAsrProfileId()
     if (seen.has(id)) continue
     seen.add(id)
@@ -399,11 +417,7 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
     out.push({
       id,
       provider,
-      model: entry.customEndpoint
-        ? model
-        : entry.models
-          ? entry.models.includes(model) ? model : entry.model
-          : entry.model,
+      model,
       ...(entry.customEndpoint && {
         baseUrl: str(v.baseUrl),
         protocol: v.protocol === 'chat' || v.protocol === 'auto' ? v.protocol : 'transcriptions',
@@ -414,7 +428,7 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
       otherKey: str(v.otherKey),
       workspaceId: str(v.workspaceId),
       omniPrompt: str(v.omniPrompt),
-      check: parseCheck(v.check),
+      check: storedModel !== '' && storedModel === model ? parseCheck(v.check) : undefined,
     })
   }
   return out
@@ -452,6 +466,29 @@ export function buildAsrProviderConfig(
       }
       : extra,
   }
+}
+
+export interface AsrRequestMetadata {
+  engine: string
+  model?: string
+}
+
+/**
+ * Engine and model a request built from this profile actually uses. Live recognition
+ * and history reprocessing both stamp their results with it, so the provider→model
+ * decision lives here instead of being re-derived by each caller.
+ */
+export function resolveAsrRequestMetadata(profile: AsrProfile): AsrRequestMetadata {
+  const entry = findAsrProvider(profile.provider)
+  if (isQwenOmniProvider(profile.provider)) {
+    return { engine: 'qwen_omni', model: resolveQwenOmniModel(profile.provider) }
+  }
+  const model = entry?.customEndpoint
+    ? profile.model.trim()
+    : entry?.models
+      ? profile.model
+      : entry?.model
+  return { engine: profile.provider, model }
 }
 
 export function normalizeAsrProfileForSave(profile: AsrProfile): AsrProfile {

@@ -480,4 +480,23 @@ describe('ASR profile persistence', () => {
       })],
     })
   })
+
+  // Import writes app_settings verbatim and restarts; the next load is the only
+  // migration step. A backup exported under an older catalog must not resurrect
+  // a check that belonged to the replaced model.
+  it('clears checks for a profile restored from an older-catalog backup', async () => {
+    storedSettings.set(ASR_PROFILES_KEY, [{
+      id: 'imported-openai',
+      provider: 'openai_transcribe',
+      apiKey: 'imported-key',
+      model: 'whisper-1-removed-from-catalog',
+      check: { ok: true, at: 1700000000000, latencyMs: 90, audioSec: 2 },
+    }])
+    storedSettings.set(ASR_ACTIVE_PROFILE_KEY, 'imported-openai')
+
+    const state = await loadAsrProfiles()
+
+    expect(state.profiles[0]).toMatchObject({ id: 'imported-openai', model: 'gpt-transcribe' })
+    expect(state.profiles[0].check).toBeUndefined()
+  })
 })

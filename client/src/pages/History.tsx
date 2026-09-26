@@ -1,12 +1,14 @@
 import * as bridge from '@/services/bridge'
 import { cn } from '@/lib/utils'
 import {
-  resolveAsrDisplayModel,
+  formatAsrHistoryProvider,
   isQwenOmniProvider,
-  resolveQwenOmniModel,
-  formatCustomAsrHistoryProvider,
 } from '@/lib/asrModels'
-import { buildAsrProviderConfig, CUSTOM_ASR_PROVIDER, findAsrProvider } from '@/features/settings/asrProviderCatalog'
+import {
+  buildAsrProviderConfig,
+  CUSTOM_ASR_PROVIDER,
+  resolveAsrRequestMetadata,
+} from '@/features/settings/asrProviderCatalog'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
@@ -230,10 +232,8 @@ export async function reprocessViaCloudApi(
   const loadedProfile = await loadActiveAsrProfile()
   if (!loadedProfile) throw new Error('No cloud ASR profile is active')
   const profile = { ...loadedProfile }
-  const entry = findAsrProvider(profile.provider)
   const asrProvider = profile.provider
   const isQwenOmni = isQwenOmniProvider(asrProvider)
-  const qwenOmniModel = resolveQwenOmniModel(asrProvider)
   const asrConfig = buildAsrProviderConfig(profile, language)
 
   const asrStart = performance.now()
@@ -277,14 +277,17 @@ export async function reprocessViaCloudApi(
     }
   }
 
+  // Stamp the model this snapshot actually used; the metadata writer must not
+  // consult the runtime provider setting, which can change during reprocessing.
+  const { engine: requestEngine, model: requestModel } = resolveAsrRequestMetadata(profile)
+
   return {
     asrText,
     llmText,
     asrMs,
     llmMs,
     durationSec,
-    ...(isQwenOmni && { asrEngine: 'qwen_omni', asrModel: qwenOmniModel }),
-    ...((entry?.models || entry?.customEndpoint) && { asrEngine: asrProvider, asrModel: profile.model }),
+    ...(requestModel && { asrEngine: requestEngine, asrModel: requestModel }),
   }
 }
 
@@ -336,8 +339,8 @@ async function reprocessViaLocal(
   return { asrText, llmText, asrMs, llmMs, durationSec }
 }
 
-/** 重新识别后写回历史记录所需的供应商元数据 */
-async function buildReprocessMetadata(
+/** Metadata written back to a history record after reprocessing. Exported for tests. */
+export async function buildReprocessMetadata(
   workMode: WorkMode,
   result: ReprocessResult,
 ): Promise<{
@@ -348,12 +351,8 @@ async function buildReprocessMetadata(
   aiStatus?: AiExecutionStatus
 }> {
   if (workMode === 'cloud_api') {
-    const customProvider = result.asrEngine === CUSTOM_ASR_PROVIDER && result.asrModel
-      ? formatCustomAsrHistoryProvider(result.asrModel)
-      : undefined
-    const asrProvider = customProvider
-      || result.asrModel
-      || resolveAsrDisplayModel(await getSetting('cloudAsr.provider', '') as string)
+    // Snapshot-backed metadata only: the result carries the model its request used.
+    const asrProvider = formatAsrHistoryProvider(result.asrEngine, result.asrModel)
     const aiProvider = await getSetting('cloudAi.provider', '') as string
     const aiModel = await getSetting('cloudAi.model', '') as string
     return {
