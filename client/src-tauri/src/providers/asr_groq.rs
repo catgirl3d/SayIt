@@ -112,6 +112,17 @@ fn resolve_openai_model(config: &AsrProviderConfig) -> String {
         .to_string()
 }
 
+fn resolve_groq_model(config: &AsrProviderConfig) -> String {
+    config
+        .extra
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(MODEL)
+        .to_string()
+}
+
 fn openai_language_field(model: &str) -> &'static str {
     if model == "gpt-transcribe" {
         "languages[]"
@@ -161,6 +172,24 @@ fn build_form(
         }
     }
     Ok(form)
+}
+
+fn build_groq_form(
+    wav: Vec<u8>,
+    config: &AsrProviderConfig,
+    language: Option<&str>,
+    scope: &str,
+) -> Result<(String, reqwest::multipart::Form), String> {
+    let model = resolve_groq_model(config);
+    let form = build_form(
+        wav,
+        &model,
+        language,
+        "language",
+        language == Some("zh"),
+        scope,
+    )?;
+    Ok((model, form))
 }
 
 fn request_builder(
@@ -301,30 +330,32 @@ pub async fn transcribe(
 
     let audio_sec = pcm.len() as f64 / (sample_rate.max(1) as f64 * 2.0);
     let language = resolve_language(config);
-    let model = if is_openai {
-        resolve_openai_model(config)
-    } else {
-        MODEL.to_string()
-    };
-    let api_url = if is_openai { OPENAI_API_URL } else { API_URL };
-    let language_field = if is_openai {
-        openai_language_field(&model)
-    } else {
-        "language"
-    };
-    let with_prompt = if is_openai {
-        openai_should_include_prompt(&model, language.as_deref())
-    } else {
-        language.as_deref() == Some("zh")
-    };
-    if is_openai && language.as_deref() == Some("zh") && !openai_supports_prompt(&model) {
-        diag::log(
-            scope,
-            "prompt_omitted",
-            &format!("model={} does not support the transcription prompt", model),
-        );
-    }
     let wav = pcm_to_wav(&pcm, sample_rate);
+    let wav_bytes = wav.len();
+    let (model, form, api_url) = if is_openai {
+        let model = resolve_openai_model(config);
+        let language_field = openai_language_field(&model);
+        let with_prompt = openai_should_include_prompt(&model, language.as_deref());
+        if language.as_deref() == Some("zh") && !openai_supports_prompt(&model) {
+            diag::log(
+                scope,
+                "prompt_omitted",
+                &format!("model={} does not support the transcription prompt", model),
+            );
+        }
+        let form = build_form(
+            wav,
+            &model,
+            language.as_deref(),
+            language_field,
+            with_prompt,
+            scope,
+        )?;
+        (model, form, OPENAI_API_URL)
+    } else {
+        let (model, form) = build_groq_form(wav, config, language.as_deref(), scope)?;
+        (model, form, API_URL)
+    };
 
     diag::log(
         scope,
@@ -332,21 +363,13 @@ pub async fn transcribe(
         &format!(
             "model={} wav_bytes={} audio_sec={:.1} rate={} language={}",
             model,
-            wav.len(),
+            wav_bytes,
             audio_sec,
             sample_rate,
             language.as_deref().unwrap_or("auto(omitted)")
         ),
     );
 
-    let form = build_form(
-        wav,
-        &model,
-        language.as_deref(),
-        language_field,
-        with_prompt,
-        scope,
-    )?;
     let client = request_client(is_openai).map_err(|error| {
         diag::fail(
             scope,
@@ -424,7 +447,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
         return test_openai_connection(config).await;
     }
 
-    test_groq_connection(config).await
+    test_groq_connection(config, API_URL).await
 }
 
 fn openai_connection_result(
@@ -550,15 +573,15 @@ async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
     }
 }
 
-async fn test_groq_connection(config: &AsrProviderConfig) -> TestResult {
+async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResult {
     // Half a second of silence yields HTTP 200 with an empty transcript and is
     // sufficient to verify credentials and connectivity. Shorter audio may be
     // rejected as "too short", which would conflate audio and key failures.
     let silence = vec![0u8; 16000];
     let wav = pcm_to_wav(&silence, 16000);
 
-    let form = match build_form(wav, MODEL, None, "language", true, SCOPE) {
-        Ok(f) => f,
+    let (_model, form) = match build_groq_form(wav, config, None, SCOPE) {
+        Ok(form) => form,
         Err(e) => {
             return TestResult {
                 ok: false,
@@ -574,7 +597,7 @@ async fn test_groq_connection(config: &AsrProviderConfig) -> TestResult {
 
     let result = request_builder(
         client,
-        API_URL,
+        url,
         &config.api_key,
         form,
         std::time::Duration::from_secs(15),
@@ -748,6 +771,29 @@ mod tests {
     }
 
     #[test]
+    fn groq_model_uses_the_selected_value_or_turbo_for_missing_or_malformed_values() {
+        assert_eq!(
+            resolve_groq_model(&config_with_language(
+                serde_json::json!({ "model": "whisper-large-v3" })
+            )),
+            "whisper-large-v3"
+        );
+        assert_eq!(
+            resolve_groq_model(&config_with_language(
+                serde_json::json!({ "model": "whisper-large-v3-turbo" })
+            )),
+            "whisper-large-v3-turbo"
+        );
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({ "model": null }),
+            serde_json::json!({ "model": 17 }),
+        ] {
+            assert_eq!(resolve_groq_model(&config_with_language(extra)), MODEL);
+        }
+    }
+
+    #[test]
     fn only_new_openai_traffic_uses_the_no_redirect_client() {
         let groq_client = super::super::http_client::shared();
         let openai_client = request_client(true).unwrap();
@@ -839,6 +885,51 @@ mod tests {
             if expected_prompt {
                 assert!(wire.contains(PUNCTUATION_PROMPT));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn groq_request_form_uses_the_selected_model_from_config() {
+        let config = config_with_language(serde_json::json!({ "model": "whisper-large-v3" }));
+        let (model, form) =
+            build_groq_form(pcm_to_wav(&[1, 2, 3, 4], 16000), &config, Some("zh"), SCOPE).unwrap();
+        let (url, server) = spawn_http_fixture();
+        let client = reqwest::Client::new();
+        let request = request_builder(
+            &client,
+            &url,
+            "groq-test-key",
+            form,
+            std::time::Duration::from_secs(5),
+        )
+        .build()
+        .unwrap();
+
+        let response = client.execute(request).await.unwrap();
+        assert!(response.status().is_success());
+        assert_eq!(model, "whisper-large-v3");
+        let wire = server.join().unwrap();
+        assert!(wire.contains("name=\"model\"\r\n\r\nwhisper-large-v3"));
+        assert!(wire.contains("name=\"language\"\r\n\r\nzh"));
+    }
+
+    #[tokio::test]
+    async fn groq_connection_test_uses_the_selected_model_and_legacy_default() {
+        for (extra, expected_model) in [
+            (
+                serde_json::json!({ "model": "whisper-large-v3" }),
+                "whisper-large-v3",
+            ),
+            (serde_json::json!({}), MODEL),
+        ] {
+            let config = config_with_language(extra);
+            let (url, server) = spawn_http_fixture();
+
+            let result = test_groq_connection(&config, &url).await;
+
+            assert!(result.ok);
+            let wire = server.join().unwrap();
+            assert!(wire.contains(&format!("name=\"model\"\r\n\r\n{}", expected_model)));
         }
     }
 

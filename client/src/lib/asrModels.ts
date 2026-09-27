@@ -173,5 +173,12 @@ export function buildCloudAsrExtra(
     }
   }
   const requestLanguage = resolveCloudAsrLanguageRequest(provider, language)
+  if (provider === 'groq_whisper') {
+    if (!selectedModel && !requestLanguage) return undefined
+    return {
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(requestLanguage ? { language: requestLanguage } : {}),
+    }
+  }
   return requestLanguage ? { language: requestLanguage } : undefined
 }

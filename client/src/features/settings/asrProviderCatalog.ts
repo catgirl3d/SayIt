@@ -215,6 +215,7 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     id: 'groq_whisper',
     get label() { return t('asrProvider.groq') },
     model: 'whisper-large-v3-turbo',
+    models: ['whisper-large-v3-turbo', 'whisper-large-v3'],
     platform: 'groq',
     availability: 'global',
     get blurb() { return t('asrProvider.groqBlurb') },

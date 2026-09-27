@@ -50,6 +50,7 @@ describe('resolveAsrDisplayModel', () => {
     expect(resolveAsrDisplayModel('qwen')).toBe('qwen3-asr-flash')
     expect(resolveAsrDisplayModel('qwen_audio_stream')).toBe('qwen-audio-3.1-asr-flash-streaming')
     expect(resolveAsrDisplayModel('mimo')).toBe('mimo-v2.5-asr')
+    expect(resolveAsrDisplayModel('groq_whisper')).toBe('whisper-large-v3-turbo')
     expect(resolveAsrDisplayModel('qwen_omni_35_plus')).toBe('qwen3.5-omni-plus-realtime')
     expect(resolveAsrDisplayModel('qwen_omni_38_realtime')).toBe('qwen3.8-omni-flash-realtime')
   })
@@ -157,6 +158,13 @@ describe('buildCloudAsrExtra', () => {
   })
 
   it('explicit-language providers carry the resolved language code', () => {
+    expect(buildCloudAsrExtra('groq_whisper', 'ru', undefined, 'whisper-large-v3')).toEqual({
+      model: 'whisper-large-v3',
+      language: 'ru',
+    })
+    expect(buildCloudAsrExtra('groq_whisper', 'auto', undefined, 'whisper-large-v3')).toEqual({
+      model: 'whisper-large-v3',
+    })
     expect(buildCloudAsrExtra('groq_whisper', 'ru')).toEqual({ language: 'ru' })
     expect(buildCloudAsrExtra('groq_whisper', 'auto')).toBeUndefined()
     expect(buildCloudAsrExtra('mimo', 'zh')).toEqual({ language: 'zh' })

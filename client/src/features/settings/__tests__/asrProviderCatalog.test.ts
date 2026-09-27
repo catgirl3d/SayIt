@@ -116,6 +116,10 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
   })
 
   it('exposes the frozen buffered provider defaults and model choices', () => {
+    expect(findAsrProvider('groq_whisper')).toMatchObject({
+      model: 'whisper-large-v3-turbo',
+      models: ['whisper-large-v3-turbo', 'whisper-large-v3'],
+    })
     expect(findAsrProvider('openai_transcribe')).toMatchObject({
       platform: 'openai',
       model: 'gpt-transcribe',
@@ -156,12 +160,34 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
   })
 
   it('keeps existing Groq profile credentials and language payload intact', () => {
-    const groq = profile({ provider: 'groq_whisper', apiKey: 'groq-profile-key' })
+    const groq = profile({
+      provider: 'groq_whisper',
+      model: 'whisper-large-v3-turbo',
+      apiKey: 'groq-profile-key',
+    })
     expect(buildAsrProviderConfig(groq, 'uk')).toEqual({
       provider: 'groq_whisper',
       api_key: 'groq-profile-key',
       app_id: '',
-      extra: { language: 'uk' },
+      extra: { model: 'whisper-large-v3-turbo', language: 'uk' },
+    })
+  })
+
+  it('preserves a saved Groq v3 selection and its check in the request config', () => {
+    const check = { ok: true, at: 123, latencyMs: 80, audioSec: 2 }
+    const [groq] = parseAsrProfiles([{
+      id: 'groq-v3',
+      provider: 'groq_whisper',
+      apiKey: 'groq-profile-key',
+      model: 'whisper-large-v3',
+      check,
+    }])
+
+    expect(groq.model).toBe('whisper-large-v3')
+    expect(groq.check).toEqual({ ...check, reason: undefined })
+    expect(buildAsrProviderConfig(groq, 'uk').extra).toEqual({
+      model: 'whisper-large-v3',
+      language: 'uk',
     })
   })
 

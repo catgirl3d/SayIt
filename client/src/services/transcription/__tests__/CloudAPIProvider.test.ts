@@ -231,18 +231,23 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(finalResults[0]).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'local-whisper' })
   })
 
-  it('stamps the snapshot engine and model for fixed-model providers', async () => {
+  it('stamps the snapshot engine and model for buffered profiles', async () => {
     const cases = [
       { id: 'qwen', model: 'qwen3-asr-flash' },
       { id: 'mimo', model: 'mimo-v2.5-asr' },
       { id: 'groq_whisper', model: 'whisper-large-v3-turbo' },
+      { id: 'groq_whisper', model: 'whisper-large-v3' },
     ]
+    const groqRequests: Array<{ extra?: Record<string, unknown> }> = []
 
     for (const { id, model } of cases) {
       mocks.invoke.mockReset()
-      mocks.invoke.mockImplementation(async (command: string) => (
-        command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
-      ))
+      mocks.invoke.mockImplementation(async (command: string, args: unknown) => {
+        if (command !== 'cloud_transcribe') return undefined
+        const config = (args as { request: { asr_config: { provider: string; extra?: Record<string, unknown> } } }).request.asr_config
+        if (config.provider === 'groq_whisper') groqRequests.push(config)
+        return { text: 'recognized', elapsed_ms: 24 }
+      })
       mocks.loadActiveAsrProfile.mockResolvedValue({
         id: `account-${id}`,
         provider: id,
@@ -265,6 +270,11 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
 
       expect(finals[0]).toMatchObject({ asrEngine: id, asrModel: model })
     }
+
+    expect(groqRequests.map(({ extra }) => extra)).toEqual([
+      { model: 'whisper-large-v3-turbo', language: 'uk' },
+      { model: 'whisper-large-v3', language: 'uk' },
+    ])
   })
 
   it('stamps the Doubao catalog model on a streamed result', async () => {
