@@ -99,6 +99,52 @@ describe('describeProviderError', () => {
     expect(describeProviderError(new Error('HTTP 403: Invalid API key')).code).toBe('provider_bad_key')
   })
 
+  it('uses the stable code for Groq HTTP details despite conflicting request IDs', () => {
+    const cases = [
+      [
+        'sayit_error:provider_bad_key:Groq ASR error 401 Unauthorized [http=401 x-request-id=quota]',
+        'provider_bad_key',
+      ],
+      [
+        'sayit_error:provider_forbidden:Groq ASR error 403 Forbidden [http=403 x-request-id=quota]',
+        'provider_forbidden',
+      ],
+      ['sayit_error:provider_no_model:Groq ASR error 404 Not Found [http=404 x-request-id=401]', 'provider_no_model'],
+      [
+        'sayit_error:provider_rate_limit:Groq ASR error 429 Too Many Requests [http=429 x-request-id=invalid_api_key]',
+        'provider_rate_limit',
+      ],
+      [
+        'sayit_error:connect_failed:Groq ASR error 500 Internal Server Error [http=500 x-request-id=quota]',
+        'connect_failed',
+      ],
+    ] as const
+
+    for (const [error, expectedCode] of cases) {
+      const result = describeProviderError(error)
+      expect(result.code).toBe(expectedCode)
+      expect(result.detail).toContain('x-request-id=')
+    }
+  })
+
+  it('keeps legacy, unknown-code, non-Groq, AI, and malformed-JSON classification unchanged', () => {
+    const unchangedCases = [
+      [new Error('API error 403 Forbidden [http=403 x-request-id=quota]'), 'provider_rate_limit'],
+      ['sayit_error:provider_forbidden:Other provider error 403 [http=403 x-request-id=quota]', 'provider_rate_limit'],
+      ['sayit_error:unknown_code:Groq ASR error 403 Forbidden [http=403 x-request-id=quota]', 'provider_rate_limit'],
+      ['Groq ASR error 403 Forbidden [http=403 x-request-id=quota]', 'provider_rate_limit'],
+      ['sayit_error:provider_forbidden:AI polishing failed: HTTP 403 quota exceeded', 'provider_rate_limit'],
+      [
+        'sayit_error:connect_failed:Failed to parse response: expected value at line 1 column 1 [http=200 x-request-id=groq-parse-trace]',
+        'connect_failed',
+      ],
+    ] as const
+
+    for (const [error, expectedCode] of unchangedCases) {
+      expect(describeProviderError(error).code).toBe(expectedCode)
+    }
+  })
+
   it('模型未开通给出换供应商的方向', () => {
     expect(describeProviderError(new Error('model not found')).message).toContain('model')
   })

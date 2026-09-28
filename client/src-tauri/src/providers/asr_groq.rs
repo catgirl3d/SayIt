@@ -238,10 +238,9 @@ fn parse_transcription_response(
             format!("OpenAI returned malformed transcription JSON: {}", error)
         } else {
             format!(
-                "Failed to parse response: {} [{}] response excerpt: {}",
+                "Failed to parse response: {} [{}]",
                 error,
-                diag::http_summary(status, headers),
-                diag::truncate(body, 200)
+                diag::http_summary(status, headers)
             )
         };
         diag::fail(scope, "parse_json", message)
@@ -266,7 +265,7 @@ fn parse_transcription_response(
 fn transcription_http_error(
     status: reqwest::StatusCode,
     headers: &reqwest::header::HeaderMap,
-    body: &str,
+    _body: &str,
     scope: &str,
 ) -> String {
     if scope == OPENAI_SCOPE {
@@ -281,15 +280,22 @@ fn transcription_http_error(
     }
 
     let provider_name = "Groq";
-    diag::fail(
+    let code = match status.as_u16() {
+        401 => "provider_bad_key",
+        403 => "provider_forbidden",
+        404 => "provider_no_model",
+        429 => "provider_rate_limit",
+        _ => "connect_failed",
+    };
+    diag::fail_code(
         scope,
         "http_status",
+        code,
         format!(
-            "{} ASR error {} [{}]: {}",
+            "{} ASR error {} [{}]",
             provider_name,
             status,
-            diag::http_summary(status, headers),
-            diag::truncate(body, 300)
+            diag::http_summary(status, headers)
         ),
     )
 }
@@ -407,8 +413,7 @@ pub async fn transcribe(
         if is_openai {
             return Err(transcription_http_error(status, &headers, "", scope));
         }
-        let body = resp.text().await.unwrap_or_default();
-        return Err(transcription_http_error(status, &headers, &body, scope));
+        return Err(transcription_http_error(status, &headers, "", scope));
     }
 
     let body_text = resp.text().await.map_err(|e| {
@@ -617,18 +622,20 @@ async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResu
         Ok(resp) => {
             let status = resp.status();
             let summary = diag::http_summary(status, resp.headers());
-            let body = resp.text().await.unwrap_or_default();
+            let code = match status.as_u16() {
+                401 => "provider_bad_key",
+                403 => "provider_forbidden",
+                404 => "provider_no_model",
+                429 => "provider_rate_limit",
+                _ => "connect_failed",
+            };
             TestResult {
                 ok: false,
-                message: diag::fail(
+                message: diag::fail_code(
                     "groq/asr-test",
                     "http_status",
-                    format!(
-                        "API error {} [{}]: {}",
-                        status,
-                        summary,
-                        diag::truncate(&body, 100)
-                    ),
+                    code,
+                    format!("API error {} [{}]", status, summary),
                 ),
                 elapsed_ms,
                 detail: String::new(),
@@ -662,6 +669,14 @@ mod tests {
             app_id: String::new(),
             extra: value,
         }
+    }
+
+    fn assert_error_envelope(error: &str, expected_code: &str, request_id: &str) {
+        let mut parts = error.splitn(3, ':');
+        assert_eq!(parts.next(), Some("sayit_error"));
+        assert_eq!(parts.next(), Some(expected_code));
+        let detail = parts.next().expect("encoded error detail is missing");
+        assert!(detail.contains(&format!("x-request-id={}", request_id)));
     }
 
     /// `auto` must omit the language field rather than being sent as a language code.
@@ -934,6 +949,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn groq_connection_test_does_not_return_provider_error_body() {
+        let marker = "groq-connection-private-marker";
+        let body = format!(r#"{{"error":{{"message":"Invalid API Key: {}"}}}}"#, marker);
+        let (url, server) = spawn_http_fixture_with_response(
+            "403 Forbidden",
+            "x-request-id: groq-connection-trace\r\n",
+            &body,
+        );
+
+        let result = test_groq_connection(&config_with_language(serde_json::json!({})), &url).await;
+        server.join().unwrap();
+
+        assert!(!result.ok);
+        assert!(!result.message.contains(marker));
+        assert!(result
+            .message
+            .starts_with("sayit_error:provider_forbidden:"));
+        assert!(result.message.contains("http=403"));
+        assert!(result
+            .message
+            .contains("x-request-id=groq-connection-trace"));
+    }
+
+    #[tokio::test]
     async fn openai_multipart_uses_selected_model_language_and_header_auth() {
         let (url, server) = spawn_http_fixture();
         let client = reqwest::Client::new();
@@ -1109,15 +1148,151 @@ mod tests {
         assert!(!error.contains(marker));
         assert!(!error.contains("response-header-marker"));
     }
+
+    #[test]
+    fn groq_malformed_success_does_not_return_provider_body() {
+        let marker = "groq-malformed-private-marker";
+        let body = format!(r#"{{"message":"{}""#, marker);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            reqwest::header::HeaderValue::from_static("groq-parse-trace"),
+        );
+
+        let error = parse_transcription_response(reqwest::StatusCode::OK, &headers, &body, SCOPE)
+            .unwrap_err();
+
+        assert!(!error.contains(marker));
+        assert!(error.starts_with("sayit_error:connect_failed:"));
+        assert!(error.contains("http=200"));
+        assert!(error.contains("x-request-id=groq-parse-trace"));
+    }
+
+    #[test]
+    fn groq_http_errors_ignore_body_and_classify_by_status() {
+        let marker = "groq-http-private-marker";
+        let body = format!(r#"{{"error":{{"message":"Invalid API Key: {}"}}}}"#, marker);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            reqwest::header::HeaderValue::from_static("groq-http-trace"),
+        );
+
+        let forbidden =
+            transcription_http_error(reqwest::StatusCode::FORBIDDEN, &headers, &body, SCOPE);
+        let marker_hidden = !forbidden.contains(marker);
+        let classified_by_status = forbidden.starts_with("sayit_error:provider_forbidden:");
+        assert!(
+            marker_hidden && classified_by_status,
+            "marker_hidden={}, classified_by_status={}",
+            marker_hidden,
+            classified_by_status
+        );
+        assert!(forbidden.contains("http=403"));
+        assert!(forbidden.contains("x-request-id=groq-http-trace"));
+
+        for (status, code) in [
+            (reqwest::StatusCode::UNAUTHORIZED, "provider_bad_key"),
+            (
+                reqwest::StatusCode::TOO_MANY_REQUESTS,
+                "provider_rate_limit",
+            ),
+        ] {
+            let error = transcription_http_error(status, &headers, "", SCOPE);
+            assert!(error.starts_with(&format!("sayit_error:{}:", code)));
+            assert!(error.contains(&format!("http={}", status.as_u16())));
+        }
+    }
+
+    #[test]
+    fn groq_transcription_http_status_only_classification() {
+        for (status, request_id, expected_code) in [
+            (
+                reqwest::StatusCode::UNAUTHORIZED,
+                "quota",
+                "provider_bad_key",
+            ),
+            (
+                reqwest::StatusCode::FORBIDDEN,
+                "quota",
+                "provider_forbidden",
+            ),
+            (reqwest::StatusCode::NOT_FOUND, "401", "provider_no_model"),
+            (
+                reqwest::StatusCode::TOO_MANY_REQUESTS,
+                "invalid_api_key",
+                "provider_rate_limit",
+            ),
+            (
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                "quota",
+                "connect_failed",
+            ),
+        ] {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "x-request-id",
+                reqwest::header::HeaderValue::from_bytes(request_id.as_bytes()).unwrap(),
+            );
+            let error = parse_transcription_response(
+                status,
+                &headers,
+                r#"{"error":{"message":"Invalid API Key; quota exceeded"}}"#,
+                SCOPE,
+            )
+            .unwrap_err();
+
+            assert_error_envelope(&error, expected_code, request_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn groq_connection_test_http_status_only_classification() {
+        for (status_line, request_id, expected_code) in [
+            ("401 Unauthorized", "quota", "provider_bad_key"),
+            ("403 Forbidden", "quota", "provider_forbidden"),
+            ("404 Not Found", "401", "provider_no_model"),
+            (
+                "429 Too Many Requests",
+                "invalid_api_key",
+                "provider_rate_limit",
+            ),
+            ("500 Internal Server Error", "quota", "connect_failed"),
+        ] {
+            let (url, server) = spawn_http_fixture_with_response(
+                status_line,
+                &format!("x-request-id: {}\r\n", request_id),
+                r#"{"error":{"message":"Invalid API Key; quota exceeded"}}"#,
+            );
+            let result =
+                test_groq_connection(&config_with_language(serde_json::json!({})), &url).await;
+            server.join().unwrap();
+
+            assert!(!result.ok);
+            assert_error_envelope(&result.message, expected_code, request_id);
+        }
+    }
 }
 
 #[cfg(test)]
 fn spawn_http_fixture() -> (String, std::thread::JoinHandle<String>) {
+    spawn_http_fixture_with_response("200 OK", "", r#"{"text":"ok"}"#)
+}
+
+#[cfg(test)]
+fn spawn_http_fixture_with_response(
+    status_line: &str,
+    response_headers: &str,
+    response_body: &str,
+) -> (String, std::thread::JoinHandle<String>) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    let status_line = status_line.to_string();
+    let response_headers = response_headers.to_string();
+    let response_body = response_body.to_string();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
@@ -1153,12 +1328,13 @@ fn spawn_http_fixture() -> (String, std::thread::JoinHandle<String>) {
             }
         }
         let wire = String::from_utf8_lossy(&request).into_owned();
-        let body = r#"{"text":"ok"}"#;
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
+            "HTTP/1.1 {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status_line,
+            response_headers,
+            response_body.len(),
+            response_body
         )
         .unwrap();
         wire

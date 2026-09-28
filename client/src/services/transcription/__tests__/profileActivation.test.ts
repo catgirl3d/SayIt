@@ -653,4 +653,42 @@ describe('ASR profile activation and recording ordering', () => {
       failReasonCode: 'provider_insufficient_balance',
     })
   })
+
+  it('persists Groq 403 as forbidden when its request ID contains quota text', async () => {
+    harness.settings.set('historyEnabled', true)
+    harness.settings.set('audioRetentionEnabled', false)
+    const historySaved = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation(async (record: Record<string, unknown>) => {
+      historySaved.resolve(record)
+    })
+
+    const recorder = new RecorderOrchestrator()
+    Reflect.set(recorder, 'overlayService', {
+      disableEscapeAction: vi.fn(async () => {}),
+      stopListeningTicker: vi.fn(),
+      resetWarnings: vi.fn(),
+      resetStreamingText: vi.fn(),
+      clearFallbackHideTimer: vi.fn(),
+      hide: vi.fn(),
+    })
+    Reflect.set(recorder, 'state', 'processing')
+    Reflect.set(recorder, 'activeRunId', 43)
+    Reflect.set(recorder, 'audioSentSamples', 8000)
+    Reflect.set(recorder, 'recordedChunks', [new ArrayBuffer(16)])
+
+    const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
+      this: RecorderOrchestrator,
+    ) => { onError?: (message: string) => void }
+    const callbacks = createCallbacks.call(recorder)
+    callbacks.onError?.('sayit_error:provider_forbidden:Groq ASR error 403 Forbidden [http=403 x-request-id=quota]')
+
+    const record = await historySaved.promise
+    await vi.waitFor(() => expect(recorder.getState()).toBe('idle'))
+
+    expect(record).toMatchObject({
+      isEmpty: true,
+      failReason: 'Groq ASR error 403 Forbidden [http=403 x-request-id=quota]',
+      failReasonCode: 'provider_forbidden',
+    })
+  })
 })

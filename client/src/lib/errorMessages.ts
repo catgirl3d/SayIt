@@ -177,10 +177,11 @@ export function describeServerError(error: unknown, hasCustomUrl: boolean): Frie
   }
 }
 
-/** 云 API 供应商类错误（密钥校验、试拨一次识别） */
+/** Cloud API provider errors (credential checks and one-shot transcription tests). */
 export function describeProviderError(error: unknown): FriendlyError {
   const { code: stableCode, text } = decodeError(error)
   const status = extractHttpStatus(text)
+  const hasGroqStableCode = stableCode !== null && text.startsWith('Groq ASR error ')
 
   if (stableCode === 'provider_insufficient_balance') {
     return {
@@ -190,10 +191,10 @@ export function describeProviderError(error: unknown): FriendlyError {
       action: 'none',
     }
   }
-  if (stableCode === 'provider_timeout' || isTimeout(text)) {
+  if (stableCode === 'provider_timeout' || (!hasGroqStableCode && isTimeout(text))) {
     return { code: 'provider_timeout', message: t('err.provider.timeout'), detail: text, action: 'retry' }
   }
-  if (stableCode === 'provider_unreachable' || isNetworkFailure(text)) {
+  if (stableCode === 'provider_unreachable' || (!hasGroqStableCode && isNetworkFailure(text))) {
     return {
       code: 'provider_unreachable',
       message: t('err.provider.unreachable'),
@@ -201,10 +202,14 @@ export function describeProviderError(error: unknown): FriendlyError {
       action: 'retry',
     }
   }
-  // 401 才是明确的鉴权失败。403 单独一类（见下方分支）：403 的常见成因是
-  // 「这个请求根本不该到这儿」——CDN 按地区拒绝、账号没开通该模型，响应里
-  // 一个字都不提密钥。把它报成密钥问题只会让用户反复重建密钥。
-  if (stableCode === 'provider_bad_key' || status === 401 || /invalid.*(key|token)|unauthorized|认证失败|鉴权/i.test(text)) { // i18n-allow: 匹配底层中文错误串
+  // 401 is an explicit authentication failure. 403 is separate: common causes
+  // include regional CDN rejection or a model unavailable to the account, with
+  // no mention of the key. Reporting those as key failures sends users to recreate it.
+  // i18n-allow-start: Match provider authentication and quota errors returned in Chinese.
+  if (
+    stableCode === 'provider_bad_key' ||
+    (!hasGroqStableCode && (status === 401 || /invalid.*(key|token)|unauthorized|认证失败|鉴权/i.test(text)))
+  ) {
     return {
       code: 'provider_bad_key',
       message: t('err.provider.badKey'),
@@ -212,7 +217,10 @@ export function describeProviderError(error: unknown): FriendlyError {
       action: 'check_key',
     }
   }
-  if (stableCode === 'provider_rate_limit' || status === 429 || /rate.?limit|quota|欠费|余额/i.test(text)) { // i18n-allow: 匹配底层中文错误串
+  if (
+    stableCode === 'provider_rate_limit' ||
+    (!hasGroqStableCode && (status === 429 || /rate.?limit|quota|欠费|余额/i.test(text)))
+  ) {
     return {
       code: 'provider_rate_limit',
       message: t('err.provider.rateLimit'),
@@ -220,10 +228,12 @@ export function describeProviderError(error: unknown): FriendlyError {
       action: 'retry',
     }
   }
-  // 排在限流之后：403 + quota 字样更可能是配额问题。
-  // action 用 switch_source 而不是 retry —— 地区不可用重试一万次也是同一个结果，
-  // 能解决问题的动作是换一家供应商。
-  if (stableCode === 'provider_forbidden' || status === 403) {
+  // i18n-allow-end
+  // Keep legacy detail-based quota detection ahead of 403: a 403 mentioning
+  // quota is more likely a quota issue. Use switch_source rather than retry
+  // because retries cannot fix regional unavailability; another provider can.
+  // For Groq envelopes, the explicit Rust code takes precedence over trace-ID text.
+  if (stableCode === 'provider_forbidden' || (!hasGroqStableCode && status === 403)) {
     return {
       code: 'provider_forbidden',
       message: t('err.provider.forbidden'),
@@ -239,7 +249,10 @@ export function describeProviderError(error: unknown): FriendlyError {
       action: 'none',
     }
   }
-  if (stableCode === 'provider_no_model' || status === 404 || /model.*not.*(found|exist)/i.test(text)) {
+  if (
+    stableCode === 'provider_no_model' ||
+    (!hasGroqStableCode && (status === 404 || /model.*not.*(found|exist)/i.test(text)))
+  ) {
     return {
       code: 'provider_no_model',
       message: t('err.provider.noModel'),
