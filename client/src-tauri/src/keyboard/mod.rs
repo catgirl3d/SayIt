@@ -360,6 +360,31 @@ fn is_injection_exempt_vk(vk: u32) -> bool {
     matches!(vk, VK_BROWSER_BACK | VK_BROWSER_FORWARD) || (VK_F13..=VK_F24).contains(&vk)
 }
 
+#[cfg(any(windows, test))]
+const LLKHF_ALTDOWN: u32 = 0x20;
+
+#[cfg(any(windows, test))]
+const MODIFIER_VK_CODES: [u32; 8] = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C];
+
+#[cfg(any(windows, test))]
+fn single_key_requires_bare_press(vk: u32) -> bool {
+    !MODIFIER_VK_CODES.contains(&vk) && !is_mouse_vk(vk)
+}
+
+#[cfg(any(windows, test))]
+// Do not infer Alt from WM_SYSKEYDOWN: a bare F10 also arrives through that message.
+fn single_key_blocked_by_modifiers(
+    vk: u32,
+    kb_flags: u32,
+    mut modifier_is_down: impl FnMut(u32) -> bool,
+) -> bool {
+    if !single_key_requires_bare_press(vk) {
+        return false;
+    }
+
+    kb_flags & LLKHF_ALTDOWN != 0 || MODIFIER_VK_CODES.iter().any(|code| modifier_is_down(*code))
+}
+
 #[allow(dead_code)]
 fn modifier_kind(setting: &str) -> Option<&'static str> {
     match setting {
@@ -1810,6 +1835,15 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     && state.ai_toggle_vk_codes.contains(&vk)
                     && !is_ptt_key
                     && !is_hf_key; // PTT / hands-free take priority if misconfigured
+                let is_ptt_single_key = ptt_member.is_some() && state.ptt_vk_codes.len() == 1;
+                let modifiers_block_down = is_kdown
+                    && (is_ptt_single_key || is_hf_key || is_ai_toggle_key)
+                    && single_key_blocked_by_modifiers(vk, kb_flags, |modifier_vk| unsafe {
+                        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+                        let state = GetAsyncKeyState(modifier_vk as i32) as u16;
+                        state & 0x8000 != 0
+                    });
+                let bare_press_violated = is_ptt_single_key && modifiers_block_down;
 
                 // Alt 键（VK_LMENU=0xA4 / VK_RMENU=0xA5）作为单键热键时，keyup 也必须吞掉。
                 // 否则被放行的 Alt 抬起会被 Windows 判为「单击了一下 Alt」→ 激活前台程序的
@@ -1823,6 +1857,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 // 只记每个组合成员的首个 down，不把按住产生的 repeat 全部塞进无界队列；
                 // 漏 key-up 看门狗直接刷新该成员的 last_down，不依赖诊断日志。
                 let should_log_hotkey_down = is_kdown
+                    && !modifiers_block_down
                     && ((ptt_member.is_some_and(|index| {
                         state.ptt_pressed_mask.load(Ordering::SeqCst) & (1_u64 << index) == 0
                     }) && !state.hands_free_active.load(Ordering::SeqCst))
@@ -1840,7 +1875,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 }
 
                 if let Some(member_index) = ptt_member {
-                    if is_kdown {
+                    if is_kdown && !bare_press_violated {
                         reconcile_stale_ptt_members_before_down(state, member_index);
                     }
                     let member_bit = 1_u64 << member_index;
@@ -1853,7 +1888,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     // 已全部按住，才吞主键 down，并用位图保证只吞它配对的 up。
                     // 若顺序是 K→Ctrl，组合仍可开始，但 K 的 down/up 都放行，不制造孤立事件。
                     if !is_combo {
-                        if is_kdown || (is_kup && is_alt_key) {
+                        if (is_kdown && !bare_press_violated) || (is_kup && is_alt_key) {
                             consumed = true;
                         }
                     } else if !is_pure_modifier_combo && is_main_key {
@@ -1884,7 +1919,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         }
                     }
 
-                    if is_kdown {
+                    if is_kdown && !bare_press_violated {
                         state.ptt_last_down_ms[member_index].store(now_ms(), Ordering::SeqCst);
                         let became_complete = press_ptt_member(
                             &state.ptt_pressed_mask,
@@ -1939,7 +1974,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 if is_hf_key {
                     let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
                     let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-                    if is_down {
+                    if is_down && !modifiers_block_down {
                         consumed = true; // 吞掉 keydown 防止系统处理
                         if begin_hf_press(&state.hf_key_down) {
                             HOOK_ACTION_TX.with(|tx| {
@@ -1962,7 +1997,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 if is_ai_toggle_key {
                     let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
                     let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-                    if is_down {
+                    if is_down && !modifiers_block_down {
                         consumed = true;
                         if begin_hf_press(&state.ai_toggle_key_down) {
                             HOOK_ACTION_TX.with(|tx| {
@@ -1994,8 +2029,9 @@ mod tests {
     use super::{
         begin_hf_press, begin_ptt_press, claim_ptt_release, complete_ptt_release, end_hf_press,
         is_injection_exempt_vk, is_mouse_button_setting, is_mouse_vk, press_ptt_member,
-        ptt_key_config, release_ptt_member, should_consume_combo_main_down, DEFAULT_PTT_SETTING,
-        DEFAULT_PTT_VK, SINGLE_KEY_TABLE,
+        ptt_key_config, release_ptt_member, should_consume_combo_main_down,
+        single_key_blocked_by_modifiers, DEFAULT_PTT_SETTING, DEFAULT_PTT_VK, LLKHF_ALTDOWN,
+        MODIFIER_VK_CODES, SINGLE_KEY_TABLE,
     };
     #[cfg(windows)]
     use super::queue_ptt_release;
@@ -2130,6 +2166,46 @@ mod tests {
         assert!(!is_injection_exempt_vk(0x88));
         assert!(!is_injection_exempt_vk(0xA4));
         assert!(!is_injection_exempt_vk(0xA5));
+    }
+
+    #[test]
+    fn single_key_modifier_guard_blocks_each_side_of_ctrl_alt_shift_and_win() {
+        for held_modifier in MODIFIER_VK_CODES {
+            assert!(
+                single_key_blocked_by_modifiers(0x73, 0, |vk| vk == held_modifier),
+                "F4 must be blocked when modifier VK {held_modifier:#04x} is down",
+            );
+        }
+    }
+
+    #[test]
+    fn single_key_modifier_guard_uses_alt_flag_without_treating_f10_as_alt() {
+        assert!(single_key_blocked_by_modifiers(0x73, LLKHF_ALTDOWN, |_| {
+            false
+        }));
+        assert!(!single_key_blocked_by_modifiers(0x73, 0, |_| false));
+        assert!(
+            !single_key_blocked_by_modifiers(0x79, 0, |_| false),
+            "bare F10 may arrive as WM_SYSKEYDOWN without LLKHF_ALTDOWN",
+        );
+    }
+
+    #[test]
+    fn single_key_modifier_guard_exempts_modifier_and_mouse_shortcuts() {
+        for modifier_vk in MODIFIER_VK_CODES {
+            assert!(!single_key_blocked_by_modifiers(
+                modifier_vk,
+                LLKHF_ALTDOWN,
+                |_| true,
+            ));
+        }
+        for mouse_vk in [0x04, 0x05, 0x06] {
+            assert!(!single_key_blocked_by_modifiers(
+                mouse_vk,
+                LLKHF_ALTDOWN,
+                |_| true,
+            ));
+        }
     }
 
     #[test]

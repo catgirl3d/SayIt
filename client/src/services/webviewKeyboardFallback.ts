@@ -161,6 +161,10 @@ function handleKeyDown(event: KeyboardEvent) {
   if (captureActive) return
 
   if (pttCodes.includes(event.code)) {
+    if (pttCodes.length === 1
+      && !isPTTModifierCode(event.code)
+      && (event.ctrlKey || event.altKey || event.shiftKey || event.metaKey)) return
+
     reconcileStalePTTModifiers(event)
     const wasPressed = pttPressed.has(event.code)
     const consumeDown = shouldConsumePTTDown(event.code, wasPressed)
@@ -183,6 +187,9 @@ function handleKeyDown(event: KeyboardEvent) {
 
   // 免提键（HF）：首个 keydown 立即触发；后续 repeat down 不重复切换。
   if (hfCode && event.code === hfCode && !pttCodes.includes(hfCode)) {
+    if (!isPTTModifierCode(event.code)
+      && (event.ctrlKey || event.altKey || event.shiftKey || event.metaKey)) return
+
     if (!hfKeyDown) {
       hfKeyDown = true
       console.log('[webview-kb] toggle-hands-free (webview fallback)', {
@@ -218,10 +225,11 @@ function handleKeyUp(event: KeyboardEvent) {
 
   if (pttCodes.includes(event.code)) {
     invalidatePTTStartCheck()
-    if (pttCodes.length === 1 || pttConsumedCodes.delete(event.code)) {
+    const wasPressed = pttPressed.delete(event.code)
+    if ((pttCodes.length === 1 && wasPressed)
+      || (pttCodes.length > 1 && pttConsumedCodes.delete(event.code))) {
       event.preventDefault()
     }
-    const wasPressed = pttPressed.delete(event.code)
     if (wasPressed && pttKeyDown) {
       pttKeyDown = false
       emitPTT('up', event.code, 'member_up')
