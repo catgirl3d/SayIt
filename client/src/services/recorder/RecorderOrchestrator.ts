@@ -141,12 +141,13 @@ export class RecorderOrchestrator {
    *  matches what the user saw on the overlay (not inflated by backend latency). */
   private wallTimeAtStopSec = 0
   private finalHandledInCurrentRun = false
+  private asrResultReceivedInCurrentRun = false
   private textInsertionInFlight = false
   /** 迟到 final 正在完成历史/插入；此期间禁止新录音复用 Provider。 */
   private finalizingLateRunId = 0
   /** Esc 仅在 processing 的可逆阶段允许取消；进入系统粘贴前永久关闭。 */
   private processingCancelable = false
-  /** 当前 fallback 卡片对应的 run token；用于拒绝队列中迟到的旧 dismiss。 */
+  /** Token of the active dismissible card; rejects dismissal events queued for a replaced card. */
   private activeFallbackToken = 0
   /** Guard against re-entrant startRecording calls during async setup */
   private startRecordingLock = false
@@ -407,10 +408,22 @@ export class RecorderOrchestrator {
           })
           return
         }
-        addRuntimeEvent('info', 'recorder', 'Fallback card dismissed with Esc', { token })
+        addRuntimeEvent('info', 'recorder', 'Overlay card dismissed with Esc', { token })
         this.activeFallbackToken = 0
-        this.overlayService.hide()
+        this.overlayService.dismissCard(token)
       }
+    })
+
+    bridge.onOverlayCardDismissed(({ token }) => {
+      if (token === 0 || token !== this.activeFallbackToken) {
+        addRuntimeEvent('info', 'recorder', 'Ignored stale overlay card dismissal', {
+          token,
+          activeFallbackToken: this.activeFallbackToken,
+        })
+        return
+      }
+      this.activeFallbackToken = 0
+      this.overlayService.dismissCard(token)
     })
 
     bridge.onPTTDown((payload) => {
@@ -776,6 +789,7 @@ export class RecorderOrchestrator {
     this.pendingStopWhileStarting = false
     this.handsFreeMode = false
     this.finalHandledInCurrentRun = false
+    this.asrResultReceivedInCurrentRun = false
     this.textInsertionInFlight = false
     this.processingCancelable = false
     this.captureReadyPromise = null
@@ -803,6 +817,67 @@ export class RecorderOrchestrator {
     if (!options?.keepOverlay) {
       this.overlayService.clearFallbackHideTimer()
       this.overlayService.hide()
+    }
+  }
+
+  private presentFailureCard(runId: number, title: string, detail: string) {
+    this.activeFallbackToken = runId
+    this.overlayService.showFailure({
+      failureTitle: title,
+      failureDetail: detail,
+      failureRecovery: 'unknown',
+      cardToken: runId,
+    })
+  }
+
+  private async persistFailureHistory(options: {
+    runId: number
+    audioDurationSec: number
+    wallTimeSec: number
+    audioChunks: ArrayBuffer[]
+    historyMeta: ReturnType<RecorderOrchestrator['buildHistoryMetadata']>
+    failReason: string
+    failReasonCode?: HistoryFailReasonCode
+  }): Promise<boolean> {
+    if (options.audioDurationSec < 0.5 || options.audioChunks.length === 0) return false
+
+    let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
+    try {
+      if (!(await getSetting('historyEnabled', true))) return false
+
+      const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+      historyArtifact = { runId: options.runId, recordId }
+      if (await getSetting('audioRetentionEnabled', true)) {
+        try {
+          const savedPath = await saveRecordingAudio(recordId, options.audioChunks)
+          if (savedPath) historyArtifact.audioFilePath = savedPath
+        } catch (error) {
+          addRuntimeEvent('warn', 'recorder', 'Failed to save audio for recognition failure', { error: String(error) })
+        }
+      }
+
+      await addHistory({
+        id: recordId,
+        timestamp: Date.now(),
+        asrText: '',
+        llmText: '',
+        asrMs: 0,
+        llmMs: 0,
+        durationSec: options.wallTimeSec,
+        audioDurationSec: options.audioDurationSec,
+        charCount: 0,
+        isEmpty: true,
+        failReason: options.failReason,
+        failReasonCode: options.failReasonCode,
+        audioFilePath: historyArtifact.audioFilePath,
+        ...options.historyMeta,
+      })
+      void bridge.emit('history-updated')
+      return Boolean(historyArtifact.audioFilePath)
+    } catch (error) {
+      if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
+      addRuntimeEvent('warn', 'recorder', 'Failed to write recognition failure to history', { error: String(error) })
+      return false
     }
   }
 
@@ -922,11 +997,12 @@ export class RecorderOrchestrator {
       onASR: (result) => {
         if (this.state !== 'processing') return
         if (this.finalHandledInCurrentRun) return
-        if (result.text && result.text.trim() !== '') return
-
         const runId = this.activeRunId
         if (!this.isRunCurrent(runId)) return
-        // 空 ASR 已是本代终态：同步阻止 timeout 与后续 final 再次收尾。
+        this.asrResultReceivedInCurrentRun = true
+        if (result.text && result.text.trim() !== '') return
+
+        // An empty ASR result is terminal for this run and suppresses protocol failure handling.
         this.finalHandledInCurrentRun = true
         this.clearProcessingTimeout()
 
@@ -1088,8 +1164,39 @@ export class RecorderOrchestrator {
         if (this.textInsertionInFlight) return
         const runId = this.activeRunId
         this.clearProcessingTimeout()
+        if (this.asrResultReceivedInCurrentRun) {
+          this.finishRun(runId)
+          this.resetToIdle()
+          return
+        }
+        this.finalHandledInCurrentRun = true
+        const audioDurationSec = this.getAudioDurationSec()
+        const wallTimeSec = this.wallTimeAtStopSec > 0 ? this.wallTimeAtStopSec : audioDurationSec
+        const audioChunks = this.recordedChunks.slice()
+        const historyMeta = this.buildHistoryMetadata(this.currentPromptResolution, this.currentActiveAppContext)
+        const showFailure = audioDurationSec >= 0.5
+        if (showFailure) {
+          this.processingCancelable = false
+          this.presentFailureCard(
+            runId,
+            t('recorder.protocolIncompleteTitle'),
+            t('recorder.protocolIncompleteDetail'),
+          )
+        }
         this.finishRun(runId)
-        this.resetToIdle()
+        this.resetToIdle({ keepOverlay: showFailure })
+        if (showFailure) {
+          void this.persistFailureHistory({
+            runId,
+            audioDurationSec,
+            wallTimeSec,
+            audioChunks,
+            historyMeta,
+            failReason: t('recorder.protocolIncompleteDetail'),
+          }).then((hasSavedAudio) => {
+            this.overlayService.updateFailureRecovery(hasSavedAudio ? 'history' : 'none', runId)
+          })
+        }
       },
 
       onError: (msg) => {
@@ -1102,18 +1209,18 @@ export class RecorderOrchestrator {
         addRuntimeEvent('error', 'backend', msg)
         this.clearProcessingTimeout()
         this.processingCancelable = false
-        void this.overlayService.disableEscapeAction()
         this.finalHandledInCurrentRun = true
 
-        // 停止音频采集，并进入不可再触发 stopRecording 的收尾状态。
+        // Stop capture and enter a state that cannot trigger stopRecording again.
+        let captureStop: Promise<void> | null = null
         if (this.state === 'recording') {
           this.overlayService.stopListeningTicker()
-          void stopCapture().catch(() => { })
+          captureStop = stopCapture()
           this.restoreSystemMuteIfNeeded()
           this.transition('processing')
         }
 
-        // 快照本代音频和元数据；每个异步 artifact 边界后均验代并清理失效产物。
+        // Snapshot this run before capture cleanup and archival proceed independently.
         const audioDur = this.getAudioDurationSec()
         const wallSec = this.wallTimeAtStopSec > 0 ? this.wallTimeAtStopSec : audioDur
         const audioChunks = this.recordedChunks.slice()
@@ -1121,65 +1228,39 @@ export class RecorderOrchestrator {
           this.currentPromptResolution,
           this.currentActiveAppContext,
         )
-        void (async () => {
-          let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
-          try {
-            if (audioDur >= 0.5 && audioChunks.length > 0) {
-              const historyEnabled = await getSetting('historyEnabled', true)
-              if (!this.isRunCurrent(runId)) return
-              if (historyEnabled) {
-                const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
-                historyArtifact = { runId, recordId }
-                this.pendingHistoryArtifact = historyArtifact
-                const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
-                if (!this.isRunCurrent(runId)) return
-                if (saveAudioEnabled) {
-                  try {
-                    const savedPath = await saveRecordingAudio(recordId, audioChunks)
-                    if (savedPath) historyArtifact.audioFilePath = savedPath
-                  } catch (err) {
-                    addRuntimeEvent('warn', 'recorder', 'Failed to save audio during error recovery', { error: String(err) })
-                  }
-                  if (!this.isRunCurrent(runId)) {
-                    await this.discardCanceledHistory(historyArtifact)
-                    return
-                  }
-                }
-                await addHistory({
-                  id: recordId,
-                  timestamp: Date.now(),
-                  asrText: '',
-                  llmText: '',
-                  asrMs: 0,
-                  llmMs: 0,
-                  durationSec: wallSec,
-                  audioDurationSec: audioDur > 0 ? audioDur : undefined,
-                  charCount: 0,
-                  isEmpty: true,
-                  // 供应商/后端给的原话（额度、资源未开通、连接被断都在这里），
-                  // 以前只进日志，用户看到的仍是「无有效声音」
-                  failReason: friendlyFailure.detail,
-                  failReasonCode: classifyHistoryProviderFailure(msg),
-                  audioFilePath: historyArtifact.audioFilePath,
-                  ...historyMeta,
-                })
-                if (!this.isRunCurrent(runId)) {
-                  await this.discardCanceledHistory(historyArtifact)
-                  return
-                }
-                void bridge.emit('history-updated')
-              }
-            }
-          } catch (err) {
-            if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-            if (!this.isRunCurrent(runId)) return
-            addRuntimeEvent('warn', 'recorder', 'Failed to write error history entry', { error: String(err) })
-          }
+        const showFailure = audioDur >= 0.5
+        if (showFailure) {
+          this.presentFailureCard(runId, t('recorder.recognitionFailedTitle'), friendlyFailure.message)
+        } else {
+          void this.overlayService.disableEscapeAction()
+        }
 
-          if (!this.isRunCurrent(runId)) return
+        const resetAfterCapture = () => {
+          if (!this.isRunCurrent(runId) || this.state !== 'processing') return
           this.finishRun(runId)
-          this.resetToIdle()
-        })()
+          this.resetToIdle({ keepOverlay: showFailure })
+        }
+        if (captureStop) {
+          void captureStop
+            .catch((error) => {
+              addRuntimeEvent('warn', 'recorder', 'Failed to stop capture after recognition failure', { error: String(error) })
+            })
+            .finally(resetAfterCapture)
+        } else {
+          resetAfterCapture()
+        }
+
+        void this.persistFailureHistory({
+          runId,
+          audioDurationSec: audioDur,
+          wallTimeSec: wallSec,
+          audioChunks,
+          historyMeta,
+          failReason: friendlyFailure.detail,
+          failReasonCode: classifyHistoryProviderFailure(msg),
+        }).then((hasSavedAudio) => {
+          if (showFailure) this.overlayService.updateFailureRecovery(hasSavedAudio ? 'history' : 'none', runId)
+        })
       },
     }
   }
@@ -1480,6 +1561,7 @@ export class RecorderOrchestrator {
     })
 
     this.finalHandledInCurrentRun = false
+    this.asrResultReceivedInCurrentRun = false
     this.audioSentSamples = 0
     this.wallTimeAtStopSec = 0
     this.recordedChunks = []
@@ -1967,17 +2049,23 @@ export class RecorderOrchestrator {
       window.setTimeout(() => {
         // onFinal 若在宽限期内消费了 context（迟到 final 已落历史）→ 跳过，避免重复记录。
         if (this.timedOutProcessingContext !== timedOutCtx || !this.isRunCurrent(timedOutCtx.runId)) return
-        // 宽限期已结束，不再接受迟到结果。先废弃 Provider 旧会话，再异步保存兜底历史；
-        // Server 必须换 socket，避免旧 final/done/error 串到下一代。
+        // The grace period has expired, so reject late results. Retire the old Provider session
+        // before saving timeout recovery asynchronously; server mode must rotate its socket so
+        // final/done/error events from this generation cannot leak into the next one.
         this.timedOutProcessingContext = null
+        this.presentFailureCard(
+          timedOutCtx.runId,
+          t('recorder.processingTimeoutTitle'),
+          t('recorder.processingTimeoutDetail'),
+        )
         this.provider.cancel()
         if (this.provider.mode === 'server') this.ensureConnection()
         void (async () => {
           let historyArtifact: { recordId: string; audioFilePath?: string } | null = null
           try {
             const historyEnabled = await getSetting('historyEnabled', true)
-            if (!this.isRunCurrent(timedOutCtx.runId)) return
             if (!historyEnabled) {
+              this.overlayService.updateFailureRecovery('none', timedOutCtx.runId)
               this.finishRun(timedOutCtx.runId)
               return
             }
@@ -1985,7 +2073,6 @@ export class RecorderOrchestrator {
             let audioFilePath: string | undefined
             const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
             const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
-            if (!this.isRunCurrent(timedOutCtx.runId)) return
             if (saveAudioEnabled && audioChunks.length > 0) {
               try {
                 const savedPath = await saveRecordingAudio(recordId, audioChunks)
@@ -1995,10 +2082,6 @@ export class RecorderOrchestrator {
               }
             }
             historyArtifact = { recordId, audioFilePath }
-            if (!this.isRunCurrent(timedOutCtx.runId)) {
-              await this.discardCanceledHistory(historyArtifact)
-              return
-            }
 
             await addHistory({
               id: recordId,
@@ -2014,16 +2097,13 @@ export class RecorderOrchestrator {
               audioFilePath,
               ...historyMeta,
             })
-            if (!this.isRunCurrent(timedOutCtx.runId)) {
-              await this.discardCanceledHistory(historyArtifact)
-              return
-            }
             void bridge.emit('history-updated')
+            this.overlayService.updateFailureRecovery(audioFilePath ? 'history' : 'none', timedOutCtx.runId)
             this.finishRun(timedOutCtx.runId)
             addRuntimeEvent('info', 'recorder', 'Timed-out recording saved to history for retry', { audioSec: timedOutCtx.audioDurationSec })
           } catch (err) {
             if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-            if (!this.isRunCurrent(timedOutCtx.runId)) return
+            this.overlayService.updateFailureRecovery('none', timedOutCtx.runId)
             this.finishRun(timedOutCtx.runId)
             addRuntimeEvent('warn', 'recorder', 'Failed to write timeout recovery history entry', { error: String(err) })
           }
@@ -2294,11 +2374,24 @@ export class RecorderOrchestrator {
     if (!this.isRunCurrent(runId)) return
 
     const hasText = Boolean(textToPaste && textToPaste.trim())
+    const emptyAfterProcessing = !hasText && Boolean(result.asrText?.trim())
+    const showEmptyFailure = emptyAfterProcessing
+      && (this.state === 'processing' || options.source === 'late_after_timeout')
     const audioDur = context.audioDurationSec
     const wallSec = context.wallTimeSec > 0 ? context.wallTimeSec : audioDur
     const promptResolution = context.promptResolution
     const appContext = context.appContext
     let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
+    let historyRetryAvailable = false
+
+    if (showEmptyFailure) {
+      this.processingCancelable = false
+      this.presentFailureCard(
+        runId,
+        t('recorder.emptyAfterProcessingTitle'),
+        t('recorder.emptyAfterProcessingDetail'),
+      )
+    }
 
     addRuntimeEvent('info', 'recorder', 'Final result received', {
       runId,
@@ -2373,6 +2466,7 @@ export class RecorderOrchestrator {
           return
         }
         void bridge.emit('history-updated')
+        historyRetryAvailable = emptyAfterProcessing && Boolean(historyArtifact.audioFilePath)
       } else if (hasText) {
         // History retention is off: still count the completed dictation in usage stats.
         try {
@@ -2394,9 +2488,9 @@ export class RecorderOrchestrator {
     }
 
     if (!hasText) {
-      if (this.state === 'processing') {
-        // asrLen / llmLen 只记长度不记内容：能区分「ASR 就没出字」和
-        // 「ASR 有字但后处理把它清空了」，这两种成因完全不同
+      if (showEmptyFailure) {
+        this.overlayService.updateFailureRecovery(historyRetryAvailable ? 'history' : 'none', runId)
+      } else if (this.state === 'processing') {
         this.overlayService.showNoSpeech({
           reason: 'final_empty',
           mode: this.provider.mode,

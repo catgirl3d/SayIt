@@ -623,6 +623,8 @@ describe('ASR profile activation and recording ordering', () => {
 
     const recorder = new RecorderOrchestrator()
     Reflect.set(recorder, 'overlayService', {
+      showFailure: vi.fn(),
+      updateFailureRecovery: vi.fn(),
       disableEscapeAction: vi.fn(async () => {}),
       stopListeningTicker: vi.fn(),
       resetWarnings: vi.fn(),
@@ -664,6 +666,8 @@ describe('ASR profile activation and recording ordering', () => {
 
     const recorder = new RecorderOrchestrator()
     Reflect.set(recorder, 'overlayService', {
+      showFailure: vi.fn(),
+      updateFailureRecovery: vi.fn(),
       disableEscapeAction: vi.fn(async () => {}),
       stopListeningTicker: vi.fn(),
       resetWarnings: vi.fn(),

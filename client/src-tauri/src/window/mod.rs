@@ -13,6 +13,8 @@ const OVERLAY_DEFAULT_BASE_WIDTH: f64 = 360.0;
 const OVERLAY_BASE_HEIGHT: f64 = 56.0;
 const OVERLAY_FALLBACK_WIDTH: f64 = 520.0;
 const OVERLAY_FALLBACK_HEIGHT: f64 = 224.0;
+const OVERLAY_FAILURE_WIDTH: f64 = 480.0;
+const OVERLAY_FAILURE_HEIGHT: f64 = 176.0;
 // 流式实时显示：录音气泡 + 波形条堆叠，需要更宽更高的窗口
 const OVERLAY_STREAMING_WIDTH: f64 = 480.0;
 const OVERLAY_STREAMING_HEIGHT: f64 = 200.0;
@@ -42,18 +44,19 @@ enum OverlayLayout {
     Base,
     BaseWithMicHint,
     Fallback,
+    Failure,
     /// 流式实时显示：气泡 + 波形，窗口更大且非交互
     Streaming,
     StreamingWithMicHint,
 }
 
 impl OverlayLayout {
-    /// 该布局是否为可交互（可点击）状态——目前只有兜底卡片需要交互。
+    /// Whether this layout receives pointer input; only card layouts are interactive.
     fn is_interactive(&self) -> bool {
-        matches!(self, OverlayLayout::Fallback)
+        matches!(self, OverlayLayout::Fallback | OverlayLayout::Failure)
     }
 
-    /// 该布局期望的逻辑尺寸（宽, 高）。
+    /// The logical dimensions (width, height) expected by this layout.
     fn dimensions(&self, base_width: f64) -> (f64, f64) {
         match self {
             OverlayLayout::Base => (base_width, OVERLAY_BASE_HEIGHT),
@@ -62,6 +65,7 @@ impl OverlayLayout {
                 OVERLAY_MIC_HINT_HEIGHT,
             ),
             OverlayLayout::Fallback => (OVERLAY_FALLBACK_WIDTH, OVERLAY_FALLBACK_HEIGHT),
+            OverlayLayout::Failure => (OVERLAY_FAILURE_WIDTH, OVERLAY_FAILURE_HEIGHT),
             OverlayLayout::Streaming => (OVERLAY_STREAMING_WIDTH, OVERLAY_STREAMING_HEIGHT),
             OverlayLayout::StreamingWithMicHint => (
                 OVERLAY_STREAMING_WIDTH,
@@ -198,6 +202,25 @@ impl WindowState {
     }
 
     pub fn update_overlay_state(&self, app: &AppHandle, data: &Value) {
+        let current_payload = self.latest_overlay_payload.lock().unwrap().clone();
+        let current_state = current_payload
+            .as_ref()
+            .and_then(|payload| payload.get("state"))
+            .and_then(Value::as_str);
+        let is_failure_update = data.get("state").and_then(Value::as_str) == Some("failure");
+        let same_failure_card = is_failure_update
+            && current_state == Some("failure")
+            && data.get("cardToken")
+                == current_payload
+                    .as_ref()
+                    .and_then(|payload| payload.get("cardToken"));
+        if (current_state == Some("failure") && !same_failure_card)
+            || (is_failure_update
+                && (self.active_show_id.load(Ordering::SeqCst) == 0 || !same_failure_card))
+        {
+            return;
+        }
+
         self.apply_payload_layout(data);
         *self.latest_overlay_payload.lock().unwrap() = Some(data.clone());
 
@@ -206,10 +229,9 @@ impl WindowState {
             // 仅在布局真正变化时才重设原生窗口几何，避免每帧 set_position/set_size 抖动。
             let changed = self.last_applied_layout.lock().unwrap().as_ref() != Some(&layout);
             if changed {
-                let is_fallback = layout == OverlayLayout::Fallback;
                 self.apply_native_layout(app, &overlay, &layout);
                 set_overlay_interactivity(&overlay, layout.is_interactive());
-                if is_fallback {
+                if layout.is_interactive() {
                     let _ = overlay.show();
                 }
             }
@@ -417,6 +439,8 @@ impl WindowState {
             .unwrap_or(false);
         let candidate_layout = if state == Some("fallback") {
             OverlayLayout::Fallback
+        } else if state == Some("failure") {
+            OverlayLayout::Failure
         } else if state == Some("listening") && streaming_on && mic_hint_on {
             OverlayLayout::StreamingWithMicHint
         } else if state == Some("listening") && streaming_on {
@@ -462,6 +486,9 @@ impl WindowState {
     fn payload_for_emit(&self, probe: bool) -> Option<Value> {
         let mut payload = self.latest_overlay_payload.lock().unwrap().clone()?;
         let show_id = self.active_show_id.load(Ordering::SeqCst);
+        if show_id == 0 && payload.get("state").and_then(Value::as_str) == Some("failure") {
+            return None;
+        }
         let generation = self.active_generation.load(Ordering::SeqCst);
         let object = payload.as_object_mut()?;
         object.insert("_overlayShowId".to_string(), json!(show_id));
@@ -926,8 +953,9 @@ fn set_overlay_interactivity(overlay: &tauri::WebviewWindow, interactive: bool) 
 
 #[cfg(test)]
 mod tests {
-    use super::classify_overlay_failure;
+    use super::{classify_overlay_failure, OverlayLayout, WindowState};
     use serde_json::json;
+    use std::sync::atomic::Ordering;
 
     fn native_window() -> serde_json::Value {
         json!({
@@ -983,6 +1011,65 @@ mod tests {
             classify_overlay_failure(&window, true, true, true),
             "visibility_or_position"
         );
+    }
+
+    #[test]
+    fn failure_layout_is_interactive_and_replaces_mic_streaming_layout() {
+        let state = WindowState::new();
+        state.apply_payload_layout(&json!({
+            "state": "listening",
+            "streaming": true,
+            "micSourceLabel": "USB microphone",
+            "baseWidth": 360.0
+        }));
+        let streaming_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(streaming_layout, OverlayLayout::StreamingWithMicHint);
+        assert_eq!(streaming_layout.dimensions(360.0), (480.0, 244.0));
+        assert!(!streaming_layout.is_interactive());
+
+        state.apply_payload_layout(&json!({
+            "state": "failure",
+            "failureTitle": "Recognition failed",
+            "failureDetail": "Check the provider settings and retry.",
+            "failureRecovery": "history",
+            "cardToken": 21
+        }));
+        let failure_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(failure_layout.dimensions(360.0), (480.0, 176.0));
+        assert!(failure_layout.is_interactive());
+
+        state.apply_payload_layout(&json!({ "state": "fallback" }));
+        let fallback_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(fallback_layout, OverlayLayout::Fallback);
+        assert_eq!(fallback_layout.dimensions(360.0), (520.0, 224.0));
+        assert!(fallback_layout.is_interactive());
+    }
+
+    #[test]
+    fn failure_replay_preserves_content_only_while_a_show_is_active() {
+        let state = WindowState::new();
+        *state.latest_overlay_payload.lock().unwrap() = Some(json!({
+            "state": "failure",
+            "failureTitle": "Recognition failed",
+            "failureDetail": "Check the provider settings and retry.",
+            "failureRecovery": "history",
+            "cardToken": 21
+        }));
+        state.active_show_id.store(7, Ordering::SeqCst);
+
+        let replay = state
+            .payload_for_emit(true)
+            .expect("active card should replay");
+        assert_eq!(replay["failureTitle"], "Recognition failed");
+        assert_eq!(
+            replay["failureDetail"],
+            "Check the provider settings and retry."
+        );
+        assert_eq!(replay["failureRecovery"], "history");
+        assert_eq!(replay["cardToken"], 21);
+
+        state.active_show_id.store(0, Ordering::SeqCst);
+        assert!(state.payload_for_emit(true).is_none());
     }
 }
 

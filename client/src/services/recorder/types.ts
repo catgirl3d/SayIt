@@ -3,6 +3,16 @@ import { t } from '@/i18n'
 
 export type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
 
+export type FailureRecovery = 'unknown' | 'history' | 'none'
+
+export interface FailureOverlayPayload {
+  state: 'failure'
+  failureTitle: string
+  failureDetail: string
+  failureRecovery: FailureRecovery
+  cardToken: number
+}
+
 export type OverlayWidthPreset = 'short' | 'medium' | 'long'
 
 export interface OverlayWidthConfig {

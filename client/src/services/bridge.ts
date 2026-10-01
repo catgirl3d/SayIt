@@ -107,6 +107,10 @@ export function setEscapeActionMode(mode: EscapeActionMode, token = 0) {
   return invoke<void>('set_escape_action_mode', { mode, token })
 }
 
+export function dismissOverlayCard(token: number) {
+  return emit('overlay-card-dismissed', { token })
+}
+
 // ─── Paste / Context ───
 
 export function pasteText(text: string, hwnd?: string, focusHwnd?: string, restoreClipboard?: boolean) {
@@ -476,6 +480,13 @@ export function onToggleHandsFree(cb: (data?: unknown) => void) {
 
 export function onEscapeAction(cb: (data: { mode: EscapeActionMode; token: number }) => void) {
   const unlisten = listen<{ mode: EscapeActionMode; token: number }>('escape-action', (event) => cb(event.payload))
+  return () => {
+    unlisten.then((fn) => fn())
+  }
+}
+
+export function onOverlayCardDismissed(cb: (data: { token: number }) => void) {
+  const unlisten = listen<{ token: number }>('overlay-card-dismissed', (event) => cb(event.payload))
   return () => {
     unlisten.then((fn) => fn())
   }

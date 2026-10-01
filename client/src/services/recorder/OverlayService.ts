@@ -7,12 +7,14 @@ import {
   formatRecordingLimit,
   OVERLAY_WIDTH_PRESETS,
   type OverlayCommonPayload,
+  type FailureOverlayPayload,
+  type FailureRecovery,
   type OverlayWaveTheme,
   type OverlayWidthPreset,
 } from './types'
 import type { MicSourceMode } from './micSourceReminder'
 
-type OverlayVisualState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'error' | 'toast'
+type OverlayVisualState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast'
 
 interface MicSourceHint {
   mode: MicSourceMode
@@ -52,6 +54,9 @@ export class OverlayService {
   private activeMicSourceHint: MicSourceHint | null = null
   private micSourceHintHideId: ReturnType<typeof setTimeout> | null = null
   private micSourceHintGeneration = 0
+  private overlayGeneration = 0
+  private activeCardToken = 0
+  private failurePayload: FailureOverlayPayload | null = null
 
   constructor(private readonly getElapsedSec: () => number) { }
 
@@ -138,6 +143,16 @@ export class OverlayService {
     this.activeMicSourceHint = null
   }
 
+  private beginPresentation(state: OverlayVisualState) {
+    this.overlayGeneration++
+    this.currentState = state
+    this.activeCardToken = 0
+    this.failurePayload = null
+    this.clearFallbackHideTimer()
+    this.clearMicSourceHint()
+    return this.overlayGeneration
+  }
+
   /** Briefly confirm the actual input route after a successful microphone open. */
   showMicSourceHint(hint: MicSourceHint) {
     this.clearMicSourceHint()
@@ -178,8 +193,7 @@ export class OverlayService {
   }
 
   showWaiting() {
-    this.currentState = 'waiting'
-    this.clearMicSourceHint()
+    this.beginPresentation('waiting')
     this.setEscapeMode('off', 0)
     this.clearFallbackHideTimer()
     void bridge.presentOverlay({
@@ -369,22 +383,57 @@ export class OverlayService {
   }
 
   showFallback(text: string, reason: string, token = 0) {
-    this.currentState = 'fallback'
-    this.clearMicSourceHint()
+    const generation = this.beginPresentation('fallback')
+    this.activeCardToken = token
     console.log('[OverlayService] showFallback called, text:', text.slice(0, 30), 'reason:', reason)
-    // token=0 的 PTT Lab 卡片没有 Orchestrator 代次，不能开启一个无人消费的全局 Esc。
+    // A PTT Lab card has no Orchestrator generation when token is zero, so it must not enable a global Esc action with no consumer.
     this.setEscapeMode(token > 0 ? 'dismiss_fallback' : 'off', token)
     void bridge.presentOverlay({
       state: 'fallback',
       fallbackText: text,
       fallbackReason: reason,
+      cardToken: token,
       ...this.getCommonPayload(),
     })
-    this.clearFallbackHideTimer()
     this.fallbackHideId = setTimeout(() => {
+      if (generation !== this.overlayGeneration || this.currentState !== 'fallback') return
       console.log('[OverlayService] fallback auto-hide timer fired')
       this.hide()
     }, 10000)
+  }
+
+  showFailure(payload: Omit<FailureOverlayPayload, 'state'>) {
+    const generation = this.beginPresentation('failure')
+    this.activeCardToken = payload.cardToken
+    this.failurePayload = { state: 'failure', ...payload }
+    this.setEscapeMode(payload.cardToken > 0 ? 'dismiss_fallback' : 'off', payload.cardToken)
+    void bridge.presentOverlay({
+      ...this.failurePayload,
+      ...this.getCommonPayload(),
+    })
+    this.fallbackHideId = setTimeout(() => {
+      if (generation !== this.overlayGeneration || this.activeCardToken !== payload.cardToken) return
+      this.hide()
+    }, 5000)
+  }
+
+  updateFailureRecovery(recovery: FailureRecovery, token: number) {
+    if (
+      this.currentState !== 'failure'
+      || this.activeCardToken !== token
+      || !this.failurePayload
+    ) return
+
+    this.failurePayload = { ...this.failurePayload, failureRecovery: recovery }
+    void bridge.updateOverlay({
+      ...this.failurePayload,
+      ...this.getCommonPayload(),
+    })
+  }
+
+  dismissCard(token: number) {
+    if (token === 0 || this.activeCardToken !== token) return
+    this.hide()
   }
 
   clearFallbackHideTimer() {
@@ -395,16 +444,19 @@ export class OverlayService {
   }
 
   hide() {
+    this.overlayGeneration++
+    this.currentState = 'waiting'
+    this.activeCardToken = 0
+    this.failurePayload = null
     this.clearMicSourceHint()
     this.clearFallbackHideTimer()
     this.setEscapeMode('off', 0)
     void bridge.hideOverlay()
   }
 
-  /** 快捷键切换润色模式后，用悬浮窗短暂提示当前模式名，约 1.6s 后自动隐藏。 */
+  /** Briefly show the current text-polishing mode after its shortcut is pressed, then hide the overlay after about 1.6 seconds. */
   showPresetSwitched(name: string) {
-    this.currentState = 'toast'
-    this.clearMicSourceHint()
+    const generation = this.beginPresentation('toast')
     this.setEscapeMode('off', 0)
     void bridge.presentOverlay({
       state: 'toast',
@@ -412,14 +464,14 @@ export class OverlayService {
       toastTone: 'info',
       ...this.getCommonPayload(),
     })
-    this.clearFallbackHideTimer()
-    this.fallbackHideId = setTimeout(() => this.hide(), 1600)
+    this.fallbackHideId = setTimeout(() => {
+      if (generation === this.overlayGeneration) this.hide()
+    }, 1600)
   }
 
-  /** 全局快捷键切换 AI 整理后的轻量确认，不打断正在录音的状态。 */
+  /** Lightweight confirmation for the global AI-cleanup shortcut; it does not interrupt active recording. */
   showAiCleanupToggled(enabled: boolean) {
-    this.currentState = 'toast'
-    this.clearMicSourceHint()
+    const generation = this.beginPresentation('toast')
     this.setEscapeMode('off', 0)
     void bridge.presentOverlay({
       state: 'toast',
@@ -427,22 +479,23 @@ export class OverlayService {
       toastTone: 'info',
       ...this.getCommonPayload(),
     })
-    this.clearFallbackHideTimer()
-    this.fallbackHideId = setTimeout(() => this.hide(), 1400)
+    this.fallbackHideId = setTimeout(() => {
+      if (generation === this.overlayGeneration) this.hide()
+    }, 1400)
   }
 
   /**
-   * 识别结果为空（未检测到有效声音）时的提示。
+   * Show the empty-recognition (no valid sound detected) notice.
    *
-   * `diagnostic` 由调用方补充成因上下文。日志刻意放在这里、而不是各个调用点：
-   * 这句提示是全软件最容易被误读的一条 —— 真实成因可能是用户没说话、供应商额度
-   * 耗尽、服务端提前断开、文本后处理失败，用户看到的却是同一句话。放在这个唯一
-   * 出口，就保证「用户看到这句」和「日志里有记录」永远一一对应，不会因为将来
-   * 新增一个调用点而漏掉。
+   * The caller supplies cause context through `diagnostic`. Logging intentionally lives here
+   * rather than at each call site because this is one of the easiest notices in the application
+   * to misinterpret: the actual cause may be silence, exhausted provider quota, an early server
+   * disconnect, or failed text post-processing, while the user sees the same notice. Keeping the
+   * log at this single exit point ensures every display of the notice has a corresponding log
+   * entry, including if another call site is added later.
    */
   showNoSpeech(diagnostic?: Record<string, unknown>) {
-    this.currentState = 'toast'
-    this.clearMicSourceHint()
+    const generation = this.beginPresentation('toast')
     addRuntimeEvent('warn', 'recorder', 'Showing no-speech warning', diagnostic ?? {})
     this.setEscapeMode('off', 0)
     void bridge.presentOverlay({
@@ -451,14 +504,14 @@ export class OverlayService {
       toastTone: 'warn',
       ...this.getCommonPayload(),
     })
-    this.clearFallbackHideTimer()
-    this.fallbackHideId = setTimeout(() => this.hide(), 1500)
+    this.fallbackHideId = setTimeout(() => {
+      if (generation === this.overlayGeneration) this.hide()
+    }, 1500)
   }
 
-  /** 用户主动取消处理后的短提示。 */
+  /** Brief confirmation after the user cancels processing. */
   showCanceled() {
-    this.currentState = 'toast'
-    this.clearMicSourceHint()
+    const generation = this.beginPresentation('toast')
     this.setEscapeMode('off', 0)
     void bridge.presentOverlay({
       state: 'toast',
@@ -466,22 +519,23 @@ export class OverlayService {
       toastTone: 'info',
       ...this.getCommonPayload(),
     })
-    this.clearFallbackHideTimer()
-    this.fallbackHideId = setTimeout(() => this.hide(), 900)
+    this.fallbackHideId = setTimeout(() => {
+      if (generation === this.overlayGeneration) this.hide()
+    }, 900)
   }
 
-  /** 显示错误信息，几秒后自动隐藏 */
+  /** Show an error message and hide it after a few seconds. */
   showError(message: string) {
-    this.currentState = 'error'
-    this.clearMicSourceHint()
+    const generation = this.beginPresentation('error')
     this.setEscapeMode('off', 0)
     void bridge.presentOverlay({
       state: 'error',
       errorMessage: message,
       ...this.getCommonPayload(),
     })
-    this.clearFallbackHideTimer()
-    this.fallbackHideId = setTimeout(() => this.hide(), 4000)
+    this.fallbackHideId = setTimeout(() => {
+      if (generation === this.overlayGeneration) this.hide()
+    }, 4000)
   }
 
   dispose() {

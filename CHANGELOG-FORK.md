@@ -53,6 +53,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### Desktop Client
 
+- Added concise, dismissible recognition failure cards with safe localized causes and a History retry hint only when the saved recording is actually available.
 - Reworked settings into routed pages instead of one large settings dialog, including dedicated Audio & Mic and Shortcuts pages.
 - Added an accessible microphone selector label with the full device name on hover; local formatting controls are disabled while AI cleanup is enabled without resetting saved options.
 - Hardened startup initialization so configuration, locale, and provider failures do not block the main UI.

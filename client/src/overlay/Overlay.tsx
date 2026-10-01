@@ -6,7 +6,7 @@ import { useT } from '@/i18n/useT'
 import { addRuntimeEvent } from '../services/debugLog'
 import { formatRecordingTimer } from '../services/recorder/types'
 
-type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'error' | 'toast'
+type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast'
 type RecordingVisualPhase = 'preparing' | 'listening'
 type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
 
@@ -19,6 +19,10 @@ interface OverlayPayload {
   barCount?: number
   fallbackText?: string
   fallbackReason?: string
+  failureTitle?: string
+  failureDetail?: string
+  failureRecovery?: 'unknown' | 'history' | 'none'
+  cardToken?: number
   errorMessage?: string
   warning?: string
   /** warning 的严重级别：warn=琥珀（声音小/未检测到），error=红色高警（麦克风已被静音） */
@@ -39,6 +43,55 @@ interface OverlayPayload {
 
 const DEFAULT_BAR_COUNT = 24
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
+
+interface OverlayFailureCardProps {
+  title: string
+  detail: string
+  recovery: 'unknown' | 'history' | 'none'
+  onDismiss: () => void
+}
+
+export function OverlayFailureCard({ title, detail, recovery, onDismiss }: OverlayFailureCardProps) {
+  const t = useT()
+  const recoveryText = recovery === 'history'
+    ? t('overlay.failureRecoveryHistory')
+    : recovery === 'none'
+      ? t('overlay.failureRecoveryNone')
+      : ''
+
+  return (
+    <div
+      data-overlay-content
+      className="pointer-events-auto flex w-full max-w-[480px] flex-col rounded-xl border p-4"
+      style={{
+        background: 'var(--overlay-bg)',
+        color: 'var(--overlay-text)',
+        borderColor: 'var(--overlay-border)',
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="min-w-0 text-sm font-semibold leading-5">{title}</h2>
+        <button
+          type="button"
+          onClick={onDismiss}
+          title={t('window.close')}
+          aria-label={t('overlay.dismissFailure')}
+          className="-mr-1 -mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <p className="mt-2 max-h-[64px] overflow-auto pr-1 text-sm leading-5 select-text">
+        {detail}
+      </p>
+      {recoveryText && (
+        <p className="mt-2 text-xs leading-4" style={{ color: 'var(--overlay-text-dim)' }}>
+          {recoveryText}
+        </p>
+      )}
+    </div>
+  )
+}
 
 function normalizeTheme(theme: unknown): OverlayWaveTheme {
   if (theme === 'black-white' || theme === 'black-blue' || theme === 'black-rainbow') {
@@ -89,6 +142,10 @@ export default function Overlay() {
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
   const [presentationId, setPresentationId] = useState(0)
   const [fallbackText, setFallbackText] = useState('')
+  const [failureTitle, setFailureTitle] = useState('')
+  const [failureDetail, setFailureDetail] = useState('')
+  const [failureRecovery, setFailureRecovery] = useState<'unknown' | 'history' | 'none'>('unknown')
+  const [failureToken, setFailureToken] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [toastText, setToastText] = useState('')
   const [toastTone, setToastTone] = useState<'info' | 'warn'>('info')
@@ -194,6 +251,12 @@ export default function Overlay() {
       if (payload.theme) setTheme(normalizeTheme(payload.theme))
       if (typeof payload.barCount === 'number' && payload.barCount > 0) setBarCount(payload.barCount)
       if (typeof payload.fallbackText === 'string') setFallbackText(payload.fallbackText)
+      if (typeof payload.failureTitle === 'string') setFailureTitle(payload.failureTitle)
+      if (typeof payload.failureDetail === 'string') setFailureDetail(payload.failureDetail)
+      if (payload.failureRecovery === 'unknown' || payload.failureRecovery === 'history' || payload.failureRecovery === 'none') {
+        setFailureRecovery(payload.failureRecovery)
+      }
+      if (typeof payload.cardToken === 'number') setFailureToken(payload.cardToken)
       if (typeof payload.errorMessage === 'string') setErrorMessage(payload.errorMessage)
       if (typeof payload.toastText === 'string') setToastText(payload.toastText)
       if (payload.toastTone === 'info' || payload.toastTone === 'warn') setToastTone(payload.toastTone)
@@ -347,7 +410,22 @@ export default function Overlay() {
       ref={rootRef}
       className="pointer-events-none flex h-full items-end justify-center pb-4"
     >
-      {state === 'fallback' ? (
+      {state === 'failure' ? (
+        <OverlayFailureCard
+          title={failureTitle}
+          detail={failureDetail}
+          recovery={failureRecovery}
+          onDismiss={() => {
+            addRuntimeEvent('info', 'overlay', 'Failure card dismissed by user', { token: failureToken })
+            void bridge.dismissOverlayCard(failureToken).catch((error) => {
+              addRuntimeEvent('warn', 'overlay', 'Failed to notify controller about card dismissal', {
+                token: failureToken,
+                error: String(error),
+              })
+            })
+          }}
+        />
+      ) : state === 'fallback' ? (
         <div
           data-overlay-content
           className="pointer-events-auto flex w-full max-w-[520px] flex-col rounded-xl border px-4 py-4"
