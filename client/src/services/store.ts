@@ -74,8 +74,9 @@ export interface HistoryRecord {
   // 推理来源信息
   workMode?: 'server' | 'cloud_api' | 'local'
   asrProvider?: string   // 例如 "server" / "doubao" / "sensevoice-small"
-  aiProvider?: string    // 例如 "server" / "openai_compat" / "ollama"
-  aiModel?: string       // 例如 "deepseek-chat" / "qwen2.5:7b"
+  // Null clears stale attribution in JSON-merged history patches; undefined is omitted by JSON.stringify.
+  aiProvider?: string | null    // 例如 "server" / "openai_compat" / "ollama"
+  aiModel?: string | null       // 例如 "deepseek-chat" / "qwen2.5:7b"
   aiSource?: 'server' | 'custom' | 'none'
   aiStatus?: 'applied' | 'skipped' | 'unavailable' | 'failed'
 }

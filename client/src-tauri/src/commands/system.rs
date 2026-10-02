@@ -20,11 +20,17 @@ const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024;
 /// Number of rotated files to keep
 const ROTATED_FILES_KEEP: usize = 3;
 
+#[cfg(not(test))]
 fn log_dir() -> std::path::PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("com.sayit.app")
         .join("logs")
+}
+
+#[cfg(test)]
+fn log_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("sayit-test-logs-{}", std::process::id()))
 }
 
 fn log_file_path() -> std::path::PathBuf {

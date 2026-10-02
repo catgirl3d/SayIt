@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { addRuntimeEvent } from '../debugLog'
 import { getSetting } from '../store'
+import { findProvider } from '@/features/settings/aiProviderCatalog'
 import type { AiExecutionSource, AiExecutionStatus, StartOptions } from './types'
 
 interface AiResult {
@@ -103,16 +104,17 @@ export async function polishWithClientAi(
   const config = await loadClientAiConfig()
   if (!isCurrent()) return null
 
+  const keyless = Boolean(findProvider(config.provider).keyless)
   const complete = Boolean(
     config.apiUrl.trim()
     && config.model.trim()
-    && (config.apiKey.trim() || config.provider === 'ollama'),
+    && (config.apiKey.trim() || keyless),
   )
   if (!complete) {
     addRuntimeEvent('warn', logSource, 'Custom AI is selected but its active profile is incomplete', {
       provider: config.provider || undefined,
       hasUrl: Boolean(config.apiUrl.trim()),
-      hasKey: Boolean(config.apiKey.trim()) || config.provider === 'ollama',
+      hasKey: Boolean(config.apiKey.trim()) || keyless,
       hasModel: Boolean(config.model.trim()),
     })
     return {

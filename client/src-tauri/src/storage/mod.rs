@@ -1091,6 +1091,56 @@ mod tests {
         drop(storage);
         let _ = fs::remove_file(path);
     }
+
+    #[test]
+    fn history_update_persists_explicit_null_ai_metadata_and_preserves_other_fields() {
+        let path = test_db_path("history-null-ai-metadata");
+        let storage = Storage::new(path.clone()).unwrap();
+        storage
+            .history_add(&serde_json::json!({
+                "id": "null-ai-metadata",
+                "timestamp": 42,
+                "asrText": "recognized words",
+                "llmText": "polished words",
+                "charCount": 14,
+                "durationSec": 2.5,
+                "aiSource": "custom",
+                "aiStatus": "applied",
+                "aiProvider": "provider-a",
+                "aiModel": "model-a",
+            }))
+            .unwrap();
+
+        storage
+            .history_update(
+                "null-ai-metadata",
+                &serde_json::json!({
+                    "aiProvider": null,
+                    "aiModel": null,
+                    "aiSource": "none",
+                    "aiStatus": "skipped",
+                }),
+            )
+            .unwrap();
+        drop(storage);
+
+        let storage = Storage::new(path.clone()).unwrap();
+        let record = storage.history_list(None, false, None, None).remove(0);
+
+        assert_eq!(record.get("aiProvider"), Some(&Value::Null));
+        assert_eq!(record.get("aiModel"), Some(&Value::Null));
+        assert_eq!(record["aiSource"], "none");
+        assert_eq!(record["aiStatus"], "skipped");
+        assert_eq!(record["id"], "null-ai-metadata");
+        assert_eq!(record["asrText"], "recognized words");
+        assert_eq!(record["llmText"], "polished words");
+        assert_eq!(record["timestamp"], 42);
+        assert_eq!(record["charCount"], 14);
+        assert_eq!(record["durationSec"], 2.5);
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
 }
 
 // ─── 备份 / 恢复辅助（导入导出用）───

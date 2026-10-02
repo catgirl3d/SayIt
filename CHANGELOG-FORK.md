@@ -45,6 +45,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### AI Providers
 
+- Fixed History reprocessing to run keyless Ollama, preserve raw ASR after failed or blank cleanup, and write or clear AI attribution from the configuration and outcome actually used.
 - Added remote model discovery for Ollama and OpenAI-compatible endpoints, with selectable model catalogs in the settings UI.
 - Added OpenCode Go as an AI provider preset and send the mandatory `x-opencode-session` routing header on OpenCode (Zen and Go) endpoints, fixing HTTP 400 `MissingSessionID` failures.
 - Decoupled connection testing from configuration saving in the AI provider editor modal: added an in-modal "Test connection" action for real-time verification without saving or closing, alongside standard Cancel and Save actions that properly close the modal on completion.

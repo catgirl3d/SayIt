@@ -9,6 +9,7 @@ import {
   CUSTOM_ASR_PROVIDER,
   resolveAsrRequestMetadata,
 } from '@/features/settings/asrProviderCatalog'
+import { findProvider } from '@/features/settings/aiProviderCatalog'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
@@ -257,12 +258,19 @@ export async function reprocessViaCloudApi(
   // Qwen Omni 已内置 AI，无需再校对
   let llmText = asrText
   let llmMs = 0
+  let aiSource: AiExecutionSource = 'none'
+  let aiStatus: AiExecutionStatus = 'skipped'
+  let requestAiProvider: string | undefined
+  let requestAiModel: string | undefined
   if (asrText.trim() && aiEnabled && !isQwenOmni) {
     const aiProvider = await getSetting('cloudAi.provider', 'openai_compat') as string
     const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
     const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
     const aiModel = await getSetting('cloudAi.model', '') as string
-    if (aiApiUrl && aiApiKey && aiModel) {
+    aiSource = 'custom'
+    if (aiApiUrl && (findProvider(aiProvider).keyless || aiApiKey) && aiModel) {
+      requestAiProvider = aiProvider
+      requestAiModel = aiModel
       try {
         const aiResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_polish', {
           request: {
@@ -271,9 +279,15 @@ export async function reprocessViaCloudApi(
             system_prompt: systemPrompt || null,
           },
         })
-        llmText = aiResult.text || asrText
+        const succeeded = Boolean(aiResult.text.trim())
+        llmText = succeeded ? aiResult.text : asrText
         llmMs = aiResult.elapsed_ms
-      } catch { /* AI 失败时保留 ASR 原文 */ }
+        aiStatus = succeeded ? 'applied' : 'failed'
+      } catch {
+        aiStatus = 'failed'
+      }
+    } else {
+      aiStatus = 'unavailable'
     }
   }
 
@@ -287,12 +301,16 @@ export async function reprocessViaCloudApi(
     asrMs,
     llmMs,
     durationSec,
+    aiSource,
+    aiStatus,
+    aiProvider: requestAiProvider,
+    aiModel: requestAiModel,
     ...(requestModel && { asrEngine: requestEngine, asrModel: requestModel }),
   }
 }
 
 /** 本地模式重新识别：调用 local_transcribe + 可选 cloud_polish，与 LocalProvider 一致 */
-async function reprocessViaLocal(
+export async function reprocessViaLocal(
   chunk: ArrayBuffer,
   hotwords: string[],
   aiEnabled: boolean,
@@ -316,12 +334,23 @@ async function reprocessViaLocal(
 
   let llmText = asrText
   let llmMs = 0
+  let aiSource: AiExecutionSource = 'none'
+  let aiStatus: AiExecutionStatus = 'skipped'
+  let requestAiProvider: string | undefined
+  let requestAiModel: string | undefined
   if (asrText.trim() && aiEnabled) {
     const aiProvider = await getSetting('cloudAi.provider', 'openai_compat') as string
     const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
     const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
     const aiModel = await getSetting('cloudAi.model', '') as string
-    if (aiApiUrl && (aiApiKey || aiProvider === 'ollama')) {
+    aiSource = 'custom'
+    if (
+      aiApiUrl
+      && (aiApiKey || findProvider(aiProvider).keyless)
+      && (Boolean(aiModel.trim()) || (aiProvider === 'ollama' && aiModel === ''))
+    ) {
+      requestAiProvider = aiProvider
+      requestAiModel = aiModel
       try {
         const aiResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_polish', {
           request: {
@@ -330,13 +359,29 @@ async function reprocessViaLocal(
             system_prompt: systemPrompt || null,
           },
         })
-        llmText = aiResult.text || asrText
+        const succeeded = Boolean(aiResult.text.trim())
+        llmText = succeeded ? aiResult.text : asrText
         llmMs = aiResult.elapsed_ms
-      } catch { /* AI 失败时保留 ASR 原文 */ }
+        aiStatus = succeeded ? 'applied' : 'failed'
+      } catch {
+        aiStatus = 'failed'
+      }
+    } else {
+      aiStatus = 'unavailable'
     }
   }
 
-  return { asrText, llmText, asrMs, llmMs, durationSec }
+  return {
+    asrText,
+    llmText,
+    asrMs,
+    llmMs,
+    durationSec,
+    aiSource,
+    aiStatus,
+    aiProvider: requestAiProvider,
+    aiModel: requestAiModel,
+  }
 }
 
 /** Metadata written back to a history record after reprocessing. Exported for tests. */
@@ -345,38 +390,41 @@ export async function buildReprocessMetadata(
   result: ReprocessResult,
 ): Promise<{
   asrProvider?: string
-  aiProvider?: string
-  aiModel?: string
+  aiProvider?: string | null
+  aiModel?: string | null
   aiSource?: AiExecutionSource
   aiStatus?: AiExecutionStatus
 }> {
   if (workMode === 'cloud_api') {
     // Snapshot-backed metadata only: the result carries the model its request used.
     const asrProvider = formatAsrHistoryProvider(result.asrEngine, result.asrModel)
-    const aiProvider = await getSetting('cloudAi.provider', '') as string
-    const aiModel = await getSetting('cloudAi.model', '') as string
     return {
       asrProvider,
-      aiProvider: aiProvider || undefined,
-      aiModel: aiModel || undefined,
+      aiProvider: result.aiProvider || null,
+      aiModel: result.aiModel || null,
+      aiSource: result.aiSource,
+      aiStatus: result.aiStatus,
     }
   }
   if (workMode === 'local') {
     const modelId = await getSetting('localAsr.modelId', '') as string
-    const aiEnabled = Boolean(await getSetting('aiEnabled', false))
-    const aiProvider = aiEnabled ? await getSetting('cloudAi.provider', '') as string : undefined
-    const aiModel = aiEnabled ? await getSetting('cloudAi.model', '') as string : undefined
-    return { asrProvider: modelId || 'local', aiProvider: aiProvider || undefined, aiModel: aiModel || undefined }
+    return {
+      asrProvider: modelId || 'local',
+      aiProvider: result.aiProvider || null,
+      aiModel: result.aiModel || null,
+      aiSource: result.aiSource,
+      aiStatus: result.aiStatus,
+    }
   }
   // server
   return {
     asrProvider: (result.asrModel || result.asrEngine || 'server').replace(/^.*\//, ''),
     aiProvider: result.aiSource === 'custom'
-      ? result.aiProvider
+      ? result.aiProvider || null
       : result.aiSource === 'none'
-        ? undefined
+        ? null
         : 'server',
-    aiModel: result.aiModel,
+    aiModel: result.aiModel || null,
     aiSource: result.aiSource,
     aiStatus: result.aiStatus,
   }

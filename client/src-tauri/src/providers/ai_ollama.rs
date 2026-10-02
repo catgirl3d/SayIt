@@ -102,27 +102,20 @@ pub async fn polish(
         .trim()
         .to_string();
 
-    // 空回复会静默回落成原文 —— 用户以为校对跑过了，其实没有。留证。
+    // An empty reply is a silent failure: returning ASR text makes users think
+    // proofreading ran when it did not. Report the failure through diagnostics.
     if result_text.is_empty() {
-        diag::log(
+        return Err(diag::fail(
             SCOPE,
-            "empty_response_fallback_to_input",
-            &format!(
-                "Ollama returned no content; returned the original text model={} {}",
-                model,
-                diag::describe_json(&body_text)
-            ),
-        );
-    } else {
-        diag::ok(SCOPE, elapsed_ms, result_text.chars().count());
+            "empty_completion",
+            "AI returned no usable completion text".to_string(),
+        ));
     }
 
+    diag::ok(SCOPE, elapsed_ms, result_text.chars().count());
+
     Ok(AiResult {
-        text: if result_text.is_empty() {
-            text.to_string()
-        } else {
-            result_text
-        },
+        text: result_text,
         elapsed_ms,
     })
 }
@@ -319,6 +312,79 @@ fn extract_tags_model_names(data: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_INPUT: &str = "spoken transcript marker";
+    const RESPONSE_MARKER: &str = "completion-payload-marker";
+    const SAFE_COMPLETION_ERROR: &str =
+        "sayit_error:connect_failed:AI returned no usable completion text";
+
+    fn polish_config(api_url: &str) -> AiProviderConfig {
+        AiProviderConfig {
+            provider: "ollama".to_string(),
+            api_url: api_url.to_string(),
+            api_key: String::new(),
+            model: "fixture-model".to_string(),
+            extra: serde_json::Value::Null,
+        }
+    }
+
+    async fn polish_response(response_body: &str, text: &str) -> Result<AiResult, String> {
+        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            response_body.to_string(),
+        );
+        let result = polish(text, &polish_config(&api_url), None, None).await;
+        let request = server.join().expect("loopback response server completed");
+        assert!(String::from_utf8_lossy(&request).starts_with("POST "));
+        result
+    }
+
+    fn assert_safe_completion_error(error: &str) {
+        assert_eq!(error, SAFE_COMPLETION_ERROR);
+        assert!(!error.contains(TEST_INPUT));
+        assert!(!error.contains(RESPONSE_MARKER));
+    }
+
+    #[tokio::test]
+    async fn missing_completion_is_a_safe_failure() {
+        let response_body = format!(r#"{{"marker":"{}"}}"#, RESPONSE_MARKER);
+        let error = polish_response(&response_body, TEST_INPUT)
+            .await
+            .unwrap_err();
+
+        assert_safe_completion_error(&error);
+    }
+
+    #[tokio::test]
+    async fn empty_and_whitespace_completions_are_safe_failures() {
+        let mut unexpected_successes = Vec::new();
+        for (label, content) in [("empty", ""), ("whitespace", " \t\n")] {
+            let response = serde_json::json!({
+                "response": content,
+                "marker": RESPONSE_MARKER,
+            })
+            .to_string();
+            match polish_response(&response, TEST_INPUT).await {
+                Err(error) => assert_safe_completion_error(&error),
+                Ok(result) => unexpected_successes.push(format!("{label}: {:?}", result.text)),
+            }
+        }
+
+        assert!(
+            unexpected_successes.is_empty(),
+            "empty completions were treated as successful: {unexpected_successes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonempty_completion_equal_to_input_succeeds() {
+        let response_body = format!(r#"{{"response":"{}"}}"#, TEST_INPUT);
+        let result = polish_response(&response_body, TEST_INPUT)
+            .await
+            .expect("a usable completion equal to the input is still success");
+
+        assert_eq!(result.text, TEST_INPUT);
+    }
 
     #[test]
     fn tags_url_variants_resolve_to_api_tags() {

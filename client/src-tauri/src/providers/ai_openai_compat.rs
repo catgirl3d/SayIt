@@ -191,47 +191,26 @@ pub async fn polish(
         )
     })?;
 
-    // 取不到内容就回落成原文。这是**静默失败**：用户看到有字、以为校对生效了，
-    // 实际上 AI 那一步等于没跑。必须留证，否则「AI 好像没起作用」永远查不下去。
-    let result_text = match extract_chat_completion_text(&data) {
-        Some(t) => t,
-        None => {
-            diag::log(
-                SCOPE,
-                "no_content_fallback_to_input",
-                &format!(
-                    "Response contained no usable content; returned the original text [{}] {}",
-                    http_summary,
-                    diag::describe_json(&body_text)
-                ),
-            );
-            text.to_string()
-        }
-    };
+    // Missing content is a silent failure: returning ASR text makes users think
+    // proofreading succeeded even though the AI step never ran. Report the failure
+    // through diagnostics so it remains visible during investigation.
+    let result_text = extract_chat_completion_text(&data).unwrap_or_default();
 
-    // 去除 <think>...</think> 标签（部分模型如 Qwen3 会输出思考过程）
+    // Remove <think>...</think> reasoning blocks emitted by models such as Qwen3.
     let cleaned = strip_thinking(&result_text);
 
     if cleaned.is_empty() {
-        diag::log(
+        return Err(diag::fail(
             SCOPE,
-            "empty_after_strip_thinking",
-            &format!(
-                "Output was empty after removing the reasoning block; returned the original text model={} raw_chars={}",
-                config.model,
-                result_text.chars().count()
-            ),
-        );
-    } else {
-        diag::ok(SCOPE, elapsed_ms, cleaned.chars().count());
+            "empty_completion",
+            "AI returned no usable completion text".to_string(),
+        ));
     }
 
+    diag::ok(SCOPE, elapsed_ms, cleaned.chars().count());
+
     Ok(AiResult {
-        text: if cleaned.is_empty() {
-            text.to_string()
-        } else {
-            cleaned
-        },
+        text: cleaned,
         elapsed_ms,
     })
 }
@@ -570,6 +549,100 @@ fn strip_thinking(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_INPUT: &str = "spoken transcript marker";
+    const RESPONSE_MARKER: &str = "completion-payload-marker";
+    const SAFE_COMPLETION_ERROR: &str =
+        "sayit_error:connect_failed:AI returned no usable completion text";
+
+    fn polish_config(api_url: &str) -> AiProviderConfig {
+        AiProviderConfig {
+            provider: "openai_compat".to_string(),
+            api_url: api_url.to_string(),
+            api_key: String::new(),
+            model: "fixture-model".to_string(),
+            extra: serde_json::Value::Null,
+        }
+    }
+
+    async fn polish_response(response_body: &str, text: &str) -> Result<AiResult, String> {
+        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            response_body.to_string(),
+        );
+        let result = polish(text, &polish_config(&api_url), None, None).await;
+        let request = server.join().expect("loopback response server completed");
+        assert!(String::from_utf8_lossy(&request).starts_with("POST "));
+        result
+    }
+
+    fn assert_safe_completion_error(error: &str) {
+        assert_eq!(error, SAFE_COMPLETION_ERROR);
+        assert!(!error.contains(TEST_INPUT));
+        assert!(!error.contains(RESPONSE_MARKER));
+    }
+
+    #[tokio::test]
+    async fn missing_completion_is_a_safe_failure() {
+        let error = polish_response(
+            &format!(
+                r#"{{"choices":[{{"message":{{"role":"assistant"}}}}],"marker":"{}"}}"#,
+                RESPONSE_MARKER
+            ),
+            TEST_INPUT,
+        )
+        .await
+        .unwrap_err();
+
+        assert_safe_completion_error(&error);
+    }
+
+    #[tokio::test]
+    async fn empty_and_whitespace_completions_are_safe_failures() {
+        let mut unexpected_successes = Vec::new();
+        for (label, content) in [("empty", ""), ("whitespace", " \t\n")] {
+            let response_body = serde_json::json!({
+                "choices": [{ "message": { "content": content } }],
+                "marker": RESPONSE_MARKER,
+            })
+            .to_string();
+            match polish_response(&response_body, TEST_INPUT).await {
+                Err(error) => assert_safe_completion_error(&error),
+                Ok(result) => unexpected_successes.push(format!("{label}: {:?}", result.text)),
+            }
+        }
+
+        assert!(
+            unexpected_successes.is_empty(),
+            "empty completions were treated as successful: {unexpected_successes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_only_completion_is_a_safe_failure() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"<think>{}</think>"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        let error = polish_response(&response_body, TEST_INPUT)
+            .await
+            .unwrap_err();
+
+        assert_safe_completion_error(&error);
+    }
+
+    #[tokio::test]
+    async fn nonempty_completion_equal_to_input_succeeds() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            TEST_INPUT
+        );
+        let result = polish_response(&response_body, TEST_INPUT)
+            .await
+            .expect("a usable completion equal to the input is still success");
+
+        assert_eq!(result.text, TEST_INPUT);
+    }
 
     /// A standard response returns every data[].id value in server order.
     #[test]
