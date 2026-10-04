@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,8 +15,55 @@ import { useSortable, DragHandle } from '@/components/ui/sortable'
 import { t } from '@/i18n'
 import { RichText } from '@/i18n/RichText'
 import { useT } from '@/i18n/useT'
+import { ASR_PROVIDERS, findAsrProvider } from '@/features/settings/asrProviderCatalog'
+import {
+  foldHotwordDelivery,
+  hotwordCapabilityNoteKey,
+  type AsrHotwordCapability,
+  type FoldedHotwordDelivery,
+  type HotwordCapabilityNoteKey,
+} from '@/lib/asrModels'
 
 type Tab = 'hotwords' | 'replacement'
+
+interface HotwordCapabilityRow {
+  label: string
+  status: FoldedHotwordDelivery
+  clientCap: number | null
+  noteKey: HotwordCapabilityNoteKey | null
+}
+
+function capabilityLabels(provider: string): string[] {
+  if (provider === 'server') return [t('mode.server')]
+  if (provider === 'local') return [t('mode.local')]
+  if (provider === 'doubao') return [findAsrProvider('doubao_v2')?.label ?? provider]
+  if (provider === 'aliyun') return [findAsrProvider('qwen')?.label ?? provider]
+  if (provider === 'qwen_omni') {
+    return ASR_PROVIDERS
+      .filter(({ id }) => id.startsWith('qwen_omni_'))
+      .map(({ label }) => label)
+  }
+  return [findAsrProvider(provider)?.label ?? provider]
+}
+
+function buildHotwordCapabilityRows(
+  matrix: Record<string, AsrHotwordCapability>,
+): HotwordCapabilityRow[] {
+  const grouped = new Map<string, HotwordCapabilityRow>()
+
+  for (const [provider, capability] of Object.entries(matrix)) {
+    const status = foldHotwordDelivery(capability.delivery)
+    const noteKey = hotwordCapabilityNoteKey(provider)
+    for (const label of capabilityLabels(provider)) {
+      const key = JSON.stringify([label, status, capability.clientCap, noteKey])
+      if (!grouped.has(key)) {
+        grouped.set(key, { label, status, clientCap: capability.clientCap, noteKey })
+      }
+    }
+  }
+
+  return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label))
+}
 
 /** 超过该数量的热词总数时，给出"过多可能反而降低准确率"的软提示 */
 const HOTWORD_SOFT_LIMIT = 200
@@ -70,6 +118,8 @@ function WordChips({
 
 export default function Dictionary() {
   useT()
+  const [hotwordCapabilities, setHotwordCapabilities] = useState<Record<string, AsrHotwordCapability>>({})
+  const [hotwordCapabilityLoadFailed, setHotwordCapabilityLoadFailed] = useState(false)
   const [tab, setTab] = useState<Tab>('hotwords')
   const [exportMessage, setExportMessage] = useState('')
   const [warnDismissed, setWarnDismissed] = useState(false)
@@ -102,6 +152,22 @@ export default function Dictionary() {
     toggleBuiltinSet,
     resetBuiltinSet,
   } = useHotwordsManager()
+
+  useEffect(() => {
+    let mounted = true
+    void invoke<Record<string, AsrHotwordCapability>>('asr_hotword_capability_matrix')
+      .then((matrix) => {
+        if (mounted) setHotwordCapabilities(matrix)
+      })
+      .catch((error: unknown) => {
+        if (!mounted) return
+        console.warn('Failed to load ASR hotword capability matrix', error)
+        setHotwordCapabilityLoadFailed(true)
+      })
+    return () => { mounted = false }
+  }, [])
+
+  const capabilityRows = buildHotwordCapabilityRows(hotwordCapabilities)
 
   // 搜索时列表是过滤后的，序号对不上完整列表，因此搜索状态下不启用拖拽
   const themeSortable = useSortable({ onMove: (from, to) => void moveTheme(from, to) })
@@ -189,21 +255,33 @@ export default function Dictionary() {
               content={
                 <div className="text-left">
                   <p className="mb-1.5 font-medium">{t('dict.supportTitle')}</p>
-                  <table className="border-collapse text-xs [&_td]:py-0.5 [&_td]:pr-3 [&_td]:align-top [&_th]:pb-1 [&_th]:pr-3 [&_th]:text-left [&_th]:font-normal [&_th]:text-muted-foreground/70">
-                    <thead>
-                      <tr><th>{t('dict.tableModel')}</th><th>{t('dict.tableHotword')}</th><th>{t('dict.tableNote')}</th></tr>
-                    </thead>
-                    <tbody>
-                      {/* 模型名是品牌 + 型号，两种语言下都用官方写法，只有"支持/说明"两列走翻译 */}
-                      <tr><td>Doubao Seed-ASR 2.0</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.doubao')}</td></tr>
-                      <tr><td>{t('dict.model.qwenAudio30')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.qwenAudio30')}</td></tr>
-                      <tr><td>{t('dict.model.qwenRealtime')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.qwenRealtime')}</td></tr>
-                      <tr><td>{t('dict.model.qwenFlash')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.qwenFlash')}</td></tr>
-                      <tr><td>{t('dict.model.localQwen')}</td><td>{t('dict.support.notYet')}</td><td>{t('dict.note.localQwen')}</td></tr>
-                      <tr><td>{t('dict.model.localOther')}</td><td>{t('dict.support.no')}</td><td>{t('dict.note.localOther')}</td></tr>
-                      <tr><td>{t('dict.model.server')}</td><td>{t('dict.support.yes')}</td><td>{t('dict.note.server')}</td></tr>
-                    </tbody>
-                  </table>
+                  {hotwordCapabilityLoadFailed ? (
+                    <p className="max-w-[380px] text-xs leading-relaxed">{t('dict.support.loadFailed')}</p>
+                  ) : (
+                    <table className="border-collapse text-xs [&_td]:py-0.5 [&_td]:pr-3 [&_td]:align-top [&_th]:pb-1 [&_th]:pr-3 [&_th]:text-left [&_th]:font-normal [&_th]:text-muted-foreground/70">
+                      <thead>
+                        <tr><th>{t('dict.tableModel')}</th><th>{t('dict.tableHotword')}</th><th>{t('dict.tableNote')}</th></tr>
+                      </thead>
+                      <tbody>
+                        {capabilityRows.map(({ label, status, clientCap, noteKey }) => {
+                          const notes: string[] = []
+                          if (clientCap !== null) notes.push(t('dict.note.clientCap', { count: clientCap }))
+                          if (noteKey !== null) notes.push(t(noteKey))
+                          return (
+                            <tr key={`${label}:${status}:${clientCap ?? ''}:${noteKey ?? ''}`}>
+                              <td>{label}</td>
+                              <td>{status === 'sent'
+                                ? t('dict.support.yes')
+                                : status === 'not_sent'
+                                  ? t('dict.support.no')
+                                  : t('dict.support.unknown')}</td>
+                              <td>{notes.join('; ')}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  )}
                   <p className="mt-2 max-w-[380px] leading-relaxed">
                     <RichText text={t('dict.caveat')} />
                   </p>

@@ -21,3 +21,4 @@ pub mod asr_qwen_audio_stream;
 pub mod doubao_auth;
 pub mod doubao_protocol;
 pub mod registry;
+pub mod capabilities;

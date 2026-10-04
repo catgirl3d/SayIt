@@ -1,5 +1,44 @@
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
+export type HotwordDelivery =
+  | 'vocabulary'
+  | 'context'
+  | 'instruction'
+  | 'protocol_has_no_slot'
+  | 'not_wired_up'
+  | 'unknown_provider'
+
+export type FoldedHotwordDelivery = 'sent' | 'not_sent' | 'undecided'
+
+export interface AsrHotwordCapability {
+  delivery: HotwordDelivery
+  clientCap: number | null
+}
+
+export type HotwordCapabilityNoteKey = 'dict.note.doubao' | 'dict.note.qwenRealtime'
+
+const HOTWORD_CAPABILITY_NOTE_KEYS: Record<string, HotwordCapabilityNoteKey> = {
+  doubao: 'dict.note.doubao',
+  doubao_v2: 'dict.note.doubao',
+  qwen_realtime: 'dict.note.qwenRealtime',
+}
+
+export function hotwordCapabilityNoteKey(provider: string): HotwordCapabilityNoteKey | null {
+  return HOTWORD_CAPABILITY_NOTE_KEYS[provider] ?? null
+}
+
+export function foldHotwordDelivery(delivery: HotwordDelivery): FoldedHotwordDelivery {
+  const folded: Record<HotwordDelivery, FoldedHotwordDelivery> = {
+    vocabulary: 'sent',
+    context: 'sent',
+    instruction: 'sent',
+    not_wired_up: 'not_sent',
+    protocol_has_no_slot: 'not_sent',
+    unknown_provider: 'undecided',
+  }
+  return folded[delivery]
+}
+
 export const CUSTOM_ASR_PROVIDER = 'openai_compat' as const
 
 export function formatCustomAsrHistoryProvider(model: string): string {

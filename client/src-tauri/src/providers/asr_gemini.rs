@@ -8,6 +8,11 @@ const SCOPE: &str = "gemini/asr";
 const TRANSCRIBE_PROMPT: &str = "Transcribe this audio verbatim. Output only the transcript text with natural punctuation. Do not add explanations, prefixes, quotation marks, timestamps, or speaker labels. If the audio contains no intelligible speech, output nothing at all.";
 const HOTWORD_LIMIT: usize = 100;
 
+#[cfg(test)]
+pub fn hotword_limit_for_docs() -> usize {
+    HOTWORD_LIMIT
+}
+
 fn resolve_model(config: &AsrProviderConfig) -> String {
     config
         .extra

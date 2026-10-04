@@ -653,6 +653,7 @@ fn main() {
             // Providers (cloud ASR / AI)
             providers::registry::cloud_polish,
             providers::registry::cloud_transcribe,
+            providers::capabilities::asr_hotword_capability_matrix,
             providers::registry::test_ai_connection,
             providers::registry::test_asr_connection,
             providers::registry::list_remote_models,

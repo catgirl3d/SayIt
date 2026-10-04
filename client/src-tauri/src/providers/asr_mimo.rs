@@ -84,8 +84,16 @@ pub async fn transcribe(
     audio_pcm_b64: &str,
     sample_rate: u32,
     config: &AsrProviderConfig,
-    _hotwords: &[String],
+    hotwords: &[String],
 ) -> Result<AsrResult, String> {
+    if !hotwords.is_empty() {
+        diag::log(
+            SCOPE,
+            "hotwords_ignored",
+            &format!("count={} reason=not_wired_up", hotwords.len()),
+        );
+    }
+
     let pcm = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         audio_pcm_b64,

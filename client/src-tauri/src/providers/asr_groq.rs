@@ -179,17 +179,18 @@ fn build_groq_form(
     config: &AsrProviderConfig,
     language: Option<&str>,
     scope: &str,
-) -> Result<(String, reqwest::multipart::Form), String> {
+) -> Result<(String, reqwest::multipart::Form, bool), String> {
     let model = resolve_groq_model(config);
+    let with_prompt = language == Some("zh");
     let form = build_form(
         wav,
         &model,
         language,
         "language",
-        language == Some("zh"),
+        with_prompt,
         scope,
     )?;
-    Ok((model, form))
+    Ok((model, form, with_prompt))
 }
 
 fn request_builder(
@@ -304,7 +305,7 @@ pub async fn transcribe(
     audio_pcm_b64: &str,
     sample_rate: u32,
     config: &AsrProviderConfig,
-    _hotwords: &[String],
+    hotwords: &[String],
 ) -> Result<AsrResult, String> {
     let is_openai = config.provider == "openai_transcribe";
     let scope = if is_openai { OPENAI_SCOPE } else { SCOPE };
@@ -338,7 +339,7 @@ pub async fn transcribe(
     let language = resolve_language(config);
     let wav = pcm_to_wav(&pcm, sample_rate);
     let wav_bytes = wav.len();
-    let (model, form, api_url) = if is_openai {
+    let (model, form, api_url, with_prompt) = if is_openai {
         let model = resolve_openai_model(config);
         let language_field = openai_language_field(&model);
         let with_prompt = openai_should_include_prompt(&model, language.as_deref());
@@ -357,11 +358,25 @@ pub async fn transcribe(
             with_prompt,
             scope,
         )?;
-        (model, form, OPENAI_API_URL)
+        (model, form, OPENAI_API_URL, with_prompt)
     } else {
-        let (model, form) = build_groq_form(wav, config, language.as_deref(), scope)?;
-        (model, form, API_URL)
+        let (model, form, with_prompt) =
+            build_groq_form(wav, config, language.as_deref(), scope)?;
+        (model, form, API_URL, with_prompt)
     };
+
+    if !hotwords.is_empty() {
+        let reason = if with_prompt {
+            "prompt_field_used_for_punctuation"
+        } else {
+            "not_wired_up"
+        };
+        diag::log(
+            scope,
+            "hotwords_ignored",
+            &format!("count={} reason={}", hotwords.len(), reason),
+        );
+    }
 
     diag::log(
         scope,
@@ -585,7 +600,7 @@ async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResu
     let silence = vec![0u8; 16000];
     let wav = pcm_to_wav(&silence, 16000);
 
-    let (_model, form) = match build_groq_form(wav, config, None, SCOPE) {
+    let (_model, form, _) = match build_groq_form(wav, config, None, SCOPE) {
         Ok(form) => form,
         Err(e) => {
             return TestResult {
@@ -906,7 +921,7 @@ mod tests {
     #[tokio::test]
     async fn groq_request_form_uses_the_selected_model_from_config() {
         let config = config_with_language(serde_json::json!({ "model": "whisper-large-v3" }));
-        let (model, form) =
+        let (model, form, _) =
             build_groq_form(pcm_to_wav(&[1, 2, 3, 4], 16000), &config, Some("zh"), SCOPE).unwrap();
         let (url, server) = spawn_http_fixture();
         let client = reqwest::Client::new();

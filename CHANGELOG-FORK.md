@@ -7,6 +7,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### Speech Recognition
 
+- Replaced the hardcoded hotword support table with a Rust capability matrix tied to ASR dispatch, including provider-specific delivery, client limits, and unsupported paths.
 - Added `whisper-large-v3` as a direct Groq ASR model choice; `whisper-large-v3-turbo` remains the default.
 - Fixed history records being labeled with whichever ASR profile was active when the entry was written: a completed recording now keeps the provider and model that actually recognized it, even if the active profile was switched while recognition was still running. History reprocessing writes the same snapshot-backed metadata.
 - Cleared outdated ASR test verdicts when a saved profile's model is no longer current: profiles migrated or imported from an older catalog no longer show a green "available" result measured against a model they no longer use.

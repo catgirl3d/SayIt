@@ -62,6 +62,11 @@ const HOTWORD_WEIGHT: u32 = 4;
 /// 那会让识别**完全不可用**，而不是"热词少生效几个"。
 const HOTWORD_LIMIT: usize = 100;
 
+#[cfg(test)]
+pub fn hotword_limit_for_docs() -> usize {
+    HOTWORD_LIMIT
+}
+
 type WsStream = tokio_tungstenite::WebSocketStream<
     tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
 >;

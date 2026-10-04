@@ -127,8 +127,16 @@ pub async fn transcribe(
     audio_pcm_b64: &str,
     sample_rate: u32,
     config: &AsrProviderConfig,
-    _hotwords: &[String],
+    hotwords: &[String],
 ) -> Result<AsrResult, String> {
+    if !hotwords.is_empty() {
+        diag::log(
+            SCOPE,
+            "hotwords_ignored",
+            &format!("count={} reason=protocol_has_no_slot", hotwords.len()),
+        );
+    }
+
     transcribe_to_endpoint(API_URL, audio_pcm_b64, sample_rate, config).await
 }
 

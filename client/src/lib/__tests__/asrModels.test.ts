@@ -215,3 +215,35 @@ describe('buildCloudAsrExtra', () => {
     expect(asrModels.formatCustomAsrHistoryProvider('local-whisper')).toBe('openai_compat:local-whisper')
   })
 })
+
+describe('foldHotwordDelivery', () => {
+  const fold = (asrModels as typeof asrModels & {
+    foldHotwordDelivery?: (delivery: string) => string
+  }).foldHotwordDelivery
+
+  it.each([
+    ['vocabulary', 'sent'],
+    ['context', 'sent'],
+    ['instruction', 'sent'],
+    ['not_wired_up', 'not_sent'],
+    ['protocol_has_no_slot', 'not_sent'],
+    ['unknown_provider', 'undecided'],
+  ])('maps %s to %s', (delivery, expected) => {
+    expect(fold?.(delivery)).toBe(expected)
+  })
+})
+
+describe('hotwordCapabilityNoteKey', () => {
+  const noteKey = (asrModels as typeof asrModels & {
+    hotwordCapabilityNoteKey?: (provider: string) => string | null
+  }).hotwordCapabilityNoteKey
+
+  it.each([
+    ['doubao', 'dict.note.doubao'],
+    ['doubao_v2', 'dict.note.doubao'],
+    ['qwen_realtime', 'dict.note.qwenRealtime'],
+    ['qwen', null],
+  ])('maps provider %s to its support note', (provider, expected) => {
+    expect(noteKey?.(provider)).toBe(expected)
+  })
+})
