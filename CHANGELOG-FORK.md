@@ -55,6 +55,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### Desktop Client
 
+- Cleaned up the microphone picker: hide duplicate browser-default entries, label the communications route with its target device instead of the raw Chromium name, hide it when it resolves to the same device as System default (kept when saved or distinct), and show the last-enumerated physical device match for System default when unambiguous; stored selections and recording behavior are unchanged.
 - Added concise, dismissible recognition failure cards with safe localized causes and a History retry hint only when the saved recording is actually available.
 - Reworked settings into routed pages instead of one large settings dialog, including dedicated Audio & Mic and Shortcuts pages.
 - Added an accessible microphone selector label with the full device name on hover; local formatting controls are disabled while AI cleanup is enabled without resetting saved options.
