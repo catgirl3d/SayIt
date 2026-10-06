@@ -239,10 +239,7 @@ describe('system audio subtitle session', () => {
     })
     await session.start({ deviceId: '', targetLanguage: 'ru' })
 
-    const initialActivity = trace.getPipelineSnapshot().activity
-    expect(initialActivity).toBeDefined()
-    if (!initialActivity) return
-    expect(initialActivity.phase).toBe('listening')
+    expect(trace.getPipelineSnapshot().activity.phase).toBe('listening')
     frames(20, 0.9)
     frames(15, 0)
     expect(trace.getPipelineSnapshot().activity.phase).toBe('asr')
