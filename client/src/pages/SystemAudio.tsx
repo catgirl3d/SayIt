@@ -1,12 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router-dom'
 import { Monitor, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, type SelectOption } from '@/components/ui/select'
+import { getLocale } from '@/i18n'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
-import { useT } from '@/i18n/useT'
-import { DEFAULT_SUBTITLE_TARGET_LANGUAGE } from '@/services/defaults'
+import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
 import { listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
@@ -20,6 +20,10 @@ export function buildTranslationOptions(presets: PromptPreset[]): SelectOption[]
       value: preset.id.slice('translate_'.length),
       label: promptPresetDisplayName(preset),
     }))
+}
+
+export function defaultSubtitleTargetLanguage(options: SelectOption[], locale: string = getLocale()): string {
+  return options.find((option) => option.value === locale)?.value ?? options[0]?.value ?? ''
 }
 
 export function SystemAudioControls({ state, busy, onAction }: { state: SystemAudioState; busy: boolean; onAction: (action: SubtitleAction) => void }) {
@@ -44,11 +48,14 @@ export default function SystemAudio() {
   const snapshot = useSyncExternalStore(systemAudioSession.subscribe, systemAudioSession.getSnapshot)
   const [devices, setDevices] = useState<SystemAudioDevice[]>([])
   const [deviceId, setDeviceId] = useState('')
-  const [targetLanguage, setTargetLanguage] = useState<SubtitleTargetLanguage>(DEFAULT_SUBTITLE_TARGET_LANGUAGE)
-  const [translationOptions, setTranslationOptions] = useState<SelectOption[]>([])
+  const [targetLanguage, setTargetLanguage] = useState<SubtitleTargetLanguage>('')
+  const [presets, setPresets] = useState<PromptPreset[]>([])
   const [ready, setReady] = useState(false)
   const [pending, setPending] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const locale = useLocale()
+  // Derive option labels from the loaded presets on every locale change; they are not stored in state.
+  const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
   const active = snapshot.state !== 'idle'
   const mode = getWorkMode()
   const deviceOptions: SelectOption[] = [
@@ -64,15 +71,15 @@ export default function SystemAudio() {
     void Promise.all([
       listSystemAudioDevices(),
       getSetting<string>('systemAudio.deviceId', ''),
-      getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', DEFAULT_SUBTITLE_TARGET_LANGUAGE),
+      getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', ''),
       getPromptPresets(),
     ]).then(([outputs, savedDevice, language, presets]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
       const options = buildTranslationOptions(presets)
-      setTranslationOptions(options)
-      setTargetLanguage(options.some((option) => option.value === language) ? language : DEFAULT_SUBTITLE_TARGET_LANGUAGE)
+      setPresets(presets)
+      setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
       setReady(true)
     }).catch(() => { if (!disposed) setLoadError(t('systemAudio.captureFailed')) })
     // Navigation does not own the listening session; only its controls or app teardown stop it.
@@ -93,7 +100,6 @@ export default function SystemAudio() {
     setLoadError('')
     try {
       if (action === 'start') {
-        await Promise.all([setSetting('systemAudio.deviceId', deviceId), setSetting('systemAudio.targetLanguage', targetLanguage)])
         await systemAudioSession.start({ deviceId, targetLanguage })
       } else {
         await systemAudioSession[action]()
@@ -120,7 +126,10 @@ export default function SystemAudio() {
               <div className="flex gap-2">
                 <Select
                   value={deviceId}
-                  onChange={setDeviceId}
+                  onChange={(value) => {
+                    setDeviceId(value)
+                    void setSetting('systemAudio.deviceId', value)
+                  }}
                   options={deviceOptions}
                   labelledBy="subtitle-output-label"
                   disabled={active || pending || !ready}
@@ -133,7 +142,10 @@ export default function SystemAudio() {
               <label id="subtitle-language-label" className="text-sm font-medium">{t('systemAudio.targetLanguage')}</label>
               <Select
                 value={targetLanguage}
-                onChange={setTargetLanguage}
+                onChange={(value) => {
+                  setTargetLanguage(value)
+                  void setSetting('systemAudio.targetLanguage', value)
+                }}
                 options={translationOptions}
                 labelledBy="subtitle-language-label"
                 disabled={active || pending}

@@ -1,7 +1,8 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { buildTranslationOptions, SystemAudioControls } from '../SystemAudio'
+import { buildTranslationOptions, defaultSubtitleTargetLanguage, SystemAudioControls } from '../SystemAudio'
+import type { SelectOption } from '@/components/ui/select'
 import type { PromptPreset } from '@/services/store'
 
 describe('system audio translation options', () => {
@@ -13,6 +14,30 @@ describe('system audio translation options', () => {
     ]
 
     expect(buildTranslationOptions(presets)).toEqual([{ value: 'de', label: 'Translate to German' }])
+  })
+})
+
+describe('default subtitle target language', () => {
+  const options: SelectOption[] = [
+    { value: 'uk', label: 'Ukrainian' },
+    { value: 'en', label: 'English' },
+    { value: 'ru', label: 'Russian' },
+  ]
+
+  it('selects English when it matches the interface locale', () => {
+    expect(defaultSubtitleTargetLanguage(options, 'en')).toBe('en')
+  })
+
+  it('selects Ukrainian when it matches the interface locale', () => {
+    expect(defaultSubtitleTargetLanguage(options, 'uk')).toBe('uk')
+  })
+
+  it('selects the first option when the interface locale is not offered', () => {
+    expect(defaultSubtitleTargetLanguage(options, 'de')).toBe('uk')
+  })
+
+  it('returns an empty value when no translation options are available', () => {
+    expect(defaultSubtitleTargetLanguage([], 'en')).toBe('')
   })
 })
 

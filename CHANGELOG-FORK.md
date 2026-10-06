@@ -29,6 +29,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added one shared speech-input language setting for local, server, and cloud ASR, migrating legacy mode-specific settings and applying it to compatible recognition requests, history reprocessing, and built-in cleanup prompts.
 - Added persistent microphone input boost with 1x, 2x, 3x, 5x, and browser-managed automatic gain modes.
 - Replaced computer-subtitle device and language dropdowns with the shared selectors and localized saved output devices that are no longer listed.
+- Save computer-subtitle device and translation-language choices immediately; use the interface language as the default translation target instead of hardcoded Russian.
 - Limited Groq's Chinese punctuation hint to explicitly selected Chinese, preventing it from being injected into automatic or other-language requests.
 - Added buffered OpenAI, Gemini, and OpenRouter transcription profiles with per-profile model selection and language-aware requests.
 - Added per-profile OpenAI-compatible ASR endpoints for multipart transcriptions and chat input_audio, with optional local-service keys and opt-in Auto fallback only on an explicit structured route-mismatch response. Auto can incur a charge on its first request; new profiles default to one transcriptions request.
