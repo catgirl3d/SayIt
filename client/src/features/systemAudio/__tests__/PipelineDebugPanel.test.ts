@@ -24,6 +24,7 @@ describe('pipeline debug panel', () => {
       mode: 'local',
       engine: 'sensevoice',
       model: 'small',
+      asrOnly: false,
       okCount: 1,
       totalCount: 1,
       avgSpeechMs: 100,
@@ -39,7 +40,7 @@ describe('pipeline debug panel', () => {
       createRun({ id: 1, status: 'ok', asrChars: 15, captionChars: 12 }),
       createRun({ id: 2, status: 'failed', asrChars: 0, captionChars: 0 }),
     ]
-    const tsv = buildPipelineTsv(summary, runs)
+    const tsv = buildPipelineTsv(summary, runs, 'ASR-only')
     const lines = tsv.split('\n')
 
     expect(lines[0]).toBe('engine/model\tOK / total runs\tavg speech ms\tavg ASR ms\tASR p90 ms\tASR max ms\tavg LLM ms\tavg latency ms\tlatency p90 ms\tlatency max ms')
@@ -50,5 +51,30 @@ describe('pipeline debug panel', () => {
     expect(lines[4].split('\t')).toHaveLength(10)
     expect(lines[4].endsWith('\t15 / 12')).toBe(true)
     expect(tsv).not.toContain('Original speech')
+  })
+
+  it('marks recognition-only summary and run rows in the TSV export', () => {
+    const summary = [{
+      key: 'local:asr-only:sensevoice:small',
+      mode: 'local',
+      engine: 'sensevoice',
+      model: 'small',
+      asrOnly: true,
+      okCount: 1,
+      totalCount: 1,
+      avgSpeechMs: 100,
+      avgAsrMs: 20,
+      asrP90Ms: 20,
+      asrMaxMs: 20,
+      avgLlmMs: 0,
+      avgLatencyMs: 25,
+      latencyP90Ms: 25,
+      latencyMaxMs: 25,
+    }]
+    const tsv = buildPipelineTsv(summary, [createRun({ id: 3, status: 'ok', asrOnly: true })], 'ASR-only')
+    const lines = tsv.split('\n')
+
+    expect(lines[1]).toContain('local · sensevoice / small · ASR-only')
+    expect(lines[4].split('\t')[1]).toBe('local · ASR-only')
   })
 })

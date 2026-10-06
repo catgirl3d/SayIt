@@ -47,7 +47,7 @@ function tsvRow(values: Array<string | number>) {
   return values.map((value) => String(value).replace(/[\t\r\n]+/g, ' ')).join('\t')
 }
 
-export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, runs: readonly PipelineRun[]): string {
+export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, runs: readonly PipelineRun[], asrOnlyMark: string): string {
   const summaryHeader = [
     'engine/model', 'OK / total runs', 'avg speech ms', 'avg ASR ms', 'ASR p90 ms', 'ASR max ms',
     'avg LLM ms', 'avg latency ms', 'latency p90 ms', 'latency max ms',
@@ -58,7 +58,7 @@ export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, 
   return [
     tsvRow(summaryHeader),
     ...summary.map((row) => tsvRow([
-      `${row.mode} · ${row.engine} / ${row.model}`,
+      withAsrOnly(`${row.mode} · ${row.engine} / ${row.model}`, row.asrOnly, asrOnlyMark),
       `${row.okCount} / ${row.totalCount}`,
       row.avgSpeechMs,
       row.avgAsrMs,
@@ -73,7 +73,7 @@ export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, 
     tsvRow(runHeader),
     ...runs.map((run) => tsvRow([
       formatTime(run.startedAt),
-      run.mode,
+      withAsrOnly(run.mode, run.asrOnly, asrOnlyMark),
       formatMs(run.speechMs),
       formatMs(run.queueMs),
       formatMs(run.asrMs),
@@ -91,6 +91,10 @@ function formatMode(mode: string, t: ReturnType<typeof useT>) {
   if (mode === 'cloud_api') return t('mode.cloudApi')
   if (mode === 'server') return t('mode.server')
   return mode
+}
+
+function withAsrOnly(label: string, asrOnly: boolean | undefined, mark: string) {
+  return asrOnly ? `${label} · ${mark}` : label
 }
 
 export default function PipelineDebugPanel() {
@@ -140,7 +144,7 @@ export default function PipelineDebugPanel() {
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold">{t('systemAudio.debug.title')}</h2>
           <div className="flex items-center gap-1">
-            <CopyButton text={buildPipelineTsv(summary, recentRuns)} />
+            <CopyButton text={buildPipelineTsv(summary, recentRuns, t('systemAudio.debug.asrOnlyMark'))} />
             <Button onClick={clearPipelineTrace} variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs">
               <Trash2 className="h-3 w-3" /> {t('systemAudio.debug.clear')}
             </Button>
@@ -221,7 +225,7 @@ export default function PipelineDebugPanel() {
                   <tr><td colSpan={10} className="px-2 py-2 text-muted-foreground">{t('systemAudio.debug.empty')}</td></tr>
                 ) : summary.map((row) => (
                   <tr key={row.key} className="border-t">
-                    <td className="px-2 py-1.5">{formatMode(row.mode, t)} · {row.engine} / {row.model}</td>
+                    <td className="px-2 py-1.5">{withAsrOnly(`${formatMode(row.mode, t)} · ${row.engine} / ${row.model}`, row.asrOnly, t('systemAudio.debug.asrOnlyMark'))}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{row.okCount} / {row.totalCount}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{row.avgSpeechMs}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{row.avgAsrMs}</td>
@@ -262,7 +266,7 @@ export default function PipelineDebugPanel() {
                 ) : recentRuns.map((run) => (
                   <tr key={run.id} className="border-t">
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatTime(run.startedAt)}</td>
-                    <td className="px-2 py-1.5">{formatMode(run.mode, t)}</td>
+                    <td className="px-2 py-1.5">{withAsrOnly(formatMode(run.mode, t), run.asrOnly, t('systemAudio.debug.asrOnlyMark'))}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.speechMs)}</td>
                     <td className={`px-2 py-1.5 font-mono tabular-nums ${run.queueMs !== null && run.queueMs > 1000 ? 'text-amber-600 dark:text-amber-300' : ''}`}>{formatMs(run.queueMs)}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.asrMs)}</td>

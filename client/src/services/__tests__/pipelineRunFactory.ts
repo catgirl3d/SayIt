@@ -12,6 +12,7 @@ export function createRun(overrides: Partial<PipelineRun> & Pick<PipelineRun, 'i
     llmMs: 30,
     overlayMs: 2,
     latencyMs: 40,
+    asrOnly: false,
     status,
     asrEngine: 'sensevoice',
     asrModel: 'small',

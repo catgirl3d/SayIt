@@ -159,7 +159,7 @@ describe('pipeline trace', () => {
     const cloudApi = summary.find((item) => item.mode === 'cloud_api')
 
     expect(local).toMatchObject({
-      key: JSON.stringify(['local', 'sensevoice', 'small']),
+      key: JSON.stringify(['local', false, 'sensevoice', 'small']),
       engine: 'sensevoice',
       model: 'small',
       okCount: 2,
@@ -174,7 +174,7 @@ describe('pipeline trace', () => {
       latencyMaxMs: 0,
     })
     expect(cloudApi).toMatchObject({
-      key: JSON.stringify(['cloud_api', '-', '-']),
+      key: JSON.stringify(['cloud_api', false, '-', '-']),
       engine: '-',
       model: '-',
       okCount: 1,
@@ -199,10 +199,11 @@ describe('pipeline trace', () => {
     ])
 
     expect(summary).toEqual([{
-      key: JSON.stringify(['local', 'sensevoice', 'small']),
+      key: JSON.stringify(['local', false, 'sensevoice', 'small']),
       mode: 'local',
       engine: 'sensevoice',
       model: 'small',
+      asrOnly: false,
       okCount: 1,
       totalCount: 3,
       avgSpeechMs: 100,
@@ -285,6 +286,24 @@ describe('pipeline trace', () => {
       ['cloud', 'custom:base:model'],
     ])
     expect(new Set(summary.map(({ key }) => key)).size).toBe(2)
+  })
+
+  it('records recognition-only runs and keeps their engine averages separate from translated runs', async () => {
+    const trace = await loadPipelineTrace()
+    trace.setPipelineDebugEnabled(true)
+    const runId = trace.beginRun({ mode: 'local', speechMs: 100, asrOnly: true })!
+    trace.finishRun(runId, { asrMs: 20, llmMs: 0 })
+
+    expect(trace.getPipelineSnapshot().runs[0]).toMatchObject({ status: 'ok', asrOnly: true })
+    const summary = trace.summarizeByEngine([
+      createRun({ id: 1, status: 'ok', asrOnly: false, speechMs: 100, asrMs: 20, llmMs: 30 }),
+      createRun({ id: 2, status: 'ok', asrOnly: true, speechMs: 300, asrMs: 40, llmMs: 0 }),
+    ])
+
+    expect(summary).toMatchObject([
+      { key: JSON.stringify(['local', false, 'sensevoice', 'small']), asrOnly: false, totalCount: 1, avgAsrMs: 20 },
+      { key: JSON.stringify(['local', true, 'sensevoice', 'small']), asrOnly: true, totalCount: 1, avgAsrMs: 40 },
+    ])
   })
 
   it('does not let old run IDs finish after clear or disable and re-enable', async () => {

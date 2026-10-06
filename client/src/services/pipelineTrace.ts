@@ -244,6 +244,7 @@ export function percentile(values: number[], p: number): number {
 export function summarizeByEngine(inputRuns: PipelineRun[]): Array<{
   key: string
   mode: string
+  asrOnly: boolean
   engine: string
   model: string
   okCount: number
@@ -257,14 +258,15 @@ export function summarizeByEngine(inputRuns: PipelineRun[]): Array<{
   latencyP90Ms: number
   latencyMaxMs: number
 }> {
-  const groups = new Map<string, { mode: string; engine: string; model: string; runs: PipelineRun[] }>()
+  const groups = new Map<string, { mode: string; asrOnly: boolean; engine: string; model: string; runs: PipelineRun[] }>()
   for (const run of inputRuns) {
+    const asrOnly = Boolean(run.asrOnly)
     const engine = run.asrEngine || '-'
     const model = run.asrModel || '-'
-    const key = JSON.stringify([run.mode, engine, model])
+    const key = JSON.stringify([run.mode, asrOnly, engine, model])
     const group = groups.get(key)
     if (group) group.runs.push(run)
-    else groups.set(key, { mode: run.mode, engine, model, runs: [run] })
+    else groups.set(key, { mode: run.mode, asrOnly, engine, model, runs: [run] })
   }
 
   const average = (values: Array<number | null>) => {
@@ -272,13 +274,14 @@ export function summarizeByEngine(inputRuns: PipelineRun[]): Array<{
     return present.length ? Math.round(present.reduce((sum, value) => sum + value, 0) / present.length) : 0
   }
 
-  return [...groups].map(([key, { mode, engine, model, runs: group }]) => {
+  return [...groups].map(([key, { mode, asrOnly, engine, model, runs: group }]) => {
     const successful = group.filter((run) => run.status === 'ok')
     const asrValues = successful.map((run) => run.asrMs).filter((value): value is number => value !== null && Number.isFinite(value))
     const latencyValues = successful.map((run) => run.latencyMs).filter((value): value is number => value !== null && Number.isFinite(value))
     return {
       key,
       mode,
+      asrOnly,
       engine,
       model,
       okCount: successful.length,

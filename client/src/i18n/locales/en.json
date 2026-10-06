@@ -39,6 +39,7 @@
   "systemAudio.mixHint": "Captures all applications playing through this output device, including notifications. Microphone dictation is unavailable until you stop subtitles.",
   "systemAudio.delayHint": "Captions arrive after each short speech fragment is recognized and translated. They are not synchronized with the video player.",
   "systemAudio.debug.toggle": "Pipeline debug",
+  "systemAudio.debug.asrOnlyMark": "ASR-only",
   "systemAudio.debug.title": "Pipeline trace",
   "systemAudio.debug.frames": "Frames",
   "systemAudio.debug.frameKb": "Frame KB",

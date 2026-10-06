@@ -39,6 +39,7 @@
   "systemAudio.mixHint": "Захоплює всі застосунки на цьому пристрої виведення, включно зі сповіщеннями. Диктування з мікрофона недоступне, доки ви не зупините субтитри.",
   "systemAudio.delayHint": "Субтитри з'являються після розпізнавання та перекладу коротких фрагментів. Вони не синхронізовані з відеоплеєром.",
   "systemAudio.debug.toggle": "Налагодження конвеєра",
+  "systemAudio.debug.asrOnlyMark": "Лише ASR",
   "systemAudio.debug.title": "Траса конвеєра",
   "systemAudio.debug.frames": "Кадри",
   "systemAudio.debug.frameKb": "КБ кадрів",
