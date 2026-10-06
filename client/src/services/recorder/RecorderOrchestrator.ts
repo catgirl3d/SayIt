@@ -123,6 +123,7 @@ export class RecorderOrchestrator {
   private state: RecorderState = 'idle'
   private onStateChange: ((s: RecorderState) => void) | null = null
   private initialized = false
+  /** Blocks dictation bridge events during subtitles; startRecording, ensureConnection, reconnectProvider, acquireSystemAudio, and toast/preset suppression retain their own checks. */
   private subtitleModeActive = false
   private providerConnection: Promise<void> | null = null
   private runSequence = 0
@@ -362,6 +363,14 @@ export class RecorderOrchestrator {
     this.pttSuppressed = suppressed
   }
 
+  /** Dictation bridge events are ignored while the subtitle session owns the provider and overlay. */
+  private dictationEventHandler<T>(handler: (payload: T) => void): (payload: T) => void {
+    return (payload) => {
+      if (this.subtitleModeActive) return
+      handler(payload)
+    }
+  }
+
   presentSubtitleOverlay(payload: SubtitleOverlayPayload): Promise<number> {
     return this.overlayService.showSubtitles(payload)
   }
@@ -464,8 +473,7 @@ export class RecorderOrchestrator {
       this.overlayService.dismissCard(token)
     })
 
-    bridge.onPTTDown((payload) => {
-      if (this.subtitleModeActive) return
+    bridge.onPTTDown(this.dictationEventHandler((payload?: unknown) => {
       this.notePTTDown(payload)
       this.logPTTEvent('down', payload)
       if (this.pttSuppressed || this.handsFreeMode) {
@@ -484,10 +492,9 @@ export class RecorderOrchestrator {
         ...this.getPTTEventContext(payload),
         ignoreReason: 'state_not_idle',
       })
-    })
+    }))
 
-    bridge.onPTTUp((payload) => {
-      if (this.subtitleModeActive) return
+    bridge.onPTTUp(this.dictationEventHandler((payload?: unknown) => {
       this.notePTTUp(payload)
       this.logPTTEvent('up', payload)
       if (this.pttSuppressed || this.handsFreeMode) {
@@ -512,10 +519,9 @@ export class RecorderOrchestrator {
         ...this.getPTTEventContext(payload),
         ignoreReason: 'state_not_recording',
       })
-    })
+    }))
 
-    bridge.onPTTToggle((payload) => {
-      if (this.subtitleModeActive) return
+    bridge.onPTTToggle(this.dictationEventHandler((payload?: unknown) => {
       this.logPTTEvent('toggle', payload)
       if (this.pttSuppressed || this.handsFreeMode) {
         addRuntimeEvent('info', 'ptt', 'event:toggle ignored', {
@@ -526,10 +532,9 @@ export class RecorderOrchestrator {
       }
       addRuntimeEvent('info', 'ptt', 'event:toggle accepted', this.getPTTEventContext(payload))
       this.pttToggle(false)
-    })
+    }))
 
-    bridge.onToggleHandsFree((payload) => {
-      if (this.subtitleModeActive) return
+    bridge.onToggleHandsFree(this.dictationEventHandler((payload?: unknown) => {
       this.logPTTEvent('hands_free', payload)
       if (this.pttSuppressed) {
         addRuntimeEvent('info', 'ptt', 'event:hands_free ignored', {
@@ -540,7 +545,7 @@ export class RecorderOrchestrator {
       }
       addRuntimeEvent('info', 'ptt', 'event:hands_free accepted', this.getPTTEventContext(payload))
       this.pttToggle(true)
-    })
+    }))
 
     // 9-minute warning from Rust keyboard hook (PTT hold mode)
     bridge.onPTTTimeoutWarning(() => {

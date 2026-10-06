@@ -952,6 +952,68 @@ describe('exclusive system-audio ownership', () => {
     recorder.cleanup()
   })
 
+  it.each([
+    { event: 'ptt-down', name: 'down' },
+    { event: 'ptt-up', name: 'up' },
+    { event: 'ptt-toggle', name: 'toggle' },
+    { event: 'toggle-hands-free', name: 'hands_free' },
+  ])('$event is delivered normally and ignored during subtitle ownership', async ({ event, name }) => {
+    const recorder = new RecorderOrchestrator()
+    const provider = await switchProvider('cloud_api')
+    vi.spyOn(provider, 'isReady').mockReturnValue(true)
+    vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    await recorder.init()
+    recorder.setPttSuppressed(true)
+    const payload = {
+      source: 'test',
+      keycode: 91,
+      rawcode: 91,
+      altKey: true,
+      ctrlKey: false,
+      shiftKey: true,
+      reason: 'test event',
+      pttSetting: 'alt+space',
+      timestamp: 123,
+    }
+    const dispatch = () => harness.listeners.get(event)?.({ payload })
+
+    expect(harness.listeners.has(event)).toBe(true)
+    harness.runtimeEvents.mockClear()
+    expect(dispatch()).toBeUndefined()
+    expect(harness.runtimeEvents).toHaveBeenCalledWith(
+      'info',
+      'ptt',
+      `event:${name}`,
+      expect.objectContaining({
+        source: payload.source,
+        keycode: payload.keycode,
+        rawcode: payload.rawcode,
+        reason: payload.reason,
+        pttSetting: payload.pttSetting,
+        timestamp: payload.timestamp,
+        modifiers: { alt: true, ctrl: false, shift: true },
+        recorderState: 'idle',
+      }),
+    )
+
+    await acquireSubtitles(recorder)
+    harness.runtimeEvents.mockClear()
+    expect(dispatch()).toBeUndefined()
+    expect(harness.runtimeEvents).not.toHaveBeenCalled()
+
+    const release = Reflect.get(recorder, 'releaseSystemAudio') as () => Promise<void>
+    await release.call(recorder)
+    harness.runtimeEvents.mockClear()
+    expect(dispatch()).toBeUndefined()
+    expect(harness.runtimeEvents).toHaveBeenCalledWith(
+      'info',
+      'ptt',
+      `event:${name}`,
+      expect.objectContaining({ source: payload.source, keycode: payload.keycode }),
+    )
+    recorder.cleanup()
+  })
+
   it('ends subtitle ownership even when the dictation provider cannot reconnect', async () => {
     const recorder = new RecorderOrchestrator()
     await acquireSubtitles(recorder)
