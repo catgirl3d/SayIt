@@ -230,16 +230,29 @@ export function subscribe(listener: () => void) {
   return () => { listeners.delete(listener) }
 }
 
+export function percentile(values: number[], p: number): number {
+  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right)
+  if (!sorted.length) return 0
+  const rank = Math.min(1, Math.max(0, p))
+  const index = Math.max(0, Math.ceil(rank * sorted.length) - 1)
+  return Math.round(sorted[index])
+}
+
 export function summarizeByEngine(inputRuns: PipelineRun[]): Array<{
   key: string
   mode: string
   engine: string
   model: string
-  count: number
+  okCount: number
+  totalCount: number
   avgSpeechMs: number
   avgAsrMs: number
+  asrP90Ms: number
+  asrMaxMs: number
   avgLlmMs: number
   avgLatencyMs: number
+  latencyP90Ms: number
+  latencyMaxMs: number
 }> {
   const groups = new Map<string, { mode: string; engine: string; model: string; runs: PipelineRun[] }>()
   for (const run of inputRuns) {
@@ -257,16 +270,24 @@ export function summarizeByEngine(inputRuns: PipelineRun[]): Array<{
   }
 
   return [...groups].map(([key, { mode, engine, model, runs: group }]) => {
+    const successful = group.filter((run) => run.status === 'ok')
+    const asrValues = successful.map((run) => run.asrMs).filter((value): value is number => value !== null && Number.isFinite(value))
+    const latencyValues = successful.map((run) => run.latencyMs).filter((value): value is number => value !== null && Number.isFinite(value))
     return {
       key,
       mode,
       engine,
       model,
-      count: group.length,
-      avgSpeechMs: average(group.map((run) => run.speechMs)),
-      avgAsrMs: average(group.map((run) => run.asrMs)),
-      avgLlmMs: average(group.map((run) => run.llmMs)),
-      avgLatencyMs: average(group.map((run) => run.latencyMs)),
+      okCount: successful.length,
+      totalCount: group.length,
+      avgSpeechMs: average(successful.map((run) => run.speechMs)),
+      avgAsrMs: average(successful.map((run) => run.asrMs)),
+      asrP90Ms: percentile(asrValues, 0.9),
+      asrMaxMs: asrValues.length ? Math.round(Math.max(...asrValues)) : 0,
+      avgLlmMs: average(successful.map((run) => run.llmMs)),
+      avgLatencyMs: average(successful.map((run) => run.latencyMs)),
+      latencyP90Ms: percentile(latencyValues, 0.9),
+      latencyMaxMs: latencyValues.length ? Math.round(Math.max(...latencyValues)) : 0,
     }
   })
 }

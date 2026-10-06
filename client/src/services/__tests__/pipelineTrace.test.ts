@@ -1,9 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PipelineRun } from '../pipelineTrace'
 
 async function loadPipelineTrace() {
   const trace = await import('../pipelineTrace').catch(() => null)
   expect(trace).not.toBeNull()
   return trace!
+}
+
+function createRun(overrides: Partial<PipelineRun> & Pick<PipelineRun, 'id' | 'status'>): PipelineRun {
+  const { id, status, ...fields } = overrides
+  return {
+    id,
+    startedAt: 1_760_000_000_000 + id,
+    mode: 'local',
+    speechMs: 100,
+    queueMs: 5,
+    asrMs: 20,
+    llmMs: 30,
+    overlayMs: 2,
+    latencyMs: 40,
+    status,
+    asrEngine: 'sensevoice',
+    asrModel: 'small',
+    asrChars: 12,
+    captionChars: 10,
+    ...fields,
+  }
 }
 
 describe('pipeline trace', () => {
@@ -163,21 +185,87 @@ describe('pipeline trace', () => {
       key: JSON.stringify(['local', 'sensevoice', 'small']),
       engine: 'sensevoice',
       model: 'small',
-      count: 2,
+      okCount: 2,
+      totalCount: 2,
       avgSpeechMs: 200,
       avgAsrMs: 20,
+      asrP90Ms: 20,
+      asrMaxMs: 20,
       avgLlmMs: 30,
       avgLatencyMs: 0,
+      latencyP90Ms: 0,
+      latencyMaxMs: 0,
     })
     expect(cloudApi).toMatchObject({
       key: JSON.stringify(['cloud_api', '-', '-']),
       engine: '-',
       model: '-',
-      count: 1,
+      okCount: 1,
+      totalCount: 1,
       avgSpeechMs: 100,
       avgAsrMs: 10,
+      asrP90Ms: 10,
+      asrMaxMs: 10,
       avgLlmMs: 10,
       avgLatencyMs: 0,
+      latencyP90Ms: 0,
+      latencyMaxMs: 0,
+    })
+  })
+
+  it('excludes cancelled and failed runs from timing averages but counts every run', async () => {
+    const trace = await loadPipelineTrace()
+    const summary = trace.summarizeByEngine([
+      createRun({ id: 1, status: 'ok', speechMs: 100, asrMs: 20, llmMs: 30, latencyMs: 40 }),
+      createRun({ id: 2, status: 'cancelled', speechMs: 10_000, asrMs: null, llmMs: null, latencyMs: 9_000 }),
+      createRun({ id: 3, status: 'failed', speechMs: 30_000, asrMs: null, llmMs: null, latencyMs: 20_000 }),
+    ])
+
+    expect(summary).toEqual([{
+      key: JSON.stringify(['local', 'sensevoice', 'small']),
+      mode: 'local',
+      engine: 'sensevoice',
+      model: 'small',
+      okCount: 1,
+      totalCount: 3,
+      avgSpeechMs: 100,
+      avgAsrMs: 20,
+      asrP90Ms: 20,
+      asrMaxMs: 20,
+      avgLlmMs: 30,
+      avgLatencyMs: 40,
+      latencyP90Ms: 40,
+      latencyMaxMs: 40,
+    }])
+  })
+
+  it('calculates nearest-rank percentiles over finite values and rounds to integers', async () => {
+    const trace = await loadPipelineTrace()
+    expect(typeof trace.percentile).toBe('function')
+    if (typeof trace.percentile !== 'function') return
+
+    expect(trace.percentile([], 0.9)).toBe(0)
+    expect(trace.percentile([7.6], 0.9)).toBe(8)
+    expect(trace.percentile([2.6, Number.NaN, 1.2, Number.POSITIVE_INFINITY], 0.5)).toBe(1)
+    expect(trace.percentile([100, 20, 80, 10, 90, 40, 70, 30, 60, 50], 0.9)).toBe(90)
+  })
+
+  it('reports nearest-rank p90 and max across successful ASR and latency timings', async () => {
+    const trace = await loadPipelineTrace()
+    const summary = trace.summarizeByEngine(Array.from({ length: 10 }, (_, index) => createRun({
+      id: index + 1,
+      status: 'ok',
+      asrMs: (index + 1) * 10,
+      latencyMs: (index + 1) * 100,
+    })))
+
+    expect(summary[0]).toMatchObject({
+      avgAsrMs: 55,
+      asrP90Ms: 90,
+      asrMaxMs: 100,
+      avgLatencyMs: 550,
+      latencyP90Ms: 900,
+      latencyMaxMs: 1000,
     })
   })
 
@@ -205,6 +293,63 @@ describe('pipeline trace', () => {
     trace.clearPipelineTrace()
     expect(trace.getPipelineSnapshot().activity).toEqual({ phase: 'idle', segmentMs: 0, stageStartedAt: null })
     unsubscribe()
+  })
+
+  it('filters pipeline runs by mode and status groups', async () => {
+    const panel = await import('../../features/systemAudio/PipelineDebugPanel')
+    expect(typeof panel.filterRuns).toBe('function')
+    if (typeof panel.filterRuns !== 'function') return
+
+    const runs = [
+      createRun({ id: 1, status: 'ok', mode: 'local' }),
+      createRun({ id: 2, status: 'failed', mode: 'local' }),
+      createRun({ id: 3, status: 'timeout', mode: 'cloud_api' }),
+      createRun({ id: 4, status: 'cancelled', mode: 'cloud_api' }),
+      createRun({ id: 5, status: 'empty', mode: 'server' }),
+      createRun({ id: 6, status: 'rejected', mode: 'server' }),
+    ]
+
+    expect(panel.filterRuns(runs, { mode: 'cloud_api', status: 'problems' }).map((run) => run.id)).toEqual([3])
+    expect(panel.filterRuns(runs, { mode: 'all', status: 'problems' }).map((run) => run.id)).toEqual([2, 3, 5, 6])
+    expect(panel.filterRuns(runs, { mode: 'all', status: 'cancelled' }).map((run) => run.id)).toEqual([4])
+  })
+
+  it('exports filtered summaries and each visible run as tab-separated character-count rows', async () => {
+    const panel = await import('../../features/systemAudio/PipelineDebugPanel')
+    expect(typeof panel.buildPipelineTsv).toBe('function')
+    if (typeof panel.buildPipelineTsv !== 'function') return
+
+    const summary = [{
+      key: 'local:sensevoice:small',
+      mode: 'local',
+      engine: 'sensevoice',
+      model: 'small',
+      okCount: 1,
+      totalCount: 1,
+      avgSpeechMs: 100,
+      avgAsrMs: 20,
+      asrP90Ms: 20,
+      asrMaxMs: 20,
+      avgLlmMs: 30,
+      avgLatencyMs: 40,
+      latencyP90Ms: 40,
+      latencyMaxMs: 40,
+    }]
+    const runs = [
+      createRun({ id: 1, status: 'ok', asrChars: 15, captionChars: 12 }),
+      createRun({ id: 2, status: 'failed', asrChars: 0, captionChars: 0 }),
+    ]
+    const tsv = panel.buildPipelineTsv(summary, runs)
+    const lines = tsv.split('\n')
+
+    expect(lines[0]).toBe('engine/model\tOK / total runs\tavg speech ms\tavg ASR ms\tASR p90 ms\tASR max ms\tavg LLM ms\tavg latency ms\tlatency p90 ms\tlatency max ms')
+    expect(lines[1]).toBe('local · sensevoice / small\t1 / 1\t100\t20\t20\t20\t30\t40\t40\t40')
+    expect(lines[2]).toBe('')
+    expect(lines[3]).toBe('time\tmode\tspeech ms\tqueue ms\tASR ms\tLLM ms\toverlay ms\tlatency ms\tstatus\tASR / caption chars')
+    expect(lines.slice(4)).toHaveLength(2)
+    expect(lines[4].split('\t')).toHaveLength(10)
+    expect(lines[4].endsWith('\t15 / 12')).toBe(true)
+    expect(tsv).not.toContain('Original speech')
   })
 
   it('keeps engine and model values containing separators in separate groups', async () => {
