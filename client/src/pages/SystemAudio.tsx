@@ -12,6 +12,8 @@ import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, ty
 import { getWorkMode } from '@/services/transcription'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
+import { setPipelineDebugEnabled } from '@/services/pipelineTrace'
+import PipelineDebugPanel from '@/features/systemAudio/PipelineDebugPanel'
 
 export type SubtitleAction = 'start' | 'pause' | 'resume' | 'stop'
 
@@ -56,6 +58,7 @@ export default function SystemAudio() {
   const [ready, setReady] = useState(false)
   const [pending, setPending] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
   const locale = useLocale()
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
@@ -77,11 +80,14 @@ export default function SystemAudio() {
       getSystemAudioSourceLanguage(),
       getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', ''),
       getPromptPresets(),
-    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets]) => {
+      getSetting<boolean>('systemAudio.debugPipeline', false),
+    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
       setSourceLanguage(savedSourceLanguage)
+      setPipelineDebugEnabledState(debugPipeline)
+      setPipelineDebugEnabled(debugPipeline)
       const options = buildTranslationOptions(presets)
       setPresets(presets)
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
@@ -171,12 +177,27 @@ export default function SystemAudio() {
               />
             </div>
           </div>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={pipelineDebugEnabled}
+              onChange={(event) => {
+                const enabled = event.target.checked
+                setPipelineDebugEnabledState(enabled)
+                setPipelineDebugEnabled(enabled)
+                void setSetting('systemAudio.debugPipeline', enabled)
+              }}
+              className="rounded"
+            />
+            {t('systemAudio.debug.toggle')}
+          </label>
           {(snapshot.error || loadError) && <p role="alert" className="text-sm leading-6 text-destructive">{snapshot.error || loadError}</p>}
           {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
           <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
           {snapshot.caption && <p aria-live="polite" className="whitespace-pre-wrap rounded-lg bg-secondary p-4 text-base leading-7">{snapshot.caption}</p>}
         </CardContent>
       </Card>
+      {pipelineDebugEnabled && <PipelineDebugPanel />}
       <div className="space-y-3 text-sm leading-6 text-muted-foreground">
         <p>{t('systemAudio.engineHint')} <Link to="/voice-engine" className="text-foreground underline underline-offset-4">{t('nav.voiceEngine')}</Link> / <Link to="/ai-service" className="text-foreground underline underline-offset-4">{t('nav.aiService')}</Link></p>
         <p>{t('systemAudio.sourceLanguageHint')}</p>

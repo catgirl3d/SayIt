@@ -12,6 +12,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Reuses the configured local, cloud API, or server speech engine and existing AI provider. Subtitle translation is independent of the dictation cleanup switch; fully local operation requires both local ASR and a local AI endpoint. Audio from other applications and notifications on the selected output device is included.
 - Start, pause, resume, and stop controls are available under Computer subtitles. Microphone dictation resumes after stopping this mode. Capture interruptions, translation failures, and processing overload are shown explicitly instead of presenting the original transcript as a translation or building an unlimited backlog.
 - Brief recoverable audio gaps discard unfinished speech and reset voice-detection context without stopping the subtitle session. A warning identifies the gap; device and translation failures still require recovery.
+- Added an opt-in pipeline debug mode on the Computer subtitles page with live stage timings and a per-engine ASR/translation summary for local-versus-cloud comparison.
 - Increased the loopback capture buffer reserve to 200 ms to prevent brief voice-detection and event-delivery stalls from losing speech. Available audio is still read immediately; capture does not wait for the buffer to fill.
 
 ### Speech Recognition

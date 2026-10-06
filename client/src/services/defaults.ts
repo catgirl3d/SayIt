@@ -79,6 +79,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // System-audio subtitles reuse the active ASR/AI profiles, not dictation presets.
   'systemAudio.deviceId': '',
   'systemAudio.sourceLanguage': 'auto',
+  'systemAudio.debugPipeline': false,
   // systemAudio.targetLanguage intentionally has no static default: it follows the interface locale (see SystemAudio.tsx).
 
   // ── Text insertion ──
