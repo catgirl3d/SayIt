@@ -155,6 +155,23 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().error).toContain('Translation failed')
   })
 
+  it('keeps the interruption cause visible when native capture cleanup also fails', async () => {
+    const original = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => {
+      if (name === 'cloud_polish') return Promise.reject(new Error('AI unavailable'))
+      if (name === 'stop_system_audio_capture') return Promise.reject(new Error('Native cleanup unavailable'))
+      return original(name, args)
+    })
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    await settle()
+
+    expect(session.getSnapshot().state).toBe('error')
+    expect(session.getSnapshot().error).toContain('Translation failed')
+    expect(session.getSnapshot().error).toContain('Could not safely return to dictation')
+  })
+
   it('does not publish a cancelled translation or process another segment before the first one finishes', async () => {
     const pending = deferred<{ text: string; elapsed_ms: number }>()
     const original = native.invoke.getMockImplementation()!
@@ -266,7 +283,10 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().caption).toBe('Translated speech')
   })
 
-  it('uses server-managed translation with the caption prompt and rejects late messages from the closed socket', async () => {
+  it.each([
+    { finalText: 'Server translation', expectedState: 'listening', expectedCaption: 'Server translation' },
+    { finalText: 'Original speech', expectedState: 'error', expectedCaption: '' },
+  ] as const)('uses server-managed translation with the caption prompt and rejects late messages from the closed socket: $finalText', async ({ finalText, expectedState, expectedCaption }) => {
     const messages: Array<Record<string, unknown>> = []
     const sockets: ServerSocket[] = []
     class ServerSocket {
@@ -291,7 +311,7 @@ describe('system audio subtitle session', () => {
         const message = JSON.parse(data)
         messages.push(message)
         if (message.cmd === 'stop') queueMicrotask(() => {
-          this.receive({ type: 'final', asr_text: 'Original speech', llm_text: 'Server translation', asr_ms: 5, llm_ms: 5, duration_sec: 1 })
+          this.receive({ type: 'final', asr_text: 'Original speech', llm_text: finalText, asr_ms: 5, llm_ms: 5, duration_sec: 1 })
           this.receive({ type: 'done' })
         })
       }
@@ -308,7 +328,9 @@ describe('system audio subtitle session', () => {
     frames(15, 0)
     await settle()
 
-    expect(session.getSnapshot().caption).toBe('Server translation')
+    expect(session.getSnapshot().state).toBe(expectedState)
+    expect(session.getSnapshot().caption).toBe(expectedCaption)
+    if (expectedState === 'error') expect(session.getSnapshot().error).toContain('Translation failed')
     expect(messages.find((message) => message.cmd === 'start')?.disable_ai).not.toBe(true)
     expect(messages.find((message) => message.cmd === 'start')?.system_prompt).toContain('Russian')
     expect(native.invoke.mock.calls.some(([name]) => name === 'cloud_polish')).toBe(false)

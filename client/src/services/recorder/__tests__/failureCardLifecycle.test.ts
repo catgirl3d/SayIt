@@ -936,6 +936,7 @@ describe('exclusive system-audio ownership', () => {
     overlay.showFailure({ cardToken: 84, failureTitle: 'Failed', failureDetail: 'Cause', failureRecovery: 'none' })
     Reflect.set(recorder, 'activeFallbackToken', 84)
     await acquireSubtitles(recorder)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toEqual([['hide_overlay']])
     const provider = await switchProvider('cloud_api')
     await provider.connect({})
     harness.invoke.mockClear()

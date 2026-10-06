@@ -38,17 +38,7 @@ import { useT } from '@/i18n/useT'
 import { applyTextTransforms, restoreHotwordSpacing } from '@/services/textPostProcess'
 import { buildHotwordInjectionPart } from '@/services/personalization/promptRouter'
 import { applySpeechLanguageToPrompt, getSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
-import {
-  BUILTIN_SET_WORDS_KEY,
-  BUILTIN_SET_ACTIVE_KEY,
-  CUSTOM_THEMES_KEY,
-  CUSTOM_THEME_ACTIVE_KEY,
-  composeHotwords,
-  normalizeBuiltinSetActive,
-  normalizeBuiltinSetWords,
-  normalizeCustomThemeActive,
-  normalizeCustomThemes,
-} from '@/services/hotwords/model'
+import { loadActiveHotwords } from '@/services/hotwords/settings'
 
 const HISTORY_PAGE_SIZE = 100
 
@@ -555,17 +545,7 @@ export default function History() {
     // 加载热词
     let hotwords: string[] = []
     try {
-      const [rawSetWords, rawSetActive, rawCustomThemes, rawCustomThemeActive] = await Promise.all([
-        getSetting(BUILTIN_SET_WORDS_KEY, {}),
-        getSetting(BUILTIN_SET_ACTIVE_KEY, {}),
-        getSetting(CUSTOM_THEMES_KEY, []),
-        getSetting(CUSTOM_THEME_ACTIVE_KEY, {}),
-      ])
-      const setWords = normalizeBuiltinSetWords(rawSetWords as Record<string, unknown>)
-      const setActive = normalizeBuiltinSetActive(rawSetActive as Record<string, unknown>)
-      const themes = normalizeCustomThemes(rawCustomThemes)
-      const themeActive = normalizeCustomThemeActive(rawCustomThemeActive as Record<string, unknown>, themes)
-      hotwords = composeHotwords([], setWords, setActive, themes, themeActive)
+      hotwords = await loadActiveHotwords()
     } catch { /* ignore */ }
 
     const clientMeta = await bridge.getClientRuntimeInfo().catch(() => null)

@@ -1,12 +1,13 @@
 import * as bridge from './bridge'
 import { getLocale, t } from '@/i18n'
-import { getPromptPresets, getSetting } from './store'
+import { getPromptPresets } from './store'
 import { getSpeechInputLanguage } from './speechInputLanguage'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import type { StartOptions, TranscriptionProvider } from './transcription/types'
 import { acquireSystemAudio, releaseSystemAudio } from './recorder'
 import { getProvider } from './transcription'
+import { loadActiveHotwords } from './hotwords/settings'
 
 export type SubtitleTargetLanguage = 'ru' | 'uk' | 'en'
 export type SystemAudioState = 'idle' | 'starting' | 'listening' | 'paused' | 'stopping' | 'error'
@@ -131,7 +132,7 @@ export class SystemAudioSession {
       }
       if (generation !== this.generation) return
       const [presets, language, hotwords] = await Promise.all([
-        getPromptPresets(), getSpeechInputLanguage(), getSetting<string[]>('hotwords', []),
+        getPromptPresets(), getSpeechInputLanguage(), loadActiveHotwords(),
       ])
       if (generation !== this.generation) return
       const prompt = presets.find((preset) => preset.id === `translate_${this.options!.targetLanguage}`)?.systemPrompt
@@ -319,13 +320,15 @@ export class SystemAudioSession {
 
   private fail(message: string, detail?: string) {
     if (this.snapshot.state === 'error' || this.snapshot.state === 'stopping') return
-    ++this.generation
+    const generation = ++this.generation
     this.clearWork()
     this.publish({ state: 'error', caption: '', error: message, warning: '' })
     addRuntimeEvent('warn', 'system-audio', 'Subtitle session interrupted', { message, detail })
     void this.stopNativeCapture().catch((error) => {
       addRuntimeEvent('error', 'system-audio', 'Capture cleanup failed', { error: String(error) })
-      this.publish({ error: t('systemAudio.cleanupFailed') })
+      // Keep the interruption cause visible: cleanup failure is additional context, not a replacement.
+      if (generation !== this.generation) return
+      this.publish({ error: `${message} ${t('systemAudio.cleanupFailed')}` })
     })
   }
 

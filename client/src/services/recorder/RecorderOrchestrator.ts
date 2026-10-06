@@ -22,17 +22,7 @@ import {
 import { setActivePresetKnown } from '../../stores/activePreset'
 import { addRuntimeEvent } from '../debugLog'
 import { saveRecordingAudio } from '../audioFileService'
-import {
-  BUILTIN_SET_ACTIVE_KEY,
-  BUILTIN_SET_WORDS_KEY,
-  CUSTOM_THEME_ACTIVE_KEY,
-  CUSTOM_THEMES_KEY,
-  composeHotwords,
-  normalizeBuiltinSetActive,
-  normalizeBuiltinSetWords,
-  normalizeCustomThemeActive,
-  normalizeCustomThemes,
-} from '../hotwords/model'
+import { loadActiveHotwords } from '../hotwords/settings'
 import { invoke } from '@tauri-apps/api/core'
 import { createWaveformBarState, computeBarsFromPCM, resetWaveformBarState } from '../waveform'
 import { elapsedSecFromPerf } from '../timeModel'
@@ -680,18 +670,7 @@ export class RecorderOrchestrator {
     // 客户端运行时信息（区域/内存/主机名等）是进程内静态元数据，已移出此热路径，
     // 仅在启动时经 ensureClientRuntimeInfo() 采集一次，避免改任意设置都重新采集。
     const [hotwordsResult, languageResult] = await Promise.allSettled([
-      Promise.all([
-        getSetting(BUILTIN_SET_WORDS_KEY, {}),
-        getSetting(BUILTIN_SET_ACTIVE_KEY, {}),
-        getSetting(CUSTOM_THEMES_KEY, []),
-        getSetting(CUSTOM_THEME_ACTIVE_KEY, {}),
-      ]).then(([rawSetWords, rawSetActive, rawCustomThemes, rawCustomThemeActive]) => {
-        const setWords = normalizeBuiltinSetWords(rawSetWords as Record<string, unknown>)
-        const setActive = normalizeBuiltinSetActive(rawSetActive as Record<string, unknown>)
-        const themes = normalizeCustomThemes(rawCustomThemes)
-        const themeActive = normalizeCustomThemeActive(rawCustomThemeActive as Record<string, unknown>, themes)
-        return composeHotwords([], setWords, setActive, themes, themeActive)
-      }),
+      loadActiveHotwords(),
       getSetting('speechInput.language', 'auto').then((lang) => {
         return normalizeSpeechInputLanguage(lang)
       }),
