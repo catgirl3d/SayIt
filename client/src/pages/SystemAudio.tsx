@@ -59,6 +59,7 @@ export default function SystemAudio() {
   const [pending, setPending] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
+  const [asrOnlyTest, setAsrOnlyTest] = useState(false)
   const locale = useLocale()
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
@@ -81,13 +82,15 @@ export default function SystemAudio() {
       getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', ''),
       getPromptPresets(),
       getSetting<boolean>('systemAudio.debugPipeline', false),
-    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline]) => {
+      getSetting<boolean>('systemAudio.asrOnlyTest', false),
+    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
       setSourceLanguage(savedSourceLanguage)
       setPipelineDebugEnabledState(debugPipeline)
       setPipelineDebugEnabled(debugPipeline)
+      setAsrOnlyTest(asrOnly)
       const options = buildTranslationOptions(presets)
       setPresets(presets)
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
@@ -111,7 +114,7 @@ export default function SystemAudio() {
     setLoadError('')
     try {
       if (action === 'start') {
-        await systemAudioSession.start({ deviceId, targetLanguage })
+        await systemAudioSession.start({ deviceId, targetLanguage, asrOnly: asrOnlyTest })
       } else {
         await systemAudioSession[action]()
       }
@@ -172,25 +175,44 @@ export default function SystemAudio() {
                 }}
                 options={translationOptions}
                 labelledBy="subtitle-language-label"
-                disabled={active || pending}
+                disabled={active || pending || asrOnlyTest}
                 className="w-full"
               />
             </div>
           </div>
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={pipelineDebugEnabled}
-              onChange={(event) => {
-                const enabled = event.target.checked
-                setPipelineDebugEnabledState(enabled)
-                setPipelineDebugEnabled(enabled)
-                void setSetting('systemAudio.debugPipeline', enabled)
-              }}
-              className="rounded"
-            />
-            {t('systemAudio.debug.toggle')}
-          </label>
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={pipelineDebugEnabled}
+                  onChange={(event) => {
+                    const enabled = event.target.checked
+                    setPipelineDebugEnabledState(enabled)
+                    setPipelineDebugEnabled(enabled)
+                    void setSetting('systemAudio.debugPipeline', enabled)
+                  }}
+                  className="rounded"
+                />
+                {t('systemAudio.debug.toggle')}
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={asrOnlyTest}
+                  disabled={active || pending}
+                  onChange={(event) => {
+                    const enabled = event.target.checked
+                    setAsrOnlyTest(enabled)
+                    void setSetting('systemAudio.asrOnlyTest', enabled)
+                  }}
+                  className="rounded"
+                />
+                {t('systemAudio.asrOnlyTest')}
+              </label>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
+          </div>
           {(snapshot.error || loadError) && <p role="alert" className="text-sm leading-6 text-destructive">{snapshot.error || loadError}</p>}
           {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
           <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />

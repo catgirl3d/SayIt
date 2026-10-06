@@ -4,7 +4,7 @@ import { getPromptPresets, getSetting, TRANSLATION_PRESET_PREFIX } from './store
 import { normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
-import type { StartOptions, TranscriptionProvider } from './transcription/types'
+import type { FinalResult, StartOptions, TranscriptionProvider } from './transcription/types'
 import {
   beginRun,
   countDiscontinuity,
@@ -104,7 +104,7 @@ export class SystemAudioSession {
   private leased = false
   private provider: TranscriptionProvider | null = null
   private localModelId = ''
-  private options: { deviceId: string; targetLanguage: SubtitleTargetLanguage } | null = null
+  private options: { deviceId: string; targetLanguage: SubtitleTargetLanguage; asrOnly: boolean } | null = null
   private startOptions: Omit<StartOptions, 'runId'> | null = null
   private starting: Promise<void> | null = null
   private stopping: Promise<void> | null = null
@@ -120,6 +120,7 @@ export class SystemAudioSession {
   private queue: Array<{ audio: Uint8Array; runId: number | null }> = []
   private queuedBytes = 0
   private activeJob = 0
+  private publishedAsrJob = 0
   private activeRunId: number | null = null
   private lastFrameAt = 0
   private gapTimer: ReturnType<typeof setTimeout> | null = null
@@ -167,9 +168,31 @@ export class SystemAudioSession {
     }
   }
 
-  async start(options: { deviceId: string; targetLanguage: SubtitleTargetLanguage }): Promise<void> {
+  private finishDetails(result: FinalResult, caption: string): PipelineFinishDetails {
+    return {
+      asrMs: result.asrMs,
+      llmMs: result.llmMs,
+      asrEngine: result.asrEngine ?? (this.provider?.mode === 'local' ? 'local' : undefined),
+      asrModel: result.asrModel ?? (this.provider?.mode === 'local' ? this.localModelId : undefined),
+      aiProvider: result.aiProvider,
+      aiModel: result.aiModel,
+      asrChars: result.asrText.length,
+      captionChars: caption.length,
+    }
+  }
+
+  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails) {
+    if (this.captionTimer) clearTimeout(this.captionTimer)
+    if (runId !== undefined && runId !== null && finishDetails) this.publish({ caption, warning: '' }, runId, finishDetails)
+    else this.publish({ caption, warning: '' })
+    this.captionTimer = setTimeout(() => {
+      if (generation === this.generation) this.publish({ caption: '' })
+    }, CAPTION_HOLD_MS)
+  }
+
+  async start(options: { deviceId: string; targetLanguage: SubtitleTargetLanguage; asrOnly?: boolean }): Promise<void> {
     if (this.snapshot.state !== 'idle') return
-    this.options = { ...options }
+    this.options = { ...options, asrOnly: options.asrOnly ?? false }
     await this.begin()
   }
 
@@ -188,30 +211,57 @@ export class SystemAudioSession {
         this.leased = true
       }
       if (generation !== this.generation) return
+      const asrOnly = this.options!.asrOnly
       const [presets, language, hotwords] = await Promise.all([
-        getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(),
+        asrOnly ? Promise.resolve([]) : getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(),
       ])
       if (generation !== this.generation) return
-      const prompt = presets.find((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${this.options!.targetLanguage}`)?.systemPrompt
-      if (!prompt?.trim()) throw new Error(t('systemAudio.notReady'))
-      this.startOptions = { systemPrompt: prompt, language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
+      if (asrOnly) {
+        this.startOptions = { systemPrompt: '', language, hotwords, disableAi: true, aiMinDurationSec: 0, requireTranslation: false }
+      } else {
+        const prompt = presets.find((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${this.options!.targetLanguage}`)?.systemPrompt
+        if (!prompt?.trim()) throw new Error(t('systemAudio.notReady'))
+        this.startOptions = { systemPrompt: prompt, language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
+      }
       this.provider = this.dependencies.getProvider()
       this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''
       if (generation !== this.generation) return
       await this.provider.connect({
         onReady: (ready) => {
           if (generation !== this.generation) return
-          if (!ready.asr || (this.provider?.mode === 'server' && !ready.llm)) this.fail(t('systemAudio.notReady'))
+          if (!ready.asr || (!asrOnly && this.provider?.mode === 'server' && !ready.llm)) this.fail(t('systemAudio.notReady'))
         },
-        onASR: () => {
+        onASR: (result) => {
           if (generation !== this.generation || !this.activeJob) return
-          setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
+          if (asrOnly) {
+            setPipelineActivity({ phase: 'listening', stageStartedAt: null })
+            const caption = result.text.trim()
+            if (caption) {
+              this.publishedAsrJob = this.activeJob
+              this.publishCaption(caption, generation)
+            }
+          } else {
+            setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
+          }
         },
         onFinal: (result) => {
           if (generation !== this.generation || !this.activeJob) return
+          const jobId = this.activeJob
           setPipelineActivity({ phase: 'listening', stageStartedAt: null })
           if (!result.asrText.trim()) {
             failRun(this.activeRunId, 'empty')
+            return
+          }
+          if (asrOnly) {
+            const caption = result.asrText.trim()
+            const runId = isPipelineDebugEnabled() ? this.activeRunId : null
+            const finishDetails = this.finishDetails(result, caption)
+            if (this.publishedAsrJob !== jobId) {
+              this.publishedAsrJob = jobId
+              this.publishCaption(caption, generation, runId, finishDetails)
+            } else if (this.activeRunId !== null) {
+              finishRun(this.activeRunId, finishDetails)
+            }
             return
           }
           // The managed server LLM falls back to the input text when its answer is empty or
@@ -224,28 +274,15 @@ export class SystemAudioSession {
             this.fail(t('systemAudio.translationFailed'))
             return
           }
-          if (this.captionTimer) clearTimeout(this.captionTimer)
           const caption = result.llmText.trim()
           const runId = isPipelineDebugEnabled() ? this.activeRunId : null
-          if (runId === null) this.publish({ caption, warning: '' })
-          else this.publish({ caption, warning: '' }, runId, {
-              asrMs: result.asrMs,
-              llmMs: result.llmMs,
-              asrEngine: result.asrEngine ?? (this.provider?.mode === 'local' ? 'local' : undefined),
-              asrModel: result.asrModel ?? (this.provider?.mode === 'local' ? this.localModelId : undefined),
-              aiProvider: result.aiProvider,
-              aiModel: result.aiModel,
-              asrChars: result.asrText.length,
-              captionChars: caption.length,
-            })
-          this.captionTimer = setTimeout(() => {
-            if (generation === this.generation) this.publish({ caption: '' })
-          }, CAPTION_HOLD_MS)
+          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption))
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
           setPipelineActivity({ phase: 'listening', stageStartedAt: null })
           this.activeJob = 0
+          this.publishedAsrJob = 0
           this.activeRunId = null
           if (this.processingTimer) clearTimeout(this.processingTimer)
           this.processingTimer = null
@@ -357,7 +394,7 @@ export class SystemAudioSession {
     const audio = new Uint8Array(Math.max(10, frames.length) * FRAME_BYTES)
     frames.forEach((frame, index) => audio.set(frame, index * FRAME_BYTES))
     if (this.queuedBytes + audio.byteLength > MAX_PENDING_BYTES) { this.fail(t('systemAudio.overload')); return }
-    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * 32 })
+    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * 32, asrOnly: this.options?.asrOnly ?? false })
     this.queue.push({ audio, runId })
     this.queuedBytes += audio.byteLength
     setQueueDepth(this.queue.length)
@@ -370,6 +407,7 @@ export class SystemAudioSession {
     if (!job) return
     this.queuedBytes -= job.audio.byteLength
     this.activeRunId = job.runId
+    this.publishedAsrJob = 0
     markQueued(job.runId)
     setQueueDepth(this.queue.length)
     const generation = this.generation
@@ -411,6 +449,7 @@ export class SystemAudioSession {
     this.queue.forEach(({ runId }) => failRun(runId, 'cancelled'))
     this.queue = []
     this.queuedBytes = this.activeJob = 0
+    this.publishedAsrJob = 0
     setQueueDepth(0)
     setPipelineActivity({ phase: 'idle', segmentMs: 0, stageStartedAt: null })
     this.unlisteners.splice(0).forEach((unlisten) => unlisten())

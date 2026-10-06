@@ -13,6 +13,8 @@
   "systemAudio.savedNotListed": "Збережений пристрій виведення (відсутній у поточному списку)",
   "systemAudio.sourceLanguage": "Мова аудіо",
   "systemAudio.targetLanguage": "Мова перекладу",
+  "systemAudio.asrOnlyTest": "Тест лише розпізнавання",
+  "systemAudio.asrOnlyHint": "Якщо ввімкнено, субтитри показують розпізнаний текст без перекладу; мову перекладу не враховано.",
   "systemAudio.start": "Увімкнути субтитри",
   "systemAudio.pause": "Пауза",
   "systemAudio.resume": "Продовжити",

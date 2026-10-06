@@ -26,7 +26,7 @@ import { SystemAudioSession } from '../systemAudio'
 import { LocalProvider } from '../transcription/LocalProvider'
 import { CloudAPIProvider } from '../transcription/CloudAPIProvider'
 import { ServerProvider } from '../transcription/ServerProvider'
-import type { TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
+import type { StartOptions, TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
 import type { SubtitleOverlayPayload } from '../recorder/types'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { clearPipelineTrace, getPipelineSnapshot, setPipelineDebugEnabled } from '../pipelineTrace'
@@ -154,6 +154,288 @@ afterEach(async () => {
 })
 
 describe('system audio subtitle session', () => {
+  it('runs recognition-only without a translation preset and publishes raw ASR before the run finishes', async () => {
+    const trace = enablePipelineDebug()
+    const presetLookup = vi.spyOn(await import('../store'), 'getPromptPresets').mockResolvedValue([])
+    const pendingTranscription = deferred<{ text: string; elapsed_ms: number }>()
+    const originalInvoke = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => name === 'local_transcribe'
+      ? pendingTranscription.promise : originalInvoke(name, args))
+    const provider = new LocalProvider()
+    const providerStart = vi.spyOn(provider, 'start')
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'missing-preset', asrOnly: true })
+    expect(session.getSnapshot().state).toBe('listening')
+    expect(presetLookup).not.toHaveBeenCalled()
+    frames(20, 0.9)
+    frames(15, 0)
+    await settle()
+    expect(native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')).toHaveLength(1)
+
+    pendingTranscription.resolve({ text: 'Original speech', elapsed_ms: 5 })
+    await Promise.resolve()
+
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
+    expect(trace.getPipelineSnapshot().activity.phase).toBe('listening')
+    expect(trace.getPipelineSnapshot().runs).toHaveLength(0)
+
+    await settle()
+
+    expect(providerStart).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: '',
+      disableAi: true,
+      aiMinDurationSec: 0,
+      requireTranslation: false,
+    }))
+    expect(native.invoke.mock.calls.some(([name]) => name === 'cloud_polish')).toBe(false)
+    expect(overlayCalls.some((call) => call.method === 'update' && call.payload.subtitleText === 'Original speech')).toBe(true)
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{
+      status: 'ok',
+      asrOnly: true,
+      asrMs: 5,
+      llmMs: 0,
+      asrChars: 15,
+      captionChars: 15,
+    }])
+  })
+
+  it('records empty recognition-only runs without showing a caption', async () => {
+    const trace = enablePipelineDebug()
+    const originalInvoke = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => name === 'local_transcribe'
+      ? Promise.resolve({ text: '', elapsed_ms: 5 }) : originalInvoke(name, args))
+    session = new SystemAudioSession({
+      getProvider: () => new LocalProvider(),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'missing-preset', asrOnly: true })
+    frames(20, 0.9)
+    frames(15, 0)
+    await settle()
+
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: '', error: '' })
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'empty', asrOnly: true }])
+  })
+
+  it('does not require server translation readiness in recognition-only mode', async () => {
+    const provider: TranscriptionProvider = {
+      mode: 'server',
+      connect: async (callbacks) => { callbacks.onReady?.({ asr: true, llm: false }) },
+      start: () => true,
+      cancel: () => {},
+      sendAudio: () => {},
+      stop: () => true,
+      disconnect: () => {},
+      isReady: () => true,
+    }
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+
+    expect(session.getSnapshot().state).toBe('listening')
+  })
+
+  it('keeps the normal-mode translation rejection path and provider options', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    let startOptions: StartOptions | undefined
+    const provider = createTestProvider((value) => { callbacks = value })
+    provider.start = (options) => { startOptions = options; return true }
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Original speech', asrMs: 5, durationSec: 0.64 })
+    callbacks?.onFinal?.({
+      asrText: 'Original speech',
+      llmText: 'Original speech',
+      asrMs: 5,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+
+    expect(startOptions).toMatchObject({ disableAi: false, requireTranslation: true })
+    expect(session.getSnapshot().state).toBe('error')
+    expect(session.getSnapshot().caption).toBe('')
+    expect(session.getSnapshot().error).not.toBe('')
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'rejected' }])
+  })
+
+  it('keeps an ASR caption on its original hold deadline after finalization', async () => {
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Recognized caption', asrMs: 5, durationSec: 0.64 })
+    expect(session.getSnapshot().caption).toBe('Recognized caption')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    callbacks?.onFinal?.({
+      asrText: 'Recognized caption',
+      llmText: '',
+      asrMs: 5,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+    callbacks?.onDone?.()
+    await vi.advanceTimersByTimeAsync(6_999)
+    expect(session.getSnapshot().caption).toBe('Recognized caption')
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(session.getSnapshot().caption).toBe('')
+  })
+
+  it('does not republish a recognition-only caption if final arrives after its hold expires', async () => {
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Expired caption', asrMs: 5, durationSec: 0.64 })
+    expect(session.getSnapshot().caption).toBe('Expired caption')
+    await vi.advanceTimersByTimeAsync(8_000)
+    expect(session.getSnapshot().caption).toBe('')
+
+    callbacks?.onFinal?.({
+      asrText: 'Expired caption',
+      llmText: '',
+      asrMs: 5,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+    callbacks?.onDone?.()
+
+    expect(session.getSnapshot().caption).toBe('')
+    expect(overlayCalls.filter((call) => call.method === 'update' && call.payload.subtitleText === 'Expired caption')).toHaveLength(1)
+  })
+
+  it('publishes the final ASR text when an ASR callback was not emitted', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onFinal?.({
+      asrText: 'Final ASR fallback',
+      llmText: '',
+      asrMs: 7,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Final ASR fallback', error: '' })
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'ok', asrOnly: true, asrMs: 7, llmMs: 0 }])
+  })
+
+  it('does not let an earlier recognition-only timer clear a newer caption', async () => {
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    const submitSegment = () => {
+      frames(20, 0.9)
+      frames(15, 0)
+    }
+    const finalize = (text: string) => {
+      callbacks?.onASR?.({ text, asrMs: 5, durationSec: 0.64 })
+      callbacks?.onFinal?.({ asrText: text, llmText: '', asrMs: 5, llmMs: 0, durationSec: 0.64, aiStatus: 'skipped' })
+      callbacks?.onDone?.()
+    }
+
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+    submitSegment()
+    finalize('First caption')
+    await settle()
+    await vi.advanceTimersByTimeAsync(4_000)
+
+    submitSegment()
+    finalize('Second caption')
+    expect(session.getSnapshot().caption).toBe('Second caption')
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(session.getSnapshot().caption).toBe('Second caption')
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(session.getSnapshot().caption).toBe('')
+  })
+
+  it('keeps translated captions final-only and on the same hold interval', async () => {
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Original speech', asrMs: 5, durationSec: 0.64 })
+    expect(session.getSnapshot().caption).toBe('')
+    callbacks?.onFinal?.({
+      asrText: 'Original speech',
+      llmText: 'Translated speech',
+      asrMs: 5,
+      llmMs: 10,
+      durationSec: 0.64,
+      aiStatus: 'applied',
+    })
+    callbacks?.onDone?.()
+    expect(session.getSnapshot().caption).toBe('Translated speech')
+    await vi.advanceTimersByTimeAsync(7_999)
+    expect(session.getSnapshot().caption).toBe('Translated speech')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(session.getSnapshot().caption).toBe('')
+  })
+
   it('records timings and engine metadata for a translated subtitle run', async () => {
     const trace = enablePipelineDebug()
     let callbacks: TranscriptionCallbacks | undefined

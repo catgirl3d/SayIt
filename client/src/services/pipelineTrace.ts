@@ -21,6 +21,7 @@ export interface PipelineRun {
   readonly latencyMs: number | null
   readonly status: PipelineRunStatus
   readonly reason?: string
+  readonly asrOnly?: boolean
   readonly asrEngine?: string
   readonly asrModel?: string
   readonly aiProvider?: string
@@ -53,6 +54,7 @@ interface ActiveRun {
   startedAt: number
   mode: WorkMode | 'unknown'
   speechMs: number
+  asrOnly?: boolean
   queueMs: number | null
 }
 
@@ -104,7 +106,7 @@ export function isPipelineDebugEnabled() {
   return enabled
 }
 
-export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number }): number | null {
+export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number; asrOnly?: boolean }): number | null {
   if (!enabled) return null
   const id = ++nextRunId
   activeRuns.set(id, {
@@ -112,6 +114,7 @@ export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number }
     startedAt: Date.now(),
     mode: input.mode,
     speechMs: input.speechMs,
+    asrOnly: input.asrOnly,
     queueMs: null,
   })
   counters.segments++

@@ -13,6 +13,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Start, pause, resume, and stop controls are available under Computer subtitles. Microphone dictation resumes after stopping this mode. Capture interruptions, translation failures, and processing overload are shown explicitly instead of presenting the original transcript as a translation or building an unlimited backlog.
 - Brief recoverable audio gaps discard unfinished speech and reset voice-detection context without stopping the subtitle session. A warning identifies the gap; device and translation failures still require recovery.
 - Improved the opt-in Computer subtitles pipeline debug panel with a live current-stage indicator, successful-run averages plus ASR and latency p90/max timings, mode/status filters, slow queue and latency highlighting, and TSV copy of filtered summaries and runs.
+- Added an opt-in recognition-only test mode for Computer subtitles that shows raw ASR output without translation (the target language is ignored), for measuring and comparing speech engines.
 - Increased the loopback capture buffer reserve to 200 ms to prevent brief voice-detection and event-delivery stalls from losing speech. Available audio is still read immediately; capture does not wait for the buffer to fill.
 
 ### Speech Recognition

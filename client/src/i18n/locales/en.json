@@ -13,6 +13,8 @@
   "systemAudio.savedNotListed": "Saved output device (not in current list)",
   "systemAudio.sourceLanguage": "Audio language",
   "systemAudio.targetLanguage": "Translation language",
+  "systemAudio.asrOnlyTest": "Recognition-only test mode",
+  "systemAudio.asrOnlyHint": "When enabled, subtitles show raw recognition without translation; the translation language is ignored.",
   "systemAudio.start": "Start subtitles",
   "systemAudio.pause": "Pause",
   "systemAudio.resume": "Resume",
