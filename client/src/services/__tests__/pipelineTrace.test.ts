@@ -23,13 +23,17 @@ describe('pipeline trace', () => {
     trace.setPipelineDebugEnabled(false)
 
     expect(trace.beginRun({ mode: 'local', speechMs: 320 })).toBeNull()
-    trace.countFrame(1024)
+    expect(typeof trace.setPipelineActivity).toBe('function')
+    if (typeof trace.setPipelineActivity !== 'function') return
+    trace.setPipelineActivity({ phase: 'asr', stageStartedAt: 1234 })
+    trace.countFrame(1024, { phase: 'speech', segmentMs: 320 })
     trace.countDiscontinuity()
     trace.setQueueDepth(2)
 
     expect(trace.getPipelineSnapshot()).toMatchObject({
       enabled: false,
       counters: { frames: 0, frameBytes: 0, discontinuities: 0, segments: 0, completed: 0, failed: 0, queueDepth: 0 },
+      activity: { phase: 'idle', segmentMs: 0, stageStartedAt: null },
       runs: [],
     })
   })
@@ -63,6 +67,7 @@ describe('pipeline trace', () => {
     expect(trace.getPipelineSnapshot()).toMatchObject({
       enabled: true,
       counters: { frames: 1, frameBytes: 1024, discontinuities: 1, segments: 1, completed: 1, failed: 0, queueDepth: 0 },
+      activity: { phase: 'idle', segmentMs: 0, stageStartedAt: null },
       runs: [{
         id: runId,
         mode: 'local',
@@ -134,6 +139,7 @@ describe('pipeline trace', () => {
     expect(trace.getPipelineSnapshot()).toMatchObject({
       enabled: true,
       counters: { frames: 0, frameBytes: 0, discontinuities: 0, segments: 0, completed: 0, failed: 0, queueDepth: 0 },
+      activity: { phase: 'idle', segmentMs: 0, stageStartedAt: null },
       runs: [],
     })
   })
@@ -173,6 +179,32 @@ describe('pipeline trace', () => {
       avgLlmMs: 10,
       avgLatencyMs: 0,
     })
+  })
+
+  it('publishes frame counters and activity together, and clears live activity', async () => {
+    const trace = await loadPipelineTrace()
+    trace.setPipelineDebugEnabled(true)
+    const listener = vi.fn()
+    const unsubscribe = trace.subscribe(listener)
+
+    trace.countFrame(1024, { phase: 'speech', segmentMs: 64 })
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(trace.getPipelineSnapshot()).toMatchObject({
+      counters: { frames: 1, frameBytes: 1024 },
+      activity: { phase: 'speech', segmentMs: 64, stageStartedAt: null },
+    })
+
+    trace.setPipelineActivity({ phase: 'asr', stageStartedAt: 1234 })
+    trace.setQueueDepth(2)
+    expect(trace.getPipelineSnapshot()).toMatchObject({
+      counters: { queueDepth: 2 },
+      activity: { phase: 'asr', stageStartedAt: 1234 },
+    })
+    expect(trace.getPipelineSnapshot().activity).not.toHaveProperty('queueDepth')
+
+    trace.clearPipelineTrace()
+    expect(trace.getPipelineSnapshot().activity).toEqual({ phase: 'idle', segmentMs: 0, stageStartedAt: null })
+    unsubscribe()
   })
 
   it('keeps engine and model values containing separators in separate groups', async () => {

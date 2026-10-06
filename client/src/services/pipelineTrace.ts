@@ -1,6 +1,13 @@
 import type { WorkMode } from './transcription/types'
 
 export type PipelineRunStatus = 'ok' | 'empty' | 'rejected' | 'failed' | 'timeout' | 'cancelled'
+export type PipelinePhase = 'idle' | 'listening' | 'speech' | 'asr' | 'translation'
+
+export interface PipelineActivity {
+  phase: PipelinePhase
+  segmentMs: number
+  stageStartedAt: number | null
+}
 
 export interface PipelineRun {
   readonly id: number
@@ -33,6 +40,7 @@ export interface PipelineSnapshot {
     failed: number
     queueDepth: number
   }>
+  readonly activity: Readonly<PipelineActivity>
   readonly runs: readonly PipelineRun[]
 }
 
@@ -58,6 +66,11 @@ const counters = {
   failed: 0,
   queueDepth: 0,
 }
+const activity: PipelineActivity = {
+  phase: 'idle',
+  segmentMs: 0,
+  stageStartedAt: null,
+}
 const listeners = new Set<() => void>()
 const activeRuns = new Map<number, ActiveRun>()
 let enabled = false
@@ -68,6 +81,7 @@ function createSnapshot(): PipelineSnapshot {
   return Object.freeze({
     enabled,
     counters: Object.freeze({ ...counters }),
+    activity: Object.freeze({ ...activity }),
     runs: Object.freeze(runs.map((run) => Object.freeze({ ...run }))),
   })
 }
@@ -158,10 +172,18 @@ export function failRun(runId: number | null, status: PipelineRunStatus, reason?
   publishSnapshot()
 }
 
-export function countFrame(bytes: number) {
+export function countFrame(bytes: number, update?: Partial<Pick<PipelineActivity, 'phase' | 'segmentMs'>>) {
   if (!enabled) return
   counters.frames++
   counters.frameBytes += bytes
+  if (update?.phase !== undefined) activity.phase = update.phase
+  if (update?.segmentMs !== undefined) activity.segmentMs = update.segmentMs
+  publishSnapshot()
+}
+
+export function setPipelineActivity(update: Partial<PipelineActivity>) {
+  if (!enabled) return
+  Object.assign(activity, update)
   publishSnapshot()
 }
 
@@ -189,6 +211,11 @@ export function clearPipelineTrace() {
     completed: 0,
     failed: 0,
     queueDepth: 0,
+  })
+  Object.assign(activity, {
+    phase: 'idle',
+    segmentMs: 0,
+    stageStartedAt: null,
   })
   runs = []
   publishSnapshot()

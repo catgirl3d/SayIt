@@ -13,6 +13,7 @@ import {
   finishRun,
   isPipelineDebugEnabled,
   markQueued,
+  setPipelineActivity,
   setQueueDepth,
 } from './pipelineTrace'
 import {
@@ -102,6 +103,7 @@ export class SystemAudioSession {
   private generation = 0
   private leased = false
   private provider: TranscriptionProvider | null = null
+  private localModelId = ''
   private options: { deviceId: string; targetLanguage: SubtitleTargetLanguage } | null = null
   private startOptions: Omit<StartOptions, 'runId'> | null = null
   private starting: Promise<void> | null = null
@@ -194,13 +196,20 @@ export class SystemAudioSession {
       if (!prompt?.trim()) throw new Error(t('systemAudio.notReady'))
       this.startOptions = { systemPrompt: prompt, language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
       this.provider = this.dependencies.getProvider()
+      this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''
+      if (generation !== this.generation) return
       await this.provider.connect({
         onReady: (ready) => {
           if (generation !== this.generation) return
           if (!ready.asr || (this.provider?.mode === 'server' && !ready.llm)) this.fail(t('systemAudio.notReady'))
         },
+        onASR: () => {
+          if (generation !== this.generation || !this.activeJob) return
+          setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
+        },
         onFinal: (result) => {
           if (generation !== this.generation || !this.activeJob) return
+          setPipelineActivity({ phase: 'listening', stageStartedAt: null })
           if (!result.asrText.trim()) {
             failRun(this.activeRunId, 'empty')
             return
@@ -222,8 +231,8 @@ export class SystemAudioSession {
           else this.publish({ caption, warning: '' }, runId, {
               asrMs: result.asrMs,
               llmMs: result.llmMs,
-              asrEngine: result.asrEngine,
-              asrModel: result.asrModel,
+              asrEngine: result.asrEngine ?? (this.provider?.mode === 'local' ? 'local' : undefined),
+              asrModel: result.asrModel ?? (this.provider?.mode === 'local' ? this.localModelId : undefined),
               aiProvider: result.aiProvider,
               aiModel: result.aiModel,
               asrChars: result.asrText.length,
@@ -235,6 +244,7 @@ export class SystemAudioSession {
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
+          setPipelineActivity({ phase: 'listening', stageStartedAt: null })
           this.activeJob = 0
           this.activeRunId = null
           if (this.processingTimer) clearTimeout(this.processingTimer)
@@ -272,6 +282,7 @@ export class SystemAudioSession {
         return
       }
       this.publish({ state: 'listening' })
+      setPipelineActivity({ phase: 'listening', segmentMs: 0, stageStartedAt: null })
     } catch (error) {
       if (generation === this.generation) {
         this.fail(!this.leased ? t('systemAudio.busy') : this.captureId ? t('systemAudio.captureFailed') : t('systemAudio.notReady'), String(error))
@@ -287,8 +298,6 @@ export class SystemAudioSession {
       if (audio.byteLength !== FRAME_BYTES || !Number.isFinite(frame.speechProbability)) throw new Error('Invalid system-audio frame')
     } catch (error) { this.fail(t('systemAudio.captureFailed'), String(error)); return }
 
-    countFrame(audio.byteLength)
-
     if (frame.discontinuity) {
       countDiscontinuity()
       this.resetSegment()
@@ -298,16 +307,23 @@ export class SystemAudioSession {
 
     const now = Date.now()
     if (this.lastFrameAt && now - this.lastFrameAt >= FRAME_RECEIVE_GAP_MS) this.closeGap()
-    if (this.snapshot.state === 'error') return
+    if (this.snapshot.state === 'error') {
+      countFrame(audio.byteLength)
+      return
+    }
     this.lastFrameAt = now
     if (this.gapTimer) clearTimeout(this.gapTimer)
     const generation = this.generation
     this.gapTimer = setTimeout(() => { if (generation === this.generation) this.closeGap() }, FRAME_RECEIVE_GAP_MS)
 
     const voiced = frame.speechProbability >= 0.3
+    // Capture-driven phases must stay out of the way while a queued ASR or translation job is in flight,
+    // otherwise the next captured frame immediately hides the stage that stageElapsedMs is timing.
+    const processing = this.activeJob !== 0
     if (!this.frames.length && !this.continuation && !voiced) {
       this.preRoll.push(audio)
       if (this.preRoll.length > PRE_ROLL_FRAMES) this.preRoll.shift()
+      countFrame(audio.byteLength, processing ? undefined : { phase: 'listening', segmentMs: 0 })
       return
     }
     if (!this.frames.length) {
@@ -315,6 +331,7 @@ export class SystemAudioSession {
       this.preRoll = []
     }
     this.frames.push(audio)
+    countFrame(audio.byteLength, processing ? undefined : { phase: 'speech', segmentMs: this.frames.length * 32 })
     if (voiced) { this.voicedFrames++; this.silenceFrames = 0 } else { this.silenceFrames++ }
     if (this.silenceFrames >= END_SILENCE_FRAMES) this.finishSegment(false)
     else if (this.frames.length >= MAX_SEGMENT_FRAMES) this.finishSegment(true)
@@ -368,6 +385,7 @@ export class SystemAudioSession {
     }, PROCESSING_TIMEOUT_MS)
     try {
       if (!this.provider.start({ ...this.startOptions, runId: this.activeJob })) throw new Error('ASR did not start')
+      setPipelineActivity({ phase: 'asr', stageStartedAt: Date.now() })
       this.provider.sendAudio(job.audio.buffer as ArrayBuffer)
       if (!this.provider.stop()) throw new Error('ASR did not accept the segment')
     } catch (error) { this.fail(t('systemAudio.notReady'), String(error)) }
@@ -394,6 +412,7 @@ export class SystemAudioSession {
     this.queue = []
     this.queuedBytes = this.activeJob = 0
     setQueueDepth(0)
+    setPipelineActivity({ phase: 'idle', segmentMs: 0, stageStartedAt: null })
     this.unlisteners.splice(0).forEach((unlisten) => unlisten())
     this.provider?.disconnect()
   }

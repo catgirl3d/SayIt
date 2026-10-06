@@ -196,6 +196,77 @@ describe('system audio subtitle session', () => {
     expect(trace.getPipelineSnapshot().runs[0].overlayMs).not.toBeNull()
   })
 
+  it('fills missing local ASR metadata from the session model setting', async () => {
+    const trace = enablePipelineDebug()
+    native.settings.set('localAsr.modelId', 'configured-local-model')
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Original speech', asrMs: 12, durationSec: 0.64 })
+    callbacks?.onFinal?.({
+      asrText: 'Original speech',
+      llmText: 'Translated speech',
+      asrMs: 12,
+      llmMs: 34,
+      durationSec: 0.64,
+      aiStatus: 'applied',
+    })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{
+      status: 'ok',
+      asrEngine: 'local',
+      asrModel: 'configured-local-model',
+    }])
+  })
+
+  it('tracks listening, ASR, translation, and completion activity phases', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+
+    const initialActivity = trace.getPipelineSnapshot().activity
+    expect(initialActivity).toBeDefined()
+    if (!initialActivity) return
+    expect(initialActivity.phase).toBe('listening')
+    frames(20, 0.9)
+    frames(15, 0)
+    expect(trace.getPipelineSnapshot().activity.phase).toBe('asr')
+    frames(1, 0)
+    expect(trace.getPipelineSnapshot().activity.phase).toBe('asr')
+
+    callbacks?.onASR?.({ text: 'Original speech', asrMs: 12, durationSec: 0.64 })
+    expect(trace.getPipelineSnapshot().activity.phase).toBe('translation')
+    frames(1, 0)
+    expect(trace.getPipelineSnapshot().activity.phase).toBe('translation')
+    callbacks?.onFinal?.({
+      asrText: 'Original speech',
+      llmText: 'Translated speech',
+      asrMs: 12,
+      llmMs: 34,
+      durationSec: 0.64,
+      aiStatus: 'applied',
+    })
+    callbacks?.onDone?.()
+    callbacks?.onASR?.({ text: 'Late transcript', asrMs: 1, durationSec: 1 })
+
+    expect(trace.getPipelineSnapshot().activity).toMatchObject({ phase: 'listening', stageStartedAt: null })
+  })
+
   it('records an empty-ASR run without interrupting the subtitle session', async () => {
     const trace = enablePipelineDebug()
     let callbacks: TranscriptionCallbacks | undefined
@@ -425,6 +496,7 @@ describe('system audio subtitle session', () => {
   })
 
   it('does not forward a provider callback from an old session generation to the subtitle overlay', async () => {
+    const trace = enablePipelineDebug()
     const callbacksByGeneration: TranscriptionCallbacks[] = []
     session = new SystemAudioSession({
       getProvider: () => createTestProvider((callbacks) => { callbacksByGeneration.push(callbacks) }),
@@ -462,9 +534,11 @@ describe('system audio subtitle session', () => {
       durationSec: 1,
       aiStatus: 'applied',
     })
+    callbacksByGeneration[0]?.onASR?.({ text: 'Old transcript', asrMs: 1, durationSec: 1 })
     await settle()
 
     expect(overlayCalls).toEqual(callsBeforeLateCallback)
+    expect(trace.getPipelineSnapshot().activity).toMatchObject({ phase: 'listening' })
   })
 
   it('releases recorder ownership only after native capture cleanup and subtitle hiding complete', async () => {
