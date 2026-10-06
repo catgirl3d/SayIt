@@ -6,6 +6,16 @@ import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import type { StartOptions, TranscriptionProvider } from './transcription/types'
 import {
+  beginRun,
+  countDiscontinuity,
+  countFrame,
+  failRun,
+  finishRun,
+  isPipelineDebugEnabled,
+  markQueued,
+  setQueueDepth,
+} from './pipelineTrace'
+import {
   acquireSystemAudio,
   hideSubtitleOverlay,
   presentSubtitleOverlay,
@@ -51,6 +61,17 @@ interface SessionDependencies {
   }
 }
 
+interface PipelineFinishDetails {
+  asrMs: number
+  llmMs: number
+  asrEngine?: string
+  asrModel?: string
+  aiProvider?: string
+  aiModel?: string
+  asrChars: number
+  captionChars: number
+}
+
 // Must match FRAME_SAMPLES = 512 i16 little-endian samples emitted by client/src-tauri/src/commands/system_audio.rs; receiveFrame hard-fails if the byte length differs.
 const FRAME_BYTES = 512 * 2
 const PRE_ROLL_FRAMES = 8
@@ -94,9 +115,10 @@ export class SystemAudioSession {
   private voicedFrames = 0
   private silenceFrames = 0
   private continuation = false
-  private queue: Uint8Array[] = []
+  private queue: Array<{ audio: Uint8Array; runId: number | null }> = []
   private queuedBytes = 0
   private activeJob = 0
+  private activeRunId: number | null = null
   private lastFrameAt = 0
   private gapTimer: ReturnType<typeof setTimeout> | null = null
   private processingTimer: ReturnType<typeof setTimeout> | null = null
@@ -108,14 +130,30 @@ export class SystemAudioSession {
     return () => { this.listeners.delete(listener) }
   }
 
-  private publish(change: Partial<SystemAudioSnapshot>) {
+  private publish(change: Partial<SystemAudioSnapshot>, runId?: number | null, finishDetails?: PipelineFinishDetails) {
     this.snapshot = { ...this.snapshot, ...change }
     this.listeners.forEach((listener) => listener())
-    if (!this.leased) return
+    const traceRunId = runId !== undefined && runId !== null && finishDetails ? runId : null
+    if (!this.leased) {
+      if (traceRunId !== null && isPipelineDebugEnabled()) finishRun(traceRunId, { ...finishDetails, overlayMs: null })
+      return
+    }
     const generation = this.generation
     const payload = this.overlayPayload()
     this.overlayUpdates = this.overlayUpdates.then(async () => {
-      if (generation === this.generation && this.leased) await this.dependencies.overlay.update(payload)
+      let overlayMs: number | null = null
+      if (generation === this.generation && this.leased) {
+        const traceOverlay = traceRunId !== null && isPipelineDebugEnabled()
+        const overlayStartedAt = traceOverlay ? Date.now() : 0
+        try {
+          await this.dependencies.overlay.update(payload)
+          if (traceOverlay) overlayMs = Math.max(0, Date.now() - overlayStartedAt)
+        } catch (error) {
+          if (traceRunId !== null && isPipelineDebugEnabled()) failRun(traceRunId, 'failed', String(error))
+          throw error
+        }
+      }
+      if (traceRunId !== null && isPipelineDebugEnabled()) finishRun(traceRunId, { ...finishDetails, overlayMs })
     })
   }
 
@@ -163,18 +201,34 @@ export class SystemAudioSession {
         },
         onFinal: (result) => {
           if (generation !== this.generation || !this.activeJob) return
-          if (!result.asrText.trim()) return
+          if (!result.asrText.trim()) {
+            failRun(this.activeRunId, 'empty')
+            return
+          }
           // The managed server LLM falls back to the input text when its answer is empty or
           // think-only while still reporting elapsed time, so an "applied" result can be the
           // original speech. A translation identical to the transcript is never shown as one.
           const comparableTranslation = result.llmText.replace(/\s+/g, ' ').trim()
           const comparableSource = result.asrText.replace(/\s+/g, ' ').trim()
           if (result.aiStatus !== 'applied' || !comparableTranslation || comparableTranslation === comparableSource) {
+            failRun(this.activeRunId, 'rejected', result.aiStatus !== 'applied' ? result.aiStatus : 'identical translation')
             this.fail(t('systemAudio.translationFailed'))
             return
           }
           if (this.captionTimer) clearTimeout(this.captionTimer)
-          this.publish({ caption: result.llmText.trim(), warning: '' })
+          const caption = result.llmText.trim()
+          const runId = isPipelineDebugEnabled() ? this.activeRunId : null
+          if (runId === null) this.publish({ caption, warning: '' })
+          else this.publish({ caption, warning: '' }, runId, {
+              asrMs: result.asrMs,
+              llmMs: result.llmMs,
+              asrEngine: result.asrEngine,
+              asrModel: result.asrModel,
+              aiProvider: result.aiProvider,
+              aiModel: result.aiModel,
+              asrChars: result.asrText.length,
+              captionChars: caption.length,
+            })
           this.captionTimer = setTimeout(() => {
             if (generation === this.generation) this.publish({ caption: '' })
           }, CAPTION_HOLD_MS)
@@ -182,6 +236,7 @@ export class SystemAudioSession {
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
           this.activeJob = 0
+          this.activeRunId = null
           if (this.processingTimer) clearTimeout(this.processingTimer)
           this.processingTimer = null
           // Providers finalize their run after onDone returns. Never start a new run inside that callback.
@@ -232,7 +287,10 @@ export class SystemAudioSession {
       if (audio.byteLength !== FRAME_BYTES || !Number.isFinite(frame.speechProbability)) throw new Error('Invalid system-audio frame')
     } catch (error) { this.fail(t('systemAudio.captureFailed'), String(error)); return }
 
+    countFrame(audio.byteLength)
+
     if (frame.discontinuity) {
+      countDiscontinuity()
       this.resetSegment()
       this.publish({ caption: '', warning: t('systemAudio.discontinuity') })
       addRuntimeEvent('warn', 'system-audio', 'Audio gap; unfinished speech discarded, listening continues')
@@ -282,24 +340,35 @@ export class SystemAudioSession {
     const audio = new Uint8Array(Math.max(10, frames.length) * FRAME_BYTES)
     frames.forEach((frame, index) => audio.set(frame, index * FRAME_BYTES))
     if (this.queuedBytes + audio.byteLength > MAX_PENDING_BYTES) { this.fail(t('systemAudio.overload')); return }
-    this.queue.push(audio)
+    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * 32 })
+    this.queue.push({ audio, runId })
     this.queuedBytes += audio.byteLength
+    setQueueDepth(this.queue.length)
     this.processNext()
   }
 
   private processNext() {
     if (this.activeJob || !this.provider || !this.startOptions || !['starting', 'listening'].includes(this.snapshot.state)) return
-    const audio = this.queue.shift()
-    if (!audio) return
-    this.queuedBytes -= audio.byteLength
+    const job = this.queue.shift()
+    if (!job) return
+    this.queuedBytes -= job.audio.byteLength
+    this.activeRunId = job.runId
+    markQueued(job.runId)
+    setQueueDepth(this.queue.length)
     const generation = this.generation
     this.activeJob = ++sequence
     this.processingTimer = setTimeout(() => {
-      if (generation === this.generation && this.activeJob) this.fail(t('systemAudio.timeout'))
+      if (generation === this.generation && this.activeJob) {
+        if (this.activeRunId !== null) {
+          failRun(this.activeRunId, 'timeout', t('systemAudio.timeout'))
+          this.activeRunId = null
+        }
+        this.fail(t('systemAudio.timeout'))
+      }
     }, PROCESSING_TIMEOUT_MS)
     try {
       if (!this.provider.start({ ...this.startOptions, runId: this.activeJob })) throw new Error('ASR did not start')
-      this.provider.sendAudio(audio.buffer as ArrayBuffer)
+      this.provider.sendAudio(job.audio.buffer as ArrayBuffer)
       if (!this.provider.stop()) throw new Error('ASR did not accept the segment')
     } catch (error) { this.fail(t('systemAudio.notReady'), String(error)) }
   }
@@ -317,8 +386,14 @@ export class SystemAudioSession {
     this.resetSegment()
     for (const timer of [this.processingTimer, this.captionTimer]) if (timer) clearTimeout(timer)
     this.processingTimer = this.captionTimer = null
+    if (this.activeRunId !== null) {
+      failRun(this.activeRunId, 'cancelled')
+      this.activeRunId = null
+    }
+    this.queue.forEach(({ runId }) => failRun(runId, 'cancelled'))
     this.queue = []
     this.queuedBytes = this.activeJob = 0
+    setQueueDepth(0)
     this.unlisteners.splice(0).forEach((unlisten) => unlisten())
     this.provider?.disconnect()
   }
@@ -337,6 +412,10 @@ export class SystemAudioSession {
 
   private fail(message: string, detail?: string) {
     if (this.snapshot.state === 'error' || this.snapshot.state === 'stopping') return
+    if (this.activeRunId !== null) {
+      failRun(this.activeRunId, 'failed', message)
+      this.activeRunId = null
+    }
     const generation = ++this.generation
     this.clearWork()
     this.publish({ state: 'error', caption: '', error: message, warning: '' })

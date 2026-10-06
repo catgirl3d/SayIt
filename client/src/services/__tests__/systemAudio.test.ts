@@ -29,6 +29,7 @@ import { ServerProvider } from '../transcription/ServerProvider'
 import type { TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
 import type { SubtitleOverlayPayload } from '../recorder/types'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
+import { clearPipelineTrace, getPipelineSnapshot, setPipelineDebugEnabled } from '../pipelineTrace'
 
 type OverlayCall =
   | { method: 'present'; payload: SubtitleOverlayPayload }
@@ -83,6 +84,12 @@ async function settle() {
 let session: SystemAudioSession
 let leased = false
 
+function enablePipelineDebug() {
+  clearPipelineTrace()
+  setPipelineDebugEnabled(true)
+  return { getPipelineSnapshot }
+}
+
 function frames(count: number, probability: number, value = 1, sessionId?: number, discontinuity = false) {
   const started = [...native.invoke.mock.calls].reverse().find(([name]) => name === 'start_system_audio_capture')
   const id = sessionId ?? (started?.[1] as { sessionId: number } | undefined)?.sessionId
@@ -99,6 +106,8 @@ function frames(count: number, probability: number, value = 1, sessionId?: numbe
 
 beforeEach(() => {
   vi.useFakeTimers()
+  setPipelineDebugEnabled(false)
+  clearPipelineTrace()
   native.settings.clear()
   native.settings.set('cloudAi.provider', 'ollama')
   native.settings.set('cloudAi.apiUrl', 'http://127.0.0.1:11434')
@@ -136,6 +145,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await session.stop()
+  setPipelineDebugEnabled(false)
+  clearPipelineTrace()
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.unstubAllGlobals()
@@ -143,6 +154,69 @@ afterEach(async () => {
 })
 
 describe('system audio subtitle session', () => {
+  it('records timings and engine metadata for a translated subtitle run', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onFinal?.({
+      asrText: 'Original speech',
+      llmText: 'Translated speech',
+      asrMs: 12,
+      llmMs: 34,
+      durationSec: 0.64,
+      asrEngine: 'test-engine',
+      asrModel: 'test-model',
+      aiStatus: 'applied',
+      aiProvider: 'ollama',
+      aiModel: 'translator',
+    })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{
+      mode: 'local',
+      speechMs: expect.any(Number),
+      asrMs: 12,
+      llmMs: 34,
+      status: 'ok',
+      asrEngine: 'test-engine',
+      asrModel: 'test-model',
+      aiProvider: 'ollama',
+      aiModel: 'translator',
+    }])
+    expect(trace.getPipelineSnapshot().runs[0].speechMs).toBeGreaterThan(0)
+    expect(trace.getPipelineSnapshot().runs[0].overlayMs).not.toBeNull()
+  })
+
+  it('records an empty-ASR run without interrupting the subtitle session', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onFinal?.({ asrText: '', llmText: '', asrMs: 5, llmMs: 0, durationSec: 0.64 })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(session.getSnapshot().state).toBe('listening')
+    expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'empty' }])
+    expect(trace.getPipelineSnapshot().counters.failed).toBe(1)
+  })
+
   it('uses the subtitle source language instead of the microphone dictation language', async () => {
     native.settings.set('speechInput.language', 'ru')
     native.settings.set('systemAudio.sourceLanguage', 'en')
