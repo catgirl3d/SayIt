@@ -6,7 +6,7 @@ import { useT } from '@/i18n/useT'
 import { addRuntimeEvent } from '../services/debugLog'
 import { formatRecordingTimer } from '../services/recorder/types'
 
-type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast'
+type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast' | 'subtitles'
 type RecordingVisualPhase = 'preparing' | 'listening'
 type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
 
@@ -32,6 +32,9 @@ interface OverlayPayload {
   toastTone?: 'info' | 'warn'
   streaming?: boolean
   streamingText?: string
+  subtitleText?: string
+  subtitleStatus?: string
+  subtitleError?: string
   micSourceMode?: 'auto' | 'fixed' | null
   micSourceLabel?: string
   /** 界面语言，由主窗随每次更新下发（见 OverlayCommonPayload.locale）。 */
@@ -43,6 +46,23 @@ interface OverlayPayload {
 
 const DEFAULT_BAR_COUNT = 24
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
+
+export function SubtitleCaption({ text, status, error }: { text: string; status: string; error: string }) {
+  return (
+    <div
+      data-overlay-content
+      className="pointer-events-none w-full max-w-[700px] rounded-2xl border px-6 py-4 text-center"
+      style={{ background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }}
+    >
+      <p className="mb-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>{status}</p>
+      {error ? (
+        <p role="alert" className="text-base leading-6 text-amber-300">{error}</p>
+      ) : text ? (
+        <p className="whitespace-pre-wrap break-words text-xl font-medium leading-8">{text}</p>
+      ) : null}
+    </div>
+  )
+}
 
 interface OverlayFailureCardProps {
   title: string
@@ -151,6 +171,9 @@ export default function Overlay() {
   const [toastTone, setToastTone] = useState<'info' | 'warn'>('info')
   const [streamingText, setStreamingText] = useState('')
   const [streamingOn, setStreamingOn] = useState(false)
+  const [subtitleText, setSubtitleText] = useState('')
+  const [subtitleStatus, setSubtitleStatus] = useState('')
+  const [subtitleError, setSubtitleError] = useState('')
   const [copied, setCopied] = useState(false)
   const [thinkingDuration, setThinkingDuration] = useState(0)
   const [warning, setWarning] = useState('')
@@ -263,6 +286,9 @@ export default function Overlay() {
       if (typeof payload.warning === 'string') setWarning(payload.warning)
       if (payload.warningTone === 'warn' || payload.warningTone === 'error') setWarningTone(payload.warningTone)
       if (typeof payload.streamingText === 'string') setStreamingText(payload.streamingText)
+      if (typeof payload.subtitleText === 'string') setSubtitleText(payload.subtitleText)
+      if (typeof payload.subtitleStatus === 'string') setSubtitleStatus(payload.subtitleStatus)
+      if (typeof payload.subtitleError === 'string') setSubtitleError(payload.subtitleError)
       if (typeof payload.streaming === 'boolean') setStreamingOn(payload.streaming)
       if (payload.micSourceMode === 'auto' || payload.micSourceMode === 'fixed' || payload.micSourceMode === null) {
         setMicSourceMode(payload.micSourceMode)
@@ -425,6 +451,8 @@ export default function Overlay() {
             })
           }}
         />
+      ) : state === 'subtitles' ? (
+        <SubtitleCaption text={subtitleText} status={subtitleStatus} error={subtitleError} />
       ) : state === 'fallback' ? (
         <div
           data-overlay-content

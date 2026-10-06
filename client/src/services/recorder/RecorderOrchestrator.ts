@@ -133,6 +133,8 @@ export class RecorderOrchestrator {
   private state: RecorderState = 'idle'
   private onStateChange: ((s: RecorderState) => void) | null = null
   private initialized = false
+  private subtitleModeActive = false
+  private providerConnection: Promise<void> | null = null
   private runSequence = 0
   private activeRunId = 0
 
@@ -354,7 +356,7 @@ export class RecorderOrchestrator {
       // 立即生效：更新录音器缓存 + 通知 UI + 悬浮窗提示（均无需等待 IPC）
       this.cachedActivePresetId = presetId
       setActivePresetKnown(presetId, target.name)
-      if (this.state === 'idle') {
+      if (this.state === 'idle' && !this.subtitleModeActive) {
         this.overlayService.showPresetSwitched(target.name)
       }
       addRuntimeEvent('info', 'recorder', 'Cleanup preset switched by shortcut', { presetId, name: target.name })
@@ -368,6 +370,38 @@ export class RecorderOrchestrator {
   /** 临时禁用/启用 PTT（用于欢迎向导热键确认步骤） */
   setPttSuppressed(suppressed: boolean) {
     this.pttSuppressed = suppressed
+  }
+
+  async acquireSystemAudio(): Promise<void> {
+    if (this.subtitleModeActive || this.state !== 'idle' || this.startRecordingLock
+      || this.textInsertionInFlight || this.finalizingLateRunId !== 0
+      || this.activeRunId !== 0 || this.timedOutProcessingContext) {
+      throw new Error(t('systemAudio.busy'))
+    }
+    // Reserve shared provider/overlay ownership before any IPC can let a hotkey through.
+    this.subtitleModeActive = true
+    this.activeFallbackToken = 0
+    this.overlayService.stopListeningTicker()
+    this.overlayService.resetStreamingText()
+    this.overlayService.resetWarnings()
+    await this.overlayService.hide()
+    if (this.providerConnection) await this.providerConnection
+    this.provider.disconnect()
+  }
+
+  async releaseSystemAudio(): Promise<void> {
+    if (!this.subtitleModeActive) return
+    // Exclusivity ends before the dictation provider is reconnected: a failed reconnect must not
+    // keep microphone dictation and engine switching blocked by a subtitle session that has
+    // already stopped. ensureConnection() retries the connection in the background.
+    this.subtitleModeActive = false
+    try {
+      await this.refreshRuntimeSettings()
+      await this.provider.connect(this.buildProviderCallbacks())
+    } catch (error) {
+      addRuntimeEvent('warn', 'recorder', 'Dictation provider reconnect after subtitles failed', { error: String(error) })
+      this.ensureConnection()
+    }
   }
 
   async init() {
@@ -429,6 +463,7 @@ export class RecorderOrchestrator {
     })
 
     bridge.onPTTDown((payload) => {
+      if (this.subtitleModeActive) return
       this.notePTTDown(payload)
       this.logPTTEvent('down', payload)
       if (this.pttSuppressed || this.handsFreeMode) {
@@ -450,6 +485,7 @@ export class RecorderOrchestrator {
     })
 
     bridge.onPTTUp((payload) => {
+      if (this.subtitleModeActive) return
       this.notePTTUp(payload)
       this.logPTTEvent('up', payload)
       if (this.pttSuppressed || this.handsFreeMode) {
@@ -477,6 +513,7 @@ export class RecorderOrchestrator {
     })
 
     bridge.onPTTToggle((payload) => {
+      if (this.subtitleModeActive) return
       this.logPTTEvent('toggle', payload)
       if (this.pttSuppressed || this.handsFreeMode) {
         addRuntimeEvent('info', 'ptt', 'event:toggle ignored', {
@@ -490,6 +527,7 @@ export class RecorderOrchestrator {
     })
 
     bridge.onToggleHandsFree((payload) => {
+      if (this.subtitleModeActive) return
       this.logPTTEvent('hands_free', payload)
       if (this.pttSuppressed) {
         addRuntimeEvent('info', 'ptt', 'event:hands_free ignored', {
@@ -528,7 +566,7 @@ export class RecorderOrchestrator {
   }
 
   showAiEnabledToast(enabled: boolean) {
-    if (this.state === 'idle') this.overlayService.showAiCleanupToggled(enabled)
+    if (this.state === 'idle' && !this.subtitleModeActive) this.overlayService.showAiCleanupToggled(enabled)
   }
 
   /** 仅更新当前润色模式（preset）的缓存值，无 IPC/热词/语言等全量刷新。
@@ -680,6 +718,7 @@ export class RecorderOrchestrator {
    *  先断开旧连接再按新配置连接，确保连接状态与新地址一致（否则改错地址后仍显示"已连接"）。
    *  录音进行中不强制断开，避免打断当前会话。 */
   reconnectProvider() {
+    if (this.subtitleModeActive) return
     if (this.state === 'idle') {
       this.provider.disconnect()
     }
@@ -1431,18 +1470,21 @@ export class RecorderOrchestrator {
   // ── Connection management ──
 
   private ensureConnection() {
-    if (this.provider.isReady()) return
-    this.provider.connect(this.buildProviderCallbacks()).catch((err) => {
+    if (this.subtitleModeActive || this.provider.isReady()) return
+    const connection = this.provider.connect(this.buildProviderCallbacks()).catch((err) => {
       addRuntimeEvent('warn', 'websocket', 'Preconnection failed; retrying in 5s', { error: String(err) })
       setTimeout(() => this.ensureConnection(), 5000)
     })
+    this.providerConnection = connection
+    void connection.finally(() => { if (this.providerConnection === connection) this.providerConnection = null })
   }
 
   // ── Recording lifecycle ──
 
   private async startRecording() {
     if (
-      this.state !== 'idle'
+      this.subtitleModeActive
+      || this.state !== 'idle'
       || this.startRecordingLock
       || this.textInsertionInFlight
       || this.finalizingLateRunId !== 0
@@ -2132,6 +2174,7 @@ export class RecorderOrchestrator {
   // ── Toggle / hands-free ──
 
   private pttToggle(isHandsFree = false) {
+    if (this.subtitleModeActive) return
     const now = Date.now()
     if (now - this.lastToggleTime < 500) {
       addRuntimeEvent('info', 'ptt', 'Ignored toggle request', {

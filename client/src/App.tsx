@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
 import WelcomeGuide from './components/WelcomeGuide'
 import Home from './pages/Home'
+import SystemAudio from './pages/SystemAudio'
 import History from './pages/History'
 import Dictionary from './pages/Dictionary'
 import VoiceEnginePage from './features/settings/VoiceEnginePage'
@@ -26,6 +27,7 @@ import { startUpdateService } from './features/update/autoUpdate'
 import { startWebDavBackupService } from './features/backup/autoWebdavBackup'
 import UpdateDialog from './features/update/UpdateDialog'
 import * as bridge from './services/bridge'
+import { systemAudioSession } from './services/systemAudio'
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(false)
@@ -61,7 +63,7 @@ export default function App() {
     })()
 
     return () => {
-      cleanup()
+      void systemAudioSession.stop().finally(cleanup)
     }
   }, [])
 
@@ -94,6 +96,7 @@ export default function App() {
         <main className="custom-scrollbar flex-1 overflow-y-auto bg-background p-8">
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/system-audio" element={<SystemAudio />} />
             <Route path="/history" element={<History />} />
             <Route path="/favorites" element={<Navigate to="/history" replace />} />
             <Route path="/hotwords" element={<Dictionary />} />

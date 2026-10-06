@@ -94,3 +94,11 @@ export function setPttSuppressed(suppressed: boolean) {
   orchestrator.setPttSuppressed(suppressed)
 }
 
+export function acquireSystemAudio() {
+  return orchestrator.acquireSystemAudio()
+}
+
+export function releaseSystemAudio() {
+  return orchestrator.releaseSystemAudio()
+}
+

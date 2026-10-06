@@ -327,6 +327,7 @@ fn main() {
         .manage(window_state)
         .manage(keyboard_hook)
         .manage(context_detector)
+        .manage(commands::system_audio::SystemAudioCaptureState::default())
         .setup(move |app| {
             // SayIt's main window and lazy overlay share one WebView2 user-data directory.
             // Per-window browser arguments violate WebView2's environment compatibility
@@ -619,6 +620,9 @@ fn main() {
             commands::audio_mute::mute_system_output,
             commands::audio_mute::restore_system_output,
             commands::audio_mute::get_mic_mute_state,
+            commands::system_audio::list_system_audio_devices,
+            commands::system_audio::start_system_audio_capture,
+            commands::system_audio::stop_system_audio_capture,
             // Shortcuts
             commands::shortcuts::shortcuts_changed,
             commands::shortcuts::test_shortcut,

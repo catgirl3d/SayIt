@@ -15,6 +15,8 @@ const OVERLAY_FALLBACK_WIDTH: f64 = 520.0;
 const OVERLAY_FALLBACK_HEIGHT: f64 = 224.0;
 const OVERLAY_FAILURE_WIDTH: f64 = 480.0;
 const OVERLAY_FAILURE_HEIGHT: f64 = 176.0;
+const OVERLAY_SUBTITLE_WIDTH: f64 = 720.0;
+const OVERLAY_SUBTITLE_HEIGHT: f64 = 260.0;
 // 流式实时显示：录音气泡 + 波形条堆叠，需要更宽更高的窗口
 const OVERLAY_STREAMING_WIDTH: f64 = 480.0;
 const OVERLAY_STREAMING_HEIGHT: f64 = 200.0;
@@ -45,6 +47,7 @@ enum OverlayLayout {
     BaseWithMicHint,
     Fallback,
     Failure,
+    Subtitles,
     /// 流式实时显示：气泡 + 波形，窗口更大且非交互
     Streaming,
     StreamingWithMicHint,
@@ -66,6 +69,7 @@ impl OverlayLayout {
             ),
             OverlayLayout::Fallback => (OVERLAY_FALLBACK_WIDTH, OVERLAY_FALLBACK_HEIGHT),
             OverlayLayout::Failure => (OVERLAY_FAILURE_WIDTH, OVERLAY_FAILURE_HEIGHT),
+            OverlayLayout::Subtitles => (OVERLAY_SUBTITLE_WIDTH, OVERLAY_SUBTITLE_HEIGHT),
             OverlayLayout::Streaming => (OVERLAY_STREAMING_WIDTH, OVERLAY_STREAMING_HEIGHT),
             OverlayLayout::StreamingWithMicHint => (
                 OVERLAY_STREAMING_WIDTH,
@@ -441,6 +445,8 @@ impl WindowState {
             OverlayLayout::Fallback
         } else if state == Some("failure") {
             OverlayLayout::Failure
+        } else if state == Some("subtitles") {
+            OverlayLayout::Subtitles
         } else if state == Some("listening") && streaming_on && mic_hint_on {
             OverlayLayout::StreamingWithMicHint
         } else if state == Some("listening") && streaming_on {
@@ -1070,6 +1076,17 @@ mod tests {
 
         state.active_show_id.store(0, Ordering::SeqCst);
         assert!(state.payload_for_emit(true).is_none());
+    }
+
+    #[test]
+    fn subtitle_layout_fits_translated_lines_without_intercepting_player_clicks() {
+        let state = WindowState::new();
+        state.apply_payload_layout(&json!({ "state": "subtitles", "subtitleText": "Translated speech" }));
+        let layout = state.overlay_layout.lock().unwrap().clone();
+        let (width, height) = layout.dimensions(360.0);
+        assert!(width >= 640.0);
+        assert!(height >= 180.0);
+        assert!(!layout.is_interactive());
     }
 }
 

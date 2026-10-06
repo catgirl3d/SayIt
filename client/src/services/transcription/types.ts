@@ -55,6 +55,8 @@ export interface StartOptions {
   runId: number
   systemPrompt?: string
   disableAi?: boolean
+  /** Passive translated captions require the AI stage even for ASR routes with built-in cleanup. */
+  requireTranslation?: boolean
   /** 录音未达到该时长时只做识别，不调用 AI。0 / undefined = 不设门槛。 */
   aiMinDurationSec?: number
   clientMeta?: ClientRuntimeInfo | null

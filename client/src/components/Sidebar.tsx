@@ -18,6 +18,7 @@ import {
   ServerOff,
   Cpu,
   Cloud,
+  Captions,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -41,6 +42,7 @@ interface NavItemDef {
  */
 const workspaceNavItems = [
   { to: '/', icon: Home, labelKey: 'nav.home' },
+  { to: '/system-audio', icon: Captions, labelKey: 'nav.systemAudio' },
   { to: '/history', icon: Clock, labelKey: 'nav.history' },
   { to: '/hotwords', icon: BookOpen, labelKey: 'nav.hotwords' },
 ] as const satisfies readonly NavItemDef[]

@@ -19,6 +19,7 @@ import ServerSection from './ServerSection'
 import AsrTestSection from './AsrTestSection'
 import { useT } from '@/i18n/useT'
 import SpeechLanguageSection from './SpeechLanguageSection'
+import { systemAudioSession } from '@/services/systemAudio'
 
 export default function VoiceEnginePage() {
   const t = useT()
@@ -37,6 +38,8 @@ export default function VoiceEnginePage() {
   }, [])
 
   const handleWorkModeChange = async (mode: WorkMode) => {
+    await systemAudioSession.stop()
+    if (systemAudioSession.getSnapshot().state !== 'idle') return
     // 换模式会整体替换下方的配置卡，上一套里没保存的输入随之消失——脏标记要跟着清，
     // 否则「识别测试」会一直以为有未保存的改动
     setEngineDraftDirty(false)

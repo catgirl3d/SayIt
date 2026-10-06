@@ -451,7 +451,7 @@ export class OverlayService {
     this.clearMicSourceHint()
     this.clearFallbackHideTimer()
     this.setEscapeMode('off', 0)
-    void bridge.hideOverlay()
+    return bridge.hideOverlay()
   }
 
   /** Briefly show the current text-polishing mode after its shortcut is pressed, then hide the overlay after about 1.6 seconds. */

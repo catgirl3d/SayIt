@@ -573,8 +573,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
         return
       }
 
-      // AI 校对（Qwen Omni 已内置 AI，跳过）
-      const polish = isQwenOmni
+      // Omni normally provides its own cleanup; subtitles still need the requested translation stage.
+      const polish = isQwenOmni && !startOpts.requireTranslation
         ? {
           llmText: startOpts.textContext?.selectedText || asrText,
           llmMs: 0,

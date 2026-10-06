@@ -76,6 +76,10 @@ export const DEFAULTS: Record<string, unknown> = {
   micNoiseSuppression: true,
   micBoost: DEFAULT_MIC_BOOST, // '1' = off; '2', '3', '5' = fixed gain; 'auto' = browser AGC
 
+  // System-audio subtitles reuse the active ASR/AI profiles, not dictation presets.
+  'systemAudio.deviceId': '',
+  'systemAudio.targetLanguage': 'ru',
+
   // ── Text insertion ──
   protectClipboard: true, // After inserting text, restore the clipboard to its pre-insert content so the user's clipboard is not occupied. On by default
 

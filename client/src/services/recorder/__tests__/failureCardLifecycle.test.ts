@@ -126,6 +126,11 @@ function makeFinal(overrides: Partial<FinalResult> = {}): FinalResult {
   }
 }
 
+async function acquireSubtitles(recorder: RecorderOrchestrator) {
+  const acquire = Reflect.get(recorder, 'acquireSystemAudio') as (() => Promise<void>) | undefined
+  if (acquire) await acquire.call(recorder)
+}
+
 async function enterTimeoutGrace(recorder: RecorderOrchestrator, runId: number, refreshSettings = true) {
   const provider = await switchProvider('cloud_api')
   vi.spyOn(provider, 'stop').mockReturnValue(true)
@@ -905,5 +910,59 @@ describe('recorder failure cards', () => {
       audioFilePath: 'history/recording.wav',
       isEmpty: true,
     })
+  })
+})
+
+describe('exclusive system-audio ownership', () => {
+  it.each([
+    ['startRecordingLock', true],
+    ['activeRunId', 81],
+    ['finalizingLateRunId', 82],
+    ['textInsertionInFlight', true],
+    ['timedOutProcessingContext', { runId: 83 }],
+  ])('refuses subtitle acquisition while an idle recorder still owns %s', async (field, value) => {
+    const recorder = new RecorderOrchestrator()
+    Reflect.set(recorder, field, value)
+    await expect(acquireSubtitles(recorder)).rejects.toThrow(en['systemAudio.busy'])
+    expect(harness.invoke.mock.calls.some(([command]) => command === 'hide_overlay')).toBe(false)
+  })
+
+  it('clears an idle card and blocks microphone start and cleanup toasts while subtitles own the overlay', async () => {
+    vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
+    vi.stubGlobal('HTMLElement', class {})
+    const recorder = new RecorderOrchestrator()
+    Reflect.set(recorder, 'cachedPresets', [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }])
+    const overlay = Reflect.get(recorder, 'overlayService') as OverlayService
+    overlay.showFailure({ cardToken: 84, failureTitle: 'Failed', failureDetail: 'Cause', failureRecovery: 'none' })
+    Reflect.set(recorder, 'activeFallbackToken', 84)
+    await acquireSubtitles(recorder)
+    const provider = await switchProvider('cloud_api')
+    await provider.connect({})
+    harness.invoke.mockClear()
+    recorder.showAiEnabledToast(true)
+    const start = Reflect.get(recorder, 'startRecording') as () => Promise<void>
+    await start.call(recorder)
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(harness.startCapture).not.toHaveBeenCalled()
+    expect(overlayPayloads('present_overlay')).toEqual([])
+    expect(harness.invoke.mock.calls.some(([command]) => command === 'hide_overlay')).toBe(false)
+    expect(Reflect.get(recorder, 'activeFallbackToken')).toBe(0)
+    recorder.cleanup()
+  })
+
+  it('ends subtitle ownership even when the dictation provider cannot reconnect', async () => {
+    const recorder = new RecorderOrchestrator()
+    await acquireSubtitles(recorder)
+    const provider = await switchProvider('cloud_api')
+    vi.spyOn(provider, 'connect').mockRejectedValue(new Error('server unreachable'))
+
+    const release = Reflect.get(recorder, 'releaseSystemAudio') as () => Promise<void>
+    await expect(release.call(recorder)).resolves.toBeUndefined()
+
+    expect(Reflect.get(recorder, 'subtitleModeActive')).toBe(false)
+    expect(harness.runtimeEvents.mock.calls.some(([level, , message]) =>
+      level === 'warn' && String(message).includes('reconnect after subtitles failed'))).toBe(true)
+    recorder.cleanup()
   })
 })
