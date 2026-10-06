@@ -604,8 +604,102 @@ describe('system audio subtitle session', () => {
     expect(native.settings).toEqual(before)
     const request = native.invoke.mock.calls.find(([name]) => name === 'cloud_polish')?.[1].request
     expect(request.system_prompt).toContain('Russian')
+    expect(request.system_prompt).toContain('live subtitle translator')
     expect(request.text_context).toBeNull()
     expect(native.invoke.mock.calls.some(([name]) => ['paste_text', 'copy_text', 'mute_system_output', 'get_recording_context'].includes(name))).toBe(false)
+  })
+
+  describe('translation context', () => {
+    function numberRecognizedSpeech() {
+      let heard = 0
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation(async (name, args) => {
+        const result = await original(name, args)
+        return name === 'local_transcribe' ? { ...result, text: `Speech ${++heard}` } : result
+      })
+    }
+
+    function polishRequests() {
+      return native.invoke.mock.calls.filter(([name]) => name === 'cloud_polish').map(([, args]) => args.request)
+    }
+
+    function speak() {
+      frames(20, 0.9)
+      frames(15, 0)
+    }
+
+    it('gives each segment the speech recognized just before it, and nothing for the first one', async () => {
+      numberRecognizedSpeech()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      speak()
+      await settle()
+      speak()
+      await settle()
+
+      const requests = polishRequests()
+      expect(requests.map((request) => request.text)).toEqual(['Speech 1', 'Speech 2', 'Speech 3'])
+      expect(requests[0].text_context).toBeNull()
+      expect(requests[1].text_context).toEqual({ source: 'subtitles', textBefore: 'Speech 1', selectedText: '', textAfter: '', selectionTruncated: false })
+      expect(requests[2].text_context.textBefore).toBe('Speech 1 Speech 2')
+    })
+
+    it('does not carry context over a long pause', async () => {
+      numberRecognizedSpeech()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      vi.advanceTimersByTime(8_000)
+      speak()
+      await settle()
+
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('forgets the context when the session is stopped and started again', async () => {
+      numberRecognizedSpeech()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      await session.stop()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('does not send context to a provider that cannot take it', async () => {
+      numberRecognizedSpeech()
+      const provider: TranscriptionProvider = new LocalProvider()
+      provider.acceptsTextContext = () => false
+      session = new SystemAudioSession({
+        getProvider: () => provider,
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      speak()
+      await settle()
+
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('keeps recognition-only runs free of translation context', async () => {
+      numberRecognizedSpeech()
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      speak()
+      await settle()
+      speak()
+      await settle()
+
+      expect(polishRequests()).toHaveLength(0)
+      expect(session.getSnapshot().caption).toBe('Speech 2')
+    })
   })
 
   it('ignores silence and retains every voiced frame across a forced split and its short tail', async () => {

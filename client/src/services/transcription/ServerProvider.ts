@@ -111,6 +111,12 @@ export class ServerProvider implements TranscriptionProvider {
     })
   }
 
+  acceptsTextContext(): boolean {
+    // A custom AI is called by this client with the context as a plain user-message section. The managed server
+    // AI gets it over the wire; a legacy server only gets a compatibility capsule written for selection editing.
+    return getRuntimeServerAiSource() === 'custom' || ws.supportsTextContext()
+  }
+
   start(opts: StartOptions): boolean {
     // 设置页可在不切换工作模式的情况下改变来源；每次 start 都同步取运行时真值。
     this.aiSource = getRuntimeServerAiSource()

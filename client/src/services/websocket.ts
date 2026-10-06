@@ -529,3 +529,8 @@ export function sendAudio(buffer: ArrayBuffer) {
 export function isConnected(): boolean {
   return ws?.readyState === WebSocket.OPEN
 }
+
+/** True once the connected server advertised text_context; false for legacy servers and while disconnected. */
+export function supportsTextContext(): boolean {
+  return serverSupportsTextContext
+}

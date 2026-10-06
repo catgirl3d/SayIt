@@ -115,4 +115,10 @@ export interface TranscriptionProvider {
 
   /** 是否已就绪可以开始转写 */
   isReady(): boolean
+
+  /**
+   * Whether `StartOptions.textContext` reaches the AI stage as plain context. Absent means yes. A provider that
+   * can only deliver it through a compatibility shim built for selection editing answers false.
+   */
+  acceptsTextContext?(): boolean
 }

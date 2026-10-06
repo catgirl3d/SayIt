@@ -3,6 +3,7 @@ import { t } from '@/i18n'
 import { getPromptPresets, getSetting, TRANSLATION_PRESET_PREFIX } from './store'
 import { normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
 import { chooseForcedSplit, DEFAULT_SEGMENT_SECONDS, FRAME_MS, normalizeSegmentSeconds, segmentPlan, type SegmentPlan } from './subtitleSegmentation'
+import { buildSubtitlePrompt, RecentSpeech, SUBTITLE_CONTEXT_SOURCE, subtitleLanguageName } from './subtitleTranslation'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import type { FinalResult, StartOptions, TranscriptionProvider } from './transcription/types'
@@ -27,6 +28,7 @@ import {
 import { getProvider } from './transcription'
 import { loadActiveHotwords } from './hotwords/settings'
 import type { SubtitleOverlayPayload } from './recorder/types'
+import type { TextContext } from '@/types/appContext'
 
 // Targets are owned by the builtin translate_* presets in store.ts; sessions validate them by preset id lookup.
 export type SubtitleTargetLanguage = string
@@ -148,6 +150,8 @@ export class SystemAudioSession {
   private queue: SegmentJob[] = []
   private queuedBytes = 0
   private activeJob = 0
+  private activeSpan: SegmentSpan | null = null
+  private readonly recent = new RecentSpeech()
   private publishedAsrJob = 0
   private activeRunId: number | null = null
   private lastFrameAt = 0
@@ -248,9 +252,10 @@ export class SystemAudioSession {
       if (asrOnly) {
         this.startOptions = { systemPrompt: '', language, hotwords, disableAi: true, aiMinDurationSec: 0, requireTranslation: false }
       } else {
-        const prompt = presets.find((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${this.options!.targetLanguage}`)?.systemPrompt
-        if (!prompt?.trim()) throw new Error(t('systemAudio.notReady'))
-        this.startOptions = { systemPrompt: prompt, language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
+        // The translate_* presets only define which target languages exist; subtitles use their own prompt.
+        const targetLanguage = this.options!.targetLanguage
+        if (!presets.some((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${targetLanguage}`)) throw new Error(t('systemAudio.notReady'))
+        this.startOptions = { systemPrompt: buildSubtitlePrompt(subtitleLanguageName(targetLanguage)), language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
       }
       this.provider = this.dependencies.getProvider()
       this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''
@@ -293,6 +298,7 @@ export class SystemAudioSession {
             }
             return
           }
+          if (this.activeSpan) this.recent.push(result.asrText.trim(), this.activeSpan)
           // The managed server LLM falls back to the input text when its answer is empty or
           // think-only while still reporting elapsed time, so an "applied" result can be the
           // original speech. A translation identical to the transcript is never shown as one.
@@ -311,6 +317,7 @@ export class SystemAudioSession {
           if (generation !== this.generation || !this.activeJob) return
           setPipelineActivity({ phase: 'listening', stageStartedAt: null })
           this.activeJob = 0
+          this.activeSpan = null
           this.publishedAsrJob = 0
           this.activeRunId = null
           if (this.processingTimer) clearTimeout(this.processingTimer)
@@ -449,6 +456,7 @@ export class SystemAudioSession {
     if (!job) return
     this.queuedBytes -= job.audio.byteLength
     this.activeRunId = job.runId
+    this.activeSpan = { startedAt: job.startedAt, endedAt: job.endedAt }
     this.publishedAsrJob = 0
     markQueued(job.runId)
     setQueueDepth(this.queue.length)
@@ -464,11 +472,18 @@ export class SystemAudioSession {
       }
     }, PROCESSING_TIMEOUT_MS)
     try {
-      if (!this.provider.start({ ...this.startOptions, runId: this.activeJob })) throw new Error('ASR did not start')
+      if (!this.provider.start({ ...this.startOptions, textContext: this.translationContext(job), runId: this.activeJob })) throw new Error('ASR did not start')
       setPipelineActivity({ phase: 'asr', stageStartedAt: Date.now() })
       this.provider.sendAudio(job.audio.buffer as ArrayBuffer)
       if (!this.provider.stop()) throw new Error('ASR did not accept the segment')
     } catch (error) { this.fail(t('systemAudio.notReady'), String(error)) }
+  }
+
+  // The speech recognized just before this segment, passed to the translation as read-only context.
+  private translationContext(job: SegmentSpan): TextContext | undefined {
+    if (this.provider?.acceptsTextContext?.() === false) return undefined
+    const textBefore = this.recent.contextBefore(job.startedAt)
+    return textBefore ? { source: SUBTITLE_CONTEXT_SOURCE, textBefore, selectedText: '', textAfter: '', selectionTruncated: false } : undefined
   }
 
   private resetSegment() {
@@ -490,6 +505,8 @@ export class SystemAudioSession {
     }
     this.queue.forEach(({ runId }) => failRun(runId, 'cancelled'))
     this.queue = []
+    this.recent.clear()
+    this.activeSpan = null
     this.queuedBytes = this.activeJob = 0
     this.publishedAsrJob = 0
     setQueueDepth(0)
