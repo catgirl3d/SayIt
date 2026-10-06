@@ -3,13 +3,15 @@ import { Link } from 'react-router-dom'
 import { Monitor, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
 import { Select, type SelectOption } from '@/components/ui/select'
 import { getLocale } from '@/i18n'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
 import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
-import { listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
+import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
+import { getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
 
 export type SubtitleAction = 'start' | 'pause' | 'resume' | 'stop'
 
@@ -48,6 +50,7 @@ export default function SystemAudio() {
   const snapshot = useSyncExternalStore(systemAudioSession.subscribe, systemAudioSession.getSnapshot)
   const [devices, setDevices] = useState<SystemAudioDevice[]>([])
   const [deviceId, setDeviceId] = useState('')
+  const [sourceLanguage, setSourceLanguage] = useState<SpeechInputLanguage>('auto')
   const [targetLanguage, setTargetLanguage] = useState<SubtitleTargetLanguage>('')
   const [presets, setPresets] = useState<PromptPreset[]>([])
   const [ready, setReady] = useState(false)
@@ -71,12 +74,14 @@ export default function SystemAudio() {
     void Promise.all([
       listSystemAudioDevices(),
       getSetting<string>('systemAudio.deviceId', ''),
+      getSystemAudioSourceLanguage(),
       getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', ''),
       getPromptPresets(),
-    ]).then(([outputs, savedDevice, language, presets]) => {
+    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
+      setSourceLanguage(savedSourceLanguage)
       const options = buildTranslationOptions(presets)
       setPresets(presets)
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
@@ -120,23 +125,36 @@ export default function SystemAudio() {
             <p className="text-sm font-medium" role="status">{t(`systemAudio.status.${snapshot.state}`)}</p>
             <span className="ml-auto rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">{t(mode === 'local' ? 'mode.local' : mode === 'cloud_api' ? 'mode.cloudApi' : 'mode.server')}</span>
           </div>
+          <div className="min-w-0 space-y-2">
+            <label id="subtitle-output-label" className="text-sm font-medium">{t('systemAudio.source')}</label>
+            <div className="flex gap-2">
+              <Select
+                value={deviceId}
+                onChange={(value) => {
+                  setDeviceId(value)
+                  void setSetting('systemAudio.deviceId', value)
+                }}
+                options={deviceOptions}
+                labelledBy="subtitle-output-label"
+                disabled={active || pending || !ready}
+                className="min-w-0 flex-1"
+              />
+              <Button variant="outline" size="icon" disabled={active || pending} onClick={() => void refreshDevices()} aria-label={t('systemAudio.refreshDevices')}><RefreshCw className="h-4 w-4" /></Button>
+            </div>
+          </div>
           <div className="grid gap-5 sm:grid-cols-2">
-            <div className="min-w-0 space-y-2">
-              <label id="subtitle-output-label" className="text-sm font-medium">{t('systemAudio.source')}</label>
-              <div className="flex gap-2">
-                <Select
-                  value={deviceId}
-                  onChange={(value) => {
-                    setDeviceId(value)
-                    void setSetting('systemAudio.deviceId', value)
-                  }}
-                  options={deviceOptions}
-                  labelledBy="subtitle-output-label"
-                  disabled={active || pending || !ready}
-                  className="min-w-0 flex-1"
-                />
-                <Button variant="outline" size="icon" disabled={active || pending} onClick={() => void refreshDevices()} aria-label={t('systemAudio.refreshDevices')}><RefreshCw className="h-4 w-4" /></Button>
-              </div>
+            <div className="space-y-2">
+              <label id="subtitle-source-language-label" className="text-sm font-medium">{t('systemAudio.sourceLanguage')}</label>
+              <SpeechLanguageSelect
+                value={sourceLanguage}
+                onChange={(value) => {
+                  setSourceLanguage(value)
+                  void setSetting('systemAudio.sourceLanguage', value)
+                }}
+                labelledBy="subtitle-source-language-label"
+                disabled={active || pending}
+                className="w-full"
+              />
             </div>
             <div className="space-y-2">
               <label id="subtitle-language-label" className="text-sm font-medium">{t('systemAudio.targetLanguage')}</label>
@@ -161,6 +179,7 @@ export default function SystemAudio() {
       </Card>
       <div className="space-y-3 text-sm leading-6 text-muted-foreground">
         <p>{t('systemAudio.engineHint')} <Link to="/voice-engine" className="text-foreground underline underline-offset-4">{t('nav.voiceEngine')}</Link> / <Link to="/ai-service" className="text-foreground underline underline-offset-4">{t('nav.aiService')}</Link></p>
+        <p>{t('systemAudio.sourceLanguageHint')}</p>
         <p>{t('systemAudio.mixHint')}</p>
         <p>{t('systemAudio.delayHint')}</p>
         <p>{t('systemAudio.privacyHint')}</p>

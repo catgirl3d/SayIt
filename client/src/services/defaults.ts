@@ -78,6 +78,7 @@ export const DEFAULTS: Record<string, unknown> = {
 
   // System-audio subtitles reuse the active ASR/AI profiles, not dictation presets.
   'systemAudio.deviceId': '',
+  'systemAudio.sourceLanguage': 'auto',
 
   // ── Text insertion ──
   protectClipboard: true, // After inserting text, restore the clipboard to its pre-insert content so the user's clipboard is not occupied. On by default

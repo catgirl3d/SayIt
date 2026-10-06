@@ -8,6 +8,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 ### System-Audio Translation Subtitles
 
 - Added a Windows computer-audio subtitle mode using native WASAPI loopback, without a virtual audio cable or browser extension. Select an output device and translate short speech fragments into Russian, Ukrainian, or English in a persistent, click-through overlay.
+- Added a separate subtitle source-audio language setting, defaulting to Auto and independent of microphone dictation language.
 - Reuses the configured local, cloud API, or server speech engine and existing AI provider. Subtitle translation is independent of the dictation cleanup switch; fully local operation requires both local ASR and a local AI endpoint. Audio from other applications and notifications on the selected output device is included.
 - Start, pause, resume, and stop controls are available under Computer subtitles. Microphone dictation resumes after stopping this mode. Capture interruptions, translation failures, and processing overload are shown explicitly instead of presenting the original transcript as a translation or building an unlimited backlog.
 - Brief recoverable audio gaps discard unfinished speech and reset voice-detection context without stopping the subtitle session. A warning identifies the gap; device and translation failures still require recovery.

@@ -5,6 +5,7 @@ const native = vi.hoisted(() => ({
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
   settings: new Map<string, unknown>(),
   captured: [] as Uint8Array[],
+  transcribeArgs: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => native.invoke(...args) }))
@@ -108,6 +109,7 @@ beforeEach(() => {
   native.settings.set('speechInput.language', 'en')
   native.listeners.clear()
   native.captured.length = 0
+  native.transcribeArgs.length = 0
   overlayCalls = []
   overlay = createOverlayPort()
   leased = false
@@ -116,6 +118,7 @@ beforeEach(() => {
     if (name === 'store_set') { native.settings.set(args.key as string, args.value); return }
     if (name === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', complete: true }]
     if (name === 'local_transcribe') {
+      native.transcribeArgs.push(args)
       native.captured.push(Uint8Array.from(atob(args.audioB64 as string), (char) => char.charCodeAt(0)))
       return { text: 'Original speech', elapsed_ms: 5 }
     }
@@ -140,6 +143,30 @@ afterEach(async () => {
 })
 
 describe('system audio subtitle session', () => {
+  it('uses the subtitle source language instead of the microphone dictation language', async () => {
+    native.settings.set('speechInput.language', 'ru')
+    native.settings.set('systemAudio.sourceLanguage', 'en')
+    await session.start({ deviceId: 'speakers', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    await settle()
+
+    expect(native.transcribeArgs[0]?.language).toBe('en')
+    expect(native.transcribeArgs[0]?.language).not.toBe('ru')
+  })
+
+  it('defaults subtitle recognition to auto when its source language is unset', async () => {
+    native.settings.set('speechInput.language', 'ru')
+    native.settings.delete('systemAudio.sourceLanguage')
+    await session.start({ deviceId: 'speakers', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    await settle()
+
+    expect(native.transcribeArgs[0]?.language).toBe('auto')
+    expect(native.transcribeArgs[0]?.language).not.toBe('ru')
+  })
+
   it('translates speech using the active AI even when dictation cleanup is disabled, without mutating dictation settings', async () => {
     const before = new Map(native.settings)
     await session.start({ deviceId: 'speakers', targetLanguage: 'ru' })

@@ -1,7 +1,7 @@
 import * as bridge from './bridge'
 import { t } from '@/i18n'
-import { getPromptPresets, TRANSLATION_PRESET_PREFIX } from './store'
-import { getSpeechInputLanguage } from './speechInputLanguage'
+import { getPromptPresets, getSetting, TRANSLATION_PRESET_PREFIX } from './store'
+import { normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import type { StartOptions, TranscriptionProvider } from './transcription/types'
@@ -63,6 +63,10 @@ const FRAME_RECEIVE_GAP_MS = 512
 const PROCESSING_TIMEOUT_MS = 30_000
 const CAPTION_HOLD_MS = 8_000
 let sequence = Date.now()
+
+export async function getSystemAudioSourceLanguage(): Promise<SpeechInputLanguage> {
+  return normalizeSpeechInputLanguage(await getSetting('systemAudio.sourceLanguage', 'auto'))
+}
 
 export function listSystemAudioDevices() {
   return bridge.invoke<SystemAudioDevice[]>('list_system_audio_devices')
@@ -145,7 +149,7 @@ export class SystemAudioSession {
       }
       if (generation !== this.generation) return
       const [presets, language, hotwords] = await Promise.all([
-        getPromptPresets(), getSpeechInputLanguage(), loadActiveHotwords(),
+        getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(),
       ])
       if (generation !== this.generation) return
       const prompt = presets.find((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${this.options!.targetLanguage}`)?.systemPrompt
