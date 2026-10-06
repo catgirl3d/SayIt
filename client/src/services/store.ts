@@ -210,6 +210,9 @@ export const BUILTIN_PROMPTS_ZH: Record<string, string> = {
 }
 // i18n-allow-end
 
+/** Builtin translation preset ids follow `translate_<targetLanguage>`; the subtitle settings UI and the session derive from this prefix. */
+export const TRANSLATION_PRESET_PREFIX = 'translate_'
+
 export const BUILTIN_PRESETS: PromptPreset[] = [
   {
     id: 'intent',

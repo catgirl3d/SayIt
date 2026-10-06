@@ -1,6 +1,6 @@
 import * as bridge from './bridge'
 import { t } from '@/i18n'
-import { getPromptPresets } from './store'
+import { getPromptPresets, TRANSLATION_PRESET_PREFIX } from './store'
 import { getSpeechInputLanguage } from './speechInputLanguage'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
@@ -148,7 +148,7 @@ export class SystemAudioSession {
         getPromptPresets(), getSpeechInputLanguage(), loadActiveHotwords(),
       ])
       if (generation !== this.generation) return
-      const prompt = presets.find((preset) => preset.id === `translate_${this.options!.targetLanguage}`)?.systemPrompt
+      const prompt = presets.find((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${this.options!.targetLanguage}`)?.systemPrompt
       if (!prompt?.trim()) throw new Error(t('systemAudio.notReady'))
       this.startOptions = { systemPrompt: prompt, language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
       this.provider = this.dependencies.getProvider()

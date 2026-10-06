@@ -7,7 +7,7 @@ import { Select, type SelectOption } from '@/components/ui/select'
 import { getLocale } from '@/i18n'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
 import { useLocale, useT } from '@/i18n/useT'
-import { getPromptPresets, getSetting, setSetting, type PromptPreset } from '@/services/store'
+import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
 import { listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
 
@@ -15,9 +15,9 @@ export type SubtitleAction = 'start' | 'pause' | 'resume' | 'stop'
 
 export function buildTranslationOptions(presets: PromptPreset[]): SelectOption[] {
   return presets
-    .filter((preset) => preset.builtin && preset.id.startsWith('translate_'))
+    .filter((preset) => preset.builtin && preset.id.startsWith(TRANSLATION_PRESET_PREFIX))
     .map((preset) => ({
-      value: preset.id.slice('translate_'.length),
+      value: preset.id.slice(TRANSLATION_PRESET_PREFIX.length),
       label: promptPresetDisplayName(preset),
     }))
 }
