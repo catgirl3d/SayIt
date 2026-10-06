@@ -5,6 +5,10 @@ use std::thread::JoinHandle;
 use tauri::{AppHandle, State};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+// Each emitted frame contains exactly FRAME_SAMPLES signed 16-bit little-endian mono samples
+// at TARGET_SAMPLE_RATE (FRAME_SAMPLES * 2 bytes). The client at client/src/services/systemAudio.ts
+// hard-validates FRAME_BYTES = 512 * 2 and aborts the subtitle session on mismatch;
+// changing FRAME_SAMPLES requires updating FRAME_BYTES in the same change and matching the Silero VAD chunk size.
 const FRAME_SAMPLES: usize = 512;
 #[cfg(not(windows))]
 const UNSUPPORTED_PLATFORM: &str = "System audio loopback capture is only supported on Windows";
@@ -1790,6 +1794,7 @@ mod tests {
         assert!((float_samples[0] - 0.5).abs() < 0.0001);
     }
 
+    // Locks the Rust half of the cross-language frame contract checked by client FRAME_BYTES.
     #[test]
     fn pcm_frame_encoding_is_exactly_512_signed_little_endian_samples() {
         let mut samples = [0.0; FRAME_SAMPLES];

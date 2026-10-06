@@ -51,13 +51,15 @@ interface SessionDependencies {
   }
 }
 
+// Must match FRAME_SAMPLES = 512 i16 little-endian samples emitted by client/src-tauri/src/commands/system_audio.rs; receiveFrame hard-fails if the byte length differs.
 const FRAME_BYTES = 512 * 2
 const PRE_ROLL_FRAMES = 8
 const MIN_VOICED_FRAMES = 8
 const END_SILENCE_FRAMES = 15
 const MAX_SEGMENT_FRAMES = 188
 const MAX_PENDING_BYTES = 16_000 * 2 * 12
-const FRAME_GAP_MS = 512
+// Close the current speech segment after this receive inactivity interval.
+const FRAME_RECEIVE_GAP_MS = 512
 const PROCESSING_TIMEOUT_MS = 30_000
 const CAPTION_HOLD_MS = 8_000
 let sequence = Date.now()
@@ -233,12 +235,12 @@ export class SystemAudioSession {
     }
 
     const now = Date.now()
-    if (this.lastFrameAt && now - this.lastFrameAt >= FRAME_GAP_MS) this.closeGap()
+    if (this.lastFrameAt && now - this.lastFrameAt >= FRAME_RECEIVE_GAP_MS) this.closeGap()
     if (this.snapshot.state === 'error') return
     this.lastFrameAt = now
     if (this.gapTimer) clearTimeout(this.gapTimer)
     const generation = this.generation
-    this.gapTimer = setTimeout(() => { if (generation === this.generation) this.closeGap() }, FRAME_GAP_MS)
+    this.gapTimer = setTimeout(() => { if (generation === this.generation) this.closeGap() }, FRAME_RECEIVE_GAP_MS)
 
     const voiced = frame.speechProbability >= 0.3
     if (!this.frames.length && !this.continuation && !voiced) {
