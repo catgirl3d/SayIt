@@ -239,7 +239,7 @@ export default function PipelineDebugPanel() {
         </section>
 
         <section className="space-y-2">
-          <h3 className="text-xs font-semibold">{t('systemAudio.debug.lastRuns')}</h3>
+          <h3 className="text-xs font-semibold">{t('systemAudio.debug.runsList')}</h3>
           <div className="max-h-80 overflow-y-auto overflow-x-auto">
             <table className="w-full min-w-[940px] text-left text-xs">
               <thead className="text-muted-foreground">

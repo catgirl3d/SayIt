@@ -56,7 +56,7 @@
   "systemAudio.debug.avgLatency": "Сер. затримка, мс",
   "systemAudio.debug.latencyP90": "90-й перцентиль затримки, мс",
   "systemAudio.debug.latencyMax": "Макс. затримка, мс",
-  "systemAudio.debug.lastRuns": "Останні запуски",
+  "systemAudio.debug.runsList": "Запуски",
   "systemAudio.debug.phase": "Поточний етап",
   "systemAudio.debug.phase.idle": "Очікування",
   "systemAudio.debug.phase.listening": "Прослуховування",

@@ -56,7 +56,7 @@
   "systemAudio.debug.avgLatency": "Avg latency ms",
   "systemAudio.debug.latencyP90": "Latency p90 ms",
   "systemAudio.debug.latencyMax": "Latency max ms",
-  "systemAudio.debug.lastRuns": "Last runs",
+  "systemAudio.debug.runsList": "Runs",
   "systemAudio.debug.phase": "Current stage",
   "systemAudio.debug.phase.idle": "Idle",
   "systemAudio.debug.phase.listening": "Listening",
