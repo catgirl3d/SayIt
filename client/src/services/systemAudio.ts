@@ -16,7 +16,8 @@ import { getProvider } from './transcription'
 import { loadActiveHotwords } from './hotwords/settings'
 import type { SubtitleOverlayPayload } from './recorder/types'
 
-export type SubtitleTargetLanguage = 'ru' | 'uk' | 'en'
+// Targets are owned by the builtin translate_* presets in store.ts; sessions validate them by preset id lookup.
+export type SubtitleTargetLanguage = string
 export type SystemAudioState = 'idle' | 'starting' | 'listening' | 'paused' | 'stopping' | 'error'
 
 export interface SystemAudioSnapshot {

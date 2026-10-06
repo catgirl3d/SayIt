@@ -10,6 +10,7 @@
   "systemAudio.source": "Output device",
   "systemAudio.defaultOutput": "System default at session start",
   "systemAudio.refreshDevices": "Refresh devices",
+  "systemAudio.savedNotListed": "Saved output device (not in current list)",
   "systemAudio.targetLanguage": "Translation language",
   "systemAudio.start": "Start subtitles",
   "systemAudio.pause": "Pause",

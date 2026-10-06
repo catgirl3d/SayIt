@@ -14,6 +14,7 @@ export type MicBoostSetting = (typeof MIC_BOOST_VALUES)[number]
 export const DEFAULT_MIC_BOOST: MicBoostSetting = '3'
 export const DEFAULT_BUILTIN_PROMPT_LANGUAGE = 'en'
 export const LEGACY_BUILTIN_PROMPT_LANGUAGE = 'zh-CN'
+export const DEFAULT_SUBTITLE_TARGET_LANGUAGE = 'ru'
 
 export interface MicBoostConfig {
   setting: MicBoostSetting
@@ -78,7 +79,7 @@ export const DEFAULTS: Record<string, unknown> = {
 
   // System-audio subtitles reuse the active ASR/AI profiles, not dictation presets.
   'systemAudio.deviceId': '',
-  'systemAudio.targetLanguage': 'ru',
+  'systemAudio.targetLanguage': DEFAULT_SUBTITLE_TARGET_LANGUAGE,
 
   // ── Text insertion ──
   protectClipboard: true, // After inserting text, restore the clipboard to its pre-insert content so the user's clipboard is not occupied. On by default

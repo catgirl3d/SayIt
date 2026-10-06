@@ -3,12 +3,24 @@ import { Link } from 'react-router-dom'
 import { Monitor, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Select, type SelectOption } from '@/components/ui/select'
+import { promptPresetDisplayName } from '@/i18n/displayNames'
 import { useT } from '@/i18n/useT'
-import { getSetting, setSetting } from '@/services/store'
+import { DEFAULT_SUBTITLE_TARGET_LANGUAGE } from '@/services/defaults'
+import { getPromptPresets, getSetting, setSetting, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
 import { listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
 
 export type SubtitleAction = 'start' | 'pause' | 'resume' | 'stop'
+
+export function buildTranslationOptions(presets: PromptPreset[]): SelectOption[] {
+  return presets
+    .filter((preset) => preset.builtin && preset.id.startsWith('translate_'))
+    .map((preset) => ({
+      value: preset.id.slice('translate_'.length),
+      label: promptPresetDisplayName(preset),
+    }))
+}
 
 export function SystemAudioControls({ state, busy, onAction }: { state: SystemAudioState; busy: boolean; onAction: (action: SubtitleAction) => void }) {
   const t = useT()
@@ -32,22 +44,35 @@ export default function SystemAudio() {
   const snapshot = useSyncExternalStore(systemAudioSession.subscribe, systemAudioSession.getSnapshot)
   const [devices, setDevices] = useState<SystemAudioDevice[]>([])
   const [deviceId, setDeviceId] = useState('')
-  const [targetLanguage, setTargetLanguage] = useState<SubtitleTargetLanguage>('ru')
+  const [targetLanguage, setTargetLanguage] = useState<SubtitleTargetLanguage>(DEFAULT_SUBTITLE_TARGET_LANGUAGE)
+  const [translationOptions, setTranslationOptions] = useState<SelectOption[]>([])
   const [ready, setReady] = useState(false)
   const [pending, setPending] = useState(false)
   const [loadError, setLoadError] = useState('')
   const active = snapshot.state !== 'idle'
   const mode = getWorkMode()
+  const deviceOptions: SelectOption[] = [
+    { value: '', label: t('systemAudio.defaultOutput') },
+    ...devices.map((device) => ({ value: device.id, label: device.name })),
+  ]
+  if (deviceId && !devices.some((device) => device.id === deviceId)) {
+    deviceOptions.push({ value: deviceId, label: t('systemAudio.savedNotListed') })
+  }
 
   useEffect(() => {
     let disposed = false
     void Promise.all([
-      listSystemAudioDevices(), getSetting<string>('systemAudio.deviceId', ''), getSetting<string>('systemAudio.targetLanguage', 'ru'),
-    ]).then(([outputs, savedDevice, language]) => {
+      listSystemAudioDevices(),
+      getSetting<string>('systemAudio.deviceId', ''),
+      getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', DEFAULT_SUBTITLE_TARGET_LANGUAGE),
+      getPromptPresets(),
+    ]).then(([outputs, savedDevice, language, presets]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
-      if (language === 'ru' || language === 'uk' || language === 'en') setTargetLanguage(language)
+      const options = buildTranslationOptions(presets)
+      setTranslationOptions(options)
+      setTargetLanguage(options.some((option) => option.value === language) ? language : DEFAULT_SUBTITLE_TARGET_LANGUAGE)
       setReady(true)
     }).catch(() => { if (!disposed) setLoadError(t('systemAudio.captureFailed')) })
     // Navigation does not own the listening session; only its controls or app teardown stop it.
@@ -91,21 +116,29 @@ export default function SystemAudio() {
           </div>
           <div className="grid gap-5 sm:grid-cols-2">
             <div className="min-w-0 space-y-2">
-              <label htmlFor="subtitle-output" className="text-sm font-medium">{t('systemAudio.source')}</label>
+              <label id="subtitle-output-label" className="text-sm font-medium">{t('systemAudio.source')}</label>
               <div className="flex gap-2">
-                <select id="subtitle-output" value={deviceId} disabled={active || pending || !ready} onChange={(event) => setDeviceId(event.target.value)} className="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-50">
-                  <option value="">{t('systemAudio.defaultOutput')}</option>
-                  {deviceId && !devices.some((device) => device.id === deviceId) && <option value={deviceId}>{deviceId}</option>}
-                  {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
-                </select>
+                <Select
+                  value={deviceId}
+                  onChange={setDeviceId}
+                  options={deviceOptions}
+                  labelledBy="subtitle-output-label"
+                  disabled={active || pending || !ready}
+                  className="min-w-0 flex-1"
+                />
                 <Button variant="outline" size="icon" disabled={active || pending} onClick={() => void refreshDevices()} aria-label={t('systemAudio.refreshDevices')}><RefreshCw className="h-4 w-4" /></Button>
               </div>
             </div>
             <div className="space-y-2">
-              <label htmlFor="subtitle-language" className="text-sm font-medium">{t('systemAudio.targetLanguage')}</label>
-              <select id="subtitle-language" value={targetLanguage} disabled={active || pending} onChange={(event) => setTargetLanguage(event.target.value as SubtitleTargetLanguage)} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-50">
-                {(['ru', 'uk', 'en'] as const).map((language) => <option key={language} value={language}>{t(`builtinPreset.translate_${language}`)}</option>)}
-              </select>
+              <label id="subtitle-language-label" className="text-sm font-medium">{t('systemAudio.targetLanguage')}</label>
+              <Select
+                value={targetLanguage}
+                onChange={setTargetLanguage}
+                options={translationOptions}
+                labelledBy="subtitle-language-label"
+                disabled={active || pending}
+                className="w-full"
+              />
             </div>
           </div>
           {(snapshot.error || loadError) && <p role="alert" className="text-sm leading-6 text-destructive">{snapshot.error || loadError}</p>}

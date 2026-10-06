@@ -10,6 +10,7 @@
   "systemAudio.source": "Пристрій виведення",
   "systemAudio.defaultOutput": "Системний типовий на початку сеансу",
   "systemAudio.refreshDevices": "Оновити пристрої",
+  "systemAudio.savedNotListed": "Збережений пристрій виведення (відсутній у поточному списку)",
   "systemAudio.targetLanguage": "Мова перекладу",
   "systemAudio.start": "Увімкнути субтитри",
   "systemAudio.pause": "Пауза",
