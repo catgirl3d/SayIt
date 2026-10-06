@@ -45,7 +45,7 @@ import {
   recordSessionStats,
 } from '../personalization/store'
 import type { AppPromptRule, PromptResolution, UserStats } from '../personalization/types'
-import type { PTTEventPayload, RecorderState } from './types'
+import type { PTTEventPayload, RecorderState, SubtitleOverlayPayload } from './types'
 import { MAX_RECORDING_SEC, RECORDING_COUNTDOWN_SEC } from './types'
 import {
   summarizeAppContext as _summarizeAppContext,
@@ -360,6 +360,18 @@ export class RecorderOrchestrator {
   /** 临时禁用/启用 PTT（用于欢迎向导热键确认步骤） */
   setPttSuppressed(suppressed: boolean) {
     this.pttSuppressed = suppressed
+  }
+
+  presentSubtitleOverlay(payload: SubtitleOverlayPayload): Promise<number> {
+    return this.overlayService.showSubtitles(payload)
+  }
+
+  updateSubtitleOverlay(payload: SubtitleOverlayPayload): Promise<void> {
+    return this.overlayService.updateSubtitles(payload)
+  }
+
+  hideSubtitleOverlay(): Promise<void> {
+    return this.overlayService.hideSubtitles()
   }
 
   async acquireSystemAudio(): Promise<void> {

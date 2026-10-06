@@ -1,5 +1,5 @@
 import { RecorderOrchestrator } from './recorder/RecorderOrchestrator'
-import type { RecorderState } from './recorder/types'
+import type { RecorderState, SubtitleOverlayPayload } from './recorder/types'
 import type { PromptPreset } from './store'
 
 const orchestrator = new RecorderOrchestrator()
@@ -100,5 +100,17 @@ export function acquireSystemAudio() {
 
 export function releaseSystemAudio() {
   return orchestrator.releaseSystemAudio()
+}
+
+export function presentSubtitleOverlay(payload: SubtitleOverlayPayload) {
+  return orchestrator.presentSubtitleOverlay(payload)
+}
+
+export function updateSubtitleOverlay(payload: SubtitleOverlayPayload) {
+  return orchestrator.updateSubtitleOverlay(payload)
+}
+
+export function hideSubtitleOverlay() {
+  return orchestrator.hideSubtitleOverlay()
 }
 

@@ -11,6 +11,7 @@ import {
   type FailureRecovery,
   type OverlayWaveTheme,
   type OverlayWidthPreset,
+  type SubtitleOverlayPayload,
 } from './types'
 import type { MicSourceMode } from './micSourceReminder'
 
@@ -116,6 +117,18 @@ export class OverlayService {
 
   getBarCount(): number {
     return OVERLAY_WIDTH_PRESETS[this.widthPreset].barCount
+  }
+
+  showSubtitles(payload: SubtitleOverlayPayload): Promise<number> {
+    return bridge.presentOverlay({ state: 'subtitles', ...payload, locale: getLocale() })
+  }
+
+  updateSubtitles(payload: SubtitleOverlayPayload): Promise<void> {
+    return bridge.updateOverlay({ state: 'subtitles', ...payload, locale: getLocale() })
+  }
+
+  hideSubtitles(): Promise<void> {
+    return bridge.hideOverlay()
   }
 
   private setEscapeMode(mode: bridge.EscapeActionMode, token = 0) {

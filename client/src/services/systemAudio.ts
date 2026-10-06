@@ -1,13 +1,20 @@
 import * as bridge from './bridge'
-import { getLocale, t } from '@/i18n'
+import { t } from '@/i18n'
 import { getPromptPresets } from './store'
 import { getSpeechInputLanguage } from './speechInputLanguage'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import type { StartOptions, TranscriptionProvider } from './transcription/types'
-import { acquireSystemAudio, releaseSystemAudio } from './recorder'
+import {
+  acquireSystemAudio,
+  hideSubtitleOverlay,
+  presentSubtitleOverlay,
+  releaseSystemAudio,
+  updateSubtitleOverlay,
+} from './recorder'
 import { getProvider } from './transcription'
 import { loadActiveHotwords } from './hotwords/settings'
+import type { SubtitleOverlayPayload } from './recorder/types'
 
 export type SubtitleTargetLanguage = 'ru' | 'uk' | 'en'
 export type SystemAudioState = 'idle' | 'starting' | 'listening' | 'paused' | 'stopping' | 'error'
@@ -36,6 +43,11 @@ interface SessionDependencies {
   acquire: () => Promise<void>
   release: () => Promise<void>
   getProvider: () => TranscriptionProvider
+  overlay: {
+    present: (payload: SubtitleOverlayPayload) => Promise<number>
+    update: (payload: SubtitleOverlayPayload) => Promise<void>
+    hide: () => Promise<void>
+  }
 }
 
 const FRAME_BYTES = 512 * 2
@@ -96,17 +108,15 @@ export class SystemAudioSession {
     const generation = this.generation
     const payload = this.overlayPayload()
     this.overlayUpdates = this.overlayUpdates.then(async () => {
-      if (generation === this.generation && this.leased) await bridge.updateOverlay(payload)
+      if (generation === this.generation && this.leased) await this.dependencies.overlay.update(payload)
     })
   }
 
-  private overlayPayload() {
+  private overlayPayload(): SubtitleOverlayPayload {
     return {
-      state: 'subtitles',
       subtitleText: this.snapshot.caption,
       subtitleStatus: this.snapshot.warning || t(`systemAudio.status.${this.snapshot.state}`),
       subtitleError: this.snapshot.error,
-      locale: getLocale(),
     }
   }
 
@@ -176,7 +186,7 @@ export class SystemAudioSession {
       })
       if (generation !== this.generation) return
       if (!this.provider.isReady()) throw new Error(t('systemAudio.notReady'))
-      const showId = await bridge.presentOverlay(this.overlayPayload())
+      const showId = await this.dependencies.overlay.present(this.overlayPayload())
       if (generation !== this.generation) return
       if (!showId) throw new Error(t('systemAudio.captureFailed'))
       for (const [event, handler] of [
@@ -367,7 +377,7 @@ export class SystemAudioSession {
       this.clearWork()
       await this.overlayUpdates
       if (this.leased) {
-        await bridge.hideOverlay()
+        await this.dependencies.overlay.hide()
         await this.dependencies.release()
         this.leased = false
       }
@@ -384,6 +394,11 @@ export const systemAudioSession = new SystemAudioSession({
   acquire: acquireSystemAudio,
   release: releaseSystemAudio,
   getProvider,
+  overlay: {
+    present: presentSubtitleOverlay,
+    update: updateSubtitleOverlay,
+    hide: hideSubtitleOverlay,
+  },
 })
 
 if (import.meta.hot) import.meta.hot.dispose(() => { void systemAudioSession.stop() })

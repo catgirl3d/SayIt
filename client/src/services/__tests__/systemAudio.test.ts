@@ -25,7 +25,49 @@ import { SystemAudioSession } from '../systemAudio'
 import { LocalProvider } from '../transcription/LocalProvider'
 import { CloudAPIProvider } from '../transcription/CloudAPIProvider'
 import { ServerProvider } from '../transcription/ServerProvider'
+import type { TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
+import type { SubtitleOverlayPayload } from '../recorder/types'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
+
+type OverlayCall =
+  | { method: 'present'; payload: SubtitleOverlayPayload }
+  | { method: 'update'; payload: SubtitleOverlayPayload }
+  | { method: 'hide' }
+
+let overlayCalls: OverlayCall[]
+
+function createOverlayPort() {
+  return {
+    present: vi.fn(async (payload: SubtitleOverlayPayload) => {
+      overlayCalls.push({ method: 'present', payload })
+      return 1
+    }),
+    update: vi.fn(async (payload: SubtitleOverlayPayload) => {
+      overlayCalls.push({ method: 'update', payload })
+    }),
+    hide: vi.fn(async () => {
+      overlayCalls.push({ method: 'hide' })
+    }),
+  }
+}
+
+function createTestProvider(
+  onConnect: (callbacks: TranscriptionCallbacks) => void,
+  onDisconnect: () => void = () => {},
+): TranscriptionProvider {
+  return {
+    mode: 'local',
+    connect: async (callbacks) => { onConnect(callbacks) },
+    start: () => true,
+    cancel: () => {},
+    sendAudio: () => {},
+    stop: () => true,
+    disconnect: onDisconnect,
+    isReady: () => true,
+  }
+}
+
+let overlay: ReturnType<typeof createOverlayPort>
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -66,6 +108,8 @@ beforeEach(() => {
   native.settings.set('speechInput.language', 'en')
   native.listeners.clear()
   native.captured.length = 0
+  overlayCalls = []
+  overlay = createOverlayPort()
   leased = false
   native.invoke.mockReset().mockImplementation(async (name: string, args: Record<string, unknown>) => {
     if (name === 'store_get') return native.settings.get(args.key as string) ?? null
@@ -83,6 +127,7 @@ beforeEach(() => {
     getProvider: () => new LocalProvider(),
     acquire: async () => { if (leased) throw new Error('Recorder busy'); leased = true },
     release: async () => { leased = false },
+    overlay,
   })
 })
 
@@ -223,6 +268,147 @@ describe('system audio subtitle session', () => {
     expect(native.listeners.size).toBe(0)
   })
 
+  it('waits for a pending subtitle update before hiding the overlay on stop', async () => {
+    const pendingUpdate = deferred<void>()
+    overlay.update = vi.fn((payload: SubtitleOverlayPayload) => {
+      overlayCalls.push({ method: 'update', payload })
+      return pendingUpdate.promise
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    expect(overlayCalls.map((call) => call.method)).toEqual(['present', 'update'])
+
+    const stopping = session.stop()
+    await settle()
+    expect(overlayCalls.map((call) => call.method)).toEqual(['present', 'update'])
+
+    pendingUpdate.resolve()
+    await stopping
+    expect(overlayCalls.map((call) => call.method)).toEqual(['present', 'update', 'update', 'hide'])
+  })
+
+  it('skips a queued subtitle update when its generation changes before dispatch', async () => {
+    const pendingUpdate = deferred<void>()
+    overlay.update = vi.fn((payload: SubtitleOverlayPayload) => {
+      overlayCalls.push({ method: 'update', payload })
+      if (overlayCalls.filter((call) => call.method === 'update').length === 1) return pendingUpdate.promise
+      return Promise.resolve()
+    })
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onFinal?.({
+      asrText: 'Source speech',
+      llmText: 'Queued stale caption',
+      asrMs: 1,
+      llmMs: 1,
+      durationSec: 1,
+      aiStatus: 'applied',
+    })
+    const pausing = session.pause()
+    pendingUpdate.resolve()
+    await pausing
+    await settle()
+
+    const updates = overlayCalls.filter((call) => call.method === 'update')
+    expect(updates).toHaveLength(2)
+    expect(updates.some((call) => call.payload.subtitleText === 'Queued stale caption')).toBe(false)
+  })
+
+  it('does not forward a provider callback from an old session generation to the subtitle overlay', async () => {
+    const callbacksByGeneration: TranscriptionCallbacks[] = []
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((callbacks) => { callbacksByGeneration.push(callbacks) }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    expect(overlayCalls.map((call) => call.method)).toEqual(['present', 'update'])
+    await session.stop()
+    expect(overlayCalls.map((call) => call.method)).toEqual(['present', 'update', 'update', 'hide'])
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacksByGeneration[1]?.onFinal?.({
+      asrText: 'Current transcript',
+      llmText: 'Current subtitle',
+      asrMs: 1,
+      llmMs: 1,
+      durationSec: 1,
+      aiStatus: 'applied',
+    })
+    await settle()
+    expect(overlayCalls.some((call) => call.method === 'update'
+      && call.payload.subtitleText === 'Current subtitle')).toBe(true)
+    const callsBeforeLateCallback = overlayCalls.slice()
+
+    callbacksByGeneration[0]?.onFinal?.({
+      asrText: 'Old transcript',
+      llmText: 'Stale subtitle',
+      asrMs: 1,
+      llmMs: 1,
+      durationSec: 1,
+      aiStatus: 'applied',
+    })
+    await settle()
+
+    expect(overlayCalls).toEqual(callsBeforeLateCallback)
+  })
+
+  it('releases recorder ownership only after native capture cleanup and subtitle hiding complete', async () => {
+    const releaseOrder: string[] = []
+    const pendingHide = deferred<void>()
+    const provider = createTestProvider(() => {}, () => releaseOrder.push('clear-work'))
+    overlay.hide = vi.fn(() => {
+      overlayCalls.push({ method: 'hide' })
+      releaseOrder.push('hide')
+      return pendingHide.promise
+    })
+    const invoke = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => {
+      if (name === 'stop_system_audio_capture') releaseOrder.push('stop-native')
+      return invoke(name, args)
+    })
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { releaseOrder.push('release'); leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    releaseOrder.length = 0
+
+    const stopping = session.stop()
+    await settle()
+    const stopIndex = releaseOrder.indexOf('stop-native')
+    const clearWorkIndex = releaseOrder.indexOf('clear-work', stopIndex + 1)
+    const hideIndex = releaseOrder.indexOf('hide')
+    expect(stopIndex).toBeGreaterThanOrEqual(0)
+    expect(clearWorkIndex).toBeGreaterThan(stopIndex)
+    expect(hideIndex).toBeGreaterThan(clearWorkIndex)
+    expect(releaseOrder).not.toContain('release')
+    expect(leased).toBe(true)
+    expect(session.getSnapshot().state).toBe('stopping')
+
+    pendingHide.resolve(undefined)
+    await stopping
+    expect(releaseOrder[releaseOrder.length - 1]).toBe('release')
+    expect(leased).toBe(false)
+    expect(session.getSnapshot().state).toBe('idle')
+  })
+
   it('closes the final spoken fragment when playback stops producing packets', async () => {
     await session.start({ deviceId: '', targetLanguage: 'ru' })
     frames(20, 0.9)
@@ -273,6 +459,7 @@ describe('system audio subtitle session', () => {
       getProvider: () => new CloudAPIProvider(),
       acquire: async () => { leased = true },
       release: async () => { leased = false },
+      overlay,
     })
     await session.start({ deviceId: '', targetLanguage: 'ru' })
     frames(20, 0.9)
@@ -322,6 +509,7 @@ describe('system audio subtitle session', () => {
       getProvider: () => new ServerProvider(),
       acquire: async () => { leased = true },
       release: async () => { leased = false },
+      overlay,
     })
     await session.start({ deviceId: '', targetLanguage: 'ru' })
     frames(20, 0.9)
@@ -363,8 +551,8 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().state).toBe('listening')
     expect(session.getSnapshot().error).toBe('')
     expect(session.getSnapshot().warning).toContain('listening continues')
-    expect(native.invoke.mock.calls.some(([name, args]) => name === 'update_overlay_state'
-      && args.data.subtitleStatus.includes('listening continues'))).toBe(true)
+    expect(overlayCalls.some((call) => call.method === 'update'
+      && call.payload.subtitleStatus.includes('listening continues'))).toBe(true)
     await vi.advanceTimersByTimeAsync(120)
     expect(native.captured).toHaveLength(0)
     frames(15, 0, 0)

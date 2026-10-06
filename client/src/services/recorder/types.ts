@@ -1,6 +1,13 @@
 export type RecorderState = 'idle' | 'recording' | 'processing'
 import { t } from '@/i18n'
 
+/** Caption data the subtitle session hands to the overlay; transport shape (state, locale) belongs to OverlayService. */
+export interface SubtitleOverlayPayload {
+  subtitleText: string
+  subtitleStatus: string
+  subtitleError: string
+}
+
 export type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
 
 export type FailureRecovery = 'unknown' | 'history' | 'none'
