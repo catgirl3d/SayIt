@@ -1,5 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card'
-import { Select } from '@/components/ui/select'
+import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
 import { useT } from '@/i18n/useT'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
@@ -21,31 +21,10 @@ export default function SpeechLanguageSection({ value, onChange }: Props) {
             <p className="mt-1 text-sm text-muted-foreground">{t('speechLanguage.note')}</p>
           </div>
           <div className="w-full shrink-0 sm:w-56">
-            <Select
+            <SpeechLanguageSelect
               value={value}
-              onChange={(val) => onChange(val as SpeechInputLanguage)}
-              options={[
-                {
-                  value: 'auto',
-                  label: t('common.auto'),
-                },
-                {
-                  value: 'ru',
-                  label: t('local.lang.ru'),
-                },
-                {
-                  value: 'uk',
-                  label: t('local.lang.uk'),
-                },
-                {
-                  value: 'en',
-                  label: t('local.lang.en'),
-                },
-                {
-                  value: 'zh',
-                  label: t('local.lang.zh'),
-                },
-              ]}
+              onChange={onChange}
+              labelledBy="speech-language-heading"
               className="text-sm [&>button]:h-9"
             />
           </div>
