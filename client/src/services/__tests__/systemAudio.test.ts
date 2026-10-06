@@ -623,6 +623,119 @@ describe('system audio subtitle session', () => {
     expect(native.captured.every((audio) => audio.length <= 188 * 1024)).toBe(true)
   })
 
+  it('moves a forced cut into the quietest part of the tail and carries the remainder into the next segment', async () => {
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(150, 0.9, 11)
+    frames(2, 0.05, 22)
+    frames(60, 0.9, 33)
+    frames(15, 0, 0)
+    await settle()
+
+    expect(native.captured).toHaveLength(2)
+    const first = new Int16Array(native.captured[0].buffer)
+    const second = new Int16Array(native.captured[1].buffer)
+    expect(native.captured[0].length).toBe(152 * 1024)
+    expect(first.includes(33)).toBe(false)
+    expect(first[first.length - 1]).toBe(22)
+    expect(native.captured[1].length).toBe(75 * 1024)
+    expect(second[0]).toBe(33)
+    expect([...second].filter((sample) => sample === 33)).toHaveLength(60 * 512)
+  })
+
+  it('splits at a short pause once the segment is long enough, keeping the following speech', async () => {
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(130, 0.9, 11)
+    frames(5, 0, 22)
+    await settle()
+
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(135 * 1024)
+
+    frames(30, 0.9, 33)
+    frames(15, 0, 0)
+    await settle()
+
+    expect(native.captured).toHaveLength(2)
+    const second = new Int16Array(native.captured[1].buffer)
+    expect(second[0]).toBe(33)
+    expect([...second].filter((sample) => sample === 33)).toHaveLength(30 * 512)
+  })
+
+  it('does not split at a short pause before the segment reaches the soft limit', async () => {
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(100, 0.9)
+    frames(8, 0)
+    await settle()
+    expect(native.captured).toHaveLength(0)
+
+    frames(7, 0)
+    await settle()
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(115 * 1024)
+  })
+
+  it('cuts at the 3 s minimum of the maximum segment length setting', async () => {
+    native.settings.set('systemAudio.maxSegmentSec', 3)
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(93, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(0)
+
+    frames(7, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(94 * 1024)
+  })
+
+  it('cuts at an intermediate maximum segment length', async () => {
+    native.settings.set('systemAudio.maxSegmentSec', 4.5)
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(140, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(0)
+
+    frames(1, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(141 * 1024)
+  })
+
+  it('splits at a pause once two thirds of an intermediate maximum are reached', async () => {
+    native.settings.set('systemAudio.maxSegmentSec', 4.5)
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(94, 0.9, 11)
+    frames(5, 0, 22)
+    await settle()
+
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(99 * 1024)
+  })
+
+  it('falls back to the 6 s cap when the stored maximum is outside the supported range', async () => {
+    native.settings.set('systemAudio.maxSegmentSec', 12)
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(187, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(0)
+
+    frames(1, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(188 * 1024)
+  })
+
+  it('keeps the original 6 s cut for the default medium segment length', async () => {
+    await session.start({ deviceId: '', targetLanguage: 'uk' })
+    frames(187, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(0)
+
+    frames(1, 0.9)
+    await settle()
+    expect(native.captured).toHaveLength(1)
+    expect(native.captured[0].length).toBe(188 * 1024)
+  })
+
   it('rejects AI fallback instead of displaying original ASR as a translation', async () => {
     const original = native.invoke.getMockImplementation()!
     native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? Promise.reject(new Error('AI unavailable')) : original(name, args))

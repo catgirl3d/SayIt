@@ -13,6 +13,8 @@
   "systemAudio.savedNotListed": "Saved output device (not in current list)",
   "systemAudio.sourceLanguage": "Audio language",
   "systemAudio.targetLanguage": "Translation language",
+  "systemAudio.segmentLength": "Maximum caption length",
+  "systemAudio.segmentLengthHint": "A caption never covers more speech than this. Once speech reaches about two thirds of the limit, the next short pause ends the caption. A lower limit shows captions sooner but gives the translation less context. Applies from the next start.",
   "systemAudio.asrOnlyTest": "Recognition-only test mode",
   "systemAudio.asrOnlyHint": "When enabled, subtitles show raw recognition without translation; the translation language is ignored.",
   "systemAudio.start": "Start subtitles",

@@ -2,6 +2,7 @@ import * as bridge from './bridge'
 import { t } from '@/i18n'
 import { getPromptPresets, getSetting, TRANSLATION_PRESET_PREFIX } from './store'
 import { normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
+import { chooseForcedSplit, DEFAULT_SEGMENT_SECONDS, FRAME_MS, normalizeSegmentSeconds, segmentPlan, type SegmentPlan } from './subtitleSegmentation'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import type { FinalResult, StartOptions, TranscriptionProvider } from './transcription/types'
@@ -62,6 +63,22 @@ interface SessionDependencies {
   }
 }
 
+interface SpeechFrame {
+  audio: Uint8Array
+  probability: number
+}
+
+/** When a segment's speech started and ended, on the clock frames are received on. */
+interface SegmentSpan {
+  startedAt: number
+  endedAt: number
+}
+
+interface SegmentJob extends SegmentSpan {
+  audio: Uint8Array
+  runId: number | null
+}
+
 interface PipelineFinishDetails {
   asrMs: number
   llmMs: number
@@ -78,7 +95,13 @@ const FRAME_BYTES = 512 * 2
 const PRE_ROLL_FRAMES = 8
 const MIN_VOICED_FRAMES = 8
 const END_SILENCE_FRAMES = 15
-const MAX_SEGMENT_FRAMES = 188
+// A pause this long (160 ms) is a phrase boundary, not a gap between words or a stop consonant.
+// Once a segment has reached its soft length (see segmentPlan) the first such pause closes it early,
+// so continuous speech is cut between phrases instead of waiting for the hard cap.
+const PAUSE_SPLIT_FRAMES = 5
+// Silero speech probability at or above which a frame counts as voiced.
+const SPEECH_THRESHOLD = 0.3
+const isVoiced = (frame: SpeechFrame) => frame.probability >= SPEECH_THRESHOLD
 const MAX_PENDING_BYTES = 16_000 * 2 * 12
 // Close the current speech segment after this receive inactivity interval.
 const FRAME_RECEIVE_GAP_MS = 512
@@ -88,6 +111,10 @@ let sequence = Date.now()
 
 export async function getSystemAudioSourceLanguage(): Promise<SpeechInputLanguage> {
   return normalizeSpeechInputLanguage(await getSetting('systemAudio.sourceLanguage', 'auto'))
+}
+
+export async function getSystemAudioMaxSegmentSeconds(): Promise<number> {
+  return normalizeSegmentSeconds(await getSetting('systemAudio.maxSegmentSec', DEFAULT_SEGMENT_SECONDS))
 }
 
 export function listSystemAudioDevices() {
@@ -112,12 +139,13 @@ export class SystemAudioSession {
   private captureStop: Promise<void> = Promise.resolve()
   private unlisteners: Array<() => void> = []
   private overlayUpdates: Promise<void> = Promise.resolve()
-  private frames: Uint8Array[] = []
-  private preRoll: Uint8Array[] = []
+  private frames: SpeechFrame[] = []
+  private preRoll: SpeechFrame[] = []
+  private plan: SegmentPlan = segmentPlan(DEFAULT_SEGMENT_SECONDS)
   private voicedFrames = 0
   private silenceFrames = 0
   private continuation = false
-  private queue: Array<{ audio: Uint8Array; runId: number | null }> = []
+  private queue: SegmentJob[] = []
   private queuedBytes = 0
   private activeJob = 0
   private publishedAsrJob = 0
@@ -212,10 +240,11 @@ export class SystemAudioSession {
       }
       if (generation !== this.generation) return
       const asrOnly = this.options!.asrOnly
-      const [presets, language, hotwords] = await Promise.all([
-        asrOnly ? Promise.resolve([]) : getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(),
+      const [presets, language, hotwords, maxSegmentSeconds] = await Promise.all([
+        asrOnly ? Promise.resolve([]) : getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(), getSystemAudioMaxSegmentSeconds(),
       ])
       if (generation !== this.generation) return
+      this.plan = segmentPlan(maxSegmentSeconds)
       if (asrOnly) {
         this.startOptions = { systemPrompt: '', language, hotwords, disableAi: true, aiMinDurationSec: 0, requireTranslation: false }
       } else {
@@ -353,12 +382,13 @@ export class SystemAudioSession {
     const generation = this.generation
     this.gapTimer = setTimeout(() => { if (generation === this.generation) this.closeGap() }, FRAME_RECEIVE_GAP_MS)
 
-    const voiced = frame.speechProbability >= 0.3
+    const speechFrame: SpeechFrame = { audio, probability: frame.speechProbability }
+    const voiced = isVoiced(speechFrame)
     // Capture-driven phases must stay out of the way while a queued ASR or translation job is in flight,
     // otherwise the next captured frame immediately hides the stage that stageElapsedMs is timing.
     const processing = this.activeJob !== 0
     if (!this.frames.length && !this.continuation && !voiced) {
-      this.preRoll.push(audio)
+      this.preRoll.push(speechFrame)
       if (this.preRoll.length > PRE_ROLL_FRAMES) this.preRoll.shift()
       countFrame(audio.byteLength, processing ? undefined : { phase: 'listening', segmentMs: 0 })
       return
@@ -367,11 +397,19 @@ export class SystemAudioSession {
       this.frames = this.preRoll
       this.preRoll = []
     }
-    this.frames.push(audio)
-    countFrame(audio.byteLength, processing ? undefined : { phase: 'speech', segmentMs: this.frames.length * 32 })
+    this.frames.push(speechFrame)
+    countFrame(audio.byteLength, processing ? undefined : { phase: 'speech', segmentMs: this.frames.length * FRAME_MS })
     if (voiced) { this.voicedFrames++; this.silenceFrames = 0 } else { this.silenceFrames++ }
     if (this.silenceFrames >= END_SILENCE_FRAMES) this.finishSegment(false)
-    else if (this.frames.length >= MAX_SEGMENT_FRAMES) this.finishSegment(true)
+    else if (this.frames.length >= this.plan.softFrames && this.silenceFrames >= PAUSE_SPLIT_FRAMES) this.finishSegment(true)
+    else if (this.frames.length >= this.plan.hardFrames) this.splitAtQuietestPoint()
+  }
+
+  // The segment hit its hard cap without a phrase boundary. Cut at the quietest point of the tail window and
+  // carry the frames after it into the next segment, so a word is not severed on an arbitrary frame.
+  private splitAtQuietestPoint() {
+    const keep = chooseForcedSplit(this.frames.map((frame) => frame.probability), this.plan.softFrames)
+    this.finishSegment(true, this.frames.splice(keep))
   }
 
   private closeGap() {
@@ -382,20 +420,24 @@ export class SystemAudioSession {
     this.lastFrameAt = 0
   }
 
-  private finishSegment(hardSplit: boolean) {
+  // `split` means speech is still going on, so the next segment continues it. `carry` holds frames that were
+  // captured after the cut point and open that next segment.
+  private finishSegment(split: boolean, carry: SpeechFrame[] = []) {
     const eligible = this.voicedFrames >= MIN_VOICED_FRAMES || (this.continuation && this.voicedFrames > 0)
     const frames = this.frames
-    this.frames = []
-    this.voicedFrames = 0
+    this.frames = carry
+    this.voicedFrames = carry.filter(isVoiced).length
     this.silenceFrames = 0
-    this.continuation = hardSplit && eligible
+    while (this.silenceFrames < carry.length && !isVoiced(carry[carry.length - 1 - this.silenceFrames])) this.silenceFrames++
+    this.continuation = split && eligible
     if (!eligible || !frames.length) return
     // A short continuation still contains real speech; pad only the submitted job to the ASR minimum.
     const audio = new Uint8Array(Math.max(10, frames.length) * FRAME_BYTES)
-    frames.forEach((frame, index) => audio.set(frame, index * FRAME_BYTES))
+    frames.forEach((frame, index) => audio.set(frame.audio, index * FRAME_BYTES))
     if (this.queuedBytes + audio.byteLength > MAX_PENDING_BYTES) { this.fail(t('systemAudio.overload')); return }
-    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * 32, asrOnly: this.options?.asrOnly ?? false })
-    this.queue.push({ audio, runId })
+    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * FRAME_MS, asrOnly: this.options?.asrOnly ?? false })
+    const endedAt = Date.now()
+    this.queue.push({ audio, runId, startedAt: endedAt - frames.length * FRAME_MS, endedAt })
     this.queuedBytes += audio.byteLength
     setQueueDepth(this.queue.length)
     this.processNext()

@@ -11,7 +11,9 @@ import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
-import { getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
+import { getSystemAudioMaxSegmentSeconds, getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
+import { DEFAULT_SEGMENT_SECONDS, MAX_SEGMENT_SECONDS, MIN_SEGMENT_SECONDS, SEGMENT_SECONDS_STEP } from '@/services/subtitleSegmentation'
+import { Slider } from '@/components/ui/slider'
 import { setPipelineDebugEnabled } from '@/services/pipelineTrace'
 import PipelineDebugPanel from '@/features/systemAudio/PipelineDebugPanel'
 
@@ -54,6 +56,7 @@ export default function SystemAudio() {
   const [deviceId, setDeviceId] = useState('')
   const [sourceLanguage, setSourceLanguage] = useState<SpeechInputLanguage>('auto')
   const [targetLanguage, setTargetLanguage] = useState<SubtitleTargetLanguage>('')
+  const [maxSegmentSeconds, setMaxSegmentSeconds] = useState(DEFAULT_SEGMENT_SECONDS)
   const [presets, setPresets] = useState<PromptPreset[]>([])
   const [ready, setReady] = useState(false)
   const [pending, setPending] = useState(false)
@@ -83,11 +86,13 @@ export default function SystemAudio() {
       getPromptPresets(),
       getSetting<boolean>('systemAudio.debugPipeline', false),
       getSetting<boolean>('systemAudio.asrOnlyTest', false),
-    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly]) => {
+      getSystemAudioMaxSegmentSeconds(),
+    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
       setSourceLanguage(savedSourceLanguage)
+      setMaxSegmentSeconds(savedMaxSegmentSeconds)
       setPipelineDebugEnabledState(debugPipeline)
       setPipelineDebugEnabled(debugPipeline)
       setAsrOnlyTest(asrOnly)
@@ -179,6 +184,30 @@ export default function SystemAudio() {
                 className="w-full"
               />
             </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <label id="subtitle-segment-length-label" className="text-sm font-medium">{t('systemAudio.segmentLength')}</label>
+              <span className="text-sm tabular-nums text-muted-foreground">{t('duration.seconds', { count: maxSegmentSeconds })}</span>
+            </div>
+            <Slider
+              value={maxSegmentSeconds}
+              min={MIN_SEGMENT_SECONDS}
+              max={MAX_SEGMENT_SECONDS}
+              step={SEGMENT_SECONDS_STEP}
+              onChange={(value) => {
+                setMaxSegmentSeconds(value)
+                void setSetting('systemAudio.maxSegmentSec', value)
+              }}
+              labelledBy="subtitle-segment-length-label"
+              valueText={t('duration.seconds', { count: maxSegmentSeconds })}
+              disabled={active || pending}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground" aria-hidden>
+              <span>{t('duration.seconds', { count: MIN_SEGMENT_SECONDS })}</span>
+              <span>{t('duration.seconds', { count: MAX_SEGMENT_SECONDS })}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('systemAudio.segmentLengthHint')}</p>
           </div>
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
