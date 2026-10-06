@@ -195,6 +195,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // (see commands/system.rs clear_legacy_update_artifacts, which deletes any value
   // left behind by older versions). Do not add a default for it back.
   historyEnabled: true, // Save history (text + audio). When off, no new entries are stored — useful on shared computers. Options: true | false
+  suppressLateFinalInsertion: false, // Save late processing results to History without automatic insertion. Options: true | false
   audioRetentionEnabled: true, // Keep recording files. Options: true | false
   audioRetentionDays: -1, // Recording retention in days. Options: 7 | 30 | 90 | -1 (forever)
   logRetentionDays: 30, // Log retention in days. Options: 7 | 15 | 30 | 90

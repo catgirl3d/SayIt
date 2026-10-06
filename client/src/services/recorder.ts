@@ -69,6 +69,11 @@ export function setStreamingDisplayCache(next: boolean) {
   orchestrator.setStreamingDisplayCache(next)
 }
 
+/** Update late-result insertion behavior without reloading unrelated settings. */
+export function setSuppressLateFinalInsertionCache(next: boolean) {
+  orchestrator.setSuppressLateFinalInsertionCache(next)
+}
+
 /** 仅刷新 overlay 显示设置（主题/长度/时长）— 轻量，避免触发全量录音缓存刷新 */
 export async function refreshOverlaySettings() {
   await orchestrator.refreshOverlaySettings()

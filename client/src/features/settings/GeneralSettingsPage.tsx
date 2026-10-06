@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Pencil, RotateCcw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Modal } from '@/components/ui/modal'
-import { refreshRecorderSettings } from '@/services/recorder'
+import { refreshRecorderSettings, setSuppressLateFinalInsertionCache } from '@/services/recorder'
 import { getSetting, setSetting } from '@/services/store'
 import { setAutomaticUpdateChecksEnabled } from '@/features/update/autoUpdate'
 import { Switch } from '@/components/ui/switch'
@@ -38,6 +38,9 @@ export default function GeneralSettingsPage() {
   const [contextPromptDraft, setContextPromptDraft] = useState(CONTEXT_SELECTION_EDIT_PROMPT)
   const [contextPromptSaving, setContextPromptSaving] = useState(false)
   const [historyEnabled, setHistoryEnabled] = useState(true)
+  const [suppressLateFinalInsertion, setSuppressLateFinalInsertion] = useState<boolean | null>(null)
+  const [suppressLateFinalInsertionSaving, setSuppressLateFinalInsertionSaving] = useState(false)
+  const [suppressLateFinalInsertionSaveError, setSuppressLateFinalInsertionSaveError] = useState(false)
   const [audioRetentionEnabled, setAudioRetentionEnabled] = useState(true)
   const [audioRetentionDays, setAudioRetentionDays] = useState(30)
   const [logRetentionDays, setLogRetentionDays] = useState(30)
@@ -47,11 +50,13 @@ export default function GeneralSettingsPage() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const [launch, clip, contextAware, history, retention, audioDays, logDays, autoCheck] = await Promise.all([
+      const [launch, clip, contextAware, history, suppressLateInsertion, retention, audioDays, logDays, autoCheck] = await Promise.all([
         bridge.getAutoLaunch().catch(() => false),
         getSetting('protectClipboard', true).catch(() => true),
         getSetting('contextAwareWritingEnabled', false).catch(() => false),
         getSetting('historyEnabled', true).catch(() => true),
+        getSetting('suppressLateFinalInsertion', false)
+          .then((value) => Boolean(value), () => null),
         getSetting('audioRetentionEnabled', true).catch(() => true),
         getSetting('audioRetentionDays', -1).catch(() => -1),
         getSetting('logRetentionDays', 30).catch(() => 30),
@@ -63,6 +68,7 @@ export default function GeneralSettingsPage() {
       setProtectClipboard(Boolean(clip))
       setContextAwareWriting(Boolean(contextAware))
       setHistoryEnabled(Boolean(history))
+      setSuppressLateFinalInsertion(suppressLateInsertion)
       setAudioRetentionEnabled(Boolean(retention))
       const ad = Number(audioDays)
       if (ad === 7 || ad === 30 || ad === 90 || ad === -1) setAudioRetentionDays(ad)
@@ -165,6 +171,22 @@ export default function GeneralSettingsPage() {
     await setSetting('historyEnabled', next)
   }
 
+  const toggleSuppressLateFinalInsertion = async () => {
+    if (suppressLateFinalInsertion === null || suppressLateFinalInsertionSaving) return
+    const next = !suppressLateFinalInsertion
+    setSuppressLateFinalInsertionSaving(true)
+    setSuppressLateFinalInsertionSaveError(false)
+    try {
+      await setSetting('suppressLateFinalInsertion', next)
+      setSuppressLateFinalInsertionCache(next)
+      setSuppressLateFinalInsertion(next)
+    } catch {
+      setSuppressLateFinalInsertionSaveError(true)
+    } finally {
+      setSuppressLateFinalInsertionSaving(false)
+    }
+  }
+
   const toggleAudioRetention = async () => {
     const next = !audioRetentionEnabled
     setAudioRetentionEnabled(next)
@@ -261,6 +283,28 @@ export default function GeneralSettingsPage() {
               </div>
               <Switch labelledBy="history-enable-label" checked={historyEnabled} onChange={() => void toggleHistory()} noAnimation={!animate} hidden={!ready} />
             </div>
+
+            <div className="flex items-center justify-between border-t border-border pt-4">
+              <div>
+                <p id="history-late-insertion-label" className="text-sm font-medium">{t('settings.history.suppressLateInsertion')}</p>
+                <p className="text-xs text-muted-foreground">{t('settings.history.suppressLateInsertionDesc')}</p>
+              </div>
+              {suppressLateFinalInsertion === null ? (
+                ready && <p role="status" className="text-xs text-muted-foreground">{t('settings.history.suppressLateInsertionUnavailable')}</p>
+              ) : (
+                <Switch
+                  labelledBy="history-late-insertion-label"
+                  checked={suppressLateFinalInsertion}
+                  onChange={() => void toggleSuppressLateFinalInsertion()}
+                  disabled={suppressLateFinalInsertionSaving}
+                  noAnimation={!animate}
+                  hidden={!ready}
+                />
+              )}
+            </div>
+            {suppressLateFinalInsertionSaveError && (
+              <p role="alert" className="text-xs text-destructive">{t('settings.history.suppressLateInsertionSaveError')}</p>
+            )}
 
             <div className="flex items-center justify-between border-t border-border pt-4">
               <div>

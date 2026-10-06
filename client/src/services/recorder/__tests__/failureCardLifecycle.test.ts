@@ -2,10 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const harness = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
+  historyReadError: false,
+  suppressLateSettingReadError: false,
+  suppressLateSettingReadCount: 0,
+  unrelatedSettingsReadError: false,
   invoke: vi.fn(),
   emit: vi.fn(),
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
+  runtimeEvents: vi.fn(),
   addHistory: vi.fn(),
+  recordStats: vi.fn(),
+  recordSessionStats: vi.fn(),
+  startCapture: vi.fn(),
   saveRecordingAudio: vi.fn(),
   stopCapture: vi.fn(),
 }))
@@ -15,15 +23,21 @@ vi.mock('@/services/store', () => ({
   deleteHistory: vi.fn(async () => undefined),
   getActivePresetId: vi.fn(async () => 'intent'),
   getPromptPresets: vi.fn(async () => []),
-  getSetting: vi.fn(async (key: string, fallback: unknown) => (
-    harness.settings.has(key) ? harness.settings.get(key) : fallback
-  )),
-  recordStats: vi.fn(async () => undefined),
+  getSetting: vi.fn(async (key: string, fallback: unknown) => {
+    if (key === 'historyEnabled' && harness.historyReadError) throw new Error('history setting unavailable')
+    if (key === 'suppressLateFinalInsertion') {
+      harness.suppressLateSettingReadCount++
+      if (harness.suppressLateSettingReadError) throw new Error('private late-insertion setting detail')
+    }
+    if (key === 'selectedMic' && harness.unrelatedSettingsReadError) throw new Error('microphone setting unavailable')
+    return harness.settings.has(key) ? harness.settings.get(key) : fallback
+  }),
+  recordStats: (...args: unknown[]) => harness.recordStats(...args),
   setActivePresetId: vi.fn(async () => undefined),
   setSetting: vi.fn(async (key: string, value: unknown) => harness.settings.set(key, value)),
 }))
 vi.mock('@/services/audio', () => ({
-  startCapture: vi.fn(),
+  startCapture: (...args: unknown[]) => harness.startCapture(...args),
   stopCapture: () => harness.stopCapture(),
 }))
 vi.mock('@/services/audioFileService', () => ({
@@ -31,8 +45,8 @@ vi.mock('@/services/audioFileService', () => ({
 }))
 vi.mock('@/services/personalization/store', () => ({
   getAppPromptRules: vi.fn(async () => []),
-  getUserStats: vi.fn(async () => ({ totalWords: 0, totalSessions: 0, appStats: {} })),
-  recordSessionStats: vi.fn(async () => ({ totalWords: 0, totalSessions: 0, appStats: {} })),
+  getUserStats: vi.fn(async () => ({ totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} })),
+  recordSessionStats: (...args: unknown[]) => harness.recordSessionStats(...args),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => harness.invoke(...args) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -43,12 +57,14 @@ vi.mock('@tauri-apps/api/event', () => ({
   }),
 }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
-vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
+vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => harness.runtimeEvents(...args) }))
 
 import en from '@/i18n/locales/en.json'
 import uk from '@/i18n/locales/uk.json'
+import { DEFAULTS } from '@/services/defaults'
 import { setLocale } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
+import * as textPostProcess from '@/services/textPostProcess'
 import { RecorderOrchestrator } from '../RecorderOrchestrator'
 import { OverlayService } from '../OverlayService'
 import { switchProvider, type TranscriptionCallbacks, type FinalResult } from '@/services/transcription'
@@ -110,10 +126,34 @@ function makeFinal(overrides: Partial<FinalResult> = {}): FinalResult {
   }
 }
 
+async function enterTimeoutGrace(recorder: RecorderOrchestrator, runId: number, refreshSettings = true) {
+  const provider = await switchProvider('cloud_api')
+  vi.spyOn(provider, 'stop').mockReturnValue(true)
+  if (refreshSettings) await recorder.refreshRuntimeSettings()
+  prepareRun(recorder, runId, 1, 'recording')
+  Reflect.set(recorder, 'recordStartPerf', performance.now() - 1_000)
+  Reflect.set(recorder, 'cachedProbeResult', {
+    editable: true,
+    hwnd: '0x1',
+    process: 'Editor',
+    detail: 'editable',
+  })
+  const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
+    this: RecorderOrchestrator,
+  ) => Promise<void>
+  await stopRecording.call(recorder)
+  await vi.advanceTimersByTimeAsync(30_500)
+  return callbacksFor(recorder)
+}
+
 beforeEach(async () => {
   vi.useFakeTimers()
   vi.stubGlobal('window', globalThis)
   harness.settings.clear()
+  harness.historyReadError = false
+  harness.suppressLateSettingReadError = false
+  harness.suppressLateSettingReadCount = 0
+  harness.unrelatedSettingsReadError = false
   harness.settings.set('historyEnabled', true)
   harness.settings.set('audioRetentionEnabled', true)
   harness.listeners.clear()
@@ -128,6 +168,10 @@ beforeEach(async () => {
     return 1
   })
   harness.addHistory.mockReset().mockResolvedValue(undefined)
+  harness.runtimeEvents.mockReset()
+  harness.recordStats.mockReset().mockResolvedValue(undefined)
+  harness.recordSessionStats.mockReset().mockResolvedValue({ totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} })
+  harness.startCapture.mockReset().mockResolvedValue({ label: 'Microphone', deviceId: 'device-1', groupId: 'group-1' })
   harness.saveRecordingAudio.mockReset().mockResolvedValue('history/recording.wav')
   harness.stopCapture.mockReset().mockResolvedValue(undefined)
   await switchProvider('cloud_api')
@@ -136,12 +180,17 @@ beforeEach(async () => {
 
 afterEach(() => {
   setLocale('en')
+  vi.restoreAllMocks()
   vi.clearAllTimers()
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
 describe('recorder failure cards', () => {
+  it('defaults late-result insertion suppression to off', () => {
+    expect(DEFAULTS.suppressLateFinalInsertion).toBe(false)
+  })
+
   it('presents a localized provider failure before archival finishes and uses only the canonical safe cause', async () => {
     setLocale('uk')
     const archive = deferred<void>()
@@ -447,24 +496,8 @@ describe('recorder failure cards', () => {
   })
 
   it('accepts an eligible late final during the existing fifteen-second grace period', async () => {
-    const provider = await switchProvider('cloud_api')
-    vi.spyOn(provider, 'stop').mockReturnValue(true)
     const recorder = new RecorderOrchestrator()
-    prepareRun(recorder, 130, 1, 'recording')
-    Reflect.set(recorder, 'recordStartPerf', performance.now() - 1_000)
-    Reflect.set(recorder, 'cachedProbeResult', {
-      editable: true,
-      hwnd: '0x1',
-      process: 'Editor',
-      detail: 'editable',
-    })
-    const callbacks = callbacksFor(recorder)
-    const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
-      this: RecorderOrchestrator,
-    ) => Promise<void>
-    await stopRecording.call(recorder)
-
-    await vi.advanceTimersByTimeAsync(30_500)
+    const callbacks = await enterTimeoutGrace(recorder, 130)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
     await vi.advanceTimersByTimeAsync(14_999)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
@@ -481,6 +514,363 @@ describe('recorder failure cards', () => {
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+  })
+
+  it('saves an opted-in late final once without inserting it', async () => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 131)
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+
+    callbacks.onFinal?.(makeFinal())
+    const savedHistory = await historyWritten.promise
+    expect(savedHistory).toMatchObject({
+      asrText: 'recognized words',
+      llmText: 'recognized words',
+      isEmpty: false,
+    })
+    expect(savedHistory.charCount).toBe('recognized words'.length)
+    expect(savedHistory.durationSec).toBeGreaterThan(0)
+    await flushMicrotasks()
+
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.recordStats).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+  })
+
+  it('continues initialization and fails closed only for late insertion when its setting read fails', async () => {
+    harness.suppressLateSettingReadError = true
+    harness.settings.set('selectedMic', 'saved-mic')
+    const recorder = new RecorderOrchestrator()
+    const provider = await switchProvider('cloud_api')
+    provider.disconnect()
+    const connect = vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    vi.spyOn(provider, 'isReady').mockReturnValue(false)
+    vi.spyOn(provider, 'stop').mockReturnValue(true)
+
+    await expect(recorder.init()).resolves.toBeUndefined()
+
+    expect(Reflect.get(recorder, 'cachedMicId')).toBe('saved-mic')
+    expect(connect).toHaveBeenCalledTimes(1)
+    const callbacks = connect.mock.calls[0]?.[0]
+    expect(callbacks?.onFinal).toBeTypeOf('function')
+    expect(harness.runtimeEvents).toHaveBeenCalledWith(
+      'warn',
+      'recorder',
+      'Late-insertion setting unavailable; suppressing late result insertion',
+    )
+    expect(JSON.stringify(harness.runtimeEvents.mock.calls)).not.toContain('private late-insertion setting detail')
+
+    prepareRun(recorder, 190, 1, 'recording')
+    Reflect.set(recorder, 'recordStartPerf', performance.now() - 1_000)
+    Reflect.set(recorder, 'cachedProbeResult', { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' })
+    const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
+      this: RecorderOrchestrator,
+    ) => Promise<void>
+    await stopRecording.call(recorder)
+    await vi.advanceTimersByTimeAsync(30_500)
+    expect(Reflect.get(recorder, 'timedOutProcessingContext')).toMatchObject({
+      runId: 190,
+      suppressLateFinalInsertion: true,
+    })
+    await vi.advanceTimersByTimeAsync(14_999)
+
+    harness.addHistory.mockClear()
+    harness.invoke.mockClear()
+    const lateHistory = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      lateHistory.resolve(record)
+      return Promise.resolve()
+    })
+    callbacks?.onFinal?.(makeFinal())
+    await flushMicrotasks()
+    expect(harness.runtimeEvents.mock.calls.some(([, , message]) => message === 'Final result received')).toBe(true)
+    await expect(lateHistory.promise).resolves.toMatchObject({
+      asrText: 'recognized words',
+      llmText: 'recognized words',
+      isEmpty: false,
+    })
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+
+    harness.invoke.mockClear()
+    prepareRun(recorder, 191, 1, 'processing')
+    Reflect.set(recorder, 'cachedProbeResult', { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' })
+    const onTimeHistory = deferred<Record<string, unknown>>()
+    harness.addHistory.mockClear()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      onTimeHistory.resolve(record)
+      return Promise.resolve()
+    })
+    callbacks?.onFinal?.(makeFinal({ asrText: 'on-time words', llmText: 'on-time words' }))
+    await expect(onTimeHistory.promise).resolves.toMatchObject({ llmText: 'on-time words' })
+    await flushMicrotasks()
+    expect(harness.invoke).toHaveBeenCalledWith('paste_text', expect.objectContaining({ text: 'on-time words' }))
+  })
+
+  it('applies explicit late-insertion cache changes in both directions without rereading the setting', async () => {
+    const recorder = new RecorderOrchestrator()
+
+    recorder.setSuppressLateFinalInsertionCache(true)
+    const suppressedCallbacks = await enterTimeoutGrace(recorder, 192, false)
+    expect(Reflect.get(recorder, 'timedOutProcessingContext')).toMatchObject({
+      runId: 192,
+      suppressLateFinalInsertion: true,
+    })
+    await vi.advanceTimersByTimeAsync(14_999)
+    harness.addHistory.mockClear()
+    const suppressedHistory = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      suppressedHistory.resolve(record)
+      return Promise.resolve()
+    })
+    harness.invoke.mockClear()
+    suppressedCallbacks.onFinal?.(makeFinal())
+    await expect(suppressedHistory.promise).resolves.toMatchObject({ llmText: 'recognized words' })
+    await flushMicrotasks()
+    expect(harness.runtimeEvents.mock.calls.some(([, , message]) => message === 'Final result received')).toBe(true)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+
+    recorder.setSuppressLateFinalInsertionCache(false)
+    const insertionCallbacks = await enterTimeoutGrace(recorder, 193, false)
+    harness.addHistory.mockClear()
+    const insertionHistory = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      insertionHistory.resolve(record)
+      return Promise.resolve()
+    })
+    harness.invoke.mockClear()
+    insertionCallbacks.onFinal?.(makeFinal())
+    await expect(insertionHistory.promise).resolves.toMatchObject({ llmText: 'recognized words' })
+    await flushMicrotasks()
+    expect(harness.invoke).toHaveBeenCalledWith('paste_text', expect.objectContaining({ text: 'recognized words' }))
+    expect(harness.suppressLateSettingReadCount).toBe(0)
+  })
+
+  it('does not count a History-only late result and permits the next recording', async () => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 141)
+
+    callbacks.onFinal?.(makeFinal())
+    await expect(historyWritten.promise).resolves.toMatchObject({ llmText: 'recognized words' })
+    await flushMicrotasks()
+
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.recordStats).not.toHaveBeenCalled()
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+
+    Reflect.set(recorder, 'cachedPresets', [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }])
+    vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
+    vi.stubGlobal('HTMLElement', class { })
+    const provider = await switchProvider('cloud_api')
+    vi.spyOn(provider, 'isReady').mockReturnValue(true)
+    vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    vi.spyOn(provider, 'start').mockReturnValue(true)
+    const startRecording = Reflect.get(RecorderOrchestrator.prototype, 'startRecording') as (
+      this: RecorderOrchestrator,
+    ) => Promise<void>
+
+    await startRecording.call(recorder)
+    const newRunId = Reflect.get(recorder, 'activeRunId')
+    expect(recorder.getState()).toBe('recording')
+    expect(newRunId).not.toBe(141)
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(newRunId)
+    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+  })
+
+  it('keeps the empty-after-processing History failure path for an opted-in late final', async () => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    harness.settings.set('textReplacements', [
+      { id: 'remove-recognized-text', from: 'recognized words', to: '', enabled: true },
+    ])
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 138)
+
+    callbacks.onFinal?.(makeFinal())
+    await expect(historyWritten.promise).resolves.toMatchObject({
+      isEmpty: true,
+      failReasonCode: 'empty_after_processing',
+    })
+    await flushMicrotasks()
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'failure',
+      failureTitle: en['recorder.emptyAfterProcessingTitle'],
+      failureDetail: en['recorder.emptyAfterProcessingDetail'],
+      cardToken: 138,
+    })
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+  })
+
+  it.each([
+    { name: 'History is disabled', historyEnabled: false, historyReadError: false },
+    { name: 'the History setting cannot be read', historyEnabled: true, historyReadError: true },
+  ])('drops an opted-in late final when $name', async ({ historyEnabled, historyReadError }) => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    harness.settings.set('historyEnabled', historyEnabled)
+    const transformSpy = vi.spyOn(textPostProcess, 'applyTextTransforms')
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, historyReadError ? 133 : 132)
+    harness.historyReadError = historyReadError
+
+    callbacks.onFinal?.(makeFinal())
+    await flushMicrotasks()
+
+    expect(transformSpy).not.toHaveBeenCalled()
+    expect(harness.addHistory).not.toHaveBeenCalled()
+    expect(harness.recordStats).not.toHaveBeenCalled()
+    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+  })
+
+  it('does not insert or retain stats when saving an opted-in late final to History fails', async () => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 134)
+    const historyAttempted = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyAttempted.resolve(record)
+      return Promise.reject(new Error('history unavailable'))
+    })
+
+    callbacks.onFinal?.(makeFinal())
+    await expect(historyAttempted.promise).resolves.toMatchObject({ llmText: 'recognized words' })
+    await flushMicrotasks()
+
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(harness.recordStats).not.toHaveBeenCalled()
+    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+  })
+
+  it('does not show a fallback or insert when transforming an opted-in late final fails', async () => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    const transformSpy = vi.spyOn(textPostProcess, 'applyTextTransforms').mockRejectedValue(new Error('transform failed'))
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 135)
+
+    callbacks.onFinal?.(makeFinal())
+    await flushMicrotasks()
+
+    expect(transformSpy).toHaveBeenCalledTimes(1)
+    expect(harness.addHistory).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+  })
+
+  it.each([
+    { name: 'enabled at timeout', timeoutSetting: true, graceSetting: false, expectedPasteCount: 0 },
+    { name: 'disabled at timeout', timeoutSetting: false, graceSetting: true, expectedPasteCount: 1 },
+  ])('freezes insertion suppression when it was $name', async ({ timeoutSetting, graceSetting, expectedPasteCount }) => {
+    harness.settings.set('suppressLateFinalInsertion', timeoutSetting)
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 136)
+    harness.settings.set('suppressLateFinalInsertion', graceSetting)
+    await recorder.refreshRuntimeSettings()
+    const historyStarted = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyStarted.resolve(record)
+      return Promise.resolve()
+    })
+
+    callbacks.onFinal?.(makeFinal())
+    await expect(historyStarted.promise).resolves.toMatchObject({ llmText: 'recognized words' })
+    await flushMicrotasks()
+
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(expectedPasteCount)
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+  })
+
+  it.each([
+    { savedSetting: true, expectedPasteCount: 0 },
+    { savedSetting: false, expectedPasteCount: 1 },
+  ])('honors saved late-insertion setting $savedSetting after an unrelated refresh failure', async ({ savedSetting, expectedPasteCount }) => {
+    const recorder = new RecorderOrchestrator()
+    harness.settings.set('suppressLateFinalInsertion', !savedSetting)
+    await recorder.refreshRuntimeSettings()
+
+    harness.settings.set('suppressLateFinalInsertion', savedSetting)
+    harness.unrelatedSettingsReadError = true
+    await expect(recorder.refreshRuntimeSettings()).rejects.toThrow('microphone setting unavailable')
+    harness.unrelatedSettingsReadError = false
+
+    const callbacks = await enterTimeoutGrace(recorder, savedSetting ? 142 : 143, false)
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+
+    callbacks.onFinal?.(makeFinal())
+    await expect(historyWritten.promise).resolves.toMatchObject({ llmText: 'recognized words' })
+    await flushMicrotasks()
+
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(expectedPasteCount)
+    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+  })
+
+  it('ignores a timed-out result after a new recording invalidates its grace context', async () => {
+    harness.settings.set('suppressLateFinalInsertion', true)
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 137)
+    Reflect.set(recorder, 'cachedPresets', [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }])
+    vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
+    vi.stubGlobal('HTMLElement', class { })
+    const provider = await switchProvider('cloud_api')
+    vi.spyOn(provider, 'isReady').mockReturnValue(true)
+    vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    vi.spyOn(provider, 'start').mockReturnValue(true)
+    const startRecording = Reflect.get(RecorderOrchestrator.prototype, 'startRecording') as (
+      this: RecorderOrchestrator,
+    ) => Promise<void>
+
+    await startRecording.call(recorder)
+    const newRunId = Reflect.get(recorder, 'activeRunId')
+    expect(recorder.getState()).toBe('recording')
+    expect(newRunId).not.toBe(137)
+
+    callbacks.onFinal?.(makeFinal())
+    await flushMicrotasks()
+
+    expect(recorder.getState()).toBe('recording')
+    expect(Reflect.get(recorder, 'activeRunId')).toBe(newRunId)
+    expect(harness.addHistory).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
   })
 
   it('shows timeout failure only after the existing fifteen-second grace expires', async () => {

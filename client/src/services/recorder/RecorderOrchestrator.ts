@@ -117,6 +117,7 @@ interface TimedOutProcessingContext {
   timedOutAt: number
   audioDurationSec: number
   wallTimeSec: number
+  suppressLateFinalInsertion: boolean
   promptResolution: PromptResolution | null
   appContext: ActiveAppContext | null
   audioChunks: ArrayBuffer[]
@@ -176,6 +177,7 @@ export class RecorderOrchestrator {
   private cachedMuteSystemAudio = false
   /** 插入文本后是否自动还原剪贴板为插入前内容。默认开启。 */
   private cachedProtectClipboard = true
+  private cachedSuppressLateFinalInsertion = false
   /** 标记本次录音是否已施加系统静音，用于配对恢复。 */
   private systemMuteApplied = false
   /** 延迟静音定时器（等提示音播完再静音）。 */
@@ -555,6 +557,10 @@ export class RecorderOrchestrator {
     this.cachedStreamingDisplay = next
   }
 
+  setSuppressLateFinalInsertionCache(next: boolean) {
+    this.cachedSuppressLateFinalInsertion = next
+  }
+
   /** 录音开始时实时判定是否激活流式字幕气泡（读最新的开关/供应商/WorkspaceId，避免缓存过期）。
    *  判据统一交给 isStreamingDisplayReady：doubao_v2 与 qwen_audio_stream 直接可用，
    *  qwen_realtime 还要配 WorkspaceId；qwen3-asr-flash 等非流式模型不激活。 */
@@ -576,6 +582,13 @@ export class RecorderOrchestrator {
   }
 
   async refreshRuntimeSettings() {
+    try {
+      this.cachedSuppressLateFinalInsertion = Boolean(await getSetting('suppressLateFinalInsertion', false))
+    } catch {
+      addRuntimeEvent('warn', 'recorder', 'Late-insertion setting unavailable; suppressing late result insertion')
+      this.cachedSuppressLateFinalInsertion = true
+    }
+
     const [
       micId,
       muteSystemAudio,
@@ -1148,6 +1161,7 @@ export class RecorderOrchestrator {
           timedOutAt: 0,
           audioDurationSec: this.getAudioDurationSec(),
           wallTimeSec: this.wallTimeAtStopSec > 0 ? this.wallTimeAtStopSec : this.getAudioDurationSec(),
+          suppressLateFinalInsertion: false,
           promptResolution: this.currentPromptResolution ? { ...this.currentPromptResolution } : null,
           appContext: this.currentActiveAppContext ? { ...this.currentActiveAppContext } : null,
           audioChunks: this.recordedChunks.slice(),
@@ -2029,6 +2043,7 @@ export class RecorderOrchestrator {
         timedOutAt: Date.now(),
         audioDurationSec: audioDur,
         wallTimeSec,
+        suppressLateFinalInsertion: this.cachedSuppressLateFinalInsertion,
         promptResolution: this.currentPromptResolution ? { ...this.currentPromptResolution } : null,
         appContext: this.currentActiveAppContext ? { ...this.currentActiveAppContext } : null,
         audioChunks: this.recordedChunks.slice(),
@@ -2334,6 +2349,8 @@ export class RecorderOrchestrator {
     options: { allowInsertionWhenIdle: boolean; source: 'processing' | 'late_after_timeout' },
   ) {
     const runId = context.runId
+    const suppressLateFinalInsertion = options.source === 'late_after_timeout'
+      && context.suppressLateFinalInsertion
     if (!this.isRunCurrent(runId)) return
 
     // llmText === asrText 说明这段没经过 AI 整理（极速模式，或后端未跑 LLM 直接回 asrText）。
@@ -2347,6 +2364,21 @@ export class RecorderOrchestrator {
       contextApplied: result.contextApplied,
       textContext: context.appContext?.textContext,
     })
+    if (suppressLateFinalInsertion && baseText.trim()) {
+      try {
+        if (!(await getSetting('historyEnabled', true))) {
+          this.finishRun(runId)
+          return
+        }
+      } catch {
+        if (!this.isRunCurrent(runId)) return
+        addRuntimeEvent('warn', 'recorder', 'History setting unavailable; discarded late result', { runId })
+        this.finishRun(runId)
+        return
+      }
+      if (!this.isRunCurrent(runId)) return
+    }
+
     let textToPaste: string
     try {
       textToPaste = selectedEditWasApplied
@@ -2355,7 +2387,9 @@ export class RecorderOrchestrator {
     } catch (error) {
       if (!this.isRunCurrent(runId)) return
       addRuntimeEvent('warn', 'recorder', 'Text post-processing failed', { error: String(error), runId })
-      if (baseText && baseText.trim()) {
+      if (suppressLateFinalInsertion) {
+        this.finishRun(runId)
+      } else if (baseText && baseText.trim()) {
         this.showFallbackAndReset(baseText, 'text_transform_failed', runId)
       } else {
         if (this.state === 'processing') {
@@ -2383,6 +2417,7 @@ export class RecorderOrchestrator {
     const appContext = context.appContext
     let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
     let historyRetryAvailable = false
+    let historyWriteSucceeded = false
 
     if (showEmptyFailure) {
       this.processingCancelable = false
@@ -2465,9 +2500,10 @@ export class RecorderOrchestrator {
           await this.discardCanceledHistory(historyArtifact)
           return
         }
+        historyWriteSucceeded = true
         void bridge.emit('history-updated')
         historyRetryAvailable = emptyAfterProcessing && Boolean(historyArtifact.audioFilePath)
-      } else if (hasText) {
+      } else if (hasText && !suppressLateFinalInsertion) {
         // History retention is off: still count the completed dictation in usage stats.
         try {
           await recordStats(textToPaste.length, wallSec)
@@ -2484,6 +2520,11 @@ export class RecorderOrchestrator {
 
     if (!this.isRunCurrent(runId)) {
       if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
+      return
+    }
+
+    if (suppressLateFinalInsertion && hasText && !historyWriteSucceeded) {
+      this.finishRun(runId)
       return
     }
 
@@ -2506,6 +2547,11 @@ export class RecorderOrchestrator {
       if (this.state === 'processing') {
         this.resetToIdle({ keepOverlay: true })
       }
+      return
+    }
+
+    if (suppressLateFinalInsertion) {
+      this.finishRun(runId)
       return
     }
 

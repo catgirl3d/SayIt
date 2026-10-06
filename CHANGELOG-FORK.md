@@ -55,6 +55,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 
 ### Desktop Client
 
+- Added an optional setting to prevent automatic insertion of ASR results received after processing times out. During the existing 15-second grace period, late results are saved to History when possible, otherwise discarded; they do not update personalization statistics. The default remains automatic insertion.
 - Cleaned up the microphone picker: hide duplicate browser-default entries, label the communications route with its target device instead of the raw Chromium name, hide it when it resolves to the same device as System default (kept when saved or distinct), and show the last-enumerated physical device match for System default when unambiguous; stored selections and recording behavior are unchanged.
 - Added concise, dismissible recognition failure cards with safe localized causes and a History retry hint only when the saved recording is actually available.
 - Reworked settings into routed pages instead of one large settings dialog, including dedicated Audio & Mic and Shortcuts pages.
