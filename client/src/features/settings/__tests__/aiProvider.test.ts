@@ -471,3 +471,18 @@ describe('normalizeModelNames', () => {
       .toEqual(['model-a', 'model-b'])
   })
 })
+
+describe('OpenAI provider preset', () => {
+  it('is a first-class provider: official endpoint, seed models, console link', () => {
+    const provider = findProvider('openai')
+    expect(provider.value).toBe('openai')
+    expect(provider.defaultUrl).toBe('https://api.openai.com')
+    expect(provider.defaultModels.length).toBeGreaterThan(0)
+    expect(provider.consoleUrl).toBe('https://platform.openai.com/api-keys')
+    expect(blankProfile('openai')).toMatchObject({ provider: 'openai' })
+  })
+
+  it('has no key format rule of its own', () => {
+    expect(checkAiKeyFormat('openai', 'sk-proj-anything')).toBe('')
+  })
+})

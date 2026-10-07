@@ -87,6 +87,16 @@ export const AI_PROVIDERS: AiProvider[] = [
     defaultModels: ['gpt-4o-mini'],
   },
   {
+    value: 'openai',
+    // Brand name, identical in every locale (same handling as DeepSeek, Groq, and OpenCode Go).
+    // The URL field is editable per profile, so this preset doubles as the proxy/relay entry:
+    // point it at any OpenAI-compatible endpoint and the openai request tuning below still applies.
+    label: 'OpenAI',
+    defaultUrl: 'https://api.openai.com',
+    defaultModels: ['gpt-4o-mini', 'gpt-5-mini'],
+    consoleUrl: 'https://platform.openai.com/api-keys',
+  },
+  {
     value: 'ollama',
     get label() { return t('aiProvider.ollama') },
     defaultUrl: 'http://127.0.0.1:11434',

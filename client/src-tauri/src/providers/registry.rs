@@ -9,6 +9,7 @@ use crate::error_protocol;
 
 /// Providers that speak the OpenAI chat/completions protocol and reuse the shared implementation.
 const OPENAI_COMPAT_PROVIDERS: &[&str] = &[
+    "openai",
     "openai_compat",
     "deepseek",
     "doubao",
@@ -259,6 +260,10 @@ mod tests {
                 "{provider} must dispatch to the shared OpenAI-compatible implementation"
             );
         }
+        assert!(
+            is_openai_compat_provider("openai"),
+            "the openai preset must dispatch to the shared OpenAI-compatible implementation"
+        );
         assert!(!is_openai_compat_provider("ollama"));
         assert!(!is_openai_compat_provider("unknown_provider"));
     }

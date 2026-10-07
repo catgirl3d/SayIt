@@ -18,6 +18,7 @@ const CLOUD_PROVIDERS = new Set([
   'qwen_omni_turbo',
   'mimo',
   'groq_whisper',
+  'openai',
   'openai_compat',
   'deepseek',
   'ollama',
