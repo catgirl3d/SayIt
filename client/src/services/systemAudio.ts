@@ -15,8 +15,10 @@ import {
   finishRun,
   isPipelineDebugEnabled,
   markQueued,
+  noteSpeechFrameGap,
   setPipelineActivity,
   setQueueDepth,
+  type SegmentCloseReason,
 } from './pipelineTrace'
 import {
   acquireSystemAudio,
@@ -388,7 +390,11 @@ export class SystemAudioSession {
     }
 
     const now = Date.now()
-    if (this.lastFrameAt && now - this.lastFrameAt >= FRAME_RECEIVE_GAP_MS) this.closeGap()
+    if (this.lastFrameAt) {
+      const gapMs = now - this.lastFrameAt
+      if (gapMs >= FRAME_RECEIVE_GAP_MS) this.closeGap(gapMs)
+      else if (this.isSpeechOpen()) noteSpeechFrameGap(gapMs)
+    }
     if (this.snapshot.state === 'error') {
       countFrame(audio.byteLength)
       return
@@ -396,7 +402,11 @@ export class SystemAudioSession {
     this.lastFrameAt = now
     if (this.gapTimer) clearTimeout(this.gapTimer)
     const generation = this.generation
-    this.gapTimer = setTimeout(() => { if (generation === this.generation) this.closeGap() }, FRAME_RECEIVE_GAP_MS)
+    // Measure from the last frame, so a timer that fires late (a frozen event loop) still reports the real stall.
+    this.gapTimer = setTimeout(() => {
+      if (generation !== this.generation) return
+      this.closeGap(Date.now() - this.lastFrameAt)
+    }, FRAME_RECEIVE_GAP_MS)
 
     const speechFrame: SpeechFrame = { audio, probability: frame.speechProbability }
     const voiced = isVoiced(speechFrame)
@@ -416,42 +426,51 @@ export class SystemAudioSession {
     this.frames.push(speechFrame)
     countFrame(audio.byteLength, processing ? undefined : { phase: 'speech', segmentMs: this.frames.length * FRAME_MS })
     if (voiced) { this.voicedFrames++; this.silenceFrames = 0 } else { this.silenceFrames++ }
-    if (this.silenceFrames >= END_SILENCE_FRAMES) this.finishSegment(false)
-    else if (this.frames.length >= this.plan.softFrames && this.silenceFrames >= PAUSE_SPLIT_FRAMES) this.finishSegment(true)
+    if (this.silenceFrames >= END_SILENCE_FRAMES) this.finishSegment('silence')
+    else if (this.frames.length >= this.plan.softFrames && this.silenceFrames >= PAUSE_SPLIT_FRAMES) this.finishSegment('pause')
     else if (this.frames.length >= this.plan.hardFrames) this.splitAtQuietestPoint()
+  }
+
+  // A speech segment is open while it holds frames, or while the one before it was cut mid-speech.
+  private isSpeechOpen() {
+    return this.frames.length > 0 || this.continuation
   }
 
   // The segment hit its hard cap without a phrase boundary. Cut at the quietest point of the tail window and
   // carry the frames after it into the next segment, so a word is not severed on an arbitrary frame.
   private splitAtQuietestPoint() {
     const keep = chooseForcedSplit(this.frames.map((frame) => frame.probability), this.plan.softFrames)
-    this.finishSegment(true, this.frames.splice(keep))
+    this.finishSegment('cap', this.frames.splice(keep))
   }
 
-  private closeGap() {
+  // No frame arrived for `gapMs`: either playback stopped or frame delivery stalled. The two look the same here, but
+  // the last frame tells them apart for diagnostics: a voiced one means speech was cut off mid-way.
+  private closeGap(gapMs: number) {
     if (this.gapTimer) clearTimeout(this.gapTimer)
     this.gapTimer = null
-    this.finishSegment(false)
+    if (this.isSpeechOpen()) noteSpeechFrameGap(gapMs)
+    const last = this.frames[this.frames.length - 1]
+    this.finishSegment(last && isVoiced(last) ? 'dropout' : 'gap')
     this.preRoll = []
     this.lastFrameAt = 0
   }
 
-  // `split` means speech is still going on, so the next segment continues it. `carry` holds frames that were
-  // captured after the cut point and open that next segment.
-  private finishSegment(split: boolean, carry: SpeechFrame[] = []) {
+  // `carry` holds frames that were captured after the cut point and open the next segment. A pause or length-limit
+  // cut means speech is still going on, so the next segment continues it; every other reason ends the utterance.
+  private finishSegment(reason: SegmentCloseReason, carry: SpeechFrame[] = []) {
     const eligible = this.voicedFrames >= MIN_VOICED_FRAMES || (this.continuation && this.voicedFrames > 0)
     const frames = this.frames
     this.frames = carry
     this.voicedFrames = carry.filter(isVoiced).length
     this.silenceFrames = 0
     while (this.silenceFrames < carry.length && !isVoiced(carry[carry.length - 1 - this.silenceFrames])) this.silenceFrames++
-    this.continuation = split && eligible
+    this.continuation = (reason === 'pause' || reason === 'cap') && eligible
     if (!eligible || !frames.length) return
     // A short continuation still contains real speech; pad only the submitted job to the ASR minimum.
     const audio = new Uint8Array(Math.max(10, frames.length) * FRAME_BYTES)
     frames.forEach((frame, index) => audio.set(frame.audio, index * FRAME_BYTES))
     this.dropOldestToFit(audio.byteLength)
-    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * FRAME_MS, asrOnly: this.options?.asrOnly ?? false })
+    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * FRAME_MS, closeReason: reason, asrOnly: this.options?.asrOnly ?? false })
     const endedAt = Date.now()
     this.queue.push({ audio, runId, startedAt: endedAt - frames.length * FRAME_MS, endedAt })
     this.queuedBytes += audio.byteLength

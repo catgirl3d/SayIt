@@ -7,6 +7,7 @@ export function createRun(overrides: Partial<PipelineRun> & Pick<PipelineRun, 'i
     startedAt: 1_760_000_000_000 + id,
     mode: 'local',
     speechMs: 100,
+    closeReason: 'silence',
     queueMs: 5,
     asrMs: 20,
     llmMs: 30,

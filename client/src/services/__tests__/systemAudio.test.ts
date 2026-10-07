@@ -760,6 +760,103 @@ describe('system audio subtitle session', () => {
     expect([...second].filter((sample) => sample === 33)).toHaveLength(30 * 512)
   })
 
+  describe('segment close reasons in the pipeline trace', () => {
+    async function closeReasons() {
+      await settle()
+      return getPipelineSnapshot().runs.map((run) => run.closeReason)
+    }
+
+    beforeEach(() => { enablePipelineDebug() })
+
+    it('records the end of speech after the silence timeout', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(20, 0.9)
+      frames(15, 0)
+
+      expect(await closeReasons()).toEqual(['silence'])
+    })
+
+    it('records an early cut at a pause once the segment is long enough', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(130, 0.9)
+      frames(5, 0)
+
+      expect(await closeReasons()).toEqual(['pause'])
+    })
+
+    it('records a forced cut at the length limit', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(188, 0.9)
+
+      expect(await closeReasons()).toEqual(['cap'])
+    })
+
+    it('records an audio stop after silence as a plain gap', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(20, 0.9)
+      frames(3, 0)
+      await vi.advanceTimersByTimeAsync(600)
+
+      expect(await closeReasons()).toEqual(['gap'])
+    })
+
+    it('records frames stopping while the last frame was still voiced as a mid-speech dropout', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(20, 0.9)
+      await vi.advanceTimersByTimeAsync(600)
+
+      expect(await closeReasons()).toEqual(['dropout'])
+    })
+
+    it('records a late frame that closes the open segment the same way as the timer', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(20, 0.9)
+      vi.setSystemTime(Date.now() + 600)
+      frames(1, 0.9)
+
+      expect(await closeReasons()).toEqual(['dropout'])
+    })
+  })
+
+  describe('frame gaps while speech is open', () => {
+    const maxGap = () => getPipelineSnapshot().counters.maxSpeechGapMs
+
+    beforeEach(() => { enablePipelineDebug() })
+
+    it('records the longest delay between received frames during speech', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(1, 0.9)
+      vi.setSystemTime(Date.now() + 40)
+      frames(1, 0.9)
+      vi.setSystemTime(Date.now() + 250)
+      frames(1, 0.9)
+      vi.setSystemTime(Date.now() + 60)
+      frames(1, 0.9)
+
+      expect(maxGap()).toBe(250)
+    })
+
+    it('counts a gap that closed the segment, at least as long as the receive timeout', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(20, 0.9)
+      await vi.advanceTimersByTimeAsync(600)
+
+      expect(maxGap()).toBe(512)
+    })
+
+    it('ignores delays between utterances, short or long, which are not a delivery problem', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(1, 0)
+      vi.setSystemTime(Date.now() + 300)
+      frames(1, 0)
+      expect(maxGap()).toBe(0)
+
+      vi.setSystemTime(Date.now() + 5_000)
+      frames(1, 0)
+      expect(maxGap()).toBe(0)
+    })
+  })
+
   it('does not split at a short pause before the segment reaches the soft limit', async () => {
     await session.start({ deviceId: '', targetLanguage: 'uk' })
     frames(100, 0.9)

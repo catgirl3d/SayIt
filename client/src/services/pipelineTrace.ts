@@ -3,6 +3,17 @@ import type { WorkMode } from './transcription/types'
 export type PipelineRunStatus = 'ok' | 'empty' | 'rejected' | 'failed' | 'timeout' | 'cancelled'
 export type PipelinePhase = 'idle' | 'listening' | 'speech' | 'asr' | 'translation'
 
+/**
+ * Why a speech segment was closed and sent to recognition.
+ * - silence: the silence timeout elapsed after the speech ended (the normal end).
+ * - pause: a short pause ended it early, once it was long enough.
+ * - cap: it reached the maximum length without a pause and was cut at its quietest point.
+ * - gap: frames stopped arriving after silence (playback stopped).
+ * - dropout: frames stopped arriving while the last frame was still voiced, so speech was cut mid-way.
+ */
+export const SEGMENT_CLOSE_REASONS = ['silence', 'pause', 'cap', 'gap', 'dropout'] as const
+export type SegmentCloseReason = typeof SEGMENT_CLOSE_REASONS[number]
+
 export interface PipelineActivity {
   phase: PipelinePhase
   segmentMs: number
@@ -14,6 +25,7 @@ export interface PipelineRun {
   readonly startedAt: number
   readonly mode: WorkMode | 'unknown'
   readonly speechMs: number
+  readonly closeReason: SegmentCloseReason
   readonly queueMs: number | null
   readonly asrMs: number | null
   readonly llmMs: number | null
@@ -40,6 +52,8 @@ export interface PipelineSnapshot {
     completed: number
     failed: number
     queueDepth: number
+    /** Longest delay between two received frames while a speech segment was open; normal delivery is tens of ms. */
+    maxSpeechGapMs: number
   }>
   readonly activity: Readonly<PipelineActivity>
   readonly runs: readonly PipelineRun[]
@@ -54,6 +68,7 @@ interface ActiveRun {
   startedAt: number
   mode: WorkMode | 'unknown'
   speechMs: number
+  closeReason: SegmentCloseReason
   asrOnly?: boolean
   queueMs: number | null
 }
@@ -67,6 +82,7 @@ const counters = {
   completed: 0,
   failed: 0,
   queueDepth: 0,
+  maxSpeechGapMs: 0,
 }
 const activity: PipelineActivity = {
   phase: 'idle',
@@ -106,7 +122,7 @@ export function isPipelineDebugEnabled() {
   return enabled
 }
 
-export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number; asrOnly?: boolean }): number | null {
+export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number; closeReason: SegmentCloseReason; asrOnly?: boolean }): number | null {
   if (!enabled) return null
   const id = ++nextRunId
   activeRuns.set(id, {
@@ -114,6 +130,7 @@ export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number; 
     startedAt: Date.now(),
     mode: input.mode,
     speechMs: input.speechMs,
+    closeReason: input.closeReason,
     asrOnly: input.asrOnly,
     queueMs: null,
   })
@@ -196,6 +213,15 @@ export function countDiscontinuity() {
   publishSnapshot()
 }
 
+/** Records the delay since the previous frame while a speech segment was open; publishes only a new maximum. */
+export function noteSpeechFrameGap(gapMs: number) {
+  if (!enabled) return
+  const rounded = Math.round(gapMs)
+  if (rounded <= counters.maxSpeechGapMs) return
+  counters.maxSpeechGapMs = rounded
+  publishSnapshot()
+}
+
 export function setQueueDepth(depth: number) {
   if (!enabled) return
   const nextDepth = Math.max(0, depth)
@@ -214,6 +240,7 @@ export function clearPipelineTrace() {
     completed: 0,
     failed: 0,
     queueDepth: 0,
+    maxSpeechGapMs: 0,
   })
   Object.assign(activity, {
     phase: 'idle',
@@ -239,6 +266,13 @@ export function percentile(values: number[], p: number): number {
   const rank = Math.min(1, Math.max(0, p))
   const index = Math.max(0, Math.ceil(rank * sorted.length) - 1)
   return Math.round(sorted[index])
+}
+
+/** Number of runs per close reason; reasons that never occurred are present with zero. */
+export function countCloseReasons(inputRuns: readonly PipelineRun[]): Record<SegmentCloseReason, number> {
+  const counts = Object.fromEntries(SEGMENT_CLOSE_REASONS.map((reason) => [reason, 0])) as Record<SegmentCloseReason, number>
+  for (const run of inputRuns) counts[run.closeReason]++
+  return counts
 }
 
 export function summarizeByEngine(inputRuns: PipelineRun[]): Array<{

@@ -38,7 +38,7 @@ describe('pipeline debug panel', () => {
     }]
     const runs = [
       createRun({ id: 1, status: 'ok', asrChars: 15, captionChars: 12 }),
-      createRun({ id: 2, status: 'failed', asrChars: 0, captionChars: 0 }),
+      createRun({ id: 2, status: 'failed', asrChars: 0, captionChars: 0, closeReason: 'cap' }),
     ]
     const tsv = buildPipelineTsv(summary, runs, 'ASR-only')
     const lines = tsv.split('\n')
@@ -46,9 +46,11 @@ describe('pipeline debug panel', () => {
     expect(lines[0]).toBe('engine/model\tOK / total runs\tavg speech ms\tavg ASR ms\tASR p90 ms\tASR max ms\tavg LLM ms\tavg latency ms\tlatency p90 ms\tlatency max ms')
     expect(lines[1]).toBe('local · sensevoice / small\t1 / 1\t100\t20\t20\t20\t30\t40\t40\t40')
     expect(lines[2]).toBe('')
-    expect(lines[3]).toBe('time\tmode\tspeech ms\tqueue ms\tASR ms\tLLM ms\toverlay ms\tlatency ms\tstatus\tASR / caption chars')
+    expect(lines[3]).toBe('time\tmode\tspeech ms\tcut\tqueue ms\tASR ms\tLLM ms\toverlay ms\tlatency ms\tstatus\tASR / caption chars')
     expect(lines.slice(4)).toHaveLength(2)
-    expect(lines[4].split('\t')).toHaveLength(10)
+    expect(lines[4].split('\t')).toHaveLength(11)
+    expect(lines[4].split('\t')[3]).toBe('silence')
+    expect(lines[5].split('\t')[3]).toBe('cap')
     expect(lines[4].endsWith('\t15 / 12')).toBe(true)
     expect(tsv).not.toContain('Original speech')
   })

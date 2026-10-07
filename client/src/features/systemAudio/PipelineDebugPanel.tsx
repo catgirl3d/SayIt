@@ -7,11 +7,14 @@ import { Select, type SelectOption } from '@/components/ui/select'
 import { useT } from '@/i18n/useT'
 import {
   clearPipelineTrace,
+  countCloseReasons,
   getPipelineSnapshot,
+  SEGMENT_CLOSE_REASONS,
   subscribe,
   summarizeByEngine,
   type PipelineRun,
   type PipelineRunStatus,
+  type SegmentCloseReason,
 } from '@/services/pipelineTrace'
 
 export type PipelineStatusFilter = 'all' | 'ok' | 'problems' | 'cancelled'
@@ -53,7 +56,7 @@ export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, 
     'avg LLM ms', 'avg latency ms', 'latency p90 ms', 'latency max ms',
   ]
   const runHeader = [
-    'time', 'mode', 'speech ms', 'queue ms', 'ASR ms', 'LLM ms', 'overlay ms', 'latency ms', 'status', 'ASR / caption chars',
+    'time', 'mode', 'speech ms', 'cut', 'queue ms', 'ASR ms', 'LLM ms', 'overlay ms', 'latency ms', 'status', 'ASR / caption chars',
   ]
   return [
     tsvRow(summaryHeader),
@@ -75,6 +78,7 @@ export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, 
       formatTime(run.startedAt),
       withAsrOnly(run.mode, run.asrOnly, asrOnlyMark),
       formatMs(run.speechMs),
+      run.closeReason,
       formatMs(run.queueMs),
       formatMs(run.asrMs),
       formatMs(run.llmMs),
@@ -95,6 +99,12 @@ function formatMode(mode: string, t: ReturnType<typeof useT>) {
 
 function withAsrOnly(label: string, asrOnly: boolean | undefined, mark: string) {
   return asrOnly ? `${label} · ${mark}` : label
+}
+
+const WARNING_CLASS = 'text-amber-600 dark:text-amber-300'
+
+function isProblemCloseReason(reason: SegmentCloseReason) {
+  return reason === 'dropout'
 }
 
 export default function PipelineDebugPanel() {
@@ -136,7 +146,9 @@ export default function PipelineDebugPanel() {
     { label: t('systemAudio.debug.queueDepth'), value: String(snapshot.counters.queueDepth) },
     { label: t('systemAudio.debug.completed'), value: String(snapshot.counters.completed) },
     { label: t('systemAudio.debug.failed'), value: String(snapshot.counters.failed) },
+    { label: t('systemAudio.debug.maxSpeechGap'), value: String(snapshot.counters.maxSpeechGapMs) },
   ]
+  const closeReasonCounts = countCloseReasons(filteredRuns)
 
   return (
     <Card>
@@ -151,7 +163,7 @@ export default function PipelineDebugPanel() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
           {counters.map(({ label, value }) => (
             <div key={label} className="rounded-md bg-muted px-2 py-1.5">
               <div className="text-xs text-muted-foreground">{label}</div>
@@ -243,14 +255,28 @@ export default function PipelineDebugPanel() {
         </section>
 
         <section className="space-y-2">
+          <h3 className="text-xs font-semibold">{t('systemAudio.debug.cutReasons')}</h3>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {SEGMENT_CLOSE_REASONS.map((reason) => (
+              <div key={reason} className="rounded-md bg-muted px-2 py-1.5">
+                <div className="text-xs text-muted-foreground">{t(`systemAudio.debug.close.${reason}`)}</div>
+                <div className={`font-mono text-sm tabular-nums ${isProblemCloseReason(reason) && closeReasonCounts[reason] > 0 ? WARNING_CLASS : ''}`}>{closeReasonCounts[reason]}</div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{t('systemAudio.debug.cutReasonsHint')}</p>
+        </section>
+
+        <section className="space-y-2">
           <h3 className="text-xs font-semibold">{t('systemAudio.debug.runsList')}</h3>
           <div className="max-h-80 overflow-y-auto overflow-x-auto">
-            <table className="w-full min-w-[940px] text-left text-xs">
+            <table className="w-full min-w-[1020px] text-left text-xs">
               <thead className="text-muted-foreground">
                 <tr>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.time')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.mode')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.speech')}</th>
+                  <th className="px-2 py-1 font-medium">{t('systemAudio.debug.cut')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.queue')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.asr')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.llm')}</th>
@@ -262,13 +288,14 @@ export default function PipelineDebugPanel() {
               </thead>
               <tbody>
                 {recentRuns.length === 0 ? (
-                  <tr><td colSpan={10} className="px-2 py-2 text-muted-foreground">{t('systemAudio.debug.empty')}</td></tr>
+                  <tr><td colSpan={11} className="px-2 py-2 text-muted-foreground">{t('systemAudio.debug.empty')}</td></tr>
                 ) : recentRuns.map((run) => (
                   <tr key={run.id} className="border-t">
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatTime(run.startedAt)}</td>
                     <td className="px-2 py-1.5">{withAsrOnly(formatMode(run.mode, t), run.asrOnly, t('systemAudio.debug.asrOnlyMark'))}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.speechMs)}</td>
-                    <td className={`px-2 py-1.5 font-mono tabular-nums ${run.queueMs !== null && run.queueMs > 1000 ? 'text-amber-600 dark:text-amber-300' : ''}`}>{formatMs(run.queueMs)}</td>
+                    <td className={`px-2 py-1.5 ${isProblemCloseReason(run.closeReason) ? WARNING_CLASS : ''}`}>{t(`systemAudio.debug.close.${run.closeReason}`)}</td>
+                    <td className={`px-2 py-1.5 font-mono tabular-nums ${run.queueMs !== null && run.queueMs > 1000 ? WARNING_CLASS : ''}`}>{formatMs(run.queueMs)}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.asrMs)}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.llmMs)}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.overlayMs)}</td>

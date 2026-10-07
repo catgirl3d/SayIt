@@ -23,7 +23,7 @@ describe('pipeline trace', () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(false)
 
-    expect(trace.beginRun({ mode: 'local', speechMs: 320 })).toBeNull()
+    expect(trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 320 })).toBeNull()
     trace.setPipelineActivity({ phase: 'asr', stageStartedAt: 1234 })
     trace.countFrame(1024, { phase: 'speech', segmentMs: 320 })
     trace.countDiscontinuity()
@@ -31,7 +31,7 @@ describe('pipeline trace', () => {
 
     expect(trace.getPipelineSnapshot()).toMatchObject({
       enabled: false,
-      counters: { frames: 0, frameBytes: 0, discontinuities: 0, segments: 0, completed: 0, failed: 0, queueDepth: 0 },
+      counters: { frames: 0, frameBytes: 0, discontinuities: 0, segments: 0, completed: 0, failed: 0, queueDepth: 0, maxSpeechGapMs: 0 },
       activity: { phase: 'idle', segmentMs: 0, stageStartedAt: null },
       runs: [],
     })
@@ -42,7 +42,7 @@ describe('pipeline trace', () => {
     trace.setPipelineDebugEnabled(true)
     vi.setSystemTime(new Date('2026-10-06T20:00:00.000Z'))
 
-    const runId = trace.beginRun({ mode: 'local', speechMs: 640 })!
+    const runId = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 640 })!
     expect(trace.getPipelineSnapshot().counters.segments).toBe(1)
     trace.countFrame(1024)
     trace.countDiscontinuity()
@@ -65,7 +65,7 @@ describe('pipeline trace', () => {
 
     expect(trace.getPipelineSnapshot()).toMatchObject({
       enabled: true,
-      counters: { frames: 1, frameBytes: 1024, discontinuities: 1, segments: 1, completed: 1, failed: 0, queueDepth: 0 },
+      counters: { frames: 1, frameBytes: 1024, discontinuities: 1, segments: 1, completed: 1, failed: 0, queueDepth: 0, maxSpeechGapMs: 0 },
       activity: { phase: 'idle', segmentMs: 0, stageStartedAt: null },
       runs: [{
         id: runId,
@@ -92,7 +92,7 @@ describe('pipeline trace', () => {
     trace.setPipelineDebugEnabled(true)
 
     for (const status of ['empty', 'rejected', 'failed', 'timeout', 'cancelled'] as const) {
-      const runId = trace.beginRun({ mode: 'cloud_api', speechMs: 320 })!
+      const runId = trace.beginRun({ closeReason: 'silence', mode: 'cloud_api', speechMs: 320 })!
       trace.failRun(runId, status, `${status} reason`)
       trace.failRun(runId, 'failed', 'duplicate')
     }
@@ -115,7 +115,7 @@ describe('pipeline trace', () => {
     const ids: number[] = []
 
     for (let index = 0; index < 101; index++) {
-      const runId = trace.beginRun({ mode: 'local', speechMs: index })!
+      const runId = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: index })!
       ids.push(runId)
       trace.finishRun(runId, {})
     }
@@ -129,7 +129,7 @@ describe('pipeline trace', () => {
   it('clears counters and runs without disabling tracing', async () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(true)
-    const runId = trace.beginRun({ mode: 'local', speechMs: 320 })!
+    const runId = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 320 })!
     trace.finishRun(runId, {})
     trace.countFrame(2048)
 
@@ -137,7 +137,7 @@ describe('pipeline trace', () => {
 
     expect(trace.getPipelineSnapshot()).toMatchObject({
       enabled: true,
-      counters: { frames: 0, frameBytes: 0, discontinuities: 0, segments: 0, completed: 0, failed: 0, queueDepth: 0 },
+      counters: { frames: 0, frameBytes: 0, discontinuities: 0, segments: 0, completed: 0, failed: 0, queueDepth: 0, maxSpeechGapMs: 0 },
       activity: { phase: 'idle', segmentMs: 0, stageStartedAt: null },
       runs: [],
     })
@@ -147,11 +147,11 @@ describe('pipeline trace', () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(true)
 
-    const firstLocal = trace.beginRun({ mode: 'local', speechMs: 100 })!
+    const firstLocal = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 100 })!
     trace.finishRun(firstLocal, { asrEngine: 'sensevoice', asrModel: 'small', asrMs: 20, llmMs: 40 })
-    const secondLocal = trace.beginRun({ mode: 'local', speechMs: 300 })!
+    const secondLocal = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 300 })!
     trace.finishRun(secondLocal, { asrEngine: 'sensevoice', asrModel: 'small', asrMs: null, llmMs: 20 })
-    const cloud = trace.beginRun({ mode: 'cloud_api', speechMs: 100 })!
+    const cloud = trace.beginRun({ closeReason: 'silence', mode: 'cloud_api', speechMs: 100 })!
     trace.finishRun(cloud, { asrMs: 10, llmMs: 10 })
 
     const summary = trace.summarizeByEngine([...trace.getPipelineSnapshot().runs])
@@ -273,9 +273,9 @@ describe('pipeline trace', () => {
   it('keeps engine and model values containing separators in separate groups', async () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(true)
-    const first = trace.beginRun({ mode: 'local', speechMs: 100 })!
+    const first = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 100 })!
     trace.finishRun(first, { asrEngine: 'cloud:custom', asrModel: 'base:model' })
-    const second = trace.beginRun({ mode: 'local', speechMs: 100 })!
+    const second = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 100 })!
     trace.finishRun(second, { asrEngine: 'cloud', asrModel: 'custom:base:model' })
 
     const summary = trace.summarizeByEngine([...trace.getPipelineSnapshot().runs])
@@ -291,7 +291,7 @@ describe('pipeline trace', () => {
   it('records recognition-only runs and keeps their engine averages separate from translated runs', async () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(true)
-    const runId = trace.beginRun({ mode: 'local', speechMs: 100, asrOnly: true })!
+    const runId = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 100, asrOnly: true })!
     trace.finishRun(runId, { asrMs: 20, llmMs: 0 })
 
     expect(trace.getPipelineSnapshot().runs[0]).toMatchObject({ status: 'ok', asrOnly: true })
@@ -309,12 +309,12 @@ describe('pipeline trace', () => {
   it('does not let old run IDs finish after clear or disable and re-enable', async () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(true)
-    const clearedRunId = trace.beginRun({ mode: 'local', speechMs: 320 })!
+    const clearedRunId = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 320 })!
     trace.clearPipelineTrace()
-    const disabledRunId = trace.beginRun({ mode: 'local', speechMs: 320 })!
+    const disabledRunId = trace.beginRun({ closeReason: 'silence', mode: 'local', speechMs: 320 })!
     trace.setPipelineDebugEnabled(false)
     trace.setPipelineDebugEnabled(true)
-    const currentRunId = trace.beginRun({ mode: 'cloud_api', speechMs: 640 })!
+    const currentRunId = trace.beginRun({ closeReason: 'silence', mode: 'cloud_api', speechMs: 640 })!
 
     trace.finishRun(clearedRunId, {})
     trace.finishRun(disabledRunId, {})
@@ -322,5 +322,56 @@ describe('pipeline trace', () => {
 
     expect(trace.getPipelineSnapshot().runs.map((run) => run.id)).toEqual([currentRunId])
     expect(currentRunId).toBeGreaterThan(disabledRunId)
+  })
+
+  it('keeps the reason a segment was closed on completed and failed runs', async () => {
+    const trace = await loadPipelineTrace()
+    trace.setPipelineDebugEnabled(true)
+    const completed = trace.beginRun({ closeReason: 'pause', mode: 'local', speechMs: 640 })!
+    trace.finishRun(completed, {})
+    const failed = trace.beginRun({ closeReason: 'cap', mode: 'local', speechMs: 640 })!
+    trace.failRun(failed, 'failed', 'boom')
+
+    expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['pause', 'cap'])
+  })
+
+  it('tracks the longest gap between frames while speech was open, and only while enabled', async () => {
+    const trace = await loadPipelineTrace()
+    trace.noteSpeechFrameGap(900)
+    expect(trace.getPipelineSnapshot().counters.maxSpeechGapMs).toBe(0)
+
+    trace.setPipelineDebugEnabled(true)
+    trace.noteSpeechFrameGap(40)
+    expect(trace.getPipelineSnapshot().counters.maxSpeechGapMs).toBe(40)
+    trace.noteSpeechFrameGap(900.4)
+    trace.noteSpeechFrameGap(100)
+    expect(trace.getPipelineSnapshot().counters.maxSpeechGapMs).toBe(900)
+
+    trace.clearPipelineTrace()
+    expect(trace.getPipelineSnapshot().counters.maxSpeechGapMs).toBe(0)
+  })
+
+  it('does not publish a new snapshot for a gap that is not a new maximum', async () => {
+    const trace = await loadPipelineTrace()
+    trace.setPipelineDebugEnabled(true)
+    trace.noteSpeechFrameGap(300)
+    const before = trace.getPipelineSnapshot()
+    trace.noteSpeechFrameGap(300)
+    trace.noteSpeechFrameGap(20)
+
+    expect(trace.getPipelineSnapshot()).toBe(before)
+  })
+
+  it('counts runs per close reason, including reasons that never occurred', async () => {
+    const trace = await loadPipelineTrace()
+    const runs = [
+      createRun({ id: 1, status: 'ok', closeReason: 'silence' }),
+      createRun({ id: 2, status: 'ok', closeReason: 'cap' }),
+      createRun({ id: 3, status: 'failed', closeReason: 'cap' }),
+      createRun({ id: 4, status: 'ok', closeReason: 'dropout' }),
+    ]
+
+    expect(trace.countCloseReasons(runs)).toEqual({ silence: 1, pause: 0, cap: 2, gap: 0, dropout: 1 })
+    expect(trace.countCloseReasons([])).toEqual({ silence: 0, pause: 0, cap: 0, gap: 0, dropout: 0 })
   })
 })
