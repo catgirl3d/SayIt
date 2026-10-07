@@ -108,6 +108,9 @@ const MAX_PENDING_BYTES = 16_000 * 2 * 12
 // Close the current speech segment after this receive inactivity interval.
 const FRAME_RECEIVE_GAP_MS = 512
 const PROCESSING_TIMEOUT_MS = 30_000
+// One bad fragment (a slow or failing AI, a recognition error) is skipped or shown untranslated. The session
+// stops only when this many fragments fail back to back, which means the service itself is down or misconfigured.
+const MAX_CONSECUTIVE_FAILURES = 3
 const CAPTION_HOLD_MS = 8_000
 let sequence = Date.now()
 
@@ -151,6 +154,7 @@ export class SystemAudioSession {
   private queuedBytes = 0
   private activeJob = 0
   private activeSpan: SegmentSpan | null = null
+  private consecutiveFailures = 0
   private readonly recent = new RecentSpeech()
   private publishedAsrJob = 0
   private activeRunId: number | null = null
@@ -213,10 +217,10 @@ export class SystemAudioSession {
     }
   }
 
-  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails) {
+  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, warning = '') {
     if (this.captionTimer) clearTimeout(this.captionTimer)
-    if (runId !== undefined && runId !== null && finishDetails) this.publish({ caption, warning: '' }, runId, finishDetails)
-    else this.publish({ caption, warning: '' })
+    if (runId !== undefined && runId !== null && finishDetails) this.publish({ caption, warning }, runId, finishDetails)
+    else this.publish({ caption, warning })
     this.captionTimer = setTimeout(() => {
       if (generation === this.generation) this.publish({ caption: '' })
     }, CAPTION_HOLD_MS)
@@ -287,6 +291,7 @@ export class SystemAudioSession {
             return
           }
           if (asrOnly) {
+            this.consecutiveFailures = 0
             const caption = result.asrText.trim()
             const runId = isPipelineDebugEnabled() ? this.activeRunId : null
             const finishDetails = this.finishDetails(result, caption)
@@ -299,34 +304,35 @@ export class SystemAudioSession {
             return
           }
           if (this.activeSpan) this.recent.push(result.asrText.trim(), this.activeSpan)
-          // The managed server LLM falls back to the input text when its answer is empty or
-          // think-only while still reporting elapsed time, so an "applied" result can be the
-          // original speech. A translation identical to the transcript is never shown as one.
+          const original = result.asrText.trim()
           const comparableTranslation = result.llmText.replace(/\s+/g, ' ').trim()
           const comparableSource = result.asrText.replace(/\s+/g, ' ').trim()
-          if (result.aiStatus !== 'applied' || !comparableTranslation || comparableTranslation === comparableSource) {
-            failRun(this.activeRunId, 'rejected', result.aiStatus !== 'applied' ? result.aiStatus : 'identical translation')
-            this.fail(t('systemAudio.translationFailed'))
+          if (result.aiStatus !== 'applied' || !comparableTranslation) {
+            // The AI produced no translation. Show what was heard, marked as untranslated, and keep listening.
+            failRun(this.activeRunId, 'rejected', result.aiStatus !== 'applied' ? result.aiStatus : 'empty translation')
+            if (this.recordFailure(t('systemAudio.translationFailed'))) return
+            this.publishCaption(original, generation, undefined, undefined, t('systemAudio.untranslated'))
             return
           }
+          this.consecutiveFailures = 0
           const caption = result.llmText.trim()
           const runId = isPipelineDebugEnabled() ? this.activeRunId : null
-          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption))
+          // A translation identical to the transcript is speech already in the target language, a name, a number,
+          // or the managed server LLM echoing its input when its answer was empty. Never present it as a translation.
+          const warning = comparableTranslation === comparableSource ? t('systemAudio.untranslated') : ''
+          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption), warning)
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
-          setPipelineActivity({ phase: 'listening', stageStartedAt: null })
-          this.activeJob = 0
-          this.activeSpan = null
-          this.publishedAsrJob = 0
-          this.activeRunId = null
-          if (this.processingTimer) clearTimeout(this.processingTimer)
-          this.processingTimer = null
-          // Providers finalize their run after onDone returns. Never start a new run inside that callback.
-          queueMicrotask(() => { if (generation === this.generation) this.processNext() })
+          this.finishJob(generation)
         },
         onError: (message) => {
-          if (generation === this.generation) this.fail(describeProviderError(message).message)
+          if (generation !== this.generation) return
+          const reason = describeProviderError(message).message
+          // An error outside any job (connection, readiness) cannot be skipped over.
+          if (!this.activeJob) { this.fail(reason); return }
+          failRun(this.activeRunId, 'failed', reason)
+          this.skipFragment(generation, reason, reason)
         },
       })
       if (generation !== this.generation) return
@@ -441,13 +447,55 @@ export class SystemAudioSession {
     // A short continuation still contains real speech; pad only the submitted job to the ASR minimum.
     const audio = new Uint8Array(Math.max(10, frames.length) * FRAME_BYTES)
     frames.forEach((frame, index) => audio.set(frame.audio, index * FRAME_BYTES))
-    if (this.queuedBytes + audio.byteLength > MAX_PENDING_BYTES) { this.fail(t('systemAudio.overload')); return }
+    this.dropOldestToFit(audio.byteLength)
     const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * FRAME_MS, asrOnly: this.options?.asrOnly ?? false })
     const endedAt = Date.now()
     this.queue.push({ audio, runId, startedAt: endedAt - frames.length * FRAME_MS, endedAt })
     this.queuedBytes += audio.byteLength
     setQueueDepth(this.queue.length)
     this.processNext()
+  }
+
+  // Captions older than the speech now playing are worthless, so when processing falls behind the oldest waiting
+  // speech is dropped to bound the backlog; the session keeps listening.
+  private dropOldestToFit(incomingBytes: number) {
+    let dropped = false
+    while (this.queue.length && this.queuedBytes + incomingBytes > MAX_PENDING_BYTES) {
+      const oldest = this.queue.shift()!
+      this.queuedBytes -= oldest.audio.byteLength
+      failRun(oldest.runId, 'failed', 'dropped: processing is behind playback')
+      dropped = true
+    }
+    if (dropped) this.publish({ warning: t('systemAudio.behind') })
+  }
+
+  // Ends the active job and, once the provider is done with its callback, starts the next queued one.
+  private finishJob(generation: number) {
+    setPipelineActivity({ phase: 'listening', stageStartedAt: null })
+    this.activeJob = 0
+    this.activeSpan = null
+    this.publishedAsrJob = 0
+    this.activeRunId = null
+    if (this.processingTimer) clearTimeout(this.processingTimer)
+    this.processingTimer = null
+    // Providers finalize their run after onDone returns. Never start a new run inside that callback.
+    queueMicrotask(() => { if (generation === this.generation) this.processNext() })
+  }
+
+  /** Counts a failed fragment and stops the session once too many failed in a row. Returns true when it stopped. */
+  private recordFailure(message: string): boolean {
+    if (++this.consecutiveFailures < MAX_CONSECUTIVE_FAILURES) return false
+    this.fail(message)
+    return true
+  }
+
+  // Gives up on the active fragment, tells the user, and moves on to the next one. A provider reports a failed job
+  // with onError immediately followed by onDone (or without onDone at all); finishJob makes either order safe,
+  // because the trailing onDone finds no active job.
+  private skipFragment(generation: number, failure: string, reason = failure) {
+    if (this.recordFailure(failure)) return
+    this.publish({ warning: t('systemAudio.fragmentSkipped', { reason }) })
+    this.finishJob(generation)
   }
 
   private processNext() {
@@ -463,13 +511,14 @@ export class SystemAudioSession {
     const generation = this.generation
     this.activeJob = ++sequence
     this.processingTimer = setTimeout(() => {
-      if (generation === this.generation && this.activeJob) {
-        if (this.activeRunId !== null) {
-          failRun(this.activeRunId, 'timeout', t('systemAudio.timeout'))
-          this.activeRunId = null
-        }
-        this.fail(t('systemAudio.timeout'))
+      if (generation !== this.generation || !this.activeJob) return
+      if (this.activeRunId !== null) {
+        failRun(this.activeRunId, 'timeout', t('systemAudio.timeout'))
+        this.activeRunId = null
       }
+      // Abandon the stuck run: after cancel() the provider drops anything it still returns for it.
+      this.provider?.cancel()
+      this.skipFragment(generation, t('systemAudio.timeout'), t('systemAudio.timeoutReason'))
     }, PROCESSING_TIMEOUT_MS)
     try {
       if (!this.provider.start({ ...this.startOptions, textContext: this.translationContext(job), runId: this.activeJob })) throw new Error('ASR did not start')
@@ -507,6 +556,7 @@ export class SystemAudioSession {
     this.queue = []
     this.recent.clear()
     this.activeSpan = null
+    this.consecutiveFailures = 0
     this.queuedBytes = this.activeJob = 0
     this.publishedAsrJob = 0
     setQueueDepth(0)

@@ -29,6 +29,7 @@ import { ServerProvider } from '../transcription/ServerProvider'
 import type { StartOptions, TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
 import type { SubtitleOverlayPayload } from '../recorder/types'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
+import { describeProviderError } from '@/lib/errorMessages'
 import { clearPipelineTrace, getPipelineSnapshot, setPipelineDebugEnabled } from '../pipelineTrace'
 
 type OverlayCall =
@@ -249,7 +250,7 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().state).toBe('listening')
   })
 
-  it('keeps the normal-mode translation rejection path and provider options', async () => {
+  it('shows the recognized original as untranslated when the AI skipped the translation, and keeps the provider options', async () => {
     const trace = enablePipelineDebug()
     let callbacks: TranscriptionCallbacks | undefined
     let startOptions: StartOptions | undefined
@@ -276,9 +277,8 @@ describe('system audio subtitle session', () => {
     })
 
     expect(startOptions).toMatchObject({ disableAi: false, requireTranslation: true })
-    expect(session.getSnapshot().state).toBe('error')
-    expect(session.getSnapshot().caption).toBe('')
-    expect(session.getSnapshot().error).not.toBe('')
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
+    expect(session.getSnapshot().warning).toContain('not translated')
     expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'rejected' }])
   })
 
@@ -830,49 +830,189 @@ describe('system audio subtitle session', () => {
     expect(native.captured[0].length).toBe(188 * 1024)
   })
 
-  it('rejects AI fallback instead of displaying original ASR as a translation', async () => {
-    const original = native.invoke.getMockImplementation()!
-    native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? Promise.reject(new Error('AI unavailable')) : original(name, args))
-    await session.start({ deviceId: '', targetLanguage: 'ru' })
-    frames(20, 0.9)
-    frames(15, 0)
-    await settle()
+  describe('failure tolerance', () => {
+    function speak() {
+      frames(20, 0.9)
+      frames(15, 0)
+    }
 
-    expect(session.getSnapshot().state).toBe('error')
-    expect(session.getSnapshot().caption).toBe('')
-    expect(session.getSnapshot().error).not.toBe('')
-  })
+    // Scripted AI answers, one per translated fragment; the last entry repeats.
+    function scriptAi(...answers: Array<'ok' | 'fail' | 'same'>) {
+      let index = 0
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name !== 'cloud_polish') return original(name, args)
+        const answer = answers[Math.min(index++, answers.length - 1)]
+        if (answer === 'fail') return Promise.reject(new Error('AI unavailable'))
+        return Promise.resolve({ text: answer === 'same' ? 'Original speech' : 'Translated speech', elapsed_ms: 5 })
+      })
+    }
 
-  it('rejects an applied translation identical to the recognized speech instead of echoing the original', async () => {
-    const original = native.invoke.getMockImplementation()!
-    native.invoke.mockImplementation((name, args) => name === 'cloud_polish'
-      ? Promise.resolve({ text: 'Original speech', elapsed_ms: 5 })
-      : original(name, args))
-    await session.start({ deviceId: '', targetLanguage: 'ru' })
-    frames(20, 0.9)
-    frames(15, 0)
-    await settle()
+    it('shows the recognized original marked as untranslated when the AI fails, and keeps listening', async () => {
+      scriptAi('fail')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
 
-    expect(session.getSnapshot().state).toBe('error')
-    expect(session.getSnapshot().caption).toBe('')
-    expect(session.getSnapshot().error).toContain('Translation failed')
-  })
-
-  it('keeps the interruption cause visible when native capture cleanup also fails', async () => {
-    const original = native.invoke.getMockImplementation()!
-    native.invoke.mockImplementation((name, args) => {
-      if (name === 'cloud_polish') return Promise.reject(new Error('AI unavailable'))
-      if (name === 'stop_system_audio_capture') return Promise.reject(new Error('Native cleanup unavailable'))
-      return original(name, args)
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
+      expect(session.getSnapshot().warning).toContain('not translated')
     })
-    await session.start({ deviceId: '', targetLanguage: 'ru' })
-    frames(20, 0.9)
-    frames(15, 0)
-    await settle()
 
-    expect(session.getSnapshot().state).toBe('error')
-    expect(session.getSnapshot().error).toContain('Translation failed')
-    expect(session.getSnapshot().error).toContain('Could not safely return to dictation')
+    it('shows an identical translation as the original, marked, and never counts it as a failure', async () => {
+      scriptAi('same')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      for (let index = 0; index < 5; index++) {
+        speak()
+        await settle()
+      }
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
+      expect(session.getSnapshot().warning).toContain('not translated')
+    })
+
+    it('replaces the untranslated mark once a translation succeeds', async () => {
+      scriptAi('fail', 'ok')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      speak()
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Translated speech', warning: '' })
+    })
+
+    it('stops with the translation error only after three failures in a row', async () => {
+      scriptAi('fail')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      for (let index = 0; index < 2; index++) {
+        speak()
+        await settle()
+        expect(session.getSnapshot().state).toBe('listening')
+      }
+      speak()
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().caption).toBe('')
+      expect(session.getSnapshot().error).toContain('Translation failed')
+    })
+
+    it('restarts the failure count after every success', async () => {
+      scriptAi('fail', 'fail', 'ok', 'fail', 'fail')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      for (let index = 0; index < 5; index++) {
+        speak()
+        await settle()
+      }
+
+      expect(session.getSnapshot().state).toBe('listening')
+    })
+
+    it('starts counting from zero after the session is resumed', async () => {
+      scriptAi('fail')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      for (let index = 0; index < 3; index++) {
+        speak()
+        await settle()
+      }
+      expect(session.getSnapshot().state).toBe('error')
+      await session.resume()
+      for (let index = 0; index < 2; index++) {
+        speak()
+        await settle()
+      }
+
+      expect(session.getSnapshot().state).toBe('listening')
+    })
+
+    it('skips a fragment whose recognition fails and keeps listening', async () => {
+      const original = native.invoke.getMockImplementation()!
+      let failures = 1
+      native.invoke.mockImplementation((name, args) => name === 'local_transcribe' && failures-- > 0
+        ? Promise.reject(new Error('ASR backend unavailable')) : original(name, args))
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(session.getSnapshot().warning).toContain('Fragment skipped')
+      speak()
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Translated speech', warning: '' })
+    })
+
+    it('stops with the provider error after three recognition failures in a row', async () => {
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'local_transcribe'
+        ? Promise.reject(new Error('ASR backend unavailable')) : original(name, args))
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      for (let index = 0; index < 3; index++) {
+        speak()
+        await settle()
+      }
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toBe(describeProviderError('Error: ASR backend unavailable').message)
+    })
+
+    it('abandons a fragment that never completes, ignores its late result, and keeps listening', async () => {
+      const stuck = deferred<{ text: string; elapsed_ms: number }>()
+      const original = native.invoke.getMockImplementation()!
+      let calls = 0
+      native.invoke.mockImplementation((name, args) => name === 'local_transcribe' && calls++ === 0 ? stuck.promise : original(name, args))
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(session.getSnapshot().warning).toContain('Fragment skipped')
+
+      speak()
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Translated speech')
+      stuck.resolve({ text: 'Stale speech', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Translated speech')
+    })
+
+    it('cancels the provider run it gave up on, so a late result cannot be attached to a later fragment', async () => {
+      const cancel = vi.fn()
+      const provider = createTestProvider(() => {})
+      provider.cancel = cancel
+      session = new SystemAudioSession({
+        getProvider: () => provider,
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(cancel).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot().state).toBe('listening')
+    })
+
+    it('keeps the interruption cause visible when native capture cleanup also fails', async () => {
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish') return Promise.reject(new Error('AI unavailable'))
+        if (name === 'stop_system_audio_capture') return Promise.reject(new Error('Native cleanup unavailable'))
+        return original(name, args)
+      })
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      for (let index = 0; index < 3; index++) {
+        speak()
+        await settle()
+      }
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('Translation failed')
+      expect(session.getSnapshot().error).toContain('Could not safely return to dictation')
+    })
   })
 
   it('does not publish a cancelled translation or process another segment before the first one finishes', async () => {
@@ -894,19 +1034,42 @@ describe('system audio subtitle session', () => {
     expect(leased).toBe(false)
   })
 
-  it('stops visibly when queued audio exceeds the budget rather than accumulating an unbounded backlog', async () => {
+  it('drops the oldest waiting speech and keeps listening when processing falls behind, instead of building an unbounded backlog', async () => {
+    const pending = deferred<{ text: string; elapsed_ms: number }>()
+    const original = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => name === 'local_transcribe' ? pending.promise : original(name, args))
+    const transcribed = () => native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')
+      .map(([, args]) => new Int16Array(Uint8Array.from(atob(args.audioB64 as string), (char) => char.charCodeAt(0)).buffer)[0])
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    frames(188, 0.9, 11)
+    await settle()
+    frames(188, 0.9, 22)
+    frames(188, 0.9, 33)
+    frames(188, 0.9, 44)
+    await settle()
+
+    expect(session.getSnapshot().state).toBe('listening')
+    expect(session.getSnapshot().warning).toContain('older speech was skipped')
+    expect(transcribed()).toEqual([11])
+
+    pending.resolve({ text: 'Late speech', elapsed_ms: 5 })
+    await settle()
+    expect(transcribed()).toEqual([11, 44])
+  })
+
+  it('marks the dropped speech as failed in the pipeline trace', async () => {
+    const trace = enablePipelineDebug()
     const pending = deferred<{ text: string; elapsed_ms: number }>()
     const original = native.invoke.getMockImplementation()!
     native.invoke.mockImplementation((name, args) => name === 'local_transcribe' ? pending.promise : original(name, args))
     await session.start({ deviceId: '', targetLanguage: 'en' })
     frames(188, 0.9)
     await settle()
-    frames(612, 0.9)
+    frames(188 * 3, 0.9)
     await settle()
 
-    expect(session.getSnapshot().state).toBe('error')
-    expect(session.getSnapshot().error).toContain('keep up')
-    expect(native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')).toHaveLength(1)
+    const dropped = trace.getPipelineSnapshot().runs.filter((run) => run.status === 'failed')
+    expect(dropped).toHaveLength(2)
     pending.resolve({ text: 'Late speech', elapsed_ms: 5 })
   })
 
@@ -1132,9 +1295,9 @@ describe('system audio subtitle session', () => {
   })
 
   it.each([
-    { finalText: 'Server translation', expectedState: 'listening', expectedCaption: 'Server translation' },
-    { finalText: 'Original speech', expectedState: 'error', expectedCaption: '' },
-  ] as const)('uses server-managed translation with the caption prompt and rejects late messages from the closed socket: $finalText', async ({ finalText, expectedState, expectedCaption }) => {
+    { finalText: 'Server translation', expectedCaption: 'Server translation', expectedWarning: '' },
+    { finalText: 'Original speech', expectedCaption: 'Original speech', expectedWarning: 'not translated' },
+  ] as const)('uses server-managed translation with the caption prompt and rejects late messages from the closed socket: $finalText', async ({ finalText, expectedCaption, expectedWarning }) => {
     const messages: Array<Record<string, unknown>> = []
     const sockets: ServerSocket[] = []
     class ServerSocket {
@@ -1177,9 +1340,9 @@ describe('system audio subtitle session', () => {
     frames(15, 0)
     await settle()
 
-    expect(session.getSnapshot().state).toBe(expectedState)
+    expect(session.getSnapshot().state).toBe('listening')
     expect(session.getSnapshot().caption).toBe(expectedCaption)
-    if (expectedState === 'error') expect(session.getSnapshot().error).toContain('Translation failed')
+    expect(session.getSnapshot().warning).toContain(expectedWarning)
     expect(messages.find((message) => message.cmd === 'start')?.disable_ai).not.toBe(true)
     expect(messages.find((message) => message.cmd === 'start')?.system_prompt).toContain('Russian')
     expect(native.invoke.mock.calls.some(([name]) => name === 'cloud_polish')).toBe(false)
@@ -1302,7 +1465,7 @@ describe('system audio subtitle session', () => {
     expect(native.invoke.mock.calls.some(([name]) => name === 'stop_system_audio_capture')).toBe(true)
   })
 
-  it('still fails visibly if a preserved translation job fails after a recoverable gap', async () => {
+  it('still reports a failed translation of a preserved job after a recoverable gap, by showing the original marked as untranslated', async () => {
     const original = native.invoke.getMockImplementation()!
     native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? Promise.reject(new Error('AI unavailable')) : original(name, args))
     await session.start({ deviceId: 'headphones', targetLanguage: 'ru' })
@@ -1311,9 +1474,8 @@ describe('system audio subtitle session', () => {
     frames(1, 0, 0, undefined, true)
     await settle()
 
-    expect(session.getSnapshot().state).toBe('error')
-    expect(session.getSnapshot().error).toContain('Translation failed')
-    expect(session.getSnapshot().warning).toBe('')
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
+    expect(session.getSnapshot().warning).toContain('not translated')
   })
 
   it('keeps the gap notice through an empty ASR final until a translated caption succeeds', async () => {
