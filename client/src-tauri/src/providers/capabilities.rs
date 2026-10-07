@@ -37,6 +37,7 @@ const CLOUD_CAPABILITIES: &[(&str, HotwordDelivery, Option<usize>)] = &[
         None,
     ),
     ("openai_compat", HotwordDelivery::Instruction, None),
+    ("deepgram", HotwordDelivery::NotWiredUp, None),
 ];
 
 const UI_CAPABILITIES: &[(&str, HotwordDelivery, Option<usize>)] = &[
@@ -216,7 +217,7 @@ pub async fn test_asr_connection() {}
                 "{provider}"
             );
         }
-        for provider in ["mimo", "groq_whisper", "openai_transcribe", "local"] {
+        for provider in ["mimo", "groq_whisper", "openai_transcribe", "local", "deepgram"] {
             assert_eq!(
                 hotword_capability(provider).delivery,
                 HotwordDelivery::NotWiredUp,

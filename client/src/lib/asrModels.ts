@@ -89,6 +89,7 @@ const ASR_DISPLAY_MODEL_MAP: Record<string, string> = {
   openai_transcribe: 'gpt-transcribe',
   gemini_transcribe: 'gemini-3.5-transcribe',
   openrouter_transcribe: 'openai/gpt-transcribe',
+  deepgram: 'nova-3',
   ...QWEN_OMNI_MODEL_MAP,
 }
 
@@ -102,6 +103,7 @@ export function resolveAsrDisplayModel(providerKey: string): string {
  * and Qwen Audio 3.1 support streaming among the Qwen providers. */
 export function isStreamingDisplayCapable(provider: string): boolean {
   return provider === 'doubao_v2' || provider === 'qwen_realtime' || provider === 'qwen_audio_stream'
+    || provider === 'deepgram'
 }
 
 /**
@@ -112,9 +114,11 @@ export function isStreamingDisplayCapable(provider: string): boolean {
  *   a live check of 3.1.
  * - qwen_realtime (qwen3-asr-flash-realtime) requires a Beijing workspace ID for its regional endpoint.
  * - qwen (qwen3-asr-flash) is non-streaming and does not support live captions.
+ * - deepgram streams over its own WebSocket and needs nothing beyond the API key.
  */
 export function isStreamingDisplayReady(provider: string, qwenWorkspaceId?: string): boolean {
   if (provider === 'doubao_v2') return true
+  if (provider === 'deepgram') return true
   if (provider === 'qwen_audio_stream') return true
   if (provider === 'qwen_realtime') {
     return Boolean(qwenWorkspaceId && qwenWorkspaceId.trim())
@@ -125,12 +129,16 @@ export function isStreamingDisplayReady(provider: string, qwenWorkspaceId?: stri
 export function resolveCloudAsrLanguageRequest(provider: string, language: SpeechInputLanguage): string | undefined {
   if (provider === 'groq_whisper') return language === 'auto' ? undefined : language
   if (provider === 'mimo') return language === 'zh' || language === 'en' ? language : undefined
+  // Nova-3 recognizes every SayIt language explicitly (ru, uk, en, zh); only
+  // "auto" falls through to its multilingual code-switching mode.
+  if (provider === 'deepgram') return language === 'auto' ? undefined : language
   return undefined
 }
 
 export function getCloudAsrSupportedLanguages(provider: string): SpeechInputLanguage[] | null {
   if (provider === 'groq_whisper') return ['ru', 'uk', 'en', 'zh']
   if (provider === 'mimo') return ['zh', 'en']
+  if (provider === 'deepgram') return ['ru', 'uk', 'en', 'zh']
   return null
 }
 
@@ -189,7 +197,7 @@ export function resolveBadgeLanguage(
 /**
  * Build the `extra` payload for a cloud ASR request. Omni providers carry the
  * resolved model ID plus system-prompt instructions; explicit-language providers
- * (Groq, MiMo) carry the language code; every other provider needs no payload.
+ * (Groq, MiMo, Deepgram) carry the language code; every other provider needs no payload.
  */
 export function buildCloudAsrExtra(
   provider: string,
@@ -212,7 +220,7 @@ export function buildCloudAsrExtra(
     }
   }
   const requestLanguage = resolveCloudAsrLanguageRequest(provider, language)
-  if (provider === 'groq_whisper') {
+  if (provider === 'groq_whisper' || provider === 'deepgram') {
     if (!selectedModel && !requestLanguage) return undefined
     return {
       ...(selectedModel ? { model: selectedModel } : {}),

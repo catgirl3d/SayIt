@@ -973,6 +973,8 @@
   "asrProvider.mimoBlurb": "A fallback. Accuracy is middling; worth a try if you already have a Xiaomi API key.",
   "asrProvider.groq": "Groq Whisper",
   "asrProvider.groqBlurb": "Multilingual transcription with fast responses. Chinese is so-so, and it needs access to the international internet.",
+  "asrProvider.deepgram": "Deepgram",
+  "asrProvider.deepgramBlurb": "Live captions as you speak; supports Russian, Ukrainian, English and Chinese, plus mixed Russian-English speech. Needs access to the international internet.",
   "asrProvider.regionGlobal": "For international accounts.",
   "asrProvider.openai": "OpenAI transcription",
   "asrProvider.openaiBlurb": "Buffered transcription with OpenAI speech-to-text models.",

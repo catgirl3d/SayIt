@@ -966,6 +966,8 @@
   "asrProvider.mimoBlurb": "Альтернативний варіант. Потрібен API-ключ Xiaomi.",
   "asrProvider.groq": "Groq Whisper",
   "asrProvider.groqBlurb": "Багатомовна транскрипція зі швидким відгуком. Потребує доступу до міжнародного інтернету.",
+  "asrProvider.deepgram": "Deepgram",
+  "asrProvider.deepgramBlurb": "Живі субтитри під час мовлення; підтримуються російська, українська, англійська та китайська, а також змішане російсько-англійське мовлення. Потрібен доступ до міжнародного інтернету.",
   "asrProvider.regionGlobal": "Для міжнародних акаунтів.",
   "asrProvider.openai": "Транскрибування OpenAI",
   "asrProvider.openaiBlurb": "Пакетне транскрибування за допомогою моделей розпізнавання мовлення OpenAI.",

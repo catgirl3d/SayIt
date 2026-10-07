@@ -4,6 +4,8 @@ import {
   buildCloudAsrExtra,
   getCloudAsrSupportedLanguages,
   isQwenOmniProvider,
+  isStreamingDisplayCapable,
+  isStreamingDisplayReady,
   modelSupportsSpeechLanguage,
   resolveBadgeLanguage,
   resolveCloudAsrLanguageRequest,
@@ -51,6 +53,7 @@ describe('resolveAsrDisplayModel', () => {
     expect(resolveAsrDisplayModel('qwen_audio_stream')).toBe('qwen-audio-3.1-asr-flash-streaming')
     expect(resolveAsrDisplayModel('mimo')).toBe('mimo-v2.5-asr')
     expect(resolveAsrDisplayModel('groq_whisper')).toBe('whisper-large-v3-turbo')
+    expect(resolveAsrDisplayModel('deepgram')).toBe('nova-3')
     expect(resolveAsrDisplayModel('qwen_omni_35_plus')).toBe('qwen3.5-omni-plus-realtime')
     expect(resolveAsrDisplayModel('qwen_omni_38_realtime')).toBe('qwen3.8-omni-flash-realtime')
   })
@@ -70,6 +73,11 @@ describe('cloud ASR language capabilities', () => {
     expect(resolveCloudAsrLanguageRequest('groq_whisper', 'ru')).toBe('ru')
     expect(resolveCloudAsrLanguageRequest('mimo', 'zh')).toBe('zh')
     expect(resolveCloudAsrLanguageRequest('mimo', 'ru')).toBeUndefined()
+    expect(resolveCloudAsrLanguageRequest('deepgram', 'ru')).toBe('ru')
+    expect(resolveCloudAsrLanguageRequest('deepgram', 'uk')).toBe('uk')
+    expect(resolveCloudAsrLanguageRequest('deepgram', 'en')).toBe('en')
+    expect(resolveCloudAsrLanguageRequest('deepgram', 'zh')).toBe('zh')
+    expect(resolveCloudAsrLanguageRequest('deepgram', 'auto')).toBeUndefined()
     for (const provider of ['doubao_v2', 'qwen', 'qwen_realtime', 'qwen_omni_plus']) {
       for (const language of ['auto', 'ru', 'uk', 'en', 'zh'] as const) {
         expect(resolveCloudAsrLanguageRequest(provider, language)).toBeUndefined()
@@ -80,7 +88,20 @@ describe('cloud ASR language capabilities', () => {
   it('reports provider-supported explicit languages', () => {
     expect(getCloudAsrSupportedLanguages('groq_whisper')).toEqual(['ru', 'uk', 'en', 'zh'])
     expect(getCloudAsrSupportedLanguages('mimo')).toEqual(['zh', 'en'])
+    expect(getCloudAsrSupportedLanguages('deepgram')).toEqual(['ru', 'uk', 'en', 'zh'])
     expect(getCloudAsrSupportedLanguages('qwen')).toBeNull()
+  })
+})
+
+describe('streaming display readiness', () => {
+  it('marks Deepgram as streaming-capable and ready with just an API key', () => {
+    expect(isStreamingDisplayCapable('deepgram')).toBe(true)
+    expect(isStreamingDisplayReady('deepgram')).toBe(true)
+  })
+
+  it('keeps the Qwen realtime workspace requirement', () => {
+    expect(isStreamingDisplayReady('qwen_realtime')).toBe(false)
+    expect(isStreamingDisplayReady('qwen_realtime', 'ws-1')).toBe(true)
   })
 })
 
@@ -169,6 +190,15 @@ describe('buildCloudAsrExtra', () => {
     expect(buildCloudAsrExtra('groq_whisper', 'auto')).toBeUndefined()
     expect(buildCloudAsrExtra('mimo', 'zh')).toEqual({ language: 'zh' })
     expect(buildCloudAsrExtra('mimo', 'uk')).toBeUndefined()
+    expect(buildCloudAsrExtra('deepgram', 'ru', undefined, 'nova-3')).toEqual({
+      model: 'nova-3',
+      language: 'ru',
+    })
+    expect(buildCloudAsrExtra('deepgram', 'auto', undefined, 'nova-3')).toEqual({ model: 'nova-3' })
+    expect(buildCloudAsrExtra('deepgram', 'uk', undefined, 'nova-3')).toEqual({
+      model: 'nova-3',
+      language: 'uk',
+    })
   })
 
   it('keeps language capability unknown for buffered providers while sending selected hints', () => {

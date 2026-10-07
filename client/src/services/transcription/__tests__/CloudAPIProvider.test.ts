@@ -345,4 +345,155 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(callbacks.onFinal).not.toHaveBeenCalled()
     expect(callbacks.onError).not.toHaveBeenCalled()
   })
+
+  it('streams Deepgram through its own transport and stamps the catalog model', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'streamingDisplayEnabled' ? true : fallback
+    ))
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-account',
+      provider: 'deepgram',
+      apiKey: 'deepgram-key',
+      appId: '',
+      model: 'nova-3',
+      omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'deepgram_stream_finish' ? 'recognized' : undefined
+    ))
+
+    const provider = new CloudAPIProvider()
+    const finals: Array<{ asrEngine?: string; asrModel?: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+    expect(provider.start({ runId: 13, language: 'ru' })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    // The Deepgram stream opens asynchronously; stop only takes the streaming path once ready.
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_open')).toBe(true)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Once ready, new audio must be pushed to the stream by the periodic flush,
+    // not held until stop.
+    provider.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_send')).toBe(true)
+    }, { timeout: 2000 })
+    expect(provider.stop()).toBe(true)
+    await done
+
+    const openCall = mocks.invoke.mock.calls.find(([command]) => command === 'deepgram_stream_open')
+    expect(openCall?.[1]).toMatchObject({
+      config: {
+        provider: 'deepgram',
+        api_key: 'deepgram-key',
+        app_id: '',
+        extra: { model: 'nova-3', language: 'ru' },
+      },
+      sampleRate: 16000,
+    })
+    expect(finals[0]).toMatchObject({ asrEngine: 'deepgram', asrModel: 'nova-3' })
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+  })
+
+  it('transcribes a completed Deepgram segment without opening a live socket when captions are off', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-account', provider: 'deepgram', apiKey: 'deepgram-key',
+      appId: '', model: 'nova-3', omniPrompt: '',
+    })
+    const provider = new CloudAPIProvider()
+    const finals: Array<{ asrText: string; asrEngine?: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+    expect(provider.start({ runId: 14, language: 'en', disableAi: true })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    expect(provider.stop()).toBe(true)
+    await done
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(finals).toEqual([expect.objectContaining({ asrText: 'recognized', asrEngine: 'deepgram' })])
+    const requests = mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')
+    expect(requests).toHaveLength(1)
+    expect(requests[0][1]).toMatchObject({ request: {
+      sample_rate: 16000,
+      asr_config: { provider: 'deepgram', extra: { model: 'nova-3', language: 'en' } },
+    } })
+    expect(mocks.invoke.mock.calls.some(([command]) => (
+      command === 'deepgram_stream_open' || command === 'deepgram_stream_send' || command === 'deepgram_stream_finish'
+    ))).toBe(false)
+    provider.disconnect()
+  })
+
+  it('keeps subtitle segment runs on the HTTP path even when live captions are enabled', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'streamingDisplayEnabled' ? true : fallback
+    ))
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-account', provider: 'deepgram', apiKey: 'deepgram-key',
+      appId: '', model: 'nova-3', omniPrompt: '',
+    })
+    const provider = new CloudAPIProvider()
+    const finals: Array<{ asrText: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+    expect(provider.start({ runId: 15, language: 'ru', disableStreaming: true })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    expect(provider.stop()).toBe(true)
+    await done
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(mocks.invoke.mock.calls.some(([command]) => (
+      command === 'deepgram_stream_open' || command === 'deepgram_stream_send' || command === 'deepgram_stream_finish'
+    ))).toBe(false)
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')).toHaveLength(1)
+    expect(finals).toEqual([expect.objectContaining({ asrText: 'recognized' })])
+    provider.disconnect()
+  })
+
+  it('falls back to the buffered HTTP path when a Deepgram stream send fails', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'streamingDisplayEnabled' ? true : fallback
+    ))
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-account', provider: 'deepgram', apiKey: 'deepgram-key',
+      appId: '', model: 'nova-3', omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_send') throw new Error('socket is gone')
+      if (command === 'cloud_transcribe') return { text: 'recognized', elapsed_ms: 24 }
+      return undefined
+    })
+
+    const provider = new CloudAPIProvider()
+    const finals: Array<{ asrText: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+    expect(provider.start({ runId: 16, language: 'ru' })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_open')).toBe(true)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Queued after the stream is ready, so the periodic flush attempts to send it and fails.
+    provider.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_send')).toBe(true)
+    }, { timeout: 2000 })
+    // Let the rejected send clear stream readiness before stopping.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(provider.stop()).toBe(true)
+    await done
+
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_finish')).toBe(false)
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')).toHaveLength(1)
+    expect(finals).toEqual([expect.objectContaining({ asrText: 'recognized' })])
+  })
 })

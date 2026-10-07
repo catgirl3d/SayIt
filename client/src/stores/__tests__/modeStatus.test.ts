@@ -129,4 +129,26 @@ describe('mode status local readiness', () => {
       blockedReason: '',
     })
   })
+
+  it('uses the catalog label for a provider without a curated short name', async () => {
+    const profile = {
+      provider: 'deepgram',
+      baseUrl: '',
+      model: 'nova-3',
+      apiKey: 'deepgram-key',
+    }
+    state.settings.set('workMode', 'cloud_api')
+    state.loadAsrProfiles.mockResolvedValue({ profiles: [profile], activeId: 'deepgram-account' })
+    vi.mocked(resolveActiveAsrProfile).mockReturnValue(profile as never)
+    vi.mocked(findAsrProvider).mockReturnValue({ label: 'asrProvider.deepgram' } as never)
+    vi.mocked(describeAsrMissing).mockReturnValue('')
+
+    await refreshModeStatus()
+
+    expect(getModeStatus()).toMatchObject({
+      mode: 'cloud_api',
+      detail: 'asrProvider.deepgram',
+      ready: true,
+    })
+  })
 })

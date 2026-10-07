@@ -29,7 +29,7 @@ import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 /** 凭据归属的平台。同平台的服务用同一种密钥形态。 */
 import { t } from '@/i18n'
 
-export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemini' | 'openrouter' | 'custom'
+export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemini' | 'openrouter' | 'deepgram' | 'custom'
 
 export interface AsrPlatformInfo {
   label: string
@@ -47,6 +47,7 @@ export const ASR_PLATFORMS: Record<AsrPlatform, AsrPlatformInfo> = {
   openai: { label: 'OpenAI', consoleUrl: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'Gemini', consoleUrl: 'https://aistudio.google.com/app/apikey' },
   openrouter: { label: 'OpenRouter', consoleUrl: 'https://openrouter.ai/settings/keys' },
+  deepgram: { label: 'Deepgram', consoleUrl: 'https://console.deepgram.com' },
   custom: { get label() { return t('asrPlatform.openaiCompat') }, consoleUrl: '' },
 }
 
@@ -210,6 +211,19 @@ export const ASR_PROVIDERS: AsrProviderEntry[] = [
     platform: 'mimo',
     availability: 'mainland_china',
     get blurb() { return t('asrProvider.mimoBlurb') },
+  },
+  // Deepgram: the first global provider with real live captions. All four SayIt
+  // languages (ru/uk/en/zh) are documented for Nova-3; mixed Russian-English
+  // speech uses its multilingual mode. Interim text is per-segment, so the
+  // overlay shows committed segments plus the current one.
+  {
+    id: 'deepgram',
+    get label() { return t('asrProvider.deepgram') },
+    model: 'nova-3',
+    platform: 'deepgram',
+    availability: 'global',
+    get blurb() { return t('asrProvider.deepgramBlurb') },
+    streaming: true,
   },
   {
     id: 'groq_whisper',

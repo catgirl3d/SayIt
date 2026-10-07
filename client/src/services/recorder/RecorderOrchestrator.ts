@@ -606,9 +606,11 @@ export class RecorderOrchestrator {
     this.cachedSuppressLateFinalInsertion = next
   }
 
-  /** 录音开始时实时判定是否激活流式字幕气泡（读最新的开关/供应商/WorkspaceId，避免缓存过期）。
-   *  判据统一交给 isStreamingDisplayReady：doubao_v2 与 qwen_audio_stream 直接可用，
-   *  qwen_realtime 还要配 WorkspaceId；qwen3-asr-flash 等非流式模型不激活。 */
+  /** Decide at recording start whether the live-caption bubble is active (reads the
+   *  freshest toggle/provider/WorkspaceId so a cached value cannot go stale).
+   *  The verdict is centralised in isStreamingDisplayReady: doubao_v2, qwen_audio_stream
+   *  and deepgram work as-is, qwen_realtime also needs a WorkspaceId, and non-streaming
+   *  models such as qwen3-asr-flash stay inactive. */
   private async applyStreamingActive(): Promise<void> {
     try {
       const [streamOn, provider, workspaceId] = await Promise.all([

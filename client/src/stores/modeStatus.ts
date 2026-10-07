@@ -56,7 +56,12 @@ export function subscribeModeStatus(listener: Listener): () => void {
   return () => listeners.delete(listener)
 }
 
-/** 云 API 供应商 key → 侧边栏简称。完整模型名在 Tooltip 里（resolveAsrDisplayModel）。 */
+/**
+ * Cloud ASR provider key → sidebar short name. The full model name lives in the
+ * tooltip (resolveAsrDisplayModel). Providers without a curated short name fall
+ * back to their catalog label, so a newly added provider never surfaces as a
+ * raw id.
+ */
 function cloudProviderShort(provider: string): string {
   switch (provider) {
     case 'doubao_v2': return t('modeStatus.doubao')
@@ -71,7 +76,7 @@ function cloudProviderShort(provider: string): string {
     case 'mimo': return 'MiMo'
     case 'groq_whisper': return 'Groq'
     case CUSTOM_ASR_PROVIDER: return t('asrProvider.openaiCompat')
-    default: return provider
+    default: return findAsrProvider(provider)?.label ?? provider
   }
 }
 

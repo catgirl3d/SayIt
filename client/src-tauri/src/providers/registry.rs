@@ -2,8 +2,8 @@
 
 use super::types::*;
 use super::{
-    ai_ollama, ai_openai_compat, asr_doubao, asr_doubao_stream, asr_gemini, asr_groq, asr_mimo,
-    asr_openai_compat, asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
+    ai_ollama, ai_openai_compat, asr_deepgram, asr_doubao, asr_doubao_stream, asr_gemini, asr_groq,
+    asr_mimo, asr_openai_compat, asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
 };
 use crate::error_protocol;
 use tauri::Emitter;
@@ -248,6 +248,15 @@ pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResu
             )
             .await
         }
+        "deepgram" => {
+            asr_deepgram::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await
+        }
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
@@ -270,6 +279,7 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
         "gemini_transcribe" => Ok(asr_gemini::test_connection(&config).await),
         "openrouter_transcribe" => Ok(asr_openrouter::test_connection(&config).await),
         "openai_compat" => Ok(asr_openai_compat::test_connection(&config).await),
+        "deepgram" => Ok(asr_deepgram::test_connection(&config).await),
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
@@ -321,6 +331,7 @@ mod tests {
                 "openrouter_transcribe",
                 "OpenRouter transcription is missing the API Key",
             ),
+            ("deepgram", "Deepgram ASR is missing the API Key"),
         ] {
             let error = cloud_transcribe(CloudTranscribeRequest {
                 audio_b64: "%%%not-base64%%%".to_string(),
@@ -386,6 +397,7 @@ mod tests {
                 "openrouter_transcribe",
                 "OpenRouter transcription is missing the API Key",
             ),
+            ("deepgram", "Deepgram ASR is missing the API Key"),
         ] {
             let result = test_asr_connection(asr_config(provider, "")).await.unwrap();
 

@@ -676,6 +676,11 @@ fn main() {
             providers::asr_qwen_audio_stream::qwen_audio_stream_send,
             providers::asr_qwen_audio_stream::qwen_audio_stream_finish,
             providers::asr_qwen_audio_stream::qwen_audio_stream_close,
+            // Deepgram Nova-3 streaming ASR
+            providers::asr_deepgram::deepgram_stream_open,
+            providers::asr_deepgram::deepgram_stream_send,
+            providers::asr_deepgram::deepgram_stream_finish,
+            providers::asr_deepgram::deepgram_stream_close,
             // Models (local model management)
             models::registry::list_available_models,
             models::registry::list_downloaded_models,

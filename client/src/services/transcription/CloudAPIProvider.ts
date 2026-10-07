@@ -57,8 +57,8 @@ const QWEN_STREAM_COMMANDS = {
 
 type QwenStreamProvider = keyof typeof QWEN_STREAM_COMMANDS
 type QwenStreamCommands = typeof QWEN_STREAM_COMMANDS[QwenStreamProvider]
-type NativeOpenCommand = 'doubao_stream_open' | QwenStreamCommands['open']
-type NativeFinishCommand = 'doubao_stream_finish' | QwenStreamCommands['finish']
+type NativeOpenCommand = 'doubao_stream_open' | 'deepgram_stream_open' | QwenStreamCommands['open']
+type NativeFinishCommand = 'doubao_stream_finish' | 'deepgram_stream_finish' | QwenStreamCommands['finish']
 
 function isQwenStreamProvider(provider: string): provider is QwenStreamProvider {
   return provider === 'qwen_realtime' || provider === 'qwen_audio_stream'
@@ -75,11 +75,13 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private activeProfileSnapshot: Promise<AsrProfile | null> | null = null
   private ready = false
 
-  // 豆包/千问流式状态
+  // Doubao / Qwen / Deepgram streaming state
   private isDoubaoStream = false
   private isQwenStream = false
+  private isDeepgramStream = false
   private doubaoStreamReady = false
   private qwenStreamReady = false
+  private deepgramStreamReady = false
   /** 本次会话用的千问命令组；没走千问流式时为 null */
   private qwenCommands: QwenStreamCommands | null = null
   private streamStartTime = 0
@@ -123,8 +125,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.activeProfileSnapshot = profileSnapshot
     this.isDoubaoStream = false
     this.isQwenStream = false
+    this.isDeepgramStream = false
     this.doubaoStreamReady = false
     this.qwenStreamReady = false
+    this.deepgramStreamReady = false
     this.qwenCommands = null
     this.streamStartTime = performance.now()
     this.pendingChunks = []
@@ -163,8 +167,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.streamFinishing = true
     this.isDoubaoStream = false
     this.isQwenStream = false
+    this.isDeepgramStream = false
     this.doubaoStreamReady = false
     this.qwenStreamReady = false
+    this.deepgramStreamReady = false
     this.qwenCommands = null
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     this.teardownPartials()
@@ -184,6 +190,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       await invoke('doubao_stream_close').catch(() => { })
       await invoke('qwen_stream_close').catch(() => { })
       await invoke('qwen_audio_stream_close').catch(() => { })
+      await invoke('deepgram_stream_close').catch(() => { })
     })
   }
 
@@ -260,7 +267,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
     // 豆包/千问流式：攒到 pendingChunks，由定时器批量发送。
     // 收尾阶段不再接收新音频，确保负包之后不会再有音频包。
-    if ((this.isDoubaoStream || this.isQwenStream) && !this.streamFinishing) {
+    if ((this.isDoubaoStream || this.isQwenStream || this.isDeepgramStream) && !this.streamFinishing) {
       this.pendingChunks.push(buffer.slice(0))
     }
   }
@@ -288,8 +295,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.streamFinishing = true
     this.isDoubaoStream = false
     this.isQwenStream = false
+    this.isDeepgramStream = false
     this.doubaoStreamReady = false
     this.qwenStreamReady = false
+    this.deepgramStreamReady = false
     this.qwenCommands = null
     this.teardownPartials()
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
@@ -348,6 +357,24 @@ export class CloudAPIProvider implements TranscriptionProvider {
         if (!opened || !this.isRunCurrent(runId)) return
         this.doubaoStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: ready')
+      } else if (asrProvider === 'deepgram' && realtime && !startOpts.disableStreaming) {
+        // Completed recordings use Deepgram's prerecorded HTTP endpoint. Only
+        // live captions need a socket; segment consumers (computer subtitles)
+        // set disableStreaming and take the HTTP route even when captions are on.
+        if (!profile) return
+        this.isDeepgramStream = true
+
+        addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: connecting', { realtime })
+        const opened = await this.invokeNativeOpen(runId, 'deepgram_stream_open', {
+          // The stream honors the same language payload as the buffered path, so an
+          // explicit Russian/English choice is not lost when live captions are on.
+          config: buildAsrProviderConfig(profile, normalizeSpeechInputLanguage(startOpts.language)),
+          sampleRate: 16000,
+          hotwords: startOpts.hotwords ?? [],
+        })
+        if (!opened || !this.isRunCurrent(runId)) return
+        this.deepgramStreamReady = true
+        addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: ready')
       } else if (isQwenStreamProvider(asrProvider) && realtime) {
         // 千问流式：只在开启实时显示、且这份配置真的就绪时才走流式 WebSocket。
         //   · qwen_realtime      需要 WorkspaceId（isStreamingDisplayReady 已把关）
@@ -381,7 +408,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       // 启动定时器，每 200ms 批量发送一次（收尾阶段不再触发新发送）
       this.flushTimer = setInterval(() => {
         if (!this.isRunCurrent(runId) || this.streamFinishing) return
-        const ready = this.doubaoStreamReady || this.qwenStreamReady
+        const ready = this.doubaoStreamReady || this.qwenStreamReady || this.deepgramStreamReady
         if (ready && this.pendingChunks.length > 0) {
           void this.flushPendingChunks(runId)
         }
@@ -391,8 +418,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
       addRuntimeEvent('warn', 'cloud_api', 'Streaming connection failed; falling back to buffered upload', { error: String(err) })
       this.isDoubaoStream = false
       this.isQwenStream = false
+      this.isDeepgramStream = false
       this.doubaoStreamReady = false
       this.qwenStreamReady = false
+      this.deepgramStreamReady = false
       this.qwenCommands = null
       this.teardownPartials()
     }
@@ -419,11 +448,17 @@ export class CloudAPIProvider implements TranscriptionProvider {
       try {
         if (this.isDoubaoStream) {
           await invoke('doubao_stream_send', { pcmB64: b64 })
+        } else if (this.isDeepgramStream) {
+          await invoke('deepgram_stream_send', { pcmB64: b64 })
         } else if (this.isQwenStream && this.qwenCommands) {
           await invoke(this.qwenCommands.send, { pcmB64: b64 })
         }
       } catch (err) {
         addRuntimeEvent('warn', 'cloud_api', 'Streaming send failed', { error: String(err) })
+        // A dropped frame cannot be recovered on the socket. Stop streaming so the
+        // stop path re-transcribes the retained full recording through Deepgram's
+        // prerecorded endpoint instead of returning a partial transcript.
+        if (this.isDeepgramStream) this.deepgramStreamReady = false
       }
     }
     // 接到发送链尾部，串行执行（无论前一个成功或失败都继续）
@@ -471,15 +506,18 @@ export class CloudAPIProvider implements TranscriptionProvider {
       let asrText = ''
       let asrMs = 0
 
-      if ((this.isDoubaoStream && this.doubaoStreamReady) || (this.isQwenStream && this.qwenStreamReady)) {
-        // 流式收尾：先置收尾标志（阻止新音频入队/定时器再发），停定时器，
-        // flush 剩余数据并等发送链彻底排空，最后再发负包——保证负包是最后一个包。
-        this.streamFinishing = true
-        if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
-        await this.flushPendingChunks(runId)
-        await this.sendLock
-        if (!this.isRunCurrent(runId)) return
+      // Finish: set the finishing flag first (no new audio may enter the queue and
+      // the timer stops), flush what is left and drain the send chain, so the
+      // CloseStream frame is the last one on the wire. If the final flush fails on
+      // the Deepgram socket, the branch below re-decides on readiness and falls
+      // back to the buffered HTTP path with the retained full recording.
+      this.streamFinishing = true
+      if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
+      await this.flushPendingChunks(runId)
+      await this.sendLock
+      if (!this.isRunCurrent(runId)) return
 
+      if ((this.isDoubaoStream && this.doubaoStreamReady) || (this.isDeepgramStream && this.deepgramStreamReady) || (this.isQwenStream && this.qwenStreamReady)) {
         if (this.isDoubaoStream) {
           addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: sending finish')
           const finishStart = performance.now()
@@ -488,6 +526,14 @@ export class CloudAPIProvider implements TranscriptionProvider {
           asrText = text
           asrMs = Math.round(performance.now() - finishStart)
           addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: recognition complete', { asrMs, textLen: asrText.length })
+        } else if (this.isDeepgramStream) {
+          addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: sending finish')
+          const finishStart = performance.now()
+          const text = await this.invokeNativeFinish(runId, 'deepgram_stream_finish')
+          if (text === undefined || !this.isRunCurrent(runId)) return
+          asrText = text
+          asrMs = Math.round(performance.now() - finishStart)
+          addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: recognition complete', { asrMs, textLen: asrText.length })
         } else {
           // 命令组在 qwenStreamReady 之前就已赋值，这里只是让类型收窄；
           // 真为空就抛出去，而不是悄悄返回空文本（空结果会被显示成「没听到声音」）。

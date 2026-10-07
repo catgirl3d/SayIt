@@ -352,12 +352,14 @@ export class SystemAudioSession {
       // Recognition-only mode already shows the recognized text as its caption.
       this.dual = dual && !asrOnly
       if (asrOnly) {
-        this.startOptions = { systemPrompt: '', language, hotwords, disableAi: true, aiMinDurationSec: 0, requireTranslation: false }
+        // Subtitles transcribe finished segments; disableStreaming keeps providers with live
+        // captions on the buffered route, where a socket per segment only adds connection latency.
+        this.startOptions = { systemPrompt: '', language, hotwords, disableAi: true, aiMinDurationSec: 0, requireTranslation: false, disableStreaming: true }
       } else {
         // The translate_* presets only define which target languages exist; subtitles use their own prompt.
         const targetLanguage = this.options!.targetLanguage
         if (!presets.some((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${targetLanguage}`)) throw new Error(t('systemAudio.notReady'))
-        this.startOptions = { systemPrompt: buildSubtitlePrompt(subtitleLanguageName(targetLanguage)), language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true }
+        this.startOptions = { systemPrompt: buildSubtitlePrompt(subtitleLanguageName(targetLanguage)), language, hotwords, disableAi: false, aiMinDurationSec: 0, requireTranslation: true, disableStreaming: true }
       }
       this.provider = this.dependencies.getProvider()
       this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''

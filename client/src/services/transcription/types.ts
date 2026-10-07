@@ -66,8 +66,14 @@ export interface StartOptions {
   source?: 'live' | 'history_reprocess'
   hotwords?: string[]
   language?: string
-  /** 是否开启流式实时显示：识别过程中把中间结果实时推给悬浮窗 */
+  /** Whether to show live captions: interim results are pushed to the overlay while recognizing. */
   streamingDisplay?: boolean
+  /**
+   * Segment consumers (computer subtitles) transcribe a finished clip per run;
+   * a live socket adds connection overhead and no interim value. Providers that
+   * can stream honor this and take their buffered route instead.
+   */
+  disableStreaming?: boolean
 }
 
 export interface StopOptions {

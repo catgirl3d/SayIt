@@ -195,6 +195,29 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     expect(buildAsrProviderConfig(profile({ provider: 'doubao_v2' }), 'auto').extra).toBeUndefined()
   })
 
+  it('lists Deepgram as a global streaming provider with its own platform', () => {
+    expect(findAsrProvider('deepgram')).toMatchObject({
+      platform: 'deepgram',
+      model: 'nova-3',
+      availability: 'global',
+      streaming: true,
+    })
+    expect(ASR_PLATFORMS.deepgram.consoleUrl).toContain('console.deepgram.com')
+  })
+
+  it('round-trips a Deepgram profile and sends the selected language with the model', () => {
+    const [deepgram] = parseAsrProfiles([{ id: 'deepgram-a', provider: 'deepgram', apiKey: 'deepgram-key' }])
+
+    expect(deepgram).toMatchObject({ id: 'deepgram-a', model: 'nova-3', apiKey: 'deepgram-key' })
+    expect(buildAsrProviderConfig(deepgram, 'ru')).toEqual({
+      provider: 'deepgram',
+      api_key: 'deepgram-key',
+      app_id: '',
+      extra: { model: 'nova-3', language: 'ru' },
+    })
+    expect(buildAsrProviderConfig(deepgram, 'auto').extra).toEqual({ model: 'nova-3' })
+  })
+
   it('round-trips custom endpoint settings and defaults old profiles to one explicit protocol', () => {
     expect(emptyAsrProfile(CUSTOM_ASR_PROVIDER).protocol).toBe('transcriptions')
     const [custom, oldCustom] = parseAsrProfiles([

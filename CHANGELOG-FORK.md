@@ -32,6 +32,8 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Fixed history records being labeled with whichever ASR profile was active when the entry was written: a completed recording now keeps the provider and model that actually recognized it, even if the active profile was switched while recognition was still running. History reprocessing writes the same snapshot-backed metadata.
 - Cleared outdated ASR test verdicts when a saved profile's model is no longer current: profiles migrated or imported from an older catalog no longer show a green "available" result measured against a model they no longer use.
 - Updated the built-in Qwen Audio streaming ASR model to `qwen-audio-3.1-asr-flash-streaming`.
+- Added Deepgram Nova-3 as a cloud ASR profile with live streaming captions over WebSocket, including Russian, Ukrainian, English and Chinese language selection and a settings connection test. It needs a Deepgram API key from an international account.
+- Deepgram now sends completed recordings and Computer subtitle segments through its prerecorded HTTP endpoint, avoiding the extra streaming connection and recognition delay of uploading a complete clip through WebSocket. Live dictation captions continue to use WebSocket.
 - Added Russian as a selectable recognition language in the client.
 - Added Ukrainian as a selectable recognition language in the client.
 - Added Sber GigaAM as a Russian speech-recognition provider for the server, with configurable RNNT and CTC variants.
