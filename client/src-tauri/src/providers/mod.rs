@@ -2,6 +2,7 @@
 
 pub mod types;
 pub mod prompt;
+pub mod reasoning;
 pub mod diag;
 pub mod http_client;
 pub mod ai_openai_compat;

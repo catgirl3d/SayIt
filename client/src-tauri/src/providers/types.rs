@@ -89,6 +89,13 @@ pub struct CloudPolishRequest {
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub text_context: Option<TextContext>,
+    /// When true, partial completion text is emitted as `cloud-polish-delta` events while the model
+    /// is still writing. Callers that only need the final text leave it false.
+    #[serde(default)]
+    pub stream: bool,
+    /// Correlates streamed deltas with the caller's request; required when `stream` is true.
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 /// Ephemeral editor context. It is accepted only for this one AI request and is never persisted.

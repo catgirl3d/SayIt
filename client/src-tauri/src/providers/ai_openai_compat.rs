@@ -3,7 +3,9 @@
 
 use super::diag;
 use super::prompt::{wrap_user_text, DEFAULT_SYSTEM_PROMPT};
+use super::reasoning::{strip_thinking, VisibleStreamText};
 use super::types::{AiProviderConfig, AiResult, TestResult, TextContext};
+use futures_util::StreamExt;
 use std::time::Instant;
 
 const SCOPE: &str = "ai/openai-compat";
@@ -241,6 +243,168 @@ pub async fn polish(
             "AI returned no usable completion text".to_string(),
         ));
     }
+
+    diag::ok(SCOPE, elapsed_ms, cleaned.chars().count());
+
+    Ok(AiResult {
+        text: cleaned,
+        elapsed_ms,
+    })
+}
+
+/// Streamed variant of [`polish`]: the same request and final result, but the visible completion
+/// text is passed to `on_delta` as it arrives, so live subtitles can show the translation while it
+/// is written and never show reasoning blocks. Providers that ignore `stream` and answer with a
+/// plain JSON body still produce the final result; they simply never call `on_delta`.
+pub async fn polish_stream(
+    text: &str,
+    config: &AiProviderConfig,
+    system_prompt: Option<&str>,
+    text_context: Option<&TextContext>,
+    mut on_delta: impl FnMut(&str),
+) -> Result<AiResult, String> {
+    if text.trim().is_empty() {
+        return Ok(AiResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
+    }
+
+    let url = chat_completion_url(&config.api_url);
+    let sys_prompt = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
+    let user_content = wrap_user_text(text, text_context);
+
+    let mut body = serde_json::json!({
+        "model": config.model,
+        "temperature": 0.2,
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [
+            { "role": "system", "content": sys_prompt },
+            { "role": "user", "content": user_content },
+        ]
+    });
+    configure_thinking(&mut body, config);
+    configure_request_tuning(&mut body, config);
+
+    let start = Instant::now();
+
+    diag::log(
+        SCOPE,
+        "stream_start",
+        &format!(
+            "provider={} model={} chars={} url={}",
+            config.provider,
+            config.model,
+            text.chars().count(),
+            url
+        ),
+    );
+
+    let req = apply_provider_headers(
+        http().post(&url).header("Content-Type", "application/json"),
+        config,
+        &url,
+    );
+    let resp = req
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "http_send",
+                format!("HTTP request failed: {}", describe_reqwest_error(&e)),
+            )
+        })?;
+
+    let http_summary = diag::http_summary(resp.status(), resp.headers());
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(diag::fail(
+            SCOPE,
+            "http_status",
+            format!(
+                "API returned error {} [{}]: {}",
+                status,
+                http_summary,
+                diag::truncate(&body_text, 200)
+            ),
+        ));
+    }
+
+    let event_stream = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase().contains("text/event-stream"))
+        .unwrap_or(false);
+
+    let result_text = if event_stream {
+        let mut stream = SseTextStream::default();
+        let mut bytes = resp.bytes_stream();
+        // Live subtitles must never see raw reasoning: every delta carries the user-visible text,
+        // and only when it changed, so a thinking block stays hidden while it streams.
+        let mut visible = VisibleStreamText::default();
+        let mut on_visible = |raw: &str| {
+            if let Some(text) = visible.update(raw) {
+                on_delta(text);
+            }
+        };
+        while let Some(chunk) = bytes.next().await {
+            let chunk = chunk.map_err(|e| {
+                diag::fail(
+                    SCOPE,
+                    "stream_read",
+                    format!("Failed to read stream: {}", e),
+                )
+            })?;
+            stream.push(&chunk, &mut on_visible);
+            if stream.done {
+                break;
+            }
+        }
+        stream.finish(&mut on_visible);
+        stream.text
+    } else {
+        // Some gateways ignore `stream` and answer with one plain completion; keep the final result.
+        let body_text = resp.text().await.map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "read_body",
+                format!("Failed to read response: {}", e),
+            )
+        })?;
+        let data: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "parse_json",
+                format!(
+                    "Failed to parse response: {} [{}] response excerpt: {}",
+                    e,
+                    http_summary,
+                    diag::truncate(&body_text, 200)
+                ),
+            )
+        })?;
+        extract_chat_completion_text(&data).unwrap_or_default()
+    };
+
+    // Remove  thinking...</think> reasoning blocks emitted by models such as Qwen3.
+    let cleaned = strip_thinking(&result_text);
+
+    if cleaned.is_empty() {
+        return Err(diag::fail(
+            SCOPE,
+            "empty_completion",
+            "AI returned no usable completion text".to_string(),
+        ));
+    }
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
 
     diag::ok(SCOPE, elapsed_ms, cleaned.chars().count());
 
@@ -563,23 +727,79 @@ fn extract_chat_completion_text(data: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// 去除 <think>...</think> 标签
-fn strip_thinking(text: &str) -> String {
-    let re = regex::Regex::new(r"(?is)<think>.*?</think>").unwrap_or_else(|_| {
-        // fallback: 不做处理
-        regex::Regex::new(r"^$").unwrap()
-    });
-    let cleaned = re.replace_all(text, "");
-    let cleaned = cleaned.trim();
+/// Incremental parser for OpenAI-compatible SSE chat streams: feed it raw response chunks as they
+/// arrive; it returns the accumulated completion text after every complete `data:` line.
+#[derive(Default)]
+struct SseTextStream {
+    buffer: Vec<u8>,
+    text: String,
+    done: bool,
+}
 
-    // 如果有"最终答案"标记，取其后面的内容
-    if let Some(pos) = cleaned.find("最终答案") {
-        let after = &cleaned[pos + "最终答案".len()..];
-        let after = after.trim_start_matches(|c: char| c == ':' || c == '：' || c.is_whitespace());
-        return after.trim().to_string();
+impl SseTextStream {
+    /// Feeds one raw chunk and calls `on_text` with the accumulated text after every complete
+    /// `data:` line that grew it. Network chunking must not decide how many partials are delivered.
+    fn push(&mut self, chunk: &[u8], on_text: &mut dyn FnMut(&str)) {
+        if self.done {
+            return;
+        }
+        self.buffer.extend_from_slice(chunk);
+        while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let mut line: Vec<u8> = self.buffer.drain(..=newline).collect();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if self.apply_line(&line) {
+                on_text(&self.text);
+            }
+        }
     }
 
-    cleaned.to_string()
+    /// Processes a trailing line that arrived without a newline before the stream ended.
+    fn finish(&mut self, on_text: &mut dyn FnMut(&str)) {
+        if self.done || self.buffer.is_empty() {
+            return;
+        }
+        let line = std::mem::take(&mut self.buffer);
+        if self.apply_line(&line) {
+            on_text(&self.text);
+        }
+    }
+
+    fn apply_line(&mut self, line: &[u8]) -> bool {
+        let line = String::from_utf8_lossy(line);
+        let Some(payload) = line.strip_prefix("data:") else {
+            return false;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() {
+            return false;
+        }
+        if payload == "[DONE]" {
+            self.done = true;
+            return false;
+        }
+        let Some(delta) = extract_stream_delta(payload) else {
+            return false;
+        };
+        if delta.is_empty() {
+            return false;
+        }
+        self.text.push_str(&delta);
+        true
+    }
+}
+
+/// Incremental text of one OpenAI-compatible stream event: `choices[0].delta.content`.
+fn extract_stream_delta(payload: &str) -> Option<String> {
+    let data: serde_json::Value = serde_json::from_str(payload).ok()?;
+    data.get("choices")?
+        .get(0)?
+        .get("delta")?
+        .get("content")?
+        .as_str()
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -590,6 +810,151 @@ mod tests {
     const RESPONSE_MARKER: &str = "completion-payload-marker";
     const SAFE_COMPLETION_ERROR: &str =
         "sayit_error:connect_failed:AI returned no usable completion text";
+
+    /// Stream chunks split lines and multi-byte characters at arbitrary points; only complete
+    /// `data:` lines may be parsed, and the accumulated text must survive the split.
+    #[test]
+    fn sse_stream_assembles_text_across_chunk_boundaries() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"Привет, \"}}]}\n\n\
+                    data: {\"choices\":[{\"delta\":{\"content\":\"мир\"}}]}\n\n\
+                    data: [DONE]\n\n";
+        let mut stream = SseTextStream::default();
+        let mut deltas = Vec::new();
+        for chunk in body.as_bytes().chunks(7) {
+            stream.push(chunk, &mut |text| deltas.push(text.to_string()));
+        }
+
+        assert_eq!(stream.text, "Привет, мир");
+        assert_eq!(deltas, vec!["Привет, ".to_string(), "Привет, мир".to_string()]);
+        assert!(stream.done);
+    }
+
+    /// Heartbeats, named events and CRLF endings are not part of the completion text.
+    #[test]
+    fn sse_stream_ignores_heartbeats_and_handles_crlf() {
+        let body = ": keep-alive\r\nevent: message\r\n\
+                    data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\r\n\r\n\
+                    data: [DONE]\r\n\r\n";
+        let mut stream = SseTextStream::default();
+        let mut emitted = 0;
+
+        stream.push(body.as_bytes(), &mut |_| emitted += 1);
+
+        assert_eq!(emitted, 1);
+        assert_eq!(stream.text, "ok");
+        assert!(stream.done);
+    }
+
+    /// A stream that ends without a trailing newline still delivers its last line through `finish`.
+    #[test]
+    fn sse_stream_finishes_a_trailing_line_without_a_newline() {
+        let mut stream = SseTextStream::default();
+        let mut emitted = Vec::new();
+
+        stream.push(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"tail\"}}]}",
+            &mut |text| emitted.push(text.to_string()),
+        );
+        assert!(emitted.is_empty());
+        stream.finish(&mut |text| emitted.push(text.to_string()));
+        assert_eq!(emitted, vec!["tail".to_string()]);
+        assert_eq!(stream.text, "tail");
+    }
+
+    #[tokio::test]
+    async fn streamed_polish_emits_partials_and_returns_the_final_text() {
+        let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n\
+                        data: {\"choices\":[{\"delta\":{\"content\":\"translation\"}}]}\n\n\
+                        data: [DONE]\n\n";
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server_with_content_type(
+                200,
+                "text/event-stream",
+                sse_body.to_string(),
+            );
+        let mut deltas = Vec::new();
+
+        let result = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |text| {
+            deltas.push(text.to_string())
+        })
+        .await
+        .expect("streamed completion succeeds");
+
+        assert_eq!(result.text, "partial translation");
+        assert_eq!(
+            deltas,
+            vec!["partial".to_string(), "partial translation".to_string()]
+        );
+        let request =
+            String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
+        assert!(request.contains(r#""stream":true"#));
+    }
+
+    /// Live subtitles must never receive reasoning: while the model is inside a `<think>` block the
+    /// deltas stay empty, and only the visible answer streams after the closing tag.
+    #[tokio::test]
+    async fn streamed_polish_hides_reasoning_from_live_deltas() {
+        let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"<think>\"}}]}\n\n\
+                        data: {\"choices\":[{\"delta\":{\"content\":\"secret\"}}]}\n\n\
+                        data: {\"choices\":[{\"delta\":{\"content\":\"</think>ok\"}}]}\n\n\
+                        data: {\"choices\":[{\"delta\":{\"content\":\" done\"}}]}\n\n\
+                        data: [DONE]\n\n";
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server_with_content_type(
+                200,
+                "text/event-stream",
+                sse_body.to_string(),
+            );
+        let mut deltas = Vec::new();
+
+        let result = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |text| {
+            deltas.push(text.to_string())
+        })
+        .await
+        .expect("streamed completion succeeds");
+
+        assert_eq!(result.text, "ok done");
+        assert_eq!(deltas, vec!["ok".to_string(), "ok done".to_string()]);
+        server.join().expect("loopback server completed");
+    }
+
+    /// Reasoning cut off before its closing tag (token limit or a dropped connection) must not be
+    /// treated as a usable completion.
+    #[tokio::test]
+    async fn unclosed_reasoning_completion_is_a_safe_failure() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"<think>{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        let error = polish_response(&response_body, TEST_INPUT)
+            .await
+            .unwrap_err();
+
+        assert_safe_completion_error(&error);
+    }
+
+    #[tokio::test]
+    async fn streamed_polish_falls_back_when_the_provider_ignores_stream() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            response_body,
+        );
+        let mut delta_count = 0;
+
+        let result = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {
+            delta_count += 1
+        })
+        .await
+        .expect("a usable completion succeeds without streaming");
+
+        assert_eq!(result.text, RESPONSE_MARKER);
+        assert_eq!(delta_count, 0);
+        server.join().expect("loopback server completed");
+    }
 
     fn polish_config(api_url: &str) -> AiProviderConfig {
         AiProviderConfig {

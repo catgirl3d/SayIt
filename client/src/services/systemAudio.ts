@@ -132,6 +132,8 @@ const PROCESSING_TIMEOUT_MS = 30_000
 // stops only when this many fragments fail back to back, which means the service itself is down or misconfigured.
 const MAX_CONSECUTIVE_FAILURES = 3
 const CAPTION_HOLD_MS = 8_000
+// Streamed translation text is repainted at most this often; the settled caption is always published.
+const PARTIAL_UPDATE_INTERVAL_MS = 100
 // Every caption-bound field of the snapshot; reset together so a notice or original never outlives its caption.
 const NO_CAPTION = { caption: '', captionNotice: '', source: '' } as const
 // Waiting translations are bounded by the same 12 s of speech as the audio queue: older fragments are dropped
@@ -189,6 +191,7 @@ export class SystemAudioSession {
   private translations: TranslationJob[] = []
   private translationBacklogMs = 0
   private translating: TranslationJob | null = null
+  private lastPartialAt = 0
   private activeContext: TextContext | undefined
   private activeSplit = false
   private readonly recent = new RecentSpeech()
@@ -294,6 +297,22 @@ export class SystemAudioSession {
   private publishSource(source: string, generation: number) {
     this.publish({ caption: '', captionNotice: '', source })
     this.holdCaption(generation)
+  }
+
+  // Partial translations repaint the caption while the AI is still writing it. They never arm the hold timer:
+  // a pending timer belongs to the caption being replaced, and only the settled outcome starts a new hold.
+  private publishPartialTranslation(job: TranslationJob, text: string, generation: number): void {
+    if (generation !== this.generation || this.translating !== job) return
+    const partial = text.trim()
+    if (!partial) return
+    const now = Date.now()
+    if (now - this.lastPartialAt < PARTIAL_UPDATE_INTERVAL_MS) return
+    this.lastPartialAt = now
+    if (this.captionTimer) {
+      clearTimeout(this.captionTimer)
+      this.captionTimer = null
+    }
+    this.publish({ caption: partial, captionNotice: '' })
   }
 
   private holdCaption(generation: number) {
@@ -685,6 +704,7 @@ export class SystemAudioSession {
     this.translationBacklogMs = Math.max(0, this.translationBacklogMs - job.speechMs)
     this.publishQueueDepth()
     this.translating = job
+    this.lastPartialAt = 0
     const generation = this.generation
     // While an ASR run is active, the live stage already reflects the lane that gates the queue.
     if (!this.activeJob) setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
@@ -701,6 +721,7 @@ export class SystemAudioSession {
         startOptions,
         logSource: this.provider?.mode ?? 'unknown',
         isCurrent: () => generation === this.generation && this.translating === job,
+        onPartial: (text) => this.publishPartialTranslation(job, text, generation),
       })
     } catch (error) {
       // polishWithClientAi can reject before its own request-error handling, for example when the AI settings

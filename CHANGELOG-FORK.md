@@ -23,6 +23,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added an opt-in recognition-only test mode for Computer subtitles that shows raw ASR output without translation (the target language is ignored), for measuring and comparing speech engines.
 - Increased the loopback capture buffer reserve to 200 ms to prevent brief voice-detection and event-delivery stalls from losing speech. Available audio is still read immediately; capture does not wait for the buffer to fill.
 - Computer subtitles now overlap recognition and translation in client-AI modes (cloud API, local, and custom-AI server): the next fragment is recognized while the previous one is still being translated, so captions keep up with live speech much longer instead of waiting for the full ASR-plus-translation chain per fragment. Managed-server runs keep a single ASR-plus-translation run. Translations that fall behind are dropped oldest-first with the same "processing is behind playback" notice as the audio backlog, so captions never drift far behind.
+- Live subtitles now show the translation while the AI is still writing it: client-AI modes stream the model output and repaint the caption as it grows, so the first words appear within a fraction of a second instead of waiting for the whole answer. The settled translation still replaces the partial text, and providers that do not stream keep the previous behavior.
 
 ### Speech Recognition
 

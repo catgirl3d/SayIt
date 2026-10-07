@@ -52,15 +52,25 @@ pub(super) mod test_support {
         status: u16,
         body: String,
     ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+        spawn_response_server_with_content_type(status, "application/json", body)
+    }
+
+    pub fn spawn_response_server_with_content_type(
+        status: u16,
+        content_type: &str,
+        body: String,
+    ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let content_type = content_type.to_string();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream).unwrap();
             write!(
                 stream,
-                "HTTP/1.1 {} Test Response\r\nContent-Type: application/json\r\nx-request-id: response-header-marker\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {} Test Response\r\nContent-Type: {}\r\nx-request-id: response-header-marker\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status,
+                content_type,
                 body.len(),
                 body
             )

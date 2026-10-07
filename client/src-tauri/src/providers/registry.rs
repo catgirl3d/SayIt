@@ -6,6 +6,7 @@ use super::{
     asr_openai_compat, asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
 };
 use crate::error_protocol;
+use tauri::Emitter;
 
 /// Providers that speak the OpenAI chat/completions protocol and reuse the shared implementation.
 const OPENAI_COMPAT_PROVIDERS: &[&str] = &[
@@ -24,29 +25,66 @@ fn is_openai_compat_provider(provider: &str) -> bool {
 }
 
 /// 云端 AI 校对（Tauri command）
+///
+/// With `request.stream` set, the provider emits `cloud-polish-delta` events
+/// (`{ requestId, text }`) while the model writes and the command still resolves with the final result.
 #[tauri::command]
-pub async fn cloud_polish(request: CloudPolishRequest) -> Result<AiResult, String> {
+pub async fn cloud_polish(
+    app: tauri::AppHandle,
+    request: CloudPolishRequest,
+) -> Result<AiResult, String> {
     let config = &request.ai_config;
+    let streaming = request.stream && request.request_id.is_some();
+    let on_delta = |text: &str| {
+        if let Some(request_id) = request.request_id.as_deref() {
+            let _ = app.emit(
+                "cloud-polish-delta",
+                serde_json::json!({ "requestId": request_id, "text": text }),
+            );
+        }
+    };
     match config.provider.as_str() {
         // Groq 是标准的 OpenAI 兼容 chat/completions，直接复用通用实现，
         // 不需要单独的文件（base_url 已带 /v1，normalize_base_url 会原样保留）。
         provider if is_openai_compat_provider(provider) => {
-            ai_openai_compat::polish(
-                &request.text,
-                config,
-                request.system_prompt.as_deref(),
-                request.text_context.as_ref(),
-            )
-            .await
+            if streaming {
+                ai_openai_compat::polish_stream(
+                    &request.text,
+                    config,
+                    request.system_prompt.as_deref(),
+                    request.text_context.as_ref(),
+                    on_delta,
+                )
+                .await
+            } else {
+                ai_openai_compat::polish(
+                    &request.text,
+                    config,
+                    request.system_prompt.as_deref(),
+                    request.text_context.as_ref(),
+                )
+                .await
+            }
         }
         "ollama" => {
-            ai_ollama::polish(
-                &request.text,
-                config,
-                request.system_prompt.as_deref(),
-                request.text_context.as_ref(),
-            )
-            .await
+            if streaming {
+                ai_ollama::polish_stream(
+                    &request.text,
+                    config,
+                    request.system_prompt.as_deref(),
+                    request.text_context.as_ref(),
+                    on_delta,
+                )
+                .await
+            } else {
+                ai_ollama::polish(
+                    &request.text,
+                    config,
+                    request.system_prompt.as_deref(),
+                    request.text_context.as_ref(),
+                )
+                .await
+            }
         }
         other => Err(error_protocol::encode(
             "connect_failed",
