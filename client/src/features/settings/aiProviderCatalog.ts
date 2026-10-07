@@ -189,13 +189,14 @@ export interface AiProfile {
 }
 
 /**
- * Reasoning effort values offered by the openai preset; API literals, not UI copy.
+ * Reasoning effort values offered by the openai and opencode_go presets; API literals, not UI copy.
  *
  * The set is model-dependent (verified against developers.openai.com, 2026-10): a model may
  * accept only a subset, and rejects the rest with HTTP 400 listing its valid levels — GPT-6
- * Luna, for example, takes low/medium/high/xhigh/max. The editor offers the full documented
- * set so no supported level is missing; the hint tells users the provider error is the
- * authority for a given model.
+ * Luna, for example, takes low/medium/high/xhigh/max. OpenCode Zen/Go was probed live
+ * (2026-10-07) and accepts this same seven-value set for its chat/completions models. The
+ * editor offers the full documented set so no supported level is missing; the hint tells
+ * users the provider error is the authority for a given model.
  */
 export const REASONING_EFFORT_OPTIONS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
@@ -208,15 +209,24 @@ export const REASONING_EFFORT_OPTIONS = ['none', 'minimal', 'low', 'medium', 'hi
  */
 export const SERVICE_TIER_OPTIONS = ['auto', 'default', 'priority', 'fast'] as const
 
-/** Whether a provider accepts the OpenAI-only request tuning fields. */
-export function supportsRequestTuning(provider: string): boolean {
+/**
+ * Whether a provider's endpoint accepts the `reasoning_effort` request field.
+ * opencode_go is verified live against https://opencode.ai/zen/go (2026-10-07): its
+ * chat/completions gateway accepts the field for GLM, DeepSeek, and Kimi models.
+ */
+export function supportsReasoningEffort(provider: string): boolean {
+  return provider === 'openai' || provider === 'opencode_go'
+}
+
+/** Whether a provider's endpoint accepts the `service_tier` request field. OpenCode Zen/Go has no tiers. */
+export function supportsServiceTier(provider: string): boolean {
   return provider === 'openai'
 }
 
 /**
  * Build the `ai_config.extra` wire payload for one profile.
  *
- * Returns undefined when the provider is not openai or nothing is set, so profiles
+ * Returns undefined when the provider supports neither knob or nothing is set, so profiles
  * that never touched tuning keep sending the exact request body they always did.
  */
 function buildAiExtra(
@@ -224,10 +234,9 @@ function buildAiExtra(
   reasoningEffort?: string,
   serviceTier?: string,
 ): Record<string, string> | undefined {
-  if (!supportsRequestTuning(provider)) return undefined
   const extra: Record<string, string> = {}
-  const effort = reasoningEffort?.trim()
-  const tier = serviceTier?.trim()
+  const effort = supportsReasoningEffort(provider) ? reasoningEffort?.trim() : ''
+  const tier = supportsServiceTier(provider) ? serviceTier?.trim() : ''
   if (effort) extra.reasoning_effort = effort
   if (tier) extra.service_tier = tier
   return Object.keys(extra).length > 0 ? extra : undefined

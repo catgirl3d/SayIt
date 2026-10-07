@@ -36,6 +36,15 @@ describe('runtime tuning mirror', () => {
     expect(storedSettings.get('cloudAi.serviceTier')).toBe('fast')
   })
 
+  it('mirrors reasoning effort but not service tier for opencode_go', async () => {
+    const active = profile('opencode_go', { reasoningEffort: 'high', serviceTier: 'priority' })
+
+    await saveAiProfiles({ profiles: [active], activeId: active.id })
+
+    expect(storedSettings.get('cloudAi.reasoningEffort')).toBe('high')
+    expect(storedSettings.get('cloudAi.serviceTier')).toBe('')
+  })
+
   it('clears tuning keys when the active profile provider does not accept them', async () => {
     const stale = profile('deepseek', { reasoningEffort: 'high', serviceTier: 'priority' })
 

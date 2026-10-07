@@ -90,23 +90,32 @@ fn is_zhipu_api_url(api_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Provider id whose endpoints accept the OpenAI-only request tuning fields.
-const OPENAI_PROVIDER: &str = "openai";
+/// Providers whose endpoints accept the `reasoning_effort` request field.
+/// opencode_go is verified live against https://opencode.ai/zen/go (2026-10-07): its
+/// chat/completions gateway accepts the field for GLM, DeepSeek, and Kimi models.
+const REASONING_EFFORT_PROVIDERS: &[&str] = &["openai", "opencode_go"];
 
-/// Apply the OpenAI-only request tuning (service tier, reasoning effort).
+/// Providers whose endpoints accept the `service_tier` request field. OpenCode Zen/Go has no tiers.
+const SERVICE_TIER_PROVIDERS: &[&str] = &["openai"];
+
+/// Apply the request tuning (reasoning effort, service tier) per provider capability.
 ///
 /// Values come from the profile's `extra` map and are sent verbatim: the valid set depends
 /// on the model and deployment (local Codex-style proxies use `service_tier: "fast"`,
-/// which is not part of the official tier list). Only the openai preset receives them —
-/// generic OpenAI-compatible endpoints may reject unknown body fields.
-fn configure_openai_tuning(body: &mut serde_json::Value, config: &AiProviderConfig) {
-    if config.provider != OPENAI_PROVIDER {
-        return;
-    }
+/// which is not part of the official tier list). Each field is added only for providers
+/// whose endpoint accepts it — generic OpenAI-compatible endpoints may reject unknown
+/// body fields.
+fn configure_request_tuning(body: &mut serde_json::Value, config: &AiProviderConfig) {
     let Some(object) = body.as_object_mut() else {
         return;
     };
-    for key in ["service_tier", "reasoning_effort"] {
+    for (key, providers) in [
+        ("reasoning_effort", REASONING_EFFORT_PROVIDERS),
+        ("service_tier", SERVICE_TIER_PROVIDERS),
+    ] {
+        if !providers.contains(&config.provider.as_str()) {
+            continue;
+        }
         if let Some(value) = config.extra.get(key).and_then(|value| value.as_str()) {
             if !value.trim().is_empty() {
                 object.insert(key.to_string(), serde_json::Value::String(value.to_string()));
@@ -144,7 +153,7 @@ pub async fn polish(
         ]
     });
     configure_thinking(&mut body, config);
-    configure_openai_tuning(&mut body, config);
+    configure_request_tuning(&mut body, config);
 
     let start = Instant::now();
 
@@ -265,7 +274,7 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
         ]
     });
     configure_thinking(&mut body, config);
-    configure_openai_tuning(&mut body, config);
+    configure_request_tuning(&mut body, config);
 
     let start = Instant::now();
 
@@ -602,15 +611,20 @@ mod tests {
         }
     }
 
-    /// OpenAI-only tuning fields may reach the wire only through the openai preset:
-    /// generic compatible endpoints can reject unknown body fields.
+    /// Tuning fields may reach the wire only through providers whose endpoints accept them:
+    /// openai gets both knobs, opencode_go gets reasoning effort only (Zen/Go has no tiers),
+    /// and generic compatible endpoints get nothing — they can reject unknown body fields.
     #[tokio::test]
-    async fn polish_sends_openai_tuning_only_for_the_openai_provider() {
+    async fn polish_sends_tuning_only_for_the_providers_that_accept_it() {
         let response_body = format!(
             r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
             RESPONSE_MARKER
         );
-        for (provider, expected) in [("openai", true), ("openai_compat", false)] {
+        for (provider, expect_reasoning, expect_tier) in [
+            ("openai", true, true),
+            ("opencode_go", true, false),
+            ("openai_compat", false, false),
+        ] {
             let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
                 200,
                 response_body.clone(),
@@ -623,14 +637,14 @@ mod tests {
             let request = String::from_utf8_lossy(&server.join().expect("loopback server completed"))
                 .to_string();
             assert_eq!(
-                request.contains(r#""service_tier":"fast""#),
-                expected,
-                "{provider} service tier mismatch: {request}"
+                request.contains(r#""reasoning_effort":"low""#),
+                expect_reasoning,
+                "{provider} reasoning effort mismatch: {request}"
             );
             assert_eq!(
-                request.contains(r#""reasoning_effort":"low""#),
-                expected,
-                "{provider} reasoning effort mismatch: {request}"
+                request.contains(r#""service_tier":"fast""#),
+                expect_tier,
+                "{provider} service tier mismatch: {request}"
             );
         }
     }

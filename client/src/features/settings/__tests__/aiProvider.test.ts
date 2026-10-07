@@ -25,7 +25,8 @@ import {
   REASONING_EFFORT_OPTIONS,
   resolveActiveProfile,
   SERVICE_TIER_OPTIONS,
-  supportsRequestTuning,
+  supportsReasoningEffort,
+  supportsServiceTier,
   type AiProfile,
   type LegacyProviderData,
 } from '../aiProviderCatalog'
@@ -492,10 +493,18 @@ describe('OpenAI provider preset', () => {
 })
 
 describe('OpenAI request tuning', () => {
-  it('is offered only by the openai preset', () => {
-    expect(supportsRequestTuning('openai')).toBe(true)
-    for (const value of ['openai_compat', 'deepseek', 'qwen', 'doubao', 'mimo', 'groq', 'opencode_go', 'ollama']) {
-      expect(supportsRequestTuning(value), value).toBe(false)
+  /**
+   * Capability matrix: the openai preset gets both knobs; opencode_go gets reasoning effort
+   * only (OpenCode Zen/Go has no service tiers); every other provider gets neither.
+   */
+  it('offers reasoning effort for openai and opencode_go, service tier for openai only', () => {
+    expect(supportsReasoningEffort('openai')).toBe(true)
+    expect(supportsReasoningEffort('opencode_go')).toBe(true)
+    expect(supportsServiceTier('openai')).toBe(true)
+    expect(supportsServiceTier('opencode_go')).toBe(false)
+    for (const value of ['openai_compat', 'deepseek', 'qwen', 'doubao', 'mimo', 'groq', 'ollama']) {
+      expect(supportsReasoningEffort(value), value).toBe(false)
+      expect(supportsServiceTier(value), value).toBe(false)
     }
   })
 
@@ -503,7 +512,9 @@ describe('OpenAI request tuning', () => {
    * Docs contract, verified against developers.openai.com (2026-10): reasoning effort values are
    * model-dependent and include none, minimal, low, medium, high, xhigh, and max. GPT-6 Luna, for
    * example, accepts only low/medium/high/xhigh/max and rejects the rest with HTTP 400 listing the
-   * valid levels. Keep the full documented set so the editor never invents or drops a level.
+   * valid levels. OpenCode Zen/Go was probed live (2026-10-07): its chat/completions gateway accepts
+   * the same seven values for GLM, DeepSeek, and Kimi models, and its error message lists exactly
+   * this set. Keep the full documented set so the editor never invents or drops a level.
    */
   it('offers every reasoning effort level the OpenAI API documents', () => {
     expect([...REASONING_EFFORT_OPTIONS]).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
@@ -547,6 +558,35 @@ describe('OpenAI request tuning', () => {
       api_url: 'https://api.deepseek.com',
       api_key: 'sk-test',
       model: 'deepseek-v4-flash',
+    })
+
+    // opencode_go sends reasoning effort but must never send a service tier.
+    expect(buildAiProviderConfig({
+      provider: 'opencode_go',
+      apiUrl: 'https://opencode.ai/zen/go/v1',
+      apiKey: 'oc_sk-test',
+      model: 'glm-5.3-flash',
+      reasoningEffort: ' high ',
+      serviceTier: 'fast',
+    })).toEqual({
+      provider: 'opencode_go',
+      api_url: 'https://opencode.ai/zen/go/v1',
+      api_key: 'oc_sk-test',
+      model: 'glm-5.3-flash',
+      extra: { reasoning_effort: 'high' },
+    })
+
+    expect(buildAiProviderConfig({
+      provider: 'opencode_go',
+      apiUrl: 'https://opencode.ai/zen/go/v1',
+      apiKey: 'oc_sk-test',
+      model: 'kimi-k2.6',
+      serviceTier: 'fast',
+    })).toEqual({
+      provider: 'opencode_go',
+      api_url: 'https://opencode.ai/zen/go/v1',
+      api_key: 'oc_sk-test',
+      model: 'kimi-k2.6',
     })
 
     expect(buildAiProviderConfig({

@@ -23,7 +23,8 @@ import {
   parseLegacyLatencies,
   parseProfiles,
   resolveActiveProfile,
-  supportsRequestTuning,
+  supportsReasoningEffort,
+  supportsServiceTier,
   type AiProfile,
   type LegacyProviderData,
 } from './aiProviderCatalog'
@@ -42,18 +43,24 @@ export interface AiProfileState {
  * Write the active entry into the flat runtime keys. No usable profile writes empty
  * strings so downstream code skips the AI step on its own.
  *
- * Tuning values are mirrored only when the active provider accepts them: switching the
- * active profile to another provider clears them instead of leaking OpenAI-only fields.
+ * Tuning values are mirrored per capability: each one only when the active provider's
+ * endpoint accepts it, so switching providers never leaks a field the new endpoint would
+ * reject.
  */
 async function syncRuntimeActive(profile: AiProfile | null): Promise<void> {
-  const tuning = profile && supportsRequestTuning(profile.provider) ? profile : undefined
   await Promise.all([
     setSetting('cloudAi.provider', profile?.provider ?? ''),
     setSetting('cloudAi.apiUrl', profile?.apiUrl ?? ''),
     setSetting('cloudAi.apiKey', profile?.apiKey ?? ''),
     setSetting('cloudAi.model', profile?.model ?? ''),
-    setSetting('cloudAi.reasoningEffort', tuning?.reasoningEffort ?? ''),
-    setSetting('cloudAi.serviceTier', tuning?.serviceTier ?? ''),
+    setSetting(
+      'cloudAi.reasoningEffort',
+      profile && supportsReasoningEffort(profile.provider) ? profile.reasoningEffort ?? '' : '',
+    ),
+    setSetting(
+      'cloudAi.serviceTier',
+      profile && supportsServiceTier(profile.provider) ? profile.serviceTier ?? '' : '',
+    ),
   ])
 }
 

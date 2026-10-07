@@ -66,7 +66,8 @@ import {
   REASONING_EFFORT_OPTIONS,
   resolveActiveProfile,
   SERVICE_TIER_OPTIONS,
-  supportsRequestTuning,
+  supportsReasoningEffort,
+  supportsServiceTier,
   type AiProfile,
   type AiProfileCheck,
 } from './aiProviderCatalog'
@@ -1097,40 +1098,45 @@ export default function AIProviderSection() {
               </p>
             </div>
 
-            {/* OpenAI-only request tuning. Hidden for other providers because generic
-                OpenAI-compatible endpoints may reject unknown body fields. */}
-            {supportsRequestTuning(draft.provider) && (
+            {/* Request tuning, per capability. Hidden for providers whose endpoints would
+                reject the field — generic OpenAI-compatible endpoints may reject unknown
+                body fields, and OpenCode Zen/Go has no service tiers. */}
+            {(supportsReasoningEffort(draft.provider) || supportsServiceTier(draft.provider)) && (
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <span id="ai-reasoning-effort-label" className="mb-1 block text-sm text-muted-foreground">
-                    {t('ai.reasoningEffort')}
-                  </span>
-                  <Select
-                    value={draft.reasoningEffort ?? ''}
-                    onChange={(value) => patchDraft({ reasoningEffort: value || undefined })}
-                    labelledBy="ai-reasoning-effort-label"
-                    options={[
-                      { value: '', label: t('ai.tuningUnset') },
-                      ...REASONING_EFFORT_OPTIONS.map((value) => ({ value, label: value })),
-                    ]}
-                  />
-                  <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.reasoningEffortHint')}</p>
-                </div>
-                <div>
-                  <span id="ai-service-tier-label" className="mb-1 block text-sm text-muted-foreground">
-                    {t('ai.serviceTier')}
-                  </span>
-                  <Select
-                    value={draft.serviceTier ?? ''}
-                    onChange={(value) => patchDraft({ serviceTier: value || undefined })}
-                    labelledBy="ai-service-tier-label"
-                    options={[
-                      { value: '', label: t('ai.tuningUnset') },
-                      ...SERVICE_TIER_OPTIONS.map((value) => ({ value, label: value })),
-                    ]}
-                  />
-                  <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.serviceTierHint')}</p>
-                </div>
+                {supportsReasoningEffort(draft.provider) && (
+                  <div>
+                    <span id="ai-reasoning-effort-label" className="mb-1 block text-sm text-muted-foreground">
+                      {t('ai.reasoningEffort')}
+                    </span>
+                    <Select
+                      value={draft.reasoningEffort ?? ''}
+                      onChange={(value) => patchDraft({ reasoningEffort: value || undefined })}
+                      labelledBy="ai-reasoning-effort-label"
+                      options={[
+                        { value: '', label: t('ai.tuningUnset') },
+                        ...REASONING_EFFORT_OPTIONS.map((value) => ({ value, label: value })),
+                      ]}
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.reasoningEffortHint')}</p>
+                  </div>
+                )}
+                {supportsServiceTier(draft.provider) && (
+                  <div>
+                    <span id="ai-service-tier-label" className="mb-1 block text-sm text-muted-foreground">
+                      {t('ai.serviceTier')}
+                    </span>
+                    <Select
+                      value={draft.serviceTier ?? ''}
+                      onChange={(value) => patchDraft({ serviceTier: value || undefined })}
+                      labelledBy="ai-service-tier-label"
+                      options={[
+                        { value: '', label: t('ai.tuningUnset') },
+                        ...SERVICE_TIER_OPTIONS.map((value) => ({ value, label: value })),
+                      ]}
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.serviceTierHint')}</p>
+                  </div>
+                )}
               </div>
             )}
 
