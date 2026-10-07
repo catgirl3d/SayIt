@@ -28,6 +28,8 @@ import {
   updateSubtitleOverlay,
 } from './recorder'
 import { getProvider } from './transcription'
+import { polishWithClientAi } from './transcription/clientAiPolish'
+import { getRuntimeServerAiSource } from './transcription/serverAiSource'
 import { loadActiveHotwords } from './hotwords/settings'
 import type { SubtitleOverlayPayload } from './recorder/types'
 import type { TextContext } from '@/types/appContext'
@@ -87,6 +89,18 @@ interface SegmentJob extends SegmentSpan {
   runId: number | null
 }
 
+/** One recognized segment waiting for, or undergoing, client-side translation. */
+interface TranslationJob {
+  runId: number | null
+  asrText: string
+  asrMs: number
+  durationSec: number
+  speechMs: number
+  context?: TextContext
+  asrEngine?: string
+  asrModel?: string
+}
+
 interface PipelineFinishDetails {
   asrMs: number
   llmMs: number
@@ -120,6 +134,9 @@ const MAX_CONSECUTIVE_FAILURES = 3
 const CAPTION_HOLD_MS = 8_000
 // Every caption-bound field of the snapshot; reset together so a notice or original never outlives its caption.
 const NO_CAPTION = { caption: '', captionNotice: '', source: '' } as const
+// Waiting translations are bounded by the same 12 s of speech as the audio queue: older fragments are dropped
+// so captions never drift far behind the speech now playing.
+const MAX_TRANSLATION_BACKLOG_MS = 12_000
 let sequence = Date.now()
 
 export async function getSystemAudioSourceLanguage(): Promise<SpeechInputLanguage> {
@@ -169,6 +186,11 @@ export class SystemAudioSession {
   private activeJob = 0
   private activeSpan: SegmentSpan | null = null
   private consecutiveFailures = 0
+  private translations: TranslationJob[] = []
+  private translationBacklogMs = 0
+  private translating: TranslationJob | null = null
+  private activeContext: TextContext | undefined
+  private activeSplit = false
   private readonly recent = new RecentSpeech()
   private publishedAsrJob = 0
   private activeRunId: number | null = null
@@ -232,6 +254,32 @@ export class SystemAudioSession {
       asrChars: result.asrText.length,
       captionChars: caption.length,
     }
+  }
+
+  // The outcome policy shared by the server-managed and client-AI paths: an absent translation is shown as
+  // the recognized original with an untranslated notice and counts toward the failure streak; an applied
+  // translation replaces the caption and pairs with its original in dual-subtitle mode. Returns false when
+  // the session stopped and the caller must not continue.
+  private publishTranslationOutcome(result: FinalResult, runId: number | null, generation: number): boolean {
+    const original = result.asrText.trim()
+    const comparableTranslation = result.llmText.replace(/\s+/g, ' ').trim()
+    const comparableSource = result.asrText.replace(/\s+/g, ' ').trim()
+    if (result.aiStatus !== 'applied' || !comparableTranslation) {
+      // The AI produced no translation. Show what was heard, marked as untranslated, and keep listening.
+      failRun(runId, 'rejected', result.aiStatus !== 'applied' ? result.aiStatus : 'empty translation')
+      if (this.recordFailure(t('systemAudio.translationFailed'))) return false
+      this.publishCaption(original, generation, undefined, undefined, t('systemAudio.untranslated'))
+      return true
+    }
+    this.consecutiveFailures = 0
+    const caption = result.llmText.trim()
+    const traceRunId = isPipelineDebugEnabled() ? runId : null
+    // A translation identical to the transcript is speech already in the target language, a name, a number,
+    // or an AI echoing its input when its answer was empty. Never present it as a translation.
+    const identical = comparableTranslation === comparableSource
+    this.publishCaption(caption, generation, traceRunId, traceRunId === null ? undefined : this.finishDetails(result, caption),
+      identical ? t('systemAudio.untranslated') : '', this.dual && !identical ? original : '')
+    return true
   }
 
   private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, captionNotice = '', source = '') {
@@ -337,24 +385,14 @@ export class SystemAudioSession {
             return
           }
           if (this.activeSpan) this.recent.push(result.asrText.trim(), this.activeSpan)
-          const original = result.asrText.trim()
-          const comparableTranslation = result.llmText.replace(/\s+/g, ' ').trim()
-          const comparableSource = result.asrText.replace(/\s+/g, ' ').trim()
-          if (result.aiStatus !== 'applied' || !comparableTranslation) {
-            // The AI produced no translation. Show what was heard, marked as untranslated, and keep listening.
-            failRun(this.activeRunId, 'rejected', result.aiStatus !== 'applied' ? result.aiStatus : 'empty translation')
-            if (this.recordFailure(t('systemAudio.translationFailed'))) return
-            this.publishCaption(original, generation, undefined, undefined, t('systemAudio.untranslated'))
+          // Client-AI modes detach the translation from this run, so the next segment's ASR can start
+          // while this text is still being translated.
+          if (this.activeSplit) {
+            this.enqueueTranslation(result)
+            this.pumpTranslation()
             return
           }
-          this.consecutiveFailures = 0
-          const caption = result.llmText.trim()
-          const runId = isPipelineDebugEnabled() ? this.activeRunId : null
-          // A translation identical to the transcript is speech already in the target language, a name, a number,
-          // or the managed server LLM echoing its input when its answer was empty. Never present it as a translation.
-          const identical = comparableTranslation === comparableSource
-          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption),
-            identical ? t('systemAudio.untranslated') : '', this.dual && !identical ? original : '')
+          this.publishTranslationOutcome(result, this.activeRunId, generation)
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
@@ -441,7 +479,7 @@ export class SystemAudioSession {
     const voiced = isVoiced(speechFrame)
     // Capture-driven phases must stay out of the way while a queued ASR or translation job is in flight,
     // otherwise the next captured frame immediately hides the stage that stageElapsedMs is timing.
-    const processing = this.activeJob !== 0
+    const processing = this.activeJob !== 0 || this.translating !== null
     if (!this.frames.length && !this.continuation && !voiced) {
       this.preRoll.push(speechFrame)
       if (this.preRoll.length > PRE_ROLL_FRAMES) this.preRoll.shift()
@@ -503,7 +541,7 @@ export class SystemAudioSession {
     const endedAt = Date.now()
     this.queue.push({ audio, runId, startedAt: endedAt - frames.length * FRAME_MS, endedAt })
     this.queuedBytes += audio.byteLength
-    setQueueDepth(this.queue.length)
+    this.publishQueueDepth()
     this.processNext()
   }
 
@@ -525,12 +563,18 @@ export class SystemAudioSession {
     setPipelineActivity({ phase: 'listening', stageStartedAt: null })
     this.activeJob = 0
     this.activeSpan = null
+    this.activeContext = undefined
+    this.activeSplit = false
     this.publishedAsrJob = 0
     this.activeRunId = null
     if (this.processingTimer) clearTimeout(this.processingTimer)
     this.processingTimer = null
     // Providers finalize their run after onDone returns. Never start a new run inside that callback.
-    queueMicrotask(() => { if (generation === this.generation) this.processNext() })
+    queueMicrotask(() => {
+      if (generation !== this.generation) return
+      this.processNext()
+      this.pumpTranslation()
+    })
   }
 
   /** Counts a failed fragment and stops the session once too many failed in a row. Returns true when it stopped. */
@@ -556,9 +600,12 @@ export class SystemAudioSession {
     this.queuedBytes -= job.audio.byteLength
     this.activeRunId = job.runId
     this.activeSpan = { startedAt: job.startedAt, endedAt: job.endedAt }
+    this.activeContext = this.translationContext(job)
+    // Client-AI modes can translate in a separate lane; a managed server run cannot.
+    this.activeSplit = !this.options?.asrOnly && this.usesClientTranslation()
     this.publishedAsrJob = 0
     markQueued(job.runId)
-    setQueueDepth(this.queue.length)
+    this.publishQueueDepth()
     const generation = this.generation
     this.activeJob = ++sequence
     this.processingTimer = setTimeout(() => {
@@ -572,7 +619,14 @@ export class SystemAudioSession {
       this.skipFragment(generation, t('systemAudio.timeout'), t('systemAudio.timeoutReason'))
     }, PROCESSING_TIMEOUT_MS)
     try {
-      if (!this.provider.start({ ...this.startOptions, textContext: this.translationContext(job), runId: this.activeJob })) throw new Error('ASR did not start')
+      const startOptions: StartOptions = {
+        ...this.startOptions,
+        // A split run must not translate inside the provider: the translation lane owns that stage.
+        disableAi: this.activeSplit || Boolean(this.startOptions.disableAi),
+        textContext: this.activeContext,
+        runId: this.activeJob,
+      }
+      if (!this.provider.start(startOptions)) throw new Error('ASR did not start')
       setPipelineActivity({ phase: 'asr', stageStartedAt: Date.now() })
       this.provider.sendAudio(job.audio.buffer as ArrayBuffer)
       if (!this.provider.stop()) throw new Error('ASR did not accept the segment')
@@ -584,6 +638,90 @@ export class SystemAudioSession {
     if (this.provider?.acceptsTextContext?.() === false) return undefined
     const textBefore = this.recent.contextBefore(job.startedAt)
     return textBefore ? { source: SUBTITLE_CONTEXT_SOURCE, textBefore, selectedText: '', textAfter: '', selectionTruncated: false } : undefined
+  }
+
+  // Client API, local and custom-AI server modes run their AI stage on this client, so it can be a lane
+  // of its own. A managed server run performs ASR and translation inside one server run.
+  private usesClientTranslation(): boolean {
+    const provider = this.provider
+    if (!provider) return false
+    return provider.mode !== 'server' || getRuntimeServerAiSource() === 'custom'
+  }
+
+  private publishQueueDepth(): void {
+    setQueueDepth(this.queue.length + this.translations.length)
+  }
+
+  private enqueueTranslation(result: FinalResult): void {
+    const speechMs = this.activeSpan ? Math.max(0, this.activeSpan.endedAt - this.activeSpan.startedAt) : 0
+    this.translations.push({
+      runId: this.activeRunId,
+      asrText: result.asrText,
+      asrMs: result.asrMs,
+      durationSec: result.durationSec,
+      speechMs,
+      context: this.activeContext,
+      asrEngine: result.asrEngine,
+      asrModel: result.asrModel,
+    })
+    this.translationBacklogMs += speechMs
+    // Translations older than the speech now playing are worthless; drop the oldest waiting ones to bound the
+    // backlog, mirroring dropOldestToFit, and keep listening.
+    let dropped = false
+    while (this.translations.length && this.translationBacklogMs > MAX_TRANSLATION_BACKLOG_MS) {
+      const oldest = this.translations.shift()!
+      this.translationBacklogMs -= oldest.speechMs
+      failRun(oldest.runId, 'failed', 'dropped: translation is behind playback')
+      dropped = true
+    }
+    if (dropped) this.publish({ warning: t('systemAudio.behind') })
+    this.publishQueueDepth()
+  }
+
+  // One translation at a time, in speech order: captions must follow each other the way they were spoken.
+  private pumpTranslation(): void {
+    if (this.translating || !this.translations.length || !['starting', 'listening'].includes(this.snapshot.state)) return
+    const job = this.translations.shift()!
+    this.translationBacklogMs = Math.max(0, this.translationBacklogMs - job.speechMs)
+    this.publishQueueDepth()
+    this.translating = job
+    const generation = this.generation
+    // While an ASR run is active, the live stage already reflects the lane that gates the queue.
+    if (!this.activeJob) setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
+    void this.translateWithClientAi(job, generation)
+  }
+
+  private async translateWithClientAi(job: TranslationJob, generation: number): Promise<void> {
+    const startOptions: StartOptions = { ...this.startOptions!, runId: job.runId ?? 0, textContext: job.context }
+    let polish: Awaited<ReturnType<typeof polishWithClientAi>>
+    try {
+      polish = await polishWithClientAi({
+        asrText: job.asrText,
+        durationSec: job.durationSec,
+        startOptions,
+        logSource: this.provider?.mode ?? 'unknown',
+        isCurrent: () => generation === this.generation && this.translating === job,
+      })
+    } catch (error) {
+      // polishWithClientAi can reject before its own request-error handling, for example when the AI settings
+      // cannot be read. The lane must not stay occupied: treat it as a failed translation.
+      addRuntimeEvent('warn', this.provider?.mode ?? 'unknown', 'Subtitle translation failed before its request', { error: String(error) })
+      polish = { llmText: '', llmMs: 0, aiSource: 'custom', aiStatus: 'failed' }
+    }
+    if (generation !== this.generation || this.translating !== job) return
+    this.translating = null
+    if (!polish) { this.pumpTranslation(); return }
+    const outcome: FinalResult = {
+      ...polish,
+      asrText: job.asrText,
+      asrMs: job.asrMs,
+      durationSec: job.durationSec,
+      asrEngine: job.asrEngine,
+      asrModel: job.asrModel,
+    }
+    if (!this.publishTranslationOutcome(outcome, job.runId, generation)) return
+    if (!this.activeJob) setPipelineActivity({ phase: 'listening', stageStartedAt: null })
+    this.pumpTranslation()
   }
 
   private resetSegment() {
@@ -605,9 +743,18 @@ export class SystemAudioSession {
     }
     this.queue.forEach(({ runId }) => failRun(runId, 'cancelled'))
     this.queue = []
+    if (this.translating) {
+      failRun(this.translating.runId, 'cancelled')
+      this.translating = null
+    }
+    this.translations.forEach(({ runId }) => failRun(runId, 'cancelled'))
+    this.translations = []
+    this.translationBacklogMs = 0
     this.recent.clear()
     this.activeSpan = null
     this.consecutiveFailures = 0
+    this.activeContext = undefined
+    this.activeSplit = false
     this.queuedBytes = this.activeJob = 0
     this.publishedAsrJob = 0
     setQueueDepth(0)

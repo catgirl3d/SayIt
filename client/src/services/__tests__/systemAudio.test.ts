@@ -105,6 +105,24 @@ function frames(count: number, probability: number, value = 1, sessionId?: numbe
   }
 }
 
+function numberRecognizedSpeech() {
+  let heard = 0
+  const original = native.invoke.getMockImplementation()!
+  native.invoke.mockImplementation(async (name, args) => {
+    const result = await original(name, args)
+    return name === 'local_transcribe' ? { ...result, text: `Speech ${++heard}` } : result
+  })
+}
+
+function polishRequests() {
+  return native.invoke.mock.calls.filter(([name]) => name === 'cloud_polish').map(([, args]) => args.request)
+}
+
+function speak() {
+  frames(20, 0.9)
+  frames(15, 0)
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
   setPipelineDebugEnabled(false)
@@ -250,8 +268,7 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().state).toBe('listening')
   })
 
-  it('shows the recognized original as untranslated when the AI skipped the translation, and keeps the provider options', async () => {
-    const trace = enablePipelineDebug()
+  it('runs client-AI modes through an ASR-only provider run and translates with the client AI', async () => {
     let callbacks: TranscriptionCallbacks | undefined
     let startOptions: StartOptions | undefined
     const provider = createTestProvider((value) => { callbacks = value })
@@ -269,12 +286,47 @@ describe('system audio subtitle session', () => {
     callbacks?.onASR?.({ text: 'Original speech', asrMs: 5, durationSec: 0.64 })
     callbacks?.onFinal?.({
       asrText: 'Original speech',
-      llmText: 'Original speech',
+      llmText: '',
       asrMs: 5,
       llmMs: 0,
       durationSec: 0.64,
       aiStatus: 'skipped',
     })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(startOptions).toMatchObject({ disableAi: true, requireTranslation: true })
+    expect(polishRequests().map((request) => request.text)).toEqual(['Original speech'])
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Translated speech' })
+  })
+
+  it('shows the recognized original as untranslated when a managed server skipped the translation', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    let startOptions: StartOptions | undefined
+    const provider: TranscriptionProvider = { ...createTestProvider((value) => { callbacks = value }), mode: 'server' }
+    provider.start = (options) => { startOptions = options; return true }
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Original speech', asrMs: 5, durationSec: 0.64 })
+    callbacks?.onFinal?.({
+      asrText: 'Original speech',
+      llmText: '',
+      asrMs: 5,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+    callbacks?.onDone?.()
+    await settle()
 
     expect(startOptions).toMatchObject({ disableAi: false, requireTranslation: true })
     expect(session.getSnapshot()).toMatchObject({
@@ -427,13 +479,14 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().caption).toBe('')
     callbacks?.onFinal?.({
       asrText: 'Original speech',
-      llmText: 'Translated speech',
+      llmText: '',
       asrMs: 5,
-      llmMs: 10,
+      llmMs: 0,
       durationSec: 0.64,
-      aiStatus: 'applied',
+      aiStatus: 'skipped',
     })
     callbacks?.onDone?.()
+    await settle()
     expect(session.getSnapshot().caption).toBe('Translated speech')
     await vi.advanceTimersByTimeAsync(7_999)
     expect(session.getSnapshot().caption).toBe('Translated speech')
@@ -444,6 +497,10 @@ describe('system audio subtitle session', () => {
   it('records timings and engine metadata for a translated subtitle run', async () => {
     const trace = enablePipelineDebug()
     let callbacks: TranscriptionCallbacks | undefined
+    const original = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => name === 'cloud_polish'
+      ? Promise.resolve({ text: 'Translated speech', elapsed_ms: 34 })
+      : original(name, args))
     session = new SystemAudioSession({
       getProvider: () => createTestProvider((value) => { callbacks = value }),
       acquire: async () => { leased = true },
@@ -455,15 +512,13 @@ describe('system audio subtitle session', () => {
     frames(15, 0)
     callbacks?.onFinal?.({
       asrText: 'Original speech',
-      llmText: 'Translated speech',
+      llmText: '',
       asrMs: 12,
-      llmMs: 34,
+      llmMs: 0,
       durationSec: 0.64,
       asrEngine: 'test-engine',
       asrModel: 'test-model',
-      aiStatus: 'applied',
-      aiProvider: 'ollama',
-      aiModel: 'translator',
+      aiStatus: 'skipped',
     })
     callbacks?.onDone?.()
     await settle()
@@ -804,24 +859,6 @@ describe('system audio subtitle session', () => {
   })
 
   describe('translation context', () => {
-    function numberRecognizedSpeech() {
-      let heard = 0
-      const original = native.invoke.getMockImplementation()!
-      native.invoke.mockImplementation(async (name, args) => {
-        const result = await original(name, args)
-        return name === 'local_transcribe' ? { ...result, text: `Speech ${++heard}` } : result
-      })
-    }
-
-    function polishRequests() {
-      return native.invoke.mock.calls.filter(([name]) => name === 'cloud_polish').map(([, args]) => args.request)
-    }
-
-    function speak() {
-      frames(20, 0.9)
-      frames(15, 0)
-    }
-
     it('gives each segment the speech recognized just before it, and nothing for the first one', async () => {
       numberRecognizedSpeech()
       await session.start({ deviceId: '', targetLanguage: 'uk' })
@@ -1480,15 +1517,15 @@ describe('system audio subtitle session', () => {
     frames(15, 0)
     callbacksByGeneration[1]?.onFinal?.({
       asrText: 'Current transcript',
-      llmText: 'Current subtitle',
+      llmText: '',
       asrMs: 1,
-      llmMs: 1,
+      llmMs: 0,
       durationSec: 1,
-      aiStatus: 'applied',
+      aiStatus: 'skipped',
     })
     await settle()
     expect(overlayCalls.some((call) => call.method === 'update'
-      && call.payload.subtitleText === 'Current subtitle')).toBe(true)
+      && call.payload.subtitleText === 'Translated speech')).toBe(true)
     const callsBeforeLateCallback = overlayCalls.slice()
 
     callbacksByGeneration[0]?.onFinal?.({
@@ -1815,5 +1852,170 @@ describe('system audio subtitle session', () => {
     await settle()
     expect(session.getSnapshot().caption).toBe('Translated speech')
     expect(session.getSnapshot().warning).toBe('')
+  })
+
+  describe('two-lane translation pipeline', () => {
+    it('starts the next segment ASR while the previous translation is still running and publishes captions in order', async () => {
+      numberRecognizedSpeech()
+      const pendings: Array<ReturnType<typeof deferred<{ text: string; elapsed_ms: number }>>> = []
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish') {
+          const pending = deferred<{ text: string; elapsed_ms: number }>()
+          pendings.push(pending)
+          return pending.promise
+        }
+        return original(name, args)
+      })
+      let startOptions: StartOptions | undefined
+      const provider = new LocalProvider()
+      const providerStart = provider.start.bind(provider)
+      provider.start = (options) => { startOptions = options; return providerStart(options) }
+      session = new SystemAudioSession({
+        getProvider: () => provider,
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      expect(polishRequests()).toHaveLength(1)
+
+      speak()
+      await settle()
+
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')).toHaveLength(2)
+      expect(polishRequests()).toHaveLength(1)
+      expect(startOptions).toMatchObject({ disableAi: true, requireTranslation: true })
+
+      pendings[0].resolve({ text: 'Translation 1', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Translation 1')
+      expect(polishRequests().map((request) => request.text)).toEqual(['Speech 1', 'Speech 2'])
+
+      pendings[1].resolve({ text: 'Translation 2', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Translation 2')
+    })
+
+    it('drops the oldest waiting translation instead of accumulating an unbounded backlog', async () => {
+      const trace = enablePipelineDebug()
+      numberRecognizedSpeech()
+      const pendings: Array<ReturnType<typeof deferred<{ text: string; elapsed_ms: number }>>> = []
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish') {
+          const pending = deferred<{ text: string; elapsed_ms: number }>()
+          pendings.push(pending)
+          return pending.promise
+        }
+        return original(name, args)
+      })
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      const speakLong = () => { frames(125, 0.9); frames(5, 0) }
+      for (let index = 0; index < 3; index++) { speakLong(); await settle() }
+      expect(session.getSnapshot().state).toBe('listening')
+
+      speakLong()
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(session.getSnapshot().warning).toContain('behind')
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')).toHaveLength(4)
+      expect(trace.getPipelineSnapshot().runs.some((run) => run.status === 'failed'
+        && run.reason === 'dropped: translation is behind playback')).toBe(true)
+
+      pendings[0].resolve({ text: 'Translation 1', elapsed_ms: 5 })
+      await settle()
+      expect(polishRequests().map((request) => request.text)).toEqual(['Speech 1', 'Speech 3'])
+    })
+
+    it('drops a translation that resolves after the session was restarted', async () => {
+      numberRecognizedSpeech()
+      const pendings: Array<ReturnType<typeof deferred<{ text: string; elapsed_ms: number }>>> = []
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish') {
+          const pending = deferred<{ text: string; elapsed_ms: number }>()
+          pendings.push(pending)
+          return pending.promise
+        }
+        return original(name, args)
+      })
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      expect(pendings).toHaveLength(1)
+
+      await session.stop()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      expect(pendings).toHaveLength(2)
+
+      pendings[0].resolve({ text: 'Stale translation', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('')
+      expect(overlayCalls.some((call) => call.method === 'update' && call.payload.subtitleText === 'Stale translation')).toBe(false)
+
+      pendings[1].resolve({ text: 'Fresh translation', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Fresh translation')
+    })
+
+    it('finishes a run once when its translation completes before the ASR run ends', async () => {
+      const trace = enablePipelineDebug()
+      let callbacks: TranscriptionCallbacks | undefined
+      session = new SystemAudioSession({
+        getProvider: () => createTestProvider((value) => { callbacks = value }),
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      frames(20, 0.9)
+      frames(15, 0)
+      callbacks?.onFinal?.({
+        asrText: 'Original speech',
+        llmText: '',
+        asrMs: 12,
+        llmMs: 0,
+        durationSec: 0.64,
+        aiStatus: 'skipped',
+      })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Translated speech')
+
+      callbacks?.onDone?.()
+      await settle()
+
+      expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'ok', asrMs: 12, llmMs: 5 }])
+      expect(trace.getPipelineSnapshot().counters.completed).toBe(1)
+      expect(trace.getPipelineSnapshot().counters.failed).toBe(0)
+    })
+
+    it('keeps the translation lane alive when the AI settings cannot be read', async () => {
+      const original = native.invoke.getMockImplementation()!
+      let failSettings = true
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'store_get' && args.key === 'cloudAi.provider' && failSettings) {
+          return Promise.reject(new Error('store unavailable'))
+        }
+        return original(name, args)
+      })
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech' })
+      expect(session.getSnapshot().captionNotice).toContain('not translated')
+
+      failSettings = false
+      speak()
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Translated speech')
+    })
   })
 })
