@@ -68,6 +68,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Decoupled connection testing from configuration saving in the AI provider editor modal: added an in-modal "Test connection" action for real-time verification without saving or closing, alongside standard Cancel and Save actions that properly close the modal on completion.
 - Stopped the AI provider editor from pre-filling a new service with the active profile's URL and key: the New dialog now starts from the selected provider's own defaults with an empty key, while switching to an already configured provider still reuses its saved credentials with an explicit note.
 - Fixed the AI provider editor keeping another provider's URL and key in the form when the provider select was switched back and forth; values the user typed are still preserved.
+- Added an OpenAI provider preset whose endpoint can be overridden per profile for local proxies and relays. Its optional Reasoning effort and Service tier settings are sent only by this preset — generic OpenAI-compatible endpoints keep receiving the unchanged request body — and the offered levels follow the current OpenAI API (reasoning effort is model-dependent; `fast` opts into Fast mode).
 
 ### Desktop Client
 

@@ -108,6 +108,10 @@ export const DEFAULTS: Record<string, unknown> = {
   'cloudAi.apiUrl': '',
   'cloudAi.apiKey': '',
   'cloudAi.model': '',
+  // OpenAI-only request tuning mirrored from the active profile. Empty means "send nothing";
+  // allowed values live in REASONING_EFFORT_OPTIONS / SERVICE_TIER_OPTIONS in aiProviderCatalog.ts.
+  'cloudAi.reasoningEffort': '',
+  'cloudAi.serviceTier': '',
   // The "AI Service" list itself: one entry = provider + URL + key + model, read and written only by the settings page.
   'cloudAi.profiles': [],
   'cloudAi.activeProfileId': '',

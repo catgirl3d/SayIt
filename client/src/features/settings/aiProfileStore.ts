@@ -1,14 +1,16 @@
-// 「AI 服务」列表的持久化，以及与运行时配置的同步。
+// Persistence for the AI Services list and its synchronization into the runtime settings.
 //
-// 这里有两套键，职责必须分清：
-//   1. 列表本身 —— `cloudAi.profiles` + `cloudAi.activeProfileId`，只有本页读写；
-//   2. 运行时生效的那一份 —— `cloudAi.provider / apiUrl / apiKey / model`，
-//      由录音链路（CloudAPIProvider、LocalProvider）、历史记录重跑、诊断页、反馈上报
-//      六处消费。它们只认这四个扁平键，**这个契约不能动**。
+// Two sets of keys with strictly separate responsibilities:
+//   1. The list itself — `cloudAi.profiles` + `cloudAi.activeProfileId`; only this page reads them.
+//   2. The runtime copy — `cloudAi.provider / apiUrl / apiKey / model` plus the OpenAI-only
+//      `cloudAi.reasoningEffort / serviceTier` tuning. It is consumed by the recording pipeline
+//      (CloudAPIProvider, LocalProvider), history re-runs, the diagnostics page, and feedback
+//      reporting. Those consumers read only these flat keys; **the contract must not change shape**.
 //
-// 所以规则是：列表是真相，每次列表或启用项变化都把启用的那条整份写进那四个键。
-// 「切了模型但地址/密钥还是上一家的」这个 bug 之所以可能存在，就是因为过去这四个键
-// 是分别维护的；现在它们只有一个写入点。
+// The rule: the list is the truth; every list or active-profile change writes the whole active
+// entry into the flat keys. The historical "model switched but URL/key still belong to the
+// previous provider" bug existed because those keys used to be maintained separately; now they
+// have exactly one writer.
 //
 // Profiles include API keys and are included in full configuration exports. Public support bundles
 // use an explicit categorical environment contract and never include cloudAi settings.
@@ -21,6 +23,7 @@ import {
   parseLegacyLatencies,
   parseProfiles,
   resolveActiveProfile,
+  supportsRequestTuning,
   type AiProfile,
   type LegacyProviderData,
 } from './aiProviderCatalog'
@@ -35,13 +38,22 @@ export interface AiProfileState {
   activeId: string
 }
 
-/** 把启用的那条写进运行时四个键。没有可用的服务时写空串，让下游自己跳过 AI 环节 */
+/**
+ * Write the active entry into the flat runtime keys. No usable profile writes empty
+ * strings so downstream code skips the AI step on its own.
+ *
+ * Tuning values are mirrored only when the active provider accepts them: switching the
+ * active profile to another provider clears them instead of leaking OpenAI-only fields.
+ */
 async function syncRuntimeActive(profile: AiProfile | null): Promise<void> {
+  const tuning = profile && supportsRequestTuning(profile.provider) ? profile : undefined
   await Promise.all([
     setSetting('cloudAi.provider', profile?.provider ?? ''),
     setSetting('cloudAi.apiUrl', profile?.apiUrl ?? ''),
     setSetting('cloudAi.apiKey', profile?.apiKey ?? ''),
     setSetting('cloudAi.model', profile?.model ?? ''),
+    setSetting('cloudAi.reasoningEffort', tuning?.reasoningEffort ?? ''),
+    setSetting('cloudAi.serviceTier', tuning?.serviceTier ?? ''),
   ])
 }
 
@@ -77,7 +89,7 @@ async function readLegacyData(): Promise<LegacyProviderData[]> {
  * 加载服务列表。首次进入会把老的按供应商存的配置摊平成列表。
  *
  * 返回前会把 activeId 归一化（指向已不存在的 id 时回落到第一条），并在确实写过东西时
- * 顺手同步运行时那四个键——否则会出现"列表里高亮着 A，实际在用 B"。
+ * 顺手同步运行时配置——否则会出现"列表里高亮着 A，实际在用 B"。
  */
 export async function loadAiProfiles(): Promise<AiProfileState> {
   const [migrated, rawProfiles, storedActiveId] = await Promise.all([
@@ -123,7 +135,7 @@ export async function loadAiProfiles(): Promise<AiProfileState> {
   return { profiles, activeId }
 }
 
-/** 落盘列表 + 启用项，并把启用的那条同步进运行时四个键。所有写路径都必须走这里 */
+/** 落盘列表 + 启用项，并把启用的那条同步进运行时配置。所有写路径都必须走这里 */
 export async function saveAiProfiles(state: AiProfileState): Promise<void> {
   const active = resolveActiveProfile(state.profiles, state.activeId)
   await Promise.all([setSetting(AI_PROFILES_KEY, state.profiles), setSetting(AI_ACTIVE_PROFILE_KEY, active?.id ?? '')])

@@ -47,6 +47,7 @@ import {
   aiProvidersForDisplay,
   applyProviderSwitch,
   blankProfile,
+  buildAiProviderConfig,
   checkAiKeyFormat,
   checkApiUrl,
   extractTestReply,
@@ -62,7 +63,10 @@ import {
   profileSubtitle,
   profileTitle,
   providerLabel,
+  REASONING_EFFORT_OPTIONS,
   resolveActiveProfile,
+  SERVICE_TIER_OPTIONS,
+  supportsRequestTuning,
   type AiProfile,
   type AiProfileCheck,
 } from './aiProviderCatalog'
@@ -96,6 +100,8 @@ function draftSnapshot(draft: AiProfile, models: string[]): string {
     provider: draft.provider,
     apiUrl: draft.apiUrl,
     apiKey: draft.apiKey,
+    reasoningEffort: draft.reasoningEffort ?? '',
+    serviceTier: draft.serviceTier ?? '',
     models,
   })
 }
@@ -481,12 +487,7 @@ export default function AIProviderSection() {
   async function runTest(profile: AiProfile): Promise<TestOutcome> {
     try {
       const result = await invoke<TestResult>('test_ai_connection', {
-        config: {
-          provider: profile.provider,
-          api_url: profile.apiUrl,
-          api_key: profile.apiKey,
-          model: profile.model,
-        },
+        config: buildAiProviderConfig(profile),
       })
       if (result.ok) {
         return { ok: true, elapsedMs: result.elapsed_ms, reply: extractTestReply(result.detail), message: '' }
@@ -585,6 +586,8 @@ export default function AIProviderSection() {
       provider: draft.provider,
       apiUrl: draft.apiUrl.trim(),
       apiKey: draft.apiKey.trim(),
+      reasoningEffort: draft.reasoningEffort,
+      serviceTier: draft.serviceTier,
     }
     const urlError = checkApiUrl(base.apiUrl)
     if (urlError) {
@@ -615,6 +618,8 @@ export default function AIProviderSection() {
         && stored.apiUrl === target.apiUrl
         && stored.apiKey === target.apiKey
         && stored.model === target.model
+        && (stored.reasoningEffort ?? '') === (target.reasoningEffort ?? '')
+        && (stored.serviceTier ?? '') === (target.serviceTier ?? '')
       return { ...target, check: target.check ?? (unchanged ? stored.check : undefined) }
     })
 
@@ -1091,6 +1096,43 @@ export default function AIProviderSection() {
                 {availableModels.length > 0 ? t('ai.modelSelectHint') : t('ai.multiModelHint')}
               </p>
             </div>
+
+            {/* OpenAI-only request tuning. Hidden for other providers because generic
+                OpenAI-compatible endpoints may reject unknown body fields. */}
+            {supportsRequestTuning(draft.provider) && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span id="ai-reasoning-effort-label" className="mb-1 block text-sm text-muted-foreground">
+                    {t('ai.reasoningEffort')}
+                  </span>
+                  <Select
+                    value={draft.reasoningEffort ?? ''}
+                    onChange={(value) => patchDraft({ reasoningEffort: value || undefined })}
+                    labelledBy="ai-reasoning-effort-label"
+                    options={[
+                      { value: '', label: t('ai.tuningUnset') },
+                      ...REASONING_EFFORT_OPTIONS.map((value) => ({ value, label: value })),
+                    ]}
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.reasoningEffortHint')}</p>
+                </div>
+                <div>
+                  <span id="ai-service-tier-label" className="mb-1 block text-sm text-muted-foreground">
+                    {t('ai.serviceTier')}
+                  </span>
+                  <Select
+                    value={draft.serviceTier ?? ''}
+                    onChange={(value) => patchDraft({ serviceTier: value || undefined })}
+                    labelledBy="ai-service-tier-label"
+                    options={[
+                      { value: '', label: t('ai.tuningUnset') },
+                      ...SERVICE_TIER_OPTIONS.map((value) => ({ value, label: value })),
+                    ]}
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.serviceTierHint')}</p>
+                </div>
+              </div>
+            )}
 
             {notice?.scope === 'editor' && (
               <Feedback tone={notice.tone} message={notice.message} detail={notice.detail} />

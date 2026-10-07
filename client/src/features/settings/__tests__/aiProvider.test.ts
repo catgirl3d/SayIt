@@ -4,6 +4,7 @@ import {
   aiProvidersForDisplay,
   applyProviderSwitch,
   blankProfile,
+  buildAiProviderConfig,
   checkAiKeyFormat,
   checkApiUrl,
   extractTestReply,
@@ -21,7 +22,10 @@ import {
   profileSubtitle,
   profileTitle,
   preferredAiProviderValue,
+  REASONING_EFFORT_OPTIONS,
   resolveActiveProfile,
+  SERVICE_TIER_OPTIONS,
+  supportsRequestTuning,
   type AiProfile,
   type LegacyProviderData,
 } from '../aiProviderCatalog'
@@ -484,5 +488,105 @@ describe('OpenAI provider preset', () => {
 
   it('has no key format rule of its own', () => {
     expect(checkAiKeyFormat('openai', 'sk-proj-anything')).toBe('')
+  })
+})
+
+describe('OpenAI request tuning', () => {
+  it('is offered only by the openai preset', () => {
+    expect(supportsRequestTuning('openai')).toBe(true)
+    for (const value of ['openai_compat', 'deepseek', 'qwen', 'doubao', 'mimo', 'groq', 'opencode_go', 'ollama']) {
+      expect(supportsRequestTuning(value), value).toBe(false)
+    }
+  })
+
+  /**
+   * Docs contract, verified against developers.openai.com (2026-10): reasoning effort values are
+   * model-dependent and include none, minimal, low, medium, high, xhigh, and max. GPT-6 Luna, for
+   * example, accepts only low/medium/high/xhigh/max and rejects the rest with HTTP 400 listing the
+   * valid levels. Keep the full documented set so the editor never invents or drops a level.
+   */
+  it('offers every reasoning effort level the OpenAI API documents', () => {
+    expect([...REASONING_EFFORT_OPTIONS]).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+  })
+
+  /**
+   * Docs contract, verified against developers.openai.com (2026-10): auto, default, and
+   * priority, plus the `fast` alias that opts into Fast mode and is reported back as priority.
+   * `flex` is deliberately not offered: it is documented as slower, beta, and limited to
+   * selected models — a latency trap in a dictation app.
+   */
+  it('offers only the service tier values that make sense for dictation latency', () => {
+    expect([...SERVICE_TIER_OPTIONS]).toEqual(['auto', 'default', 'priority', 'fast'])
+  })
+
+  it('builds the native request config with OpenAI tuning only for the openai provider', () => {
+    expect(buildAiProviderConfig({
+      provider: 'openai',
+      apiUrl: 'https://relay.example/v1',
+      apiKey: 'sk-test',
+      model: 'gpt-5-mini',
+      reasoningEffort: ' low ',
+      serviceTier: 'fast',
+    })).toEqual({
+      provider: 'openai',
+      api_url: 'https://relay.example/v1',
+      api_key: 'sk-test',
+      model: 'gpt-5-mini',
+      extra: { reasoning_effort: 'low', service_tier: 'fast' },
+    })
+
+    expect(buildAiProviderConfig({
+      provider: 'deepseek',
+      apiUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-test',
+      model: 'deepseek-v4-flash',
+      reasoningEffort: 'low',
+      serviceTier: 'fast',
+    })).toEqual({
+      provider: 'deepseek',
+      api_url: 'https://api.deepseek.com',
+      api_key: 'sk-test',
+      model: 'deepseek-v4-flash',
+    })
+
+    expect(buildAiProviderConfig({
+      provider: 'openai',
+      apiUrl: 'https://api.openai.com',
+      apiKey: 'sk-test',
+      model: 'gpt-5-mini',
+      reasoningEffort: '',
+      serviceTier: '',
+    })).toEqual({
+      provider: 'openai',
+      api_url: 'https://api.openai.com',
+      api_key: 'sk-test',
+      model: 'gpt-5-mini',
+    })
+  })
+
+  it('round-trips tuning through parseProfiles and drops junk values', () => {
+    const parsed = parseProfiles([
+      { ...profile({ provider: 'openai' }), reasoningEffort: ' high ', serviceTier: 'fast' },
+    ])[0]
+    expect(parsed.reasoningEffort).toBe('high')
+    expect(parsed.serviceTier).toBe('fast')
+
+    const junk = parseProfiles([
+      { ...profile({ provider: 'openai' }), reasoningEffort: 42, serviceTier: { value: 'fast' } },
+    ])[0]
+    expect(junk.reasoningEffort).toBeUndefined()
+    expect(junk.serviceTier).toBeUndefined()
+
+    // A value outside the catalog's set (removed tier, hand-edited string) must not survive:
+    // it would stay invisible in the editor and keep failing the request.
+    const unknown = parseProfiles([
+      { ...profile({ provider: 'openai' }), reasoningEffort: 'turbo', serviceTier: 'flex' },
+    ])[0]
+    expect(unknown.reasoningEffort).toBeUndefined()
+    expect(unknown.serviceTier).toBeUndefined()
+
+    const blank = parseProfiles([profile({ provider: 'openai' })])[0]
+    expect(blank.reasoningEffort).toBeUndefined()
+    expect(blank.serviceTier).toBeUndefined()
   })
 })

@@ -157,4 +157,68 @@ describe('client AI polish completion handling', () => {
       { provider, hasUrl: true, hasKey, hasModel },
     )
   })
+
+  it('sends OpenAI request tuning with the openai provider', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') return { text: 'polished', elapsed_ms: 12 }
+      return undefined
+    })
+    boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      const settings: Record<string, string> = {
+        'cloudAi.provider': 'openai',
+        'cloudAi.apiUrl': 'http://127.0.0.1:65181/v1',
+        'cloudAi.apiKey': 'sk-test',
+        'cloudAi.model': 'gpt-5.5',
+        'cloudAi.reasoningEffort': 'low',
+        'cloudAi.serviceTier': 'fast',
+      }
+      return settings[key] ?? fallback
+    })
+
+    await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 5 },
+      logSource: 'test',
+    })
+
+    const call = boundaries.invoke.mock.calls.find(([command]) => command === 'cloud_polish')
+    expect(call?.[1]).toMatchObject({
+      request: {
+        ai_config: {
+          provider: 'openai',
+          extra: { reasoning_effort: 'low', service_tier: 'fast' },
+        },
+      },
+    })
+  })
+
+  it('keeps generic compatible providers free of OpenAI tuning fields', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') return { text: 'polished', elapsed_ms: 12 }
+      return undefined
+    })
+    boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      const settings: Record<string, string> = {
+        'cloudAi.provider': 'deepseek',
+        'cloudAi.apiUrl': 'https://api.deepseek.com',
+        'cloudAi.apiKey': 'sk-test',
+        'cloudAi.model': 'deepseek-v4-flash',
+        'cloudAi.reasoningEffort': 'low',
+        'cloudAi.serviceTier': 'fast',
+      }
+      return settings[key] ?? fallback
+    })
+
+    await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 6 },
+      logSource: 'test',
+    })
+
+    const call = boundaries.invoke.mock.calls.find(([command]) => command === 'cloud_polish')
+    const aiConfig = (call?.[1] as { request: { ai_config: Record<string, unknown> } }).request.ai_config
+    expect(aiConfig.extra).toBeUndefined()
+  })
 })

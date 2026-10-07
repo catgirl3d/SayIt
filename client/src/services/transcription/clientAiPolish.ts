@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { addRuntimeEvent } from '../debugLog'
-import { getSetting } from '../store'
-import { findProvider } from '@/features/settings/aiProviderCatalog'
+import { loadRuntimeAiConfig } from '../aiRuntimeConfig'
+import { buildAiProviderConfig, findProvider } from '@/features/settings/aiProviderCatalog'
 import type { AiExecutionSource, AiExecutionStatus, StartOptions } from './types'
 
 interface AiResult {
@@ -10,13 +10,6 @@ interface AiResult {
 }
 
 const CLIENT_AI_TIMEOUT_MS = 8_000
-
-interface ClientAiConfig {
-  provider: string
-  apiUrl: string
-  apiKey: string
-  model: string
-}
 
 export interface ClientAiPolishResult {
   llmText: string
@@ -35,16 +28,6 @@ interface ClientAiPolishOptions {
   logSource: string
   /** 异步读设置和原生请求结束后都要验代；false 表示结果已经属于旧录音。 */
   isCurrent?: () => boolean
-}
-
-async function loadClientAiConfig(): Promise<ClientAiConfig> {
-  const [provider, apiUrl, apiKey, model] = await Promise.all([
-    getSetting('cloudAi.provider', 'openai_compat') as Promise<string>,
-    getSetting('cloudAi.apiUrl', '') as Promise<string>,
-    getSetting('cloudAi.apiKey', '') as Promise<string>,
-    getSetting('cloudAi.model', '') as Promise<string>,
-  ])
-  return { provider, apiUrl, apiKey, model }
 }
 
 function safeFallbackText(asrText: string, startOptions?: Readonly<StartOptions>): string {
@@ -101,7 +84,7 @@ export async function polishWithClientAi(
     }
   }
 
-  const config = await loadClientAiConfig()
+  const config = await loadRuntimeAiConfig()
   if (!isCurrent()) return null
 
   const keyless = Boolean(findProvider(config.provider).keyless)
@@ -138,12 +121,7 @@ export async function polishWithClientAi(
     const request = invoke<AiResult>('cloud_polish', {
       request: {
         text: asrText,
-        ai_config: {
-          provider: config.provider,
-          api_url: config.apiUrl,
-          api_key: config.apiKey,
-          model: config.model,
-        },
+        ai_config: buildAiProviderConfig(config),
         system_prompt: startOptions?.systemPrompt || null,
         text_context: startOptions?.textContext || null,
       },

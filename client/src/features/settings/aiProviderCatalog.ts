@@ -177,8 +177,73 @@ export interface AiProfile {
   apiUrl: string
   apiKey: string
   model: string
+  /**
+   * OpenAI-only request tuning. Only the openai preset renders and sends these:
+   * generic OpenAI-compatible endpoints may reject unknown body fields, so they never
+   * leave for any other provider. Undefined = the provider decides.
+   */
+  reasoningEffort?: string
+  serviceTier?: string
   /** 最近一次可用性检测。没有 = 还没测过 */
   check?: AiProfileCheck
+}
+
+/**
+ * Reasoning effort values offered by the openai preset; API literals, not UI copy.
+ *
+ * The set is model-dependent (verified against developers.openai.com, 2026-10): a model may
+ * accept only a subset, and rejects the rest with HTTP 400 listing its valid levels — GPT-6
+ * Luna, for example, takes low/medium/high/xhigh/max. The editor offers the full documented
+ * set so no supported level is missing; the hint tells users the provider error is the
+ * authority for a given model.
+ */
+export const REASONING_EFFORT_OPTIONS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/**
+ * Service tier values offered by the openai preset; API literals, not UI copy.
+ * `fast` is the documented Fast-mode alias: the API accepts it and reports the request back
+ * as `priority` (verified against developers.openai.com, 2026-10). `flex` is deliberately
+ * not offered: it is documented as slower, beta, and limited to selected models — a latency
+ * trap in a dictation app.
+ */
+export const SERVICE_TIER_OPTIONS = ['auto', 'default', 'priority', 'fast'] as const
+
+/** Whether a provider accepts the OpenAI-only request tuning fields. */
+export function supportsRequestTuning(provider: string): boolean {
+  return provider === 'openai'
+}
+
+/**
+ * Build the `ai_config.extra` wire payload for one profile.
+ *
+ * Returns undefined when the provider is not openai or nothing is set, so profiles
+ * that never touched tuning keep sending the exact request body they always did.
+ */
+function buildAiExtra(
+  provider: string,
+  reasoningEffort?: string,
+  serviceTier?: string,
+): Record<string, string> | undefined {
+  if (!supportsRequestTuning(provider)) return undefined
+  const extra: Record<string, string> = {}
+  const effort = reasoningEffort?.trim()
+  const tier = serviceTier?.trim()
+  if (effort) extra.reasoning_effort = effort
+  if (tier) extra.service_tier = tier
+  return Object.keys(extra).length > 0 ? extra : undefined
+}
+
+export function buildAiProviderConfig(
+  config: Pick<AiProfile, 'provider' | 'apiUrl' | 'apiKey' | 'model' | 'reasoningEffort' | 'serviceTier'>,
+) {
+  const extra = buildAiExtra(config.provider, config.reasoningEffort, config.serviceTier)
+  return {
+    provider: config.provider,
+    api_url: config.apiUrl,
+    api_key: config.apiKey,
+    model: config.model,
+    ...(extra ? { extra } : {}),
+  }
 }
 
 export function makeProfileId(): string {
@@ -266,12 +331,22 @@ export function parseProfiles(raw: unknown): AiProfile[] {
     while (used.has(id)) id = `${id}-${index}`
     used.add(id)
 
+    // Tuning values are validated against the catalog's offered set: a value that is no
+    // longer offered (a removed tier) or was hand-edited would stay invisible in the editor
+    // and keep failing the request, so it is dropped here instead of lingering.
+    const reasoningEffort = text(source.reasoningEffort).trim()
+    const serviceTier = text(source.serviceTier).trim()
+    const keepReasoningEffort = (REASONING_EFFORT_OPTIONS as readonly string[]).includes(reasoningEffort)
+    const keepServiceTier = (SERVICE_TIER_OPTIONS as readonly string[]).includes(serviceTier)
+
     out.push({
       id,
       provider: text(source.provider) || AI_PROVIDERS[0].value,
       apiUrl: text(source.apiUrl),
       apiKey: text(source.apiKey),
       model: text(source.model),
+      ...(keepReasoningEffort ? { reasoningEffort } : {}),
+      ...(keepServiceTier ? { serviceTier } : {}),
       check: parseCheck(source.check, source.latencyMs, finite),
     })
   })

@@ -90,6 +90,31 @@ fn is_zhipu_api_url(api_url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Provider id whose endpoints accept the OpenAI-only request tuning fields.
+const OPENAI_PROVIDER: &str = "openai";
+
+/// Apply the OpenAI-only request tuning (service tier, reasoning effort).
+///
+/// Values come from the profile's `extra` map and are sent verbatim: the valid set depends
+/// on the model and deployment (local Codex-style proxies use `service_tier: "fast"`,
+/// which is not part of the official tier list). Only the openai preset receives them —
+/// generic OpenAI-compatible endpoints may reject unknown body fields.
+fn configure_openai_tuning(body: &mut serde_json::Value, config: &AiProviderConfig) {
+    if config.provider != OPENAI_PROVIDER {
+        return;
+    }
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    for key in ["service_tier", "reasoning_effort"] {
+        if let Some(value) = config.extra.get(key).and_then(|value| value.as_str()) {
+            if !value.trim().is_empty() {
+                object.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+            }
+        }
+    }
+}
+
 /// 调用 OpenAI 兼容接口进行文本校对
 pub async fn polish(
     text: &str,
@@ -119,6 +144,7 @@ pub async fn polish(
         ]
     });
     configure_thinking(&mut body, config);
+    configure_openai_tuning(&mut body, config);
 
     let start = Instant::now();
 
@@ -239,6 +265,7 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
         ]
     });
     configure_thinking(&mut body, config);
+    configure_openai_tuning(&mut body, config);
 
     let start = Instant::now();
 
@@ -563,6 +590,72 @@ mod tests {
             model: "fixture-model".to_string(),
             extra: serde_json::Value::Null,
         }
+    }
+
+    fn tuning_config(api_url: &str, provider: &str) -> AiProviderConfig {
+        AiProviderConfig {
+            provider: provider.to_string(),
+            api_url: api_url.to_string(),
+            api_key: String::new(),
+            model: "fixture-model".to_string(),
+            extra: serde_json::json!({ "service_tier": "fast", "reasoning_effort": "low" }),
+        }
+    }
+
+    /// OpenAI-only tuning fields may reach the wire only through the openai preset:
+    /// generic compatible endpoints can reject unknown body fields.
+    #[tokio::test]
+    async fn polish_sends_openai_tuning_only_for_the_openai_provider() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        for (provider, expected) in [("openai", true), ("openai_compat", false)] {
+            let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+                200,
+                response_body.clone(),
+            );
+            let result = polish(TEST_INPUT, &tuning_config(&api_url, provider), None, None)
+                .await
+                .expect("a usable completion succeeds");
+            assert_eq!(result.text, RESPONSE_MARKER);
+
+            let request = String::from_utf8_lossy(&server.join().expect("loopback server completed"))
+                .to_string();
+            assert_eq!(
+                request.contains(r#""service_tier":"fast""#),
+                expected,
+                "{provider} service tier mismatch: {request}"
+            );
+            assert_eq!(
+                request.contains(r#""reasoning_effort":"low""#),
+                expected,
+                "{provider} reasoning effort mismatch: {request}"
+            );
+        }
+    }
+
+    /// The connection test must exercise the same body the polish request sends.
+    #[tokio::test]
+    async fn connection_test_mirrors_openai_tuning_for_the_openai_provider() {
+        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            r#"{"choices":[{"message":{"content":"OK"}}]}"#.to_string(),
+        );
+
+        let result = test_connection(&tuning_config(&api_url, "openai")).await;
+        assert!(result.ok, "connection test failed: {}", result.message);
+
+        let request = String::from_utf8_lossy(&server.join().expect("loopback server completed"))
+            .to_string();
+        assert!(
+            request.contains(r#""service_tier":"fast""#),
+            "service tier missing: {request}"
+        );
+        assert!(
+            request.contains(r#""reasoning_effort":"low""#),
+            "reasoning effort missing: {request}"
+        );
     }
 
     async fn polish_response(response_body: &str, text: &str) -> Result<AiResult, String> {

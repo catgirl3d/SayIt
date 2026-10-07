@@ -4,11 +4,12 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Card, CardContent } from '@/components/ui/card'
 import { getSetting } from '@/services/store'
+import { loadRuntimeAiConfig } from '@/services/aiRuntimeConfig'
 import { getRuntimeEvents, type RuntimeEvent } from '@/services/debugLog'
 import { getWorkMode } from '@/services/transcription'
 import { FolderOpen, RefreshCw, CheckCircle2, XCircle, MinusCircle, CircleSlash, Info, HelpCircle, ChevronDown } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
-import { providerLabel } from './aiProviderCatalog'
+import { buildAiProviderConfig, providerLabel } from './aiProviderCatalog'
 import { describeAsrMissing, effectiveAsrCredentials, findAsrProvider, type AsrProfile } from './asrProviderCatalog'
 import { loadActiveAsrProfile } from './asrProfileStore'
 import { getSpeechInputLanguage } from '@/services/speechInputLanguage'
@@ -211,23 +212,21 @@ export default function DiagnosticsPage() {
     } else if (workMode === 'server') {
       items.push({ id: 'ai', label: t('diagnostics.health.ai'), status: 'ok', detail: t('diagnostics.fromServer') })
     } else {
-      const aiProvider = await getSetting('cloudAi.provider', '') as string
-      const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
-      const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
-      const aiModel = await getSetting('cloudAi.model', '') as string
+      const ai = await loadRuntimeAiConfig()
+      const aiProvider = ai.provider
       // 供应商显示名只有一份真相（aiProviderCatalog）。这里原先另有一张 AI_DISPLAY 表，
       // 少了小米 MiMo、Ollama 的写法也和设置页不一致。
       const displayName = aiProvider ? providerLabel(aiProvider) : ''
 
-      if (!aiProvider || (!aiApiKey && aiProvider !== 'ollama') || !aiApiUrl) {
+      if (!aiProvider || (!ai.apiKey && aiProvider !== 'ollama') || !ai.apiUrl) {
         items.push({ id: 'ai', label: t('diagnostics.health.ai'), status: 'error', detail: t('diagnostics.incomplete') })
       } else {
         // 实际测试连通性
         try {
           const result = await invoke<{ ok: boolean; message: string }>('test_ai_connection', {
-            config: { provider: aiProvider, api_url: aiApiUrl, api_key: aiApiKey, model: aiModel },
+            config: buildAiProviderConfig(ai),
           })
-          items.push({ id: 'ai', label: t('diagnostics.health.ai'), status: result.ok ? 'ok' : 'error', detail: result.ok ? t('diagnostics.providerModel', { provider: displayName, model: aiModel }) : `${displayName} — ${result.message}` })
+          items.push({ id: 'ai', label: t('diagnostics.health.ai'), status: result.ok ? 'ok' : 'error', detail: result.ok ? t('diagnostics.providerModel', { provider: displayName, model: ai.model }) : `${displayName} — ${result.message}` })
         } catch (err) {
           items.push({ id: 'ai', label: t('diagnostics.health.ai'), status: 'error', detail: `${displayName} — ${String(err)}` })
         }

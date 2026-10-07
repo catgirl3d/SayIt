@@ -9,9 +9,10 @@ import {
   CUSTOM_ASR_PROVIDER,
   resolveAsrRequestMetadata,
 } from '@/features/settings/asrProviderCatalog'
-import { findProvider } from '@/features/settings/aiProviderCatalog'
+import { buildAiProviderConfig, findProvider } from '@/features/settings/aiProviderCatalog'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
+import { loadRuntimeAiConfig } from '@/services/aiRuntimeConfig'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
@@ -253,19 +254,17 @@ export async function reprocessViaCloudApi(
   let requestAiProvider: string | undefined
   let requestAiModel: string | undefined
   if (asrText.trim() && aiEnabled && !isQwenOmni) {
-    const aiProvider = await getSetting('cloudAi.provider', 'openai_compat') as string
-    const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
-    const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
-    const aiModel = await getSetting('cloudAi.model', '') as string
+    const ai = await loadRuntimeAiConfig()
+    const aiProvider = ai.provider
     aiSource = 'custom'
-    if (aiApiUrl && (findProvider(aiProvider).keyless || aiApiKey) && aiModel) {
+    if (ai.apiUrl && (findProvider(aiProvider).keyless || ai.apiKey) && ai.model) {
       requestAiProvider = aiProvider
-      requestAiModel = aiModel
+      requestAiModel = ai.model
       try {
         const aiResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_polish', {
           request: {
             text: asrText,
-            ai_config: { provider: aiProvider, api_url: aiApiUrl, api_key: aiApiKey, model: aiModel },
+            ai_config: buildAiProviderConfig(ai),
             system_prompt: systemPrompt || null,
           },
         })
@@ -329,23 +328,21 @@ export async function reprocessViaLocal(
   let requestAiProvider: string | undefined
   let requestAiModel: string | undefined
   if (asrText.trim() && aiEnabled) {
-    const aiProvider = await getSetting('cloudAi.provider', 'openai_compat') as string
-    const aiApiUrl = await getSetting('cloudAi.apiUrl', '') as string
-    const aiApiKey = await getSetting('cloudAi.apiKey', '') as string
-    const aiModel = await getSetting('cloudAi.model', '') as string
+    const ai = await loadRuntimeAiConfig()
+    const aiProvider = ai.provider
     aiSource = 'custom'
     if (
-      aiApiUrl
-      && (aiApiKey || findProvider(aiProvider).keyless)
-      && (Boolean(aiModel.trim()) || (aiProvider === 'ollama' && aiModel === ''))
+      ai.apiUrl
+      && (ai.apiKey || findProvider(aiProvider).keyless)
+      && (Boolean(ai.model.trim()) || (aiProvider === 'ollama' && ai.model === ''))
     ) {
       requestAiProvider = aiProvider
-      requestAiModel = aiModel
+      requestAiModel = ai.model
       try {
         const aiResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_polish', {
           request: {
             text: asrText,
-            ai_config: { provider: aiProvider, api_url: aiApiUrl, api_key: aiApiKey, model: aiModel },
+            ai_config: buildAiProviderConfig(ai),
             system_prompt: systemPrompt || null,
           },
         })
