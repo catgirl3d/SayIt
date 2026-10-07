@@ -1014,7 +1014,6 @@
   "asrTest.pause": "Pause",
   "asrTest.testing": "Transcribing…",
   "asrTest.start": "Run test",
-  "asrTest.languageMismatchWarning": "The bundled test recording is Chinese. A poor transcript with another selected language may reflect a language mismatch, not an engine problem.",
   "asr.lang.autoOnly": "This provider recognizes speech automatically; the setting is not sent.",
   "asr.lang.hintSent": "A selected language is sent as a hint; actual support depends on the provider and model. Auto is omitted.",
   "asr.lang.supportedOnly": "This provider supports only {langs} explicitly.",

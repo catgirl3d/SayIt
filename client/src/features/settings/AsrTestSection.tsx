@@ -1,4 +1,4 @@
-// ASR 测试卡片 — 用内置测试音频测试当前模式的识别效果
+// ASR test card — runs the bundled test clip through the current recognition mode.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -16,6 +16,7 @@ import type { WorkMode } from '@/services/transcription'
 import { useT } from '@/i18n/useT'
 import { type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
+import { prepareTestPcm } from './testAudio'
 
 interface TestResult {
   text: string
@@ -35,16 +36,17 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
   const [testing, setTesting] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [result, setResult] = useState<TestResult | null>(null)
-  // 失败原来是被写进 result.text 的，于是用与成功完全相同的面板渲染出来，
-  // 外面还配着「ASR 0ms」的徽标——失败长得像"成功识别出了『测试失败:』这几个字"。
+  // Failures used to be written into result.text, so they rendered in the same
+  // panel as successes with an "ASR 0ms" badge — a failure looked like a
+  // successful recognition of the words "Test failed:".
   const [error, setError] = useState<TestError | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const testRunIdRef = useRef(0)
 
-  // 上方配置有未保存改动时，这里读到的还是旧值，测出来的结果没有意义
+  // With unsaved edits above, this card reads stale values, so a result would be meaningless
   const draftDirty = useSyncExternalStore(subscribeEngineDraft, getEngineDraftDirty)
 
-  // 换了工作模式，旧结果就不再说明任何事情，直接作废
+  // Switching the work mode invalidates old results; drop them.
   useEffect(() => {
     testRunIdRef.current += 1
     setTesting(false)
@@ -60,7 +62,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
       return
     }
     try {
-      const b64 = await invoke<string>('get_test_audio_b64')
+      const b64 = await invoke<string>('get_test_audio_b64', { language: speechLanguage })
       const audio = new Audio(`data:audio/wav;base64,${b64}`)
       audioRef.current = audio
       audio.onended = () => setPlaying(false)
@@ -81,11 +83,8 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
 
     try {
       const cloudProfile = workMode === 'cloud_api' ? await loadActiveAsrProfile() : null
-      // 获取测试音频并计算时长
-      const wavB64 = await invoke<string>('get_test_audio_b64')
-      const wavBytes = Uint8Array.from(atob(wavB64), (c) => c.charCodeAt(0))
-      const pcmBytes = wavBytes.slice(44)
-      const audioDurationSec = pcmBytes.length / 2 / 16000
+      // Fetch the test clip for the selected language and prepare raw PCM
+      const { pcmB64, pcmBytes, audioSec: audioDurationSec } = await prepareTestPcm(speechLanguage)
 
       if (workMode === 'local') {
         const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
@@ -94,14 +93,6 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
         })
         setResult({ text: r.text, asrMs: r.elapsed_ms, mode: 'local', model: r.model_id, audioDurationSec })
       } else if (workMode === 'cloud_api') {
-        let pcmB64 = ''
-        const chunk = 8192
-        for (let i = 0; i < pcmBytes.length; i += chunk) {
-          const slice = pcmBytes.subarray(i, Math.min(i + chunk, pcmBytes.length))
-          pcmB64 += String.fromCharCode(...slice)
-        }
-        pcmB64 = btoa(pcmB64)
-
         const profile = cloudProfile
         if (!profile) throw new Error('No cloud ASR profile is active')
         customProfileTest = profile.provider === CUSTOM_ASR_PROVIDER
@@ -137,7 +128,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
           audioDurationSec,
         })
       } else {
-        // 服务器模式
+        // Server mode
         const { getWSUrl } = await import('@/services/runtimeConfig')
         const wsUrl = getWSUrl()
 
@@ -150,7 +141,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
           sock.binaryType = 'arraybuffer'
           sock.onopen = () => {
             sock.send(JSON.stringify({ cmd: 'start', disable_ai: true, language: speechLanguage }))
-            // 分块发送 PCM（每块 3200 字节 = 100ms @16kHz 16bit mono）
+            // Send PCM in chunks (3200 bytes = 100 ms of 16 kHz 16-bit mono)
             const chunkSize = 3200
             for (let i = 0; i < pcmBytes.length; i += chunkSize) {
               sock.send(pcmBytes.slice(i, i + chunkSize).buffer)
@@ -191,13 +182,15 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
   return (
     <Card>
       <CardContent className="p-6">
-        {/* flex-wrap：最小窗口下标题 + 两个按钮挤一行会溢出 */}
+        {/* flex-wrap: at the minimum window size the title and both buttons overflow one row */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-lg font-semibold">{t('asrTest.title')}</h2>
-            {/* 这张卡只测 ASR。服务器模式下请求里写着 disable_ai: true，本地和云 API 也
-                不经过 AI 整理——原来界面上还渲染一个恒为 0 的「LLM 0ms」，会让人以为
-                AI 整理坏了。现在把范围说清，并不再展示那个假字段。 */}
+            {/* This card tests ASR only. In server mode the request carries
+                disable_ai: true, and local and cloud API runs skip AI cleanup as
+                well. The UI used to render a constant "LLM 0ms", making users
+                think cleanup was broken; the scope is stated and the fake field
+                is gone. */}
             <p className="mt-1 text-xs text-muted-foreground">
               {t('asrTest.desc')}
             </p>
@@ -218,17 +211,14 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
           </div>
         </div>
 
-        {/* 测试读的是已保存的配置。粘完密钥直接点测试必然失败，用户会误判成"密钥是坏的"。 */}
+        {/* The test reads saved configuration. Testing right after pasting a key
+            would fail and users would misjudge the key as broken. */}
         {draftDirty && (
           <Feedback
             className="mt-4"
             tone="warning"
             message={t('asrTest.unsavedWarning')}
           />
-        )}
-
-        {speechLanguage !== 'auto' && speechLanguage !== 'zh' && (
-          <Feedback className="mt-4" tone="warning" message={t('asrTest.languageMismatchWarning')} />
         )}
 
         {error && (

@@ -34,6 +34,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Updated the built-in Qwen Audio streaming ASR model to `qwen-audio-3.1-asr-flash-streaming`.
 - Added Deepgram Nova-3 as a cloud ASR profile with live streaming captions over WebSocket, including Russian, Ukrainian, English and Chinese language selection and a settings connection test. It needs a Deepgram API key from an international account.
 - Deepgram now sends completed recordings and Computer subtitle segments through its prerecorded HTTP endpoint, avoiding the extra streaming connection and recognition delay of uploading a complete clip through WebSocket. Live dictation captions continue to use WebSocket.
+- The built-in recognition test and its playback in Settings now use a clip matching the selected speech language (Russian, Ukrainian, English, Chinese; English for Auto) instead of always the Chinese clip, so a working engine can no longer look broken because the test audio was in a language it does not recognize. Added bundled Russian and Ukrainian test clips; the language-mismatch warnings are gone.
 - Added Russian as a selectable recognition language in the client.
 - Added Ukrainian as a selectable recognition language in the client.
 - Added Sber GigaAM as a Russian speech-recognition provider for the server, with configurable RNNT and CTC variants.

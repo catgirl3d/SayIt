@@ -29,6 +29,7 @@ import { getCloudAsrSupportedLanguages } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { describeProviderError } from '@/lib/errorMessages'
 import { doubaoKeyLabel } from '@/lib/cloudAsrCreds'
+import { prepareTestPcm } from './testAudio'
 import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
@@ -98,27 +99,11 @@ type AsrTestOutcome =
   | { ok: false; check: AsrCheck; message: string; detail?: string }
 
 /**
- * 把内置测试音频准备成后端要的裸 PCM（base64）。
- * 从测试逻辑里单独拆出来，是为了让批量测试**只准备一次**给 N 张卡共用。
- */
-async function prepareTestPcm(): Promise<{ pcmB64: string; audioSec: number }> {
-  const wavB64 = await invoke<string>('get_test_audio_b64')
-  const wavBytes = Uint8Array.from(atob(wavB64), (c) => c.charCodeAt(0))
-  const pcmBytes = wavBytes.slice(44) // 去掉 44 字节 WAV 头，后端要的是裸 PCM
-  const audioSec = pcmBytes.length / 2 / 16000
-  let pcmB64 = ''
-  const chunk = 8192
-  for (let i = 0; i < pcmBytes.length; i += chunk) {
-    pcmB64 += String.fromCharCode(...pcmBytes.subarray(i, Math.min(i + chunk, pcmBytes.length)))
-  }
-  return { pcmB64: btoa(pcmB64), audioSec }
-}
-
-/**
- * 真跑一次识别并把结果收成 outcome。
+ * Run one recognition pass and collect the outcome.
  *
- * 刻意不碰任何 state、也不写存储：单张测试与「测试全部」共用它，各自决定怎么落盘、
- * 怎么提示。message 里不带供应商名字，由调用方按自己的语境加前缀。
+ * Deliberately touches no state and writes no storage: the single-card test and
+ * "Test all" share it, and each caller decides how to persist the check and what
+ * to show. The message carries no provider name; callers add their own prefix.
  */
 async function runAsrTest(
   profile: AsrProfile,
@@ -151,7 +136,8 @@ async function runAsrTest(
     const latencyMs = Math.round(performance.now() - start)
     const text = r.text.trim()
     if (!text) {
-      // 连通了但一个字都没出：多半是资源没开通或额度问题，不能算可用
+      // Connected but nothing came out. The clip matches the selected language,
+      // so the service or the account is the likely cause.
       return {
         ok: false,
         check: { ok: false, at: Date.now(), reason: t('asr.err.emptyText') },
@@ -305,7 +291,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     setTestingId(profile.id)
     setNotice(null)
     try {
-      const outcome = await runAsrTest(profile, await prepareTestPcm(), speechLanguage)
+      const outcome = await runAsrTest(profile, await prepareTestPcm(speechLanguage), speechLanguage)
       await persistChecks([{ profile, check: outcome.check }])
       if (!outcome.ok) {
         setNotice({ tone: 'error', message: `${entry.label} ${outcome.message}`, detail: outcome.detail })
@@ -358,8 +344,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     setTestingIds(targets.map((p) => p.id))
 
     try {
-      // 测试音频只准备一次，N 张卡共用
-      const audio = await prepareTestPcm()
+      // The test clip is prepared once and shared by N cards
+      const audio = await prepareTestPcm(speechLanguage)
       let done = 0
       const results = await Promise.all(targets.map(async (target) => {
         const outcome = await runAsrTest(target, audio, speechLanguage)
