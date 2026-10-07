@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
-  mode: 'cloud_api' as 'local' | 'server' | 'cloud_api',
+  mode: 'cloud_api' as 'local' | 'server' | 'cloud_api' | 'unknown',
 }))
 
 const bridge = vi.hoisted(() => ({
@@ -32,6 +32,7 @@ import {
   saveSupportBundle,
 } from '../diagnostics'
 import { AI_PROVIDERS } from '@/features/settings/aiProviderCatalog'
+import { ASR_PROVIDERS } from '@/features/settings/asrProviderCatalog'
 
 describe('public diagnostics', () => {
   beforeEach(() => {
@@ -110,6 +111,18 @@ describe('public diagnostics', () => {
       expect(await collectPublicDiagnosticsEnvironment(), provider.value).toMatchObject({
         workMode: 'local',
         aiProvider: 'cloud',
+      })
+    }
+  })
+
+  it('classifies every catalog ASR provider as cloud when the work mode is unknown', async () => {
+    state.mode = 'unknown'
+
+    for (const provider of ASR_PROVIDERS) {
+      state.settings.set('cloudAsr.provider', provider.id)
+      expect(await collectPublicDiagnosticsEnvironment(), provider.id).toMatchObject({
+        workMode: 'unknown',
+        asrProvider: 'cloud',
       })
     }
   })

@@ -8,16 +8,25 @@ import type { DiagnosticOccurrence, DiagnosticsPreview, PublicDiagnosticsEnviron
 
 const WORK_MODES = new Set(['local', 'server', 'cloud_api'])
 const ACCELERATORS = new Set(['cpu', 'cuda', 'vulkan', 'auto'])
+// ASR provider ids from the catalog plus AI provider ids. Consulted only when
+// the work mode itself is unknown; keep the ASR entries in sync with
+// ASR_PROVIDERS so a provider is never classified as unknown.
 const CLOUD_PROVIDERS = new Set([
   'doubao_v2',
   'qwen',
   'qwen_realtime',
+  'qwen_audio_stream',
   'qwen_omni_35_plus',
   'qwen_omni_35_flash',
+  'qwen_omni_38_realtime',
   'qwen_omni_flash',
   'qwen_omni_turbo',
   'mimo',
   'groq_whisper',
+  'deepgram',
+  'openai_transcribe',
+  'gemini_transcribe',
+  'openrouter_transcribe',
   'openai',
   'openai_compat',
   'deepseek',
