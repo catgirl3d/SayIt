@@ -614,6 +614,195 @@ describe('system audio subtitle session', () => {
     expect(native.invoke.mock.calls.some(([name]) => ['paste_text', 'copy_text', 'mute_system_output', 'get_recording_context'].includes(name))).toBe(false)
   })
 
+  describe('overlay status line', () => {
+    const statuses = () => overlayCalls.flatMap((call) => call.method === 'hide' ? [] : [call.payload.subtitleStatus])
+    const lastStatus = () => statuses()[statuses().length - 1]
+
+    it('says nothing while listening, so only captions appear over the video', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      expect(session.getSnapshot().state).toBe('listening')
+
+      expect(lastStatus()).toBe('')
+    })
+
+    it('still names the other states, which would otherwise leave the overlay blank', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      expect(statuses()[0]).toBe('Starting computer subtitles...')
+
+      await session.pause()
+      expect(lastStatus()).toBe('Subtitles paused')
+    })
+
+    it('still shows a warning while listening', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      frames(1, 0, 0, undefined, true)
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(lastStatus()).toContain('listening continues')
+    })
+  })
+
+  describe('dual subtitles', () => {
+    function speak() {
+      frames(20, 0.9)
+      frames(15, 0)
+    }
+
+    const lastOverlayPayload = () => {
+      const updates = overlayCalls.filter((call): call is Extract<OverlayCall, { method: 'update' }> => call.method === 'update')
+      return updates[updates.length - 1].payload
+    }
+
+    // A translation that stays pending until the test releases it.
+    function holdTranslation() {
+      const pending = deferred<{ text: string; elapsed_ms: number }>()
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : original(name, args))
+      return pending
+    }
+
+    function numberRecognizedSpeech() {
+      let heard = 0
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation(async (name, args) => {
+        const result = await original(name, args)
+        return name === 'local_transcribe' ? { ...result, text: `Speech ${++heard}` } : result
+      })
+    }
+
+    it('is off by default: the recognized text is never shown next to the translation', async () => {
+      const pending = holdTranslation()
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: '', source: '' })
+
+      pending.resolve({ text: 'Translated speech', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Translated speech', source: '' })
+      expect(lastOverlayPayload()).toMatchObject({ subtitleText: 'Translated speech', subtitleSource: '' })
+    })
+
+    it('shows the recognized text as soon as it is recognized, then the translation next to it', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      const pending = holdTranslation()
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: '', source: 'Original speech' })
+      expect(lastOverlayPayload()).toMatchObject({ subtitleText: '', subtitleSource: 'Original speech' })
+
+      pending.resolve({ text: 'Translated speech', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Translated speech', source: 'Original speech' })
+      expect(lastOverlayPayload()).toMatchObject({ subtitleText: 'Translated speech', subtitleSource: 'Original speech' })
+    })
+
+    it('replaces the previous pair as soon as the next fragment is recognized', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      numberRecognizedSpeech()
+      const original = native.invoke.getMockImplementation()!
+      let polishes = 0
+      const second = deferred<{ text: string; elapsed_ms: number }>()
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' && ++polishes === 2 ? second.promise : original(name, args))
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Translated speech', source: 'Speech 1' })
+
+      speak()
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: '', source: 'Speech 2' })
+
+      second.resolve({ text: 'Second translation', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Second translation', source: 'Speech 2' })
+    })
+
+    it.each([
+      { name: 'the translation fails', answer: () => Promise.reject(new Error('AI unavailable')) },
+      { name: 'the translation equals the original', answer: () => Promise.resolve({ text: 'Original speech', elapsed_ms: 5 }) },
+    ])('shows the original once, as the main caption with its notice, when $name', async ({ answer }) => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? answer() : original(name, args))
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', source: '' })
+      expect(session.getSnapshot().captionNotice).toContain('not translated')
+      expect(lastOverlayPayload()).toMatchObject({ subtitleText: 'Original speech', subtitleSource: '' })
+    })
+
+    it('is ignored in recognition-only mode, which already shows the recognized text', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      speak()
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Original speech', source: '' })
+    })
+
+    it('clears the translation and its original together after the hold time', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Translated speech', source: 'Original speech' })
+
+      await vi.advanceTimersByTimeAsync(7_999)
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Translated speech', source: 'Original speech' })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(session.getSnapshot()).toMatchObject({ caption: '', source: '' })
+      expect(lastOverlayPayload()).toMatchObject({ subtitleText: '', subtitleSource: '' })
+    })
+
+    it('drops an original whose translation never arrives after the hold time, instead of leaving it on screen', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      let callbacks: TranscriptionCallbacks | undefined
+      session = new SystemAudioSession({
+        getProvider: () => createTestProvider((value) => { callbacks = value }),
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      callbacks?.onASR?.({ text: 'Original speech', asrMs: 5, durationSec: 0.64 })
+      expect(session.getSnapshot().source).toBe('Original speech')
+
+      await vi.advanceTimersByTimeAsync(7_999)
+      expect(session.getSnapshot().source).toBe('Original speech')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(session.getSnapshot()).toMatchObject({ caption: '', source: '' })
+    })
+
+    it('clears the source when the session stops', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      holdTranslation()
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      expect(session.getSnapshot().source).toBe('Original speech')
+      await session.stop()
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'idle', caption: '', source: '' })
+    })
+
+    it('reads the setting once per start, so a running session keeps its layout', async () => {
+      holdTranslation()
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      native.settings.set('systemAudio.dualSubtitles', true)
+      speak()
+      await settle()
+
+      expect(session.getSnapshot().source).toBe('')
+    })
+  })
+
   describe('translation context', () => {
     function numberRecognizedSpeech() {
       let heard = 0

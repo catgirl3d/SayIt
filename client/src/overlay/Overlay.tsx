@@ -36,6 +36,7 @@ interface OverlayPayload {
   subtitleStatus?: string
   subtitleError?: string
   subtitleNotice?: string
+  subtitleSource?: string
   micSourceMode?: 'auto' | 'fixed' | null
   micSourceLabel?: string
   /** 界面语言，由主窗随每次更新下发（见 OverlayCommonPayload.locale）。 */
@@ -48,19 +49,36 @@ interface OverlayPayload {
 const DEFAULT_BAR_COUNT = 24
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
 
-export function SubtitleCaption({ text, status, notice, error }: { text: string; status: string; notice: string; error: string }) {
+/**
+ * `source` is the recognized original of dual-subtitle mode. It sits above the translation so it stays put while the
+ * translation arrives below it; until then the translation line is a muted placeholder that holds its space.
+ */
+export function SubtitleCaption({ text, source, status, notice, error }: { text: string; source: string; status: string; notice: string; error: string }) {
+  const label = notice || status
+  // With nothing to say the bubble is invisible but keeps its size: the overlay's render probe looks for
+  // [data-overlay-content] with a non-zero box and would treat a missing one as a broken window.
+  const idle = !label && !text && !source && !error
   return (
     <div
       data-overlay-content
       className="pointer-events-none w-full max-w-[700px] rounded-2xl border px-6 py-4 text-center"
-      style={{ background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }}
+      style={idle
+        ? { background: 'transparent', color: 'var(--overlay-text)', borderColor: 'transparent' }
+        : { background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }}
     >
-      <p className="mb-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>{notice || status}</p>
+      {label && <p className="mb-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>{label}</p>}
       {error ? (
         <p role="alert" className="text-base leading-6 text-amber-300">{error}</p>
-      ) : text ? (
-        <p className="whitespace-pre-wrap break-words text-xl font-medium leading-8">{text}</p>
-      ) : null}
+      ) : (
+        <>
+          {source && <p className="mb-1.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-5" style={{ color: 'var(--overlay-text-muted)' }}>{source}</p>}
+          {text ? (
+            <p className="whitespace-pre-wrap break-words text-xl font-medium leading-8">{text}</p>
+          ) : source ? (
+            <p aria-hidden className="text-xl font-medium leading-8" style={{ color: 'var(--overlay-text-muted)' }}>…</p>
+          ) : null}
+        </>
+      )}
     </div>
   )
 }
@@ -176,6 +194,7 @@ export default function Overlay() {
   const [subtitleStatus, setSubtitleStatus] = useState('')
   const [subtitleError, setSubtitleError] = useState('')
   const [subtitleNotice, setSubtitleNotice] = useState('')
+  const [subtitleSource, setSubtitleSource] = useState('')
   const [copied, setCopied] = useState(false)
   const [thinkingDuration, setThinkingDuration] = useState(0)
   const [warning, setWarning] = useState('')
@@ -292,6 +311,7 @@ export default function Overlay() {
       if (typeof payload.subtitleStatus === 'string') setSubtitleStatus(payload.subtitleStatus)
       if (typeof payload.subtitleError === 'string') setSubtitleError(payload.subtitleError)
       if (typeof payload.subtitleNotice === 'string') setSubtitleNotice(payload.subtitleNotice)
+      if (typeof payload.subtitleSource === 'string') setSubtitleSource(payload.subtitleSource)
       if (typeof payload.streaming === 'boolean') setStreamingOn(payload.streaming)
       if (payload.micSourceMode === 'auto' || payload.micSourceMode === 'fixed' || payload.micSourceMode === null) {
         setMicSourceMode(payload.micSourceMode)
@@ -455,7 +475,7 @@ export default function Overlay() {
           }}
         />
       ) : state === 'subtitles' ? (
-        <SubtitleCaption text={subtitleText} status={subtitleStatus} notice={subtitleNotice} error={subtitleError} />
+        <SubtitleCaption text={subtitleText} source={subtitleSource} status={subtitleStatus} notice={subtitleNotice} error={subtitleError} />
       ) : state === 'fallback' ? (
         <div
           data-overlay-content

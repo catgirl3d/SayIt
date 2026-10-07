@@ -43,6 +43,8 @@ export interface SystemAudioSnapshot {
   warning: string
   /** Notice describing the current caption itself (e.g. that it is the untranslated original); shown in the overlay status line. */
   captionNotice: string
+  /** Recognized original shown next to the translation in dual-subtitle mode; empty otherwise. */
+  source: string
 }
 
 export interface SystemAudioDevice {
@@ -116,10 +118,16 @@ const PROCESSING_TIMEOUT_MS = 30_000
 // stops only when this many fragments fail back to back, which means the service itself is down or misconfigured.
 const MAX_CONSECUTIVE_FAILURES = 3
 const CAPTION_HOLD_MS = 8_000
+// Every caption-bound field of the snapshot; reset together so a notice or original never outlives its caption.
+const NO_CAPTION = { caption: '', captionNotice: '', source: '' } as const
 let sequence = Date.now()
 
 export async function getSystemAudioSourceLanguage(): Promise<SpeechInputLanguage> {
   return normalizeSpeechInputLanguage(await getSetting('systemAudio.sourceLanguage', 'auto'))
+}
+
+export async function getSystemAudioDualSubtitles(): Promise<boolean> {
+  return (await getSetting('systemAudio.dualSubtitles', false)) === true
 }
 
 export async function getSystemAudioMaxSegmentSeconds(): Promise<number> {
@@ -134,7 +142,7 @@ export function listSystemAudioDevices() {
 export class SystemAudioSession {
   constructor(private readonly dependencies: SessionDependencies) {}
 
-  private snapshot: SystemAudioSnapshot = { state: 'idle', caption: '', error: '', warning: '', captionNotice: '' }
+  private snapshot: SystemAudioSnapshot = { state: 'idle', ...NO_CAPTION, error: '', warning: '' }
   private readonly listeners = new Set<() => void>()
   private generation = 0
   private leased = false
@@ -151,6 +159,8 @@ export class SystemAudioSession {
   private frames: SpeechFrame[] = []
   private preRoll: SpeechFrame[] = []
   private plan: SegmentPlan = segmentPlan(DEFAULT_SEGMENT_SECONDS)
+  // Fixed per start: the overlay window is sized once, so the layout must not change under a running session.
+  private dual = false
   private voicedFrames = 0
   private silenceFrames = 0
   private continuation = false
@@ -203,9 +213,11 @@ export class SystemAudioSession {
   private overlayPayload(): SubtitleOverlayPayload {
     return {
       subtitleText: this.snapshot.caption,
-      subtitleStatus: this.snapshot.warning || t(`systemAudio.status.${this.snapshot.state}`),
+      // The steady "listening" label only sits on top of the video; every other state is named, and a warning replaces it.
+      subtitleStatus: this.snapshot.warning || (this.snapshot.state === 'listening' ? '' : t(`systemAudio.status.${this.snapshot.state}`)),
       subtitleError: this.snapshot.error,
       subtitleNotice: this.snapshot.captionNotice,
+      subtitleSource: this.snapshot.source,
     }
   }
 
@@ -222,12 +234,24 @@ export class SystemAudioSession {
     }
   }
 
-  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, captionNotice = '') {
+  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, captionNotice = '', source = '') {
+    const change = { caption, warning: '', captionNotice, source }
+    if (runId !== undefined && runId !== null && finishDetails) this.publish(change, runId, finishDetails)
+    else this.publish(change)
+    this.holdCaption(generation)
+  }
+
+  // Dual-subtitle mode shows the recognized original while its translation is still pending. The previous caption is
+  // dropped with it, so the original is never paired with the translation of the fragment before.
+  private publishSource(source: string, generation: number) {
+    this.publish({ caption: '', captionNotice: '', source })
+    this.holdCaption(generation)
+  }
+
+  private holdCaption(generation: number) {
     if (this.captionTimer) clearTimeout(this.captionTimer)
-    if (runId !== undefined && runId !== null && finishDetails) this.publish({ caption, warning: '', captionNotice }, runId, finishDetails)
-    else this.publish({ caption, warning: '', captionNotice })
     this.captionTimer = setTimeout(() => {
-      if (generation === this.generation) this.publish({ caption: '', captionNotice: '' })
+      if (generation === this.generation) this.publish(NO_CAPTION)
     }, CAPTION_HOLD_MS)
   }
 
@@ -239,7 +263,7 @@ export class SystemAudioSession {
 
   private async begin() {
     const generation = ++this.generation
-    this.publish({ state: 'starting', caption: '', error: '', warning: '', captionNotice: '' })
+    this.publish({ state: 'starting', ...NO_CAPTION, error: '', warning: '' })
     const operation = this.open(generation)
     this.starting = operation
     try { await operation } finally { if (this.starting === operation) this.starting = null }
@@ -253,11 +277,13 @@ export class SystemAudioSession {
       }
       if (generation !== this.generation) return
       const asrOnly = this.options!.asrOnly
-      const [presets, language, hotwords, maxSegmentSeconds] = await Promise.all([
-        asrOnly ? Promise.resolve([]) : getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(), getSystemAudioMaxSegmentSeconds(),
+      const [presets, language, hotwords, maxSegmentSeconds, dual] = await Promise.all([
+        asrOnly ? Promise.resolve([]) : getPromptPresets(), getSystemAudioSourceLanguage(), loadActiveHotwords(), getSystemAudioMaxSegmentSeconds(), getSystemAudioDualSubtitles(),
       ])
       if (generation !== this.generation) return
       this.plan = segmentPlan(maxSegmentSeconds)
+      // Recognition-only mode already shows the recognized text as its caption.
+      this.dual = dual && !asrOnly
       if (asrOnly) {
         this.startOptions = { systemPrompt: '', language, hotwords, disableAi: true, aiMinDurationSec: 0, requireTranslation: false }
       } else {
@@ -285,6 +311,8 @@ export class SystemAudioSession {
             }
           } else {
             setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
+            const original = result.text.trim()
+            if (this.dual && original) this.publishSource(original, generation)
           }
         },
         onFinal: (result) => {
@@ -324,8 +352,9 @@ export class SystemAudioSession {
           const runId = isPipelineDebugEnabled() ? this.activeRunId : null
           // A translation identical to the transcript is speech already in the target language, a name, a number,
           // or the managed server LLM echoing its input when its answer was empty. Never present it as a translation.
-          const captionNotice = comparableTranslation === comparableSource ? t('systemAudio.untranslated') : ''
-          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption), captionNotice)
+          const identical = comparableTranslation === comparableSource
+          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption),
+            identical ? t('systemAudio.untranslated') : '', this.dual && !identical ? original : '')
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
@@ -385,7 +414,7 @@ export class SystemAudioSession {
     if (frame.discontinuity) {
       countDiscontinuity()
       this.resetSegment()
-      this.publish({ caption: '', warning: t('systemAudio.discontinuity'), captionNotice: '' })
+      this.publish({ ...NO_CAPTION, warning: t('systemAudio.discontinuity') })
       addRuntimeEvent('warn', 'system-audio', 'Audio gap; unfinished speech discarded, listening continues')
     }
 
@@ -607,7 +636,7 @@ export class SystemAudioSession {
     }
     const generation = ++this.generation
     this.clearWork()
-    this.publish({ state: 'error', caption: '', error: message, warning: '', captionNotice: '' })
+    this.publish({ state: 'error', ...NO_CAPTION, error: message, warning: '' })
     addRuntimeEvent('warn', 'system-audio', 'Subtitle session interrupted', { message, detail })
     void this.stopNativeCapture().catch((error) => {
       addRuntimeEvent('error', 'system-audio', 'Capture cleanup failed', { error: String(error) })
@@ -621,7 +650,7 @@ export class SystemAudioSession {
     if (this.snapshot.state !== 'listening') return
     ++this.generation
     this.clearWork()
-    this.publish({ state: 'paused', caption: '', warning: '', captionNotice: '' })
+    this.publish({ state: 'paused', ...NO_CAPTION, warning: '' })
     try { await this.stopNativeCapture() } catch (error) { this.fail(t('systemAudio.cleanupFailed'), String(error)) }
   }
 
@@ -638,7 +667,7 @@ export class SystemAudioSession {
     if (this.stopping) return this.stopping
     if (this.snapshot.state === 'idle') return
     ++this.generation
-    this.publish({ state: 'stopping', caption: '', error: '', warning: '', captionNotice: '' })
+    this.publish({ state: 'stopping', ...NO_CAPTION, error: '', warning: '' })
     this.clearWork()
     const operation = this.release()
     this.stopping = operation
@@ -657,7 +686,7 @@ export class SystemAudioSession {
         this.leased = false
       }
       this.provider = null
-      this.publish({ state: 'idle', caption: '', error: '', warning: '', captionNotice: '' })
+      this.publish({ state: 'idle', ...NO_CAPTION, error: '', warning: '' })
     } catch (error) {
       this.publish({ state: 'error', error: t('systemAudio.cleanupFailed') })
       addRuntimeEvent('error', 'system-audio', 'Subtitle session release failed', { error: String(error) })

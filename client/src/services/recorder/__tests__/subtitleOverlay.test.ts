@@ -33,6 +33,7 @@ describe('subtitle overlay recorder delegates', () => {
       subtitleStatus: 'Listening',
       subtitleError: '',
       subtitleNotice: '',
+      subtitleSource: '',
     }
     const bridgePayload = { state: 'subtitles', ...payload, locale: getLocale() }
     const pendingPresent = deferred<number>()

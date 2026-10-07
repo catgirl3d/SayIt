@@ -8,6 +8,8 @@ export interface SubtitleOverlayPayload {
   subtitleError: string
   /** Marks the caption itself (e.g. an original shown untranslated); rendered in the status line, empty hides it. */
   subtitleNotice: string
+  /** Recognized original shown above the translation in dual-subtitle mode; empty in the single-caption layout. */
+  subtitleSource: string
 }
 
 export type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'

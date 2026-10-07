@@ -11,9 +11,10 @@ import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
-import { getSystemAudioMaxSegmentSeconds, getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
+import { getSystemAudioDualSubtitles, getSystemAudioMaxSegmentSeconds, getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
 import { DEFAULT_SEGMENT_SECONDS, MAX_SEGMENT_SECONDS, MIN_SEGMENT_SECONDS, SEGMENT_SECONDS_STEP } from '@/services/subtitleSegmentation'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { setPipelineDebugEnabled } from '@/services/pipelineTrace'
 import PipelineDebugPanel from '@/features/systemAudio/PipelineDebugPanel'
 
@@ -63,6 +64,7 @@ export default function SystemAudio() {
   const [loadError, setLoadError] = useState('')
   const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
   const [asrOnlyTest, setAsrOnlyTest] = useState(false)
+  const [dualSubtitles, setDualSubtitles] = useState(false)
   const locale = useLocale()
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
@@ -87,12 +89,14 @@ export default function SystemAudio() {
       getSetting<boolean>('systemAudio.debugPipeline', false),
       getSetting<boolean>('systemAudio.asrOnlyTest', false),
       getSystemAudioMaxSegmentSeconds(),
-    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds]) => {
+      getSystemAudioDualSubtitles(),
+    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds, savedDualSubtitles]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
       setSourceLanguage(savedSourceLanguage)
       setMaxSegmentSeconds(savedMaxSegmentSeconds)
+      setDualSubtitles(savedDualSubtitles)
       setPipelineDebugEnabledState(debugPipeline)
       setPipelineDebugEnabled(debugPipeline)
       setAsrOnlyTest(asrOnly)
@@ -210,6 +214,19 @@ export default function SystemAudio() {
             <p className="text-xs text-muted-foreground">{t('systemAudio.segmentLengthHint')}</p>
           </div>
           <div className="space-y-1">
+            <Switch
+              checked={dualSubtitles}
+              onChange={() => {
+                const enabled = !dualSubtitles
+                setDualSubtitles(enabled)
+                void setSetting('systemAudio.dualSubtitles', enabled)
+              }}
+              label={t('systemAudio.dualSubtitles')}
+              disabled={active || pending || asrOnlyTest}
+            />
+            <p className="text-xs text-muted-foreground">{t('systemAudio.dualSubtitlesHint')}</p>
+          </div>
+          <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
                 <input
@@ -245,7 +262,12 @@ export default function SystemAudio() {
           {(snapshot.error || loadError) && <p role="alert" className="text-sm leading-6 text-destructive">{snapshot.error || loadError}</p>}
           {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
           <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
-          {snapshot.caption && <p aria-live="polite" className="whitespace-pre-wrap rounded-lg bg-secondary p-4 text-base leading-7">{snapshot.caption}</p>}
+          {(snapshot.caption || snapshot.source) && (
+            <div aria-live="polite" className="space-y-1 rounded-lg bg-secondary p-4">
+              {snapshot.source && <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{snapshot.source}</p>}
+              {snapshot.caption && <p className="whitespace-pre-wrap text-base leading-7">{snapshot.caption}</p>}
+            </div>
+          )}
         </CardContent>
       </Card>
       {pipelineDebugEnabled && <PipelineDebugPanel />}
