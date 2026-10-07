@@ -39,6 +39,8 @@ export interface SystemAudioSnapshot {
   caption: string
   error: string
   warning: string
+  /** Notice describing the current caption itself (e.g. that it is the untranslated original); shown in the overlay status line. */
+  captionNotice: string
 }
 
 export interface SystemAudioDevice {
@@ -130,7 +132,7 @@ export function listSystemAudioDevices() {
 export class SystemAudioSession {
   constructor(private readonly dependencies: SessionDependencies) {}
 
-  private snapshot: SystemAudioSnapshot = { state: 'idle', caption: '', error: '', warning: '' }
+  private snapshot: SystemAudioSnapshot = { state: 'idle', caption: '', error: '', warning: '', captionNotice: '' }
   private readonly listeners = new Set<() => void>()
   private generation = 0
   private leased = false
@@ -201,6 +203,7 @@ export class SystemAudioSession {
       subtitleText: this.snapshot.caption,
       subtitleStatus: this.snapshot.warning || t(`systemAudio.status.${this.snapshot.state}`),
       subtitleError: this.snapshot.error,
+      subtitleNotice: this.snapshot.captionNotice,
     }
   }
 
@@ -217,12 +220,12 @@ export class SystemAudioSession {
     }
   }
 
-  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, warning = '') {
+  private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, captionNotice = '') {
     if (this.captionTimer) clearTimeout(this.captionTimer)
-    if (runId !== undefined && runId !== null && finishDetails) this.publish({ caption, warning }, runId, finishDetails)
-    else this.publish({ caption, warning })
+    if (runId !== undefined && runId !== null && finishDetails) this.publish({ caption, warning: '', captionNotice }, runId, finishDetails)
+    else this.publish({ caption, warning: '', captionNotice })
     this.captionTimer = setTimeout(() => {
-      if (generation === this.generation) this.publish({ caption: '' })
+      if (generation === this.generation) this.publish({ caption: '', captionNotice: '' })
     }, CAPTION_HOLD_MS)
   }
 
@@ -234,7 +237,7 @@ export class SystemAudioSession {
 
   private async begin() {
     const generation = ++this.generation
-    this.publish({ state: 'starting', caption: '', error: '', warning: '' })
+    this.publish({ state: 'starting', caption: '', error: '', warning: '', captionNotice: '' })
     const operation = this.open(generation)
     this.starting = operation
     try { await operation } finally { if (this.starting === operation) this.starting = null }
@@ -319,8 +322,8 @@ export class SystemAudioSession {
           const runId = isPipelineDebugEnabled() ? this.activeRunId : null
           // A translation identical to the transcript is speech already in the target language, a name, a number,
           // or the managed server LLM echoing its input when its answer was empty. Never present it as a translation.
-          const warning = comparableTranslation === comparableSource ? t('systemAudio.untranslated') : ''
-          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption), warning)
+          const captionNotice = comparableTranslation === comparableSource ? t('systemAudio.untranslated') : ''
+          this.publishCaption(caption, generation, runId, runId === null ? undefined : this.finishDetails(result, caption), captionNotice)
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
@@ -380,7 +383,7 @@ export class SystemAudioSession {
     if (frame.discontinuity) {
       countDiscontinuity()
       this.resetSegment()
-      this.publish({ caption: '', warning: t('systemAudio.discontinuity') })
+      this.publish({ caption: '', warning: t('systemAudio.discontinuity'), captionNotice: '' })
       addRuntimeEvent('warn', 'system-audio', 'Audio gap; unfinished speech discarded, listening continues')
     }
 
@@ -585,7 +588,7 @@ export class SystemAudioSession {
     }
     const generation = ++this.generation
     this.clearWork()
-    this.publish({ state: 'error', caption: '', error: message, warning: '' })
+    this.publish({ state: 'error', caption: '', error: message, warning: '', captionNotice: '' })
     addRuntimeEvent('warn', 'system-audio', 'Subtitle session interrupted', { message, detail })
     void this.stopNativeCapture().catch((error) => {
       addRuntimeEvent('error', 'system-audio', 'Capture cleanup failed', { error: String(error) })
@@ -599,7 +602,7 @@ export class SystemAudioSession {
     if (this.snapshot.state !== 'listening') return
     ++this.generation
     this.clearWork()
-    this.publish({ state: 'paused', caption: '', warning: '' })
+    this.publish({ state: 'paused', caption: '', warning: '', captionNotice: '' })
     try { await this.stopNativeCapture() } catch (error) { this.fail(t('systemAudio.cleanupFailed'), String(error)) }
   }
 
@@ -616,7 +619,7 @@ export class SystemAudioSession {
     if (this.stopping) return this.stopping
     if (this.snapshot.state === 'idle') return
     ++this.generation
-    this.publish({ state: 'stopping', caption: '', error: '', warning: '' })
+    this.publish({ state: 'stopping', caption: '', error: '', warning: '', captionNotice: '' })
     this.clearWork()
     const operation = this.release()
     this.stopping = operation
@@ -635,7 +638,7 @@ export class SystemAudioSession {
         this.leased = false
       }
       this.provider = null
-      this.publish({ state: 'idle', caption: '', error: '', warning: '' })
+      this.publish({ state: 'idle', caption: '', error: '', warning: '', captionNotice: '' })
     } catch (error) {
       this.publish({ state: 'error', error: t('systemAudio.cleanupFailed') })
       addRuntimeEvent('error', 'system-audio', 'Subtitle session release failed', { error: String(error) })

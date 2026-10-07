@@ -277,8 +277,13 @@ describe('system audio subtitle session', () => {
     })
 
     expect(startOptions).toMatchObject({ disableAi: false, requireTranslation: true })
-    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
-    expect(session.getSnapshot().warning).toContain('not translated')
+    expect(session.getSnapshot()).toMatchObject({
+      state: 'listening',
+      caption: 'Original speech',
+      error: '',
+      warning: '',
+      captionNotice: expect.stringContaining('not translated'),
+    })
     expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'rejected' }])
   })
 
@@ -854,8 +859,33 @@ describe('system audio subtitle session', () => {
       speak()
       await settle()
 
-      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
-      expect(session.getSnapshot().warning).toContain('not translated')
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '', warning: '' })
+      expect(session.getSnapshot().captionNotice).toContain('not translated')
+    })
+
+    it('publishes the untranslated mark as its own overlay field, next to the untouched caption and status', async () => {
+      scriptAi('fail')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+
+      const published = [...overlayCalls].reverse().find(
+        (call): call is Extract<OverlayCall, { method: 'update' }> => call.method === 'update' && call.payload.subtitleText === 'Original speech',
+      )
+      expect(published?.payload.subtitleNotice).toContain('not translated')
+      expect(published?.payload.subtitleStatus).not.toContain('not translated')
+    })
+
+    it('clears the untranslated mark together with the caption it describes', async () => {
+      scriptAi('fail')
+      await session.start({ deviceId: '', targetLanguage: 'ru' })
+      speak()
+      await settle()
+      expect(session.getSnapshot().captionNotice).toContain('not translated')
+
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      expect(session.getSnapshot()).toMatchObject({ caption: '', captionNotice: '' })
     })
 
     it('shows an identical translation as the original, marked, and never counts it as a failure', async () => {
@@ -866,8 +896,8 @@ describe('system audio subtitle session', () => {
         await settle()
       }
 
-      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
-      expect(session.getSnapshot().warning).toContain('not translated')
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '', warning: '' })
+      expect(session.getSnapshot().captionNotice).toContain('not translated')
     })
 
     it('replaces the untranslated mark once a translation succeeds', async () => {
@@ -878,7 +908,7 @@ describe('system audio subtitle session', () => {
       speak()
       await settle()
 
-      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Translated speech', warning: '' })
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Translated speech', warning: '', captionNotice: '' })
     })
 
     it('stops with the translation error only after three failures in a row', async () => {
@@ -1295,9 +1325,9 @@ describe('system audio subtitle session', () => {
   })
 
   it.each([
-    { finalText: 'Server translation', expectedCaption: 'Server translation', expectedWarning: '' },
-    { finalText: 'Original speech', expectedCaption: 'Original speech', expectedWarning: 'not translated' },
-  ] as const)('uses server-managed translation with the caption prompt and rejects late messages from the closed socket: $finalText', async ({ finalText, expectedCaption, expectedWarning }) => {
+    { finalText: 'Server translation', expectedCaption: 'Server translation', expectedNotice: '' },
+    { finalText: 'Original speech', expectedCaption: 'Original speech', expectedNotice: 'not translated' },
+  ] as const)('uses server-managed translation with the caption prompt and rejects late messages from the closed socket: $finalText', async ({ finalText, expectedCaption, expectedNotice }) => {
     const messages: Array<Record<string, unknown>> = []
     const sockets: ServerSocket[] = []
     class ServerSocket {
@@ -1342,7 +1372,7 @@ describe('system audio subtitle session', () => {
 
     expect(session.getSnapshot().state).toBe('listening')
     expect(session.getSnapshot().caption).toBe(expectedCaption)
-    expect(session.getSnapshot().warning).toContain(expectedWarning)
+    expect(session.getSnapshot().captionNotice).toContain(expectedNotice)
     expect(messages.find((message) => message.cmd === 'start')?.disable_ai).not.toBe(true)
     expect(messages.find((message) => message.cmd === 'start')?.system_prompt).toContain('Russian')
     expect(native.invoke.mock.calls.some(([name]) => name === 'cloud_polish')).toBe(false)
@@ -1475,7 +1505,7 @@ describe('system audio subtitle session', () => {
     await settle()
 
     expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech', error: '' })
-    expect(session.getSnapshot().warning).toContain('not translated')
+    expect(session.getSnapshot().captionNotice).toContain('not translated')
   })
 
   it('keeps the gap notice through an empty ASR final until a translated caption succeeds', async () => {

@@ -6,6 +6,8 @@ export interface SubtitleOverlayPayload {
   subtitleText: string
   subtitleStatus: string
   subtitleError: string
+  /** Marks the caption itself (e.g. an original shown untranslated); rendered in the status line, empty hides it. */
+  subtitleNotice: string
 }
 
 export type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'

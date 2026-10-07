@@ -35,6 +35,7 @@ interface OverlayPayload {
   subtitleText?: string
   subtitleStatus?: string
   subtitleError?: string
+  subtitleNotice?: string
   micSourceMode?: 'auto' | 'fixed' | null
   micSourceLabel?: string
   /** 界面语言，由主窗随每次更新下发（见 OverlayCommonPayload.locale）。 */
@@ -47,14 +48,14 @@ interface OverlayPayload {
 const DEFAULT_BAR_COUNT = 24
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
 
-export function SubtitleCaption({ text, status, error }: { text: string; status: string; error: string }) {
+export function SubtitleCaption({ text, status, notice, error }: { text: string; status: string; notice: string; error: string }) {
   return (
     <div
       data-overlay-content
       className="pointer-events-none w-full max-w-[700px] rounded-2xl border px-6 py-4 text-center"
       style={{ background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }}
     >
-      <p className="mb-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>{status}</p>
+      <p className="mb-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>{notice || status}</p>
       {error ? (
         <p role="alert" className="text-base leading-6 text-amber-300">{error}</p>
       ) : text ? (
@@ -174,6 +175,7 @@ export default function Overlay() {
   const [subtitleText, setSubtitleText] = useState('')
   const [subtitleStatus, setSubtitleStatus] = useState('')
   const [subtitleError, setSubtitleError] = useState('')
+  const [subtitleNotice, setSubtitleNotice] = useState('')
   const [copied, setCopied] = useState(false)
   const [thinkingDuration, setThinkingDuration] = useState(0)
   const [warning, setWarning] = useState('')
@@ -289,6 +291,7 @@ export default function Overlay() {
       if (typeof payload.subtitleText === 'string') setSubtitleText(payload.subtitleText)
       if (typeof payload.subtitleStatus === 'string') setSubtitleStatus(payload.subtitleStatus)
       if (typeof payload.subtitleError === 'string') setSubtitleError(payload.subtitleError)
+      if (typeof payload.subtitleNotice === 'string') setSubtitleNotice(payload.subtitleNotice)
       if (typeof payload.streaming === 'boolean') setStreamingOn(payload.streaming)
       if (payload.micSourceMode === 'auto' || payload.micSourceMode === 'fixed' || payload.micSourceMode === null) {
         setMicSourceMode(payload.micSourceMode)
@@ -452,7 +455,7 @@ export default function Overlay() {
           }}
         />
       ) : state === 'subtitles' ? (
-        <SubtitleCaption text={subtitleText} status={subtitleStatus} error={subtitleError} />
+        <SubtitleCaption text={subtitleText} status={subtitleStatus} notice={subtitleNotice} error={subtitleError} />
       ) : state === 'fallback' ? (
         <div
           data-overlay-content
