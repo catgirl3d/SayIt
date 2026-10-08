@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { buildAsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { errorProtocolCode } from '@/lib/errorMessages'
 import type { SpeechInputLanguage } from '../speechInputLanguage'
 
 interface CustomAsrResult {
@@ -23,13 +24,9 @@ interface CloudTranscribeRequest {
   hotwords: string[]
 }
 
-const ROUTE_MISMATCH_PREFIX = 'sayit_error:asr_protocol_mismatch:'
+const AUTO_PROTOCOL_MISMATCH_CODE = 'asr_protocol_mismatch'
 type CustomAsrProtocol = 'transcriptions' | 'chat'
 const successfulAutoProtocol = new Map<string, CustomAsrProtocol>()
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 function makeRequest(input: CustomAsrInput): CloudTranscribeRequest {
   return {
@@ -111,8 +108,7 @@ export async function transcribeCustomAsr(input: CustomAsrInput): Promise<Custom
     return result
   } catch (error) {
     if (!input.isCurrent()) return null
-    const message = errorText(error)
-    if (!message.startsWith(ROUTE_MISMATCH_PREFIX)) {
+    if (errorProtocolCode(error) !== AUTO_PROTOCOL_MISMATCH_CODE) {
       throw error
     }
     try {

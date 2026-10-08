@@ -3,6 +3,7 @@ import {
   describeDownloadError,
   describeProviderError,
   describeServerError,
+  errorProtocolCode,
 } from '../errorMessages'
 
 /**
@@ -195,5 +196,22 @@ describe('describeDownloadError', () => {
     const result = describeDownloadError('sayit_error:download_source_mismatch:size changed')
     expect(result.code).toBe('download_source_mismatch')
     expect(result.action).toBe('switch_source')
+  })
+})
+
+describe('errorProtocolCode', () => {
+  it('returns codes that are not in the friendly registry', () => {
+    expect(errorProtocolCode('sayit_error:deepgram_keyterm_retry_failed:retry failed')).toBe('deepgram_keyterm_retry_failed')
+    expect(errorProtocolCode('sayit_error:provider_bad_key:HTTP 418')).toBe('provider_bad_key')
+  })
+
+  it('reads the code from an Error message the same way', () => {
+    expect(errorProtocolCode(new Error('sayit_error:asr_protocol_mismatch:route mismatch'))).toBe('asr_protocol_mismatch')
+  })
+
+  it('returns null without the protocol envelope', () => {
+    expect(errorProtocolCode('plain failure')).toBeNull()
+    expect(errorProtocolCode('sayit_error:missing-separator')).toBeNull()
+    expect(errorProtocolCode(new TypeError('Failed to fetch'))).toBeNull()
   })
 })

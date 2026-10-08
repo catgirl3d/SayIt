@@ -53,6 +53,27 @@ interface DecodedError {
   text: string
 }
 
+/** Split `sayit_error:<code>:<detail>`; null when the value does not carry the envelope. */
+function errorProtocolParts(error: unknown): { code: string; text: string } | null {
+  const value = error instanceof Error ? (error.message || String(error)) : String(error)
+  if (!value.startsWith(ERROR_PROTOCOL_PREFIX)) return null
+
+  const separator = value.indexOf(':', ERROR_PROTOCOL_PREFIX.length)
+  if (separator < 0) return null
+  return {
+    code: value.slice(ERROR_PROTOCOL_PREFIX.length, separator),
+    text: value.slice(separator + 1),
+  }
+}
+
+/**
+ * Raw stable code from the `sayit_error:` envelope, without the friendly-code filter.
+ * For callers that branch on their own Rust-side code before the UI translation layer.
+ */
+export function errorProtocolCode(error: unknown): string | null {
+  return errorProtocolParts(error)?.code ?? null
+}
+
 const FRIENDLY_ERROR_CODES = new Set<FriendlyErrorCode>([
   'server_timeout',
   'server_unreachable',
@@ -83,16 +104,14 @@ const FRIENDLY_ERROR_CODES = new Set<FriendlyErrorCode>([
  * Unknown codes deliberately fall back to legacy text classification for forward compatibility.
  */
 function decodeError(error: unknown): DecodedError {
-  const value = error instanceof Error ? (error.message || String(error)) : String(error)
-  if (!value.startsWith(ERROR_PROTOCOL_PREFIX)) return { code: null, text: value }
-
-  const separator = value.indexOf(':', ERROR_PROTOCOL_PREFIX.length)
-  if (separator < 0) return { code: null, text: value }
-  const candidate = value.slice(ERROR_PROTOCOL_PREFIX.length, separator)
-  const text = value.slice(separator + 1)
-  return FRIENDLY_ERROR_CODES.has(candidate as FriendlyErrorCode)
-    ? { code: candidate as FriendlyErrorCode, text }
-    : { code: null, text }
+  const parts = errorProtocolParts(error)
+  if (!parts) {
+    const value = error instanceof Error ? (error.message || String(error)) : String(error)
+    return { code: null, text: value }
+  }
+  return FRIENDLY_ERROR_CODES.has(parts.code as FriendlyErrorCode)
+    ? { code: parts.code as FriendlyErrorCode, text: parts.text }
+    : { code: null, text: parts.text }
 }
 
 /**
