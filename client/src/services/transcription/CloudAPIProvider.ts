@@ -12,6 +12,7 @@ import {
   type AsrProfile,
 } from '@/features/settings/asrProviderCatalog'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
+import { errorProtocolCode } from '@/lib/errorMessages'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { invoke } from '@tauri-apps/api/core'
@@ -21,15 +22,17 @@ import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
 import { polishWithClientAi } from './clientAiPolish'
 import { transcribeCustomAsr } from './customAsrRequest'
-import type {
-  TranscriptionProvider,
-  TranscriptionCallbacks,
-  StartOptions,
-  StopOptions,
-  WorkMode,
+import {
+  DEEPGRAM_KEYTERM_LIMIT,
+  type AsrWarningCode,
+  type TranscriptionProvider,
+  type TranscriptionCallbacks,
+  type StartOptions,
+  type StopOptions,
+  type WorkMode,
 } from './types'
 
-interface AsrResult { text: string; elapsed_ms: number }
+interface AsrResult { text: string; elapsed_ms: number; warning?: AsrWarningCode }
 
 /**
  * 千问两个流式模型各有一组原生命令。
@@ -62,6 +65,18 @@ type NativeFinishCommand = 'doubao_stream_finish' | 'deepgram_stream_finish' | Q
 
 function isQwenStreamProvider(provider: string): provider is QwenStreamProvider {
   return provider === 'qwen_realtime' || provider === 'qwen_audio_stream'
+}
+
+/**
+ * Whether this run can open a Deepgram socket whose keyterm-overflow retry fails
+ * terminally. Only then must the buffered path wait for the stream startup before
+ * it decides, so the retry failure is never answered with a third billed request.
+ */
+function awaitsDeepgramKeytermStartup(profile: AsrProfile | null, startOpts: Readonly<StartOptions>): boolean {
+  return profile?.provider === 'deepgram'
+    && profile.deepgramKeytermsEnabled === true
+    && Boolean(startOpts.hotwords?.length)
+    && !startOpts.disableStreaming
 }
 
 export class CloudAPIProvider implements TranscriptionProvider {
@@ -99,6 +114,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
   // 原生流生命周期串行化：open / finish / close 共用 Provider 级队列。
   // cancel 会先把 close 排入旧 open 之后；下一代 open 因而只能在旧 close 完成后执行。
   private nativeLifecycleQueue: Promise<void> = Promise.resolve()
+  private streamStartup: Promise<void> | null = null
+  /** Terminal retry failure parked by the streaming startup, bound to the run that produced it. */
+  private streamOpenFailure: { runId: number; error: string } | null = null
+  private asrWarning: AsrWarningCode | undefined
 
   async connect(callbacks: TranscriptionCallbacks): Promise<void> {
     this.callbacks = callbacks
@@ -134,9 +153,11 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.pendingChunks = []
     this.streamFinishing = false
     this.sendLock = Promise.resolve()
+    this.streamOpenFailure = null
+    this.asrWarning = undefined
 
     // 异步判断供应商并建连；所有异步步骤只使用本次 run 的 StartOptions 快照。
-    void this.tryStartRealtimeStream(runOpts.runId, runOpts, profileSnapshot)
+    this.streamStartup = this.tryStartRealtimeStream(runOpts.runId, runOpts, profileSnapshot)
 
     return true
   }
@@ -151,6 +172,13 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
   private isRunCurrent(runId: number): boolean {
     return runId !== 0 && this.activeRunId === runId
+  }
+
+  private reportWarning(runId: number, warning: unknown): void {
+    if (!this.isRunCurrent(runId) || warning !== DEEPGRAM_KEYTERM_LIMIT || this.asrWarning === warning) return
+    this.asrWarning = warning
+    addRuntimeEvent('warn', 'cloud_api', 'Deepgram dictionary exceeded the keyterm limit; recognition continued without hints')
+    this.callbacks.onWarning?.(warning)
   }
 
   private completeRun(runId: number): void {
@@ -198,17 +226,18 @@ export class CloudAPIProvider implements TranscriptionProvider {
     runId: number,
     command: NativeOpenCommand,
     args: Record<string, unknown>,
-  ): Promise<boolean> {
+  ): Promise<{ opened: boolean; payload: unknown }> {
     return this.enqueueNativeLifecycle(async () => {
-      if (!this.isRunCurrent(runId)) return false
+      if (!this.isRunCurrent(runId)) return { opened: false, payload: null }
+      let payload: unknown
       try {
-        await invoke(command, args)
+        payload = await invoke<unknown>(command, args)
       } catch (err) {
-        if (!this.isRunCurrent(runId)) return false
+        if (!this.isRunCurrent(runId)) return { opened: false, payload: null }
         throw err
       }
-      if (!this.isRunCurrent(runId)) return false
-      return true
+      if (!this.isRunCurrent(runId)) return { opened: false, payload }
+      return { opened: true, payload }
     })
   }
 
@@ -348,13 +377,13 @@ export class CloudAPIProvider implements TranscriptionProvider {
         const credentials = effectiveAsrCredentials(profile)
 
         addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: connecting', { realtime })
-        const opened = await this.invokeNativeOpen(runId, 'doubao_stream_open', {
+        const open = await this.invokeNativeOpen(runId, 'doubao_stream_open', {
           config: { provider: 'doubao_v2', api_key: credentials.apiKey, app_id: credentials.appId },
           sampleRate: 16000,
           hotwords: startOpts.hotwords ?? [],
           realtime,
         })
-        if (!opened || !this.isRunCurrent(runId)) return
+        if (!open.opened || !this.isRunCurrent(runId)) return
         this.doubaoStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: ready')
       } else if (asrProvider === 'deepgram' && realtime && !startOpts.disableStreaming) {
@@ -363,16 +392,20 @@ export class CloudAPIProvider implements TranscriptionProvider {
         // set disableStreaming and take the HTTP route even when captions are on.
         if (!profile) return
         this.isDeepgramStream = true
+        // Include audio captured before async profile resolution; subsequent
+        // sendAudio calls append directly to this live queue.
+        this.pendingChunks = this.pcmBuffers.slice()
 
         addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: connecting', { realtime })
-        const opened = await this.invokeNativeOpen(runId, 'deepgram_stream_open', {
+        const open = await this.invokeNativeOpen(runId, 'deepgram_stream_open', {
           // The stream honors the same language payload as the buffered path, so an
           // explicit Russian/English choice is not lost when live captions are on.
           config: buildAsrProviderConfig(profile, normalizeSpeechInputLanguage(startOpts.language)),
           sampleRate: 16000,
           hotwords: startOpts.hotwords ?? [],
         })
-        if (!opened || !this.isRunCurrent(runId)) return
+        if (!open.opened || !this.isRunCurrent(runId)) return
+        this.reportWarning(runId, open.payload)
         this.deepgramStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: ready')
       } else if (isQwenStreamProvider(asrProvider) && realtime) {
@@ -386,13 +419,13 @@ export class CloudAPIProvider implements TranscriptionProvider {
         const credentials = effectiveAsrCredentials(profile)
 
         addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: connecting', { asrProvider, hasWorkspace: Boolean(qwenWorkspaceId) })
-        const opened = await this.invokeNativeOpen(runId, this.qwenCommands.open, {
+        const open = await this.invokeNativeOpen(runId, this.qwenCommands.open, {
           config: { provider: asrProvider, api_key: credentials.apiKey, app_id: '' },
           hotwords: startOpts.hotwords ?? [],
           realtime,
           workspaceId: qwenWorkspaceId,
         })
-        if (!opened || !this.isRunCurrent(runId)) return
+        if (!open.opened || !this.isRunCurrent(runId)) return
         this.qwenStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: ready', { asrProvider })
       } else {
@@ -415,6 +448,11 @@ export class CloudAPIProvider implements TranscriptionProvider {
       }, 200)
     } catch (err) {
       if (!this.isRunCurrent(runId)) return
+      if (errorProtocolCode(err) === 'deepgram_keyterm_retry_failed') {
+        this.streamOpenFailure = { runId, error: String(err) }
+        this.teardownPartials()
+        return
+      }
       addRuntimeEvent('warn', 'cloud_api', 'Streaming connection failed; falling back to buffered upload', { error: String(err) })
       this.isDoubaoStream = false
       this.isQwenStream = false
@@ -503,6 +541,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
       // can be switched while a recognition is still in flight.
       const { engine: requestEngine, model: requestModel } = resolveAsrRequestMetadata(profile)
 
+      if (awaitsDeepgramKeytermStartup(profile, startOpts)) {
+        await this.streamStartup
+        if (!this.isRunCurrent(runId)) return
+      }
+      if (this.streamOpenFailure?.runId === runId) throw this.streamOpenFailure.error
+
       let asrText = ''
       let asrMs = 0
 
@@ -581,6 +625,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
             },
           })
         if (!this.isRunCurrent(runId) || !asrResult) return
+        if ('warning' in asrResult) this.reportWarning(runId, asrResult.warning)
         asrText = asrResult.text
         asrMs = asrResult.elapsed_ms
       }
@@ -597,6 +642,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         text: asrText,
         asrMs,
         durationSec,
+        ...(this.asrWarning && { asrWarning: this.asrWarning }),
         ...(!asrText.trim() && requestModel && {
           asrEngine: requestEngine,
           asrModel: requestModel,
@@ -610,6 +656,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
           asrMs,
           llmMs: 0,
           durationSec,
+          ...(this.asrWarning && { asrWarning: this.asrWarning }),
           ...(requestModel && {
             asrEngine: requestEngine,
             asrModel: requestModel,
@@ -650,6 +697,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         asrText,
         asrMs,
         durationSec,
+        ...(this.asrWarning && { asrWarning: this.asrWarning }),
         ...polish,
         ...(requestModel && { asrEngine: requestEngine, asrModel: requestModel }),
       })

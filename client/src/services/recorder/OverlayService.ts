@@ -57,7 +57,7 @@ export class OverlayService {
   private micSourceHintGeneration = 0
   private overlayGeneration = 0
   private activeCardToken = 0
-  private failurePayload: FailureOverlayPayload | null = null
+  private failurePayload: (FailureOverlayPayload & { warning?: string }) | null = null
 
   constructor(private readonly getElapsedSec: () => number) { }
 
@@ -395,7 +395,7 @@ export class OverlayService {
     this.activeWarning = ''
   }
 
-  showFallback(text: string, reason: string, token = 0) {
+  showFallback(text: string, reason: string, token = 0, warning?: string) {
     const generation = this.beginPresentation('fallback')
     this.activeCardToken = token
     console.log('[OverlayService] showFallback called, text:', text.slice(0, 30), 'reason:', reason)
@@ -406,6 +406,7 @@ export class OverlayService {
       fallbackText: text,
       fallbackReason: reason,
       cardToken: token,
+      warning: warning ?? '',
       ...this.getCommonPayload(),
     })
     this.fallbackHideId = setTimeout(() => {
@@ -415,10 +416,10 @@ export class OverlayService {
     }, 10000)
   }
 
-  showFailure(payload: Omit<FailureOverlayPayload, 'state'>) {
+  showFailure(payload: Omit<FailureOverlayPayload, 'state'> & { warning?: string }) {
     const generation = this.beginPresentation('failure')
     this.activeCardToken = payload.cardToken
-    this.failurePayload = { state: 'failure', ...payload }
+    this.failurePayload = { state: 'failure', ...payload, warning: payload.warning ?? '' }
     this.setEscapeMode(payload.cardToken > 0 ? 'dismiss_fallback' : 'off', payload.cardToken)
     void bridge.presentOverlay({
       ...this.failurePayload,
@@ -506,20 +507,39 @@ export class OverlayService {
    * disconnect, or failed text post-processing, while the user sees the same notice. Keeping the
    * log at this single exit point ensures every display of the notice has a corresponding log
    * entry, including if another call site is added later.
+   *
+   * `warningLabel` is a short, already translated second fact for the same toast (e.g. the
+   * dictionary was dropped); the toast is single-line, so both facts must stay short.
    */
-  showNoSpeech(diagnostic?: Record<string, unknown>) {
+  showNoSpeech(diagnostic?: Record<string, unknown>, warningLabel?: string) {
     const generation = this.beginPresentation('toast')
     addRuntimeEvent('warn', 'recorder', 'Showing no-speech warning', diagnostic ?? {})
     this.setEscapeMode('off', 0)
+    const baseLabel = t('overlay.toastNoSpeech')
     void bridge.presentOverlay({
       state: 'toast',
-      toastText: t('overlay.toastNoSpeech'),
+      toastText: warningLabel ? `${baseLabel} · ${warningLabel}` : baseLabel,
       toastTone: 'warn',
       ...this.getCommonPayload(),
     })
     this.fallbackHideId = setTimeout(() => {
       if (generation === this.overlayGeneration) this.hide()
     }, 1500)
+  }
+
+  /** Keep the native 56px toast short; recovery cards and History carry the full notice. */
+  showAsrWarning() {
+    const generation = this.beginPresentation('toast')
+    this.setEscapeMode('off', 0)
+    void bridge.presentOverlay({
+      state: 'toast',
+      toastText: t('asr.deepgramKeytermLimitToast'),
+      toastTone: 'warn',
+      ...this.getCommonPayload(),
+    })
+    this.fallbackHideId = setTimeout(() => {
+      if (generation === this.overlayGeneration) this.hide()
+    }, 5000)
   }
 
   /** Brief confirmation after the user cancels processing. */

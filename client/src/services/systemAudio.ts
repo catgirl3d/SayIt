@@ -6,7 +6,13 @@ import { chooseForcedSplit, DEFAULT_SEGMENT_SECONDS, FRAME_MS, normalizeSegmentS
 import { buildSubtitlePrompt, RecentSpeech, SUBTITLE_CONTEXT_SOURCE, subtitleLanguageName } from './subtitleTranslation'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
-import type { FinalResult, StartOptions, TranscriptionProvider } from './transcription/types'
+import {
+  DEEPGRAM_KEYTERM_LIMIT,
+  type AsrWarningCode,
+  type FinalResult,
+  type StartOptions,
+  type TranscriptionProvider,
+} from './transcription/types'
 import {
   beginRun,
   countDiscontinuity,
@@ -195,6 +201,7 @@ export class SystemAudioSession {
   private activeContext: TextContext | undefined
   private activeSplit = false
   private readonly recent = new RecentSpeech()
+  private asrWarning: AsrWarningCode | null = null
   private publishedAsrJob = 0
   private activeRunId: number | null = null
   private lastFrameAt = 0
@@ -286,7 +293,10 @@ export class SystemAudioSession {
   }
 
   private publishCaption(caption: string, generation: number, runId?: number | null, finishDetails?: PipelineFinishDetails, captionNotice = '', source = '') {
-    const change = { caption, warning: '', captionNotice, source }
+    const warning = this.asrWarning === DEEPGRAM_KEYTERM_LIMIT
+      ? t('asr.deepgramKeytermLimitWarning')
+      : ''
+    const change = { caption, warning, captionNotice, source }
     if (runId !== undefined && runId !== null && finishDetails) this.publish(change, runId, finishDetails)
     else this.publish(change)
     this.holdCaption(generation)
@@ -330,6 +340,7 @@ export class SystemAudioSession {
 
   private async begin() {
     const generation = ++this.generation
+    this.asrWarning = null
     this.publish({ state: 'starting', ...NO_CAPTION, error: '', warning: '' })
     const operation = this.open(generation)
     this.starting = operation
@@ -364,6 +375,11 @@ export class SystemAudioSession {
       this.provider = this.dependencies.getProvider()
       this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''
       if (generation !== this.generation) return
+      const acceptAsrWarning = (code: AsrWarningCode | undefined) => {
+        if (generation !== this.generation || code !== DEEPGRAM_KEYTERM_LIMIT || this.asrWarning === code) return
+        this.asrWarning = code
+        this.publish({ warning: t('asr.deepgramKeytermLimitWarning') })
+      }
       await this.provider.connect({
         onReady: (ready) => {
           if (generation !== this.generation) return
@@ -371,6 +387,7 @@ export class SystemAudioSession {
         },
         onASR: (result) => {
           if (generation !== this.generation || !this.activeJob) return
+          acceptAsrWarning(result.asrWarning)
           if (asrOnly) {
             setPipelineActivity({ phase: 'listening', stageStartedAt: null })
             const caption = result.text.trim()
@@ -386,6 +403,7 @@ export class SystemAudioSession {
         },
         onFinal: (result) => {
           if (generation !== this.generation || !this.activeJob) return
+          acceptAsrWarning(result.asrWarning)
           const jobId = this.activeJob
           setPipelineActivity({ phase: 'listening', stageStartedAt: null })
           if (!result.asrText.trim()) {
@@ -427,6 +445,7 @@ export class SystemAudioSession {
           failRun(this.activeRunId, 'failed', reason)
           this.skipFragment(generation, reason, reason)
         },
+        onWarning: acceptAsrWarning,
       })
       if (generation !== this.generation) return
       if (!this.provider.isReady()) throw new Error(t('systemAudio.notReady'))
@@ -778,6 +797,7 @@ export class SystemAudioSession {
     this.consecutiveFailures = 0
     this.activeContext = undefined
     this.activeSplit = false
+    this.asrWarning = null
     this.queuedBytes = this.activeJob = 0
     this.publishedAsrJob = 0
     setQueueDepth(0)

@@ -929,6 +929,7 @@
   "err.provider.unreachable": "Couldn't reach the provider. Check your network, and whether you need a proxy to get there.",
   "err.provider.badKey": "The key was rejected. Check that it was copied in full with no stray spaces, and that the service is enabled in the provider's console.",
   "err.provider.insufficientBalance": "Your OpenRouter account balance is too low for this transcription. Add funds or choose another provider.",
+  "err.provider.deepgramKeytermRetryFailed": "Deepgram rejected the dictionary as over its 500-token limit, and the retry without it also failed. Shorten the active dictionary or check the connection.",
   "err.provider.forbidden": "The service refused the request (403) without pointing at the key. Usually that means it isn't offered in your region, or this account doesn't have the model enabled.",
   "err.provider.rateLimit": "The provider rate-limited you, or you're out of quota. Check your balance and call limits in their console.",
   "err.provider.noModel": "The provider says this model doesn't exist or isn't enabled for you. Pick another provider, or request access to the model in their console.",

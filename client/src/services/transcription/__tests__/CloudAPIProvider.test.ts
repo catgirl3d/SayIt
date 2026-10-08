@@ -100,6 +100,102 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(results.map((result) => result.asrModel)).toEqual(['gpt-transcribe', 'whisper-1'])
   })
 
+  it('keeps a dictionary-limit fallback successful and delivers its warning with the recognized text', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({ id: 'dg', provider: 'deepgram', model: 'nova-3', apiKey: 'key', deepgramKeytermsEnabled: true })
+    mocks.invoke.mockImplementation(async (command: string) => command === 'cloud_transcribe'
+      ? { text: 'recognized', elapsed_ms: 24, warning: 'deepgram_keyterm_limit' } : undefined)
+    const provider = new CloudAPIProvider()
+    const onWarning = vi.fn()
+    const onError = vi.fn()
+    const onASR = vi.fn()
+    const onFinal = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onWarning, onError, onASR, onFinal, onDone: finish })
+    provider.start({ runId: 20, hotwords: ['SayIt'], disableStreaming: true })
+    provider.sendAudio(new ArrayBuffer(16000))
+    provider.stop()
+    await done
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith('deepgram_keyterm_limit')
+    expect(onASR).toHaveBeenCalledWith(expect.objectContaining({ text: 'recognized', asrWarning: 'deepgram_keyterm_limit' }))
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ asrText: 'recognized', asrWarning: 'deepgram_keyterm_limit' }))
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not forward a dictionary fallback warning from a canceled request', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({ id: 'dg', provider: 'deepgram', model: 'nova-3', apiKey: 'key' })
+    let respond!: (value: unknown) => void
+    mocks.invoke.mockImplementation(async (command: string) => command === 'cloud_transcribe'
+      ? new Promise((resolve) => { respond = resolve }) : undefined)
+    const provider = new CloudAPIProvider()
+    const onWarning = vi.fn()
+    const onFinal = vi.fn()
+    await provider.connect({ onWarning, onFinal })
+    provider.start({ runId: 21, disableStreaming: true })
+    provider.sendAudio(new ArrayBuffer(16000))
+    provider.stop()
+    await vi.waitFor(() => expect(respond).toBeTypeOf('function'))
+    provider.cancel()
+    respond({ text: 'stale', elapsed_ms: 24, warning: 'deepgram_keyterm_limit' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onWarning).not.toHaveBeenCalled()
+    expect(onFinal).not.toHaveBeenCalled()
+  })
+
+  it('uses a recovered live connection warning without a second buffered recognition', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => key === 'streamingDisplayEnabled' ? true : fallback)
+    mocks.loadActiveAsrProfile.mockResolvedValue({ id: 'dg', provider: 'deepgram', model: 'nova-3', apiKey: 'key', deepgramKeytermsEnabled: true })
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_open') return 'deepgram_keyterm_limit'
+      if (command === 'deepgram_stream_finish') return 'recognized'
+    })
+    const provider = new CloudAPIProvider()
+    const onWarning = vi.fn()
+    const onFinal = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onWarning, onFinal, onDone: finish })
+    provider.start({ runId: 22, hotwords: ['SayIt'] })
+    provider.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_open')).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    provider.stop()
+    await done
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith('deepgram_keyterm_limit')
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ asrText: 'recognized', asrWarning: 'deepgram_keyterm_limit' }))
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+    const sentFrames = mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')
+    const sentBytes = sentFrames.reduce((total, [, args]) => (
+      total + atob((args as { pcmB64: string }).pcmB64).length
+    ), 0)
+    expect(sentBytes).toBe(16000)
+  })
+
+  it('does not launch a third attempt when a live keyterm-limit retry fails before stop', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => key === 'streamingDisplayEnabled' ? true : fallback)
+    mocks.loadActiveAsrProfile.mockResolvedValue({ id: 'dg', provider: 'deepgram', model: 'nova-3', apiKey: 'key', deepgramKeytermsEnabled: true })
+    let rejectOpen!: (value: unknown) => void
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_open') return new Promise((_, reject) => { rejectOpen = reject })
+      if (command === 'cloud_transcribe') return { text: 'unexpected third attempt', elapsed_ms: 24 }
+    })
+    const provider = new CloudAPIProvider()
+    const onError = vi.fn()
+    const onWarning = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onError, onWarning, onDone: finish })
+    provider.start({ runId: 23, hotwords: ['SayIt'] })
+    provider.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => expect(rejectOpen).toBeTypeOf('function'))
+    provider.stop()
+    rejectOpen('sayit_error:deepgram_keyterm_retry_failed:Retry without dictionary failed')
+    await done
+    expect(onError).toHaveBeenCalledExactlyOnceWith('sayit_error:deepgram_keyterm_retry_failed:Retry without dictionary failed')
+    expect(onWarning).not.toHaveBeenCalled()
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+  })
+
   it('keeps an in-flight run bound to the profile captured at start', async () => {
     let resolveFirstProfile!: (profile: {
       id: string

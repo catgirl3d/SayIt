@@ -10,6 +10,9 @@ export type ProviderState = 'disconnected' | 'connecting' | 'connected' | 'error
 
 export type AiExecutionSource = 'server' | 'custom' | 'none'
 export type AiExecutionStatus = 'applied' | 'skipped' | 'unavailable' | 'failed'
+/** Stable wire code the Rust side emits after it recovered from a rejected Deepgram dictionary. */
+export const DEEPGRAM_KEYTERM_LIMIT = 'deepgram_keyterm_limit' as const
+export type AsrWarningCode = typeof DEEPGRAM_KEYTERM_LIMIT
 
 export interface ASRResult {
   text: string
@@ -20,6 +23,7 @@ export interface ASRResult {
   asrModel?: string
   aiSource?: AiExecutionSource
   aiStatus?: AiExecutionStatus
+  asrWarning?: AsrWarningCode
 }
 
 export interface FinalResult {
@@ -37,6 +41,7 @@ export interface FinalResult {
   aiStatus?: AiExecutionStatus
   aiProvider?: string
   aiModel?: string
+  asrWarning?: AsrWarningCode
 }
 
 export interface TranscriptionCallbacks {
@@ -48,6 +53,8 @@ export interface TranscriptionCallbacks {
   onFinal?: (result: FinalResult) => void
   onDone?: () => void
   onError?: (msg: string) => void
+  /** A current request succeeded after dropping rejected dictionary hints. */
+  onWarning?: (code: AsrWarningCode) => void
 }
 
 export interface StartOptions {

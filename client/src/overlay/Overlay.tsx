@@ -87,10 +87,11 @@ interface OverlayFailureCardProps {
   title: string
   detail: string
   recovery: 'unknown' | 'history' | 'none'
+  warning?: string
   onDismiss: () => void
 }
 
-export function OverlayFailureCard({ title, detail, recovery, onDismiss }: OverlayFailureCardProps) {
+export function OverlayFailureCard({ title, detail, recovery, warning, onDismiss }: OverlayFailureCardProps) {
   const t = useT()
   const recoveryText = recovery === 'history'
     ? t('overlay.failureRecoveryHistory')
@@ -101,7 +102,7 @@ export function OverlayFailureCard({ title, detail, recovery, onDismiss }: Overl
   return (
     <div
       data-overlay-content
-      className="pointer-events-auto flex w-full max-w-[480px] flex-col rounded-xl border p-4"
+      className={`pointer-events-auto flex w-full max-w-[480px] flex-col rounded-xl border p-4${warning ? ' max-h-[calc(100vh-16px)] overflow-y-auto' : ''}`}
       style={{
         background: 'var(--overlay-bg)',
         color: 'var(--overlay-text)',
@@ -123,6 +124,7 @@ export function OverlayFailureCard({ title, detail, recovery, onDismiss }: Overl
       <p className="mt-2 max-h-[64px] overflow-auto pr-1 text-sm leading-5 select-text">
         {detail}
       </p>
+      {warning && <p role="status" className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-amber-300">{warning}</p>}
       {recoveryText && (
         <p className="mt-2 text-xs leading-4" style={{ color: 'var(--overlay-text-dim)' }}>
           {recoveryText}
@@ -464,6 +466,7 @@ export default function Overlay() {
           title={failureTitle}
           detail={failureDetail}
           recovery={failureRecovery}
+          warning={warning}
           onDismiss={() => {
             addRuntimeEvent('info', 'overlay', 'Failure card dismissed by user', { token: failureToken })
             void bridge.dismissOverlayCard(failureToken).catch((error) => {
@@ -479,7 +482,7 @@ export default function Overlay() {
       ) : state === 'fallback' ? (
         <div
           data-overlay-content
-          className="pointer-events-auto flex w-full max-w-[520px] flex-col rounded-xl border px-4 py-4"
+          className={`pointer-events-auto flex w-full max-w-[520px] flex-col rounded-xl border px-4 py-4${warning ? ' max-h-[calc(100vh-16px)] overflow-y-auto' : ''}`}
           style={{
             background: 'var(--overlay-bg)',
             color: 'var(--overlay-text)',
@@ -521,6 +524,7 @@ export default function Overlay() {
               {fallbackText || t('overlay.noText')}
             </p>
           </div>
+          {warning && <p role="status" className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-amber-300">{warning}</p>}
         </div>
       ) : (
         <div

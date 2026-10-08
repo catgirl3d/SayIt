@@ -91,6 +91,56 @@ describe('history cloud ASR reprocessing', () => {
     expect(result.asrModel).toBe('whisper-1')
   })
 
+  it('returns a Deepgram keyterm warning without changing the recognized result or AI outcome', async () => {
+    const profile = Object.freeze({
+      id: 'deepgram-history-profile',
+      provider: 'deepgram',
+      apiKey: 'history-asr-key',
+      appId: '',
+      model: 'nova-3',
+      omniPrompt: '',
+    })
+    const settings = { 'aiEnabled': false }
+    mocks.loadActiveAsrProfile.mockResolvedValue(profile)
+    mockSettings(settings)
+    mocks.invoke.mockResolvedValue({
+      text: 'recognized again',
+      elapsed_ms: 18,
+      warning: 'deepgram_keyterm_limit',
+    })
+
+    const result = await reprocessViaCloudApi(
+      new ArrayBuffer(32000), ['SayIt'], false, undefined, 'en',
+    )
+
+    expect(result).toMatchObject({
+      asrText: 'recognized again',
+      llmText: 'recognized again',
+      aiSource: 'none',
+      aiStatus: 'skipped',
+      asrWarning: 'deepgram_keyterm_limit',
+    })
+    expect(profile).toMatchObject({ provider: 'deepgram', model: 'nova-3' })
+    expect(settings).toEqual({ aiEnabled: false })
+    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual(['cloud_transcribe'])
+  })
+
+  it('ignores a warning returned for a non-Deepgram cloud provider', async () => {
+    mockCloudProfile('openai_transcribe')
+    mocks.invoke.mockResolvedValue({
+      text: 'recognized again',
+      elapsed_ms: 18,
+      warning: 'deepgram_keyterm_limit',
+    })
+
+    const result = await reprocessViaCloudApi(
+      new ArrayBuffer(32000), [], false, undefined, 'en',
+    )
+
+    expect(result.asrWarning).toBeUndefined()
+    expect(result.asrText).toBe('recognized again')
+  })
+
   it('reprocesses with one captured custom profile across Auto fallback and returns provider/model metadata', async () => {
     const profile = {
       id: 'custom-history-profile',

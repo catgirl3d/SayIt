@@ -1,6 +1,7 @@
 import * as bridge from '../bridge'
 import { startCapture, stopCapture } from '../audio'
 import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult } from '../transcription'
+import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode } from '../transcription/types'
 import {
   CUSTOM_ASR_PROVIDER,
   formatAsrHistoryProvider,
@@ -136,6 +137,7 @@ export class RecorderOrchestrator {
   private wallTimeAtStopSec = 0
   private finalHandledInCurrentRun = false
   private asrResultReceivedInCurrentRun = false
+  private activeAsrWarning: AsrWarningCode | null = null
   private textInsertionInFlight = false
   /** 迟到 final 正在完成历史/插入；此期间禁止新录音复用 Provider。 */
   private finalizingLateRunId = 0
@@ -840,6 +842,7 @@ export class RecorderOrchestrator {
     this.handsFreeMode = false
     this.finalHandledInCurrentRun = false
     this.asrResultReceivedInCurrentRun = false
+    this.activeAsrWarning = null
     this.textInsertionInFlight = false
     this.processingCancelable = false
     this.captureReadyPromise = null
@@ -870,13 +873,14 @@ export class RecorderOrchestrator {
     }
   }
 
-  private presentFailureCard(runId: number, title: string, detail: string) {
+  private presentFailureCard(runId: number, title: string, detail: string, warning?: string) {
     this.activeFallbackToken = runId
     this.overlayService.showFailure({
       failureTitle: title,
       failureDetail: detail,
       failureRecovery: 'unknown',
       cardToken: runId,
+      ...(warning ? { warning } : {}),
     })
   }
 
@@ -1044,11 +1048,18 @@ export class RecorderOrchestrator {
         this.overlayService.setStreamingText(text)
       },
 
+      onWarning: (code) => {
+        const runId = this.activeRunId
+        if (!this.isRunCurrent(runId) || this.finalHandledInCurrentRun) return
+        if (code === DEEPGRAM_KEYTERM_LIMIT) this.activeAsrWarning = code
+      },
+
       onASR: (result) => {
         if (this.state !== 'processing') return
         if (this.finalHandledInCurrentRun) return
         const runId = this.activeRunId
         if (!this.isRunCurrent(runId)) return
+        if (result.asrWarning === DEEPGRAM_KEYTERM_LIMIT) this.activeAsrWarning = result.asrWarning
         this.asrResultReceivedInCurrentRun = true
         if (result.text && result.text.trim() !== '') return
 
@@ -1144,7 +1155,10 @@ export class RecorderOrchestrator {
             asrMs: result.asrMs || 0,
             audioChunks: audioChunks.length,
             runId,
-          })
+            ...(this.activeAsrWarning && { asrWarning: this.activeAsrWarning }),
+          }, this.activeAsrWarning === DEEPGRAM_KEYTERM_LIMIT
+            ? t('asr.deepgramKeytermLimitToast')
+            : undefined)
           this.finishRun(runId)
           this.resetToIdle({ keepOverlay: true })
         })()
@@ -1320,7 +1334,7 @@ export class RecorderOrchestrator {
 
   private async handleTextInsertion(
     text: string,
-    options: { allowWhenIdle?: boolean; runId: number; probeResult?: ProbeResult | null },
+    options: { allowWhenIdle?: boolean; runId: number; probeResult?: ProbeResult | null; warning?: string },
   ) {
     const insertionStartedAt = Date.now()
     const { runId } = options
@@ -1395,7 +1409,7 @@ export class RecorderOrchestrator {
         detail: probe.detail,
       })
       if (!this.isRunCurrent(runId)) return
-      this.showFallbackAndReset(text, 'not_editable', runId)
+      this.showFallbackAndReset(text, 'not_editable', runId, options.warning)
       return
     }
 
@@ -1423,8 +1437,9 @@ export class RecorderOrchestrator {
       })
 
       this.finishRun(runId)
+      if (options.warning) this.overlayService.showAsrWarning()
       if (this.state === 'processing') {
-        this.resetToIdle()
+        this.resetToIdle({ keepOverlay: Boolean(options.warning) })
       }
       return
     }
@@ -1440,14 +1455,14 @@ export class RecorderOrchestrator {
       finalToPasteDoneMs: this.finalReceivedAt > 0 ? Date.now() - this.finalReceivedAt : undefined,
       pasteExecMs: Date.now() - pasteStartedAt,
     })
-    this.showFallbackAndReset(text, result.reason || 'paste_failed', runId)
+    this.showFallbackAndReset(text, result.reason || 'paste_failed', runId, options.warning)
   }
 
   /**
    * Show fallback card and transition to idle.
    * Ensures overlay layout is switched to fallback BEFORE hiding other states.
    */
-  private showFallbackAndReset(text: string, reason: string, runId: number) {
+  private showFallbackAndReset(text: string, reason: string, runId: number, warning?: string) {
     if (!this.isRunCurrent(runId)) return
     addRuntimeEvent('info', 'recorder', 'Showing fallback card', {
       runId,
@@ -1457,7 +1472,7 @@ export class RecorderOrchestrator {
     })
     // 先发布带本代 token 的 fallback，再结束 run；后续旧 dismiss 只能匹配这张卡片。
     this.activeFallbackToken = runId
-    this.overlayService.showFallback(text, reason, runId)
+    this.overlayService.showFallback(text, reason, runId, warning)
     this.finishRun(runId)
     // Then: transition to idle but keep overlay visible
     if (this.state === 'processing') {
@@ -1516,6 +1531,7 @@ export class RecorderOrchestrator {
 
     const runId = ++this.runSequence
     this.activeRunId = runId
+    this.activeAsrWarning = null
     this.activeFallbackToken = 0
     this.startRecordingLock = true
     this.pendingStopWhileStarting = false
@@ -2393,6 +2409,9 @@ export class RecorderOrchestrator {
     const suppressLateFinalInsertion = options.source === 'late_after_timeout'
       && context.suppressLateFinalInsertion
     if (!this.isRunCurrent(runId)) return
+    const warning = (result.asrWarning ?? this.activeAsrWarning) === DEEPGRAM_KEYTERM_LIMIT
+      ? t('asr.deepgramKeytermLimitWarning')
+      : undefined
 
     // llmText === asrText 说明这段没经过 AI 整理（极速模式，或后端未跑 LLM 直接回 asrText）。
     // 此时文本仍是纯 ASR，「格式规范」由我们兜底；AI 整理过的文本则把格式交给 AI，只做文本替换。
@@ -2431,7 +2450,7 @@ export class RecorderOrchestrator {
       if (suppressLateFinalInsertion) {
         this.finishRun(runId)
       } else if (baseText && baseText.trim()) {
-        this.showFallbackAndReset(baseText, 'text_transform_failed', runId)
+        this.showFallbackAndReset(baseText, 'text_transform_failed', runId, warning)
       } else {
         if (this.state === 'processing') {
           this.overlayService.showNoSpeech({
@@ -2466,6 +2485,7 @@ export class RecorderOrchestrator {
         runId,
         t('recorder.emptyAfterProcessingTitle'),
         t('recorder.emptyAfterProcessingDetail'),
+        warning,
       )
     }
 
@@ -2582,7 +2602,10 @@ export class RecorderOrchestrator {
           asrLen: result.asrText?.length ?? 0,
           llmLen: result.llmText?.length ?? 0,
           runId,
-        })
+        }, warning ? t('asr.deepgramKeytermLimitToast') : undefined)
+      } else if (warning) {
+        // A late empty final has no card of its own; keep the dropped dictionary visible.
+        this.overlayService.showAsrWarning()
       }
       this.finishRun(runId)
       if (this.state === 'processing') {
@@ -2593,6 +2616,7 @@ export class RecorderOrchestrator {
 
     if (suppressLateFinalInsertion) {
       this.finishRun(runId)
+      if (warning) this.overlayService.showAsrWarning()
       return
     }
 
@@ -2604,11 +2628,12 @@ export class RecorderOrchestrator {
         allowWhenIdle: options.allowInsertionWhenIdle,
         runId,
         probeResult: context.probeResult,
+        warning,
       })
     } catch (error) {
       if (!this.isRunCurrent(runId)) return
       addRuntimeEvent('error', 'recorder', 'Text insertion threw; showing fallback card', { error: String(error), runId })
-      this.showFallbackAndReset(textToPaste, 'paste_exception', runId)
+      this.showFallbackAndReset(textToPaste, 'paste_exception', runId, warning)
     } finally {
       this.textInsertionInFlight = false
     }

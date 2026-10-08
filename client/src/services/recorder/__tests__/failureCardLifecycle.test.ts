@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createElement, type ComponentType } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 const harness = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
@@ -62,11 +64,12 @@ vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) =>
 import en from '@/i18n/locales/en.json'
 import uk from '@/i18n/locales/uk.json'
 import { DEFAULTS } from '@/services/defaults'
-import { setLocale } from '@/i18n'
+import { setLocale, t } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
 import * as textPostProcess from '@/services/textPostProcess'
 import { RecorderOrchestrator } from '../RecorderOrchestrator'
 import { OverlayService } from '../OverlayService'
+import * as OverlayModule from '@/overlay/Overlay'
 import { switchProvider, type TranscriptionCallbacks, type FinalResult } from '@/services/transcription'
 import { dismissOverlayCard, onOverlayCardDismissed } from '@/services/bridge'
 
@@ -423,6 +426,23 @@ describe('recorder failure cards', () => {
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
   })
 
+  it('keeps the Deepgram keyterm warning on the no-speech toast when the retry returns no speech', async () => {
+    const recorder = new RecorderOrchestrator()
+    prepareRun(recorder, 92)
+    const callbacks = callbacksFor(recorder)
+    callbacks.onWarning?.('deepgram_keyterm_limit')
+    callbacks.onASR?.({ text: '', asrMs: 10, durationSec: 1, asrWarning: 'deepgram_keyterm_limit' })
+    await flushMicrotasks()
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      toastText: `${t('overlay.toastNoSpeech')} · ${t('asr.deepgramKeytermLimitToast')}`,
+      toastTone: 'warn',
+    })
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+    expect(recorder.getState()).toBe('idle')
+  })
+
   it('shows a failure card when nonempty ASR text is removed by post-processing', async () => {
     harness.settings.set('textReplacements', [
       { id: 'remove-recognized-text', from: 'recognized words', to: '', enabled: true },
@@ -519,6 +539,106 @@ describe('recorder failure cards', () => {
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+  })
+
+  it('renders a warning inside the failure card without replacing its recovery controls', () => {
+    const FailureCard = (OverlayModule as unknown as {
+      OverlayFailureCard?: ComponentType<{
+        title: string
+        detail: string
+        recovery: 'unknown' | 'history' | 'none'
+        warning?: string
+        onDismiss: () => void
+      }>
+    }).OverlayFailureCard
+    const warning = t('asr.deepgramKeytermLimitWarning')
+    const markup = FailureCard
+      ? renderToStaticMarkup(createElement(FailureCard, {
+        title: 'Recognition failed',
+        detail: 'Retry recognition from History.',
+        recovery: 'history',
+        warning,
+        onDismiss: () => undefined,
+      }))
+      : ''
+
+    expect(markup).toContain('Recognition failed')
+    expect(markup).toContain('Retry recognition from History.')
+    expect(markup).toContain(en['overlay.failureRecoveryHistory'])
+    expect(markup).toContain(warning)
+    expect(markup).toContain('aria-label="Dismiss recognition error"')
+  })
+
+  it('defers the Deepgram keyterm warning until recognized text is pasted', async () => {
+    const recorder = new RecorderOrchestrator()
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+    prepareRun(recorder, 43, 1, 'recording')
+    Reflect.set(recorder, 'cachedProbeResult', {
+      editable: true,
+      hwnd: '0x1',
+      process: 'Editor',
+      detail: 'editable',
+    })
+    const callbacks = callbacksFor(recorder)
+
+    callbacks.onWarning?.('deepgram_keyterm_limit')
+
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'toast')).toBe(false)
+    Reflect.set(recorder, 'state', 'processing')
+    callbacks.onFinal?.(makeFinal())
+    await historyWritten.promise
+    await flushMicrotasks()
+
+    expect(harness.invoke).toHaveBeenCalledWith('paste_text', expect.objectContaining({ text: 'recognized words' }))
+    expect(harness.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      asrText: 'recognized words',
+      llmText: 'recognized words',
+      isEmpty: false,
+    }))
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      toastText: t('asr.deepgramKeytermLimitToast'),
+      toastTone: 'warn',
+    })
+    expect(latestPayload('present_overlay')).not.toHaveProperty('warning')
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(1)
+  })
+
+  it('keeps the Deepgram warning alongside recognized text on the fallback card', async () => {
+    const recorder = new RecorderOrchestrator()
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+    prepareRun(recorder, 44)
+    Reflect.set(recorder, 'cachedProbeResult', {
+      editable: false,
+      hwnd: '0x1',
+      process: 'Editor',
+      detail: 'not editable',
+    })
+    const callbacks = callbacksFor(recorder)
+    callbacks.onFinal?.(makeFinal({ asrWarning: 'deepgram_keyterm_limit' }))
+    await historyWritten.promise
+    await flushMicrotasks()
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'fallback',
+      fallbackText: 'recognized words',
+      fallbackReason: 'not_editable',
+      warning: t('asr.deepgramKeytermLimitWarning'),
+    })
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'toast')).toBe(false)
   })
 
   it('saves an opted-in late final once without inserting it', async () => {

@@ -26,6 +26,7 @@ export type FriendlyErrorCode =
   | 'provider_rate_limit'
   | 'provider_no_model'
   | 'provider_model_list_unavailable'
+  | 'deepgram_keyterm_retry_failed'
   | 'download_network'
   | 'download_busy'
   | 'download_source_mismatch'
@@ -88,6 +89,7 @@ const FRIENDLY_ERROR_CODES = new Set<FriendlyErrorCode>([
   'provider_rate_limit',
   'provider_no_model',
   'provider_model_list_unavailable',
+  'deepgram_keyterm_retry_failed',
   'download_network',
   'download_busy',
   'download_source_mismatch',
@@ -206,6 +208,15 @@ export function describeProviderError(error: unknown): FriendlyError {
     return {
       code: 'provider_insufficient_balance',
       message: t('err.provider.insufficientBalance'),
+      detail: text,
+      action: 'none',
+    }
+  }
+  if (stableCode === 'deepgram_keyterm_retry_failed') {
+    // Retrying would resend the same over-limit dictionary; the fix is in Settings.
+    return {
+      code: 'deepgram_keyterm_retry_failed',
+      message: t('err.provider.deepgramKeytermRetryFailed'),
       detail: text,
       action: 'none',
     }

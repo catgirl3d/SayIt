@@ -18,11 +18,13 @@ import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
 import { SERVER_AI_SOURCE_KEY } from '@/services/transcription/serverAiSource'
 import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/transcription'
-import { useCallback, useEffect, useState } from 'react'
+import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode } from '@/services/transcription/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Download, Search, Check, FolderOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
+import { Feedback } from '@/components/ui/feedback'
 import HistoryRecordList from '@/components/history/HistoryRecordList'
 import { exportHistory } from '@/services/exports'
 import {
@@ -55,6 +57,7 @@ interface ReprocessResult {
   aiStatus?: AiExecutionStatus
   aiProvider?: string
   aiModel?: string
+  asrWarning?: AsrWarningCode
 }
 
 /** 服务器模式重新识别：通过独立 WebSocket 连接，避免干扰全局连接 */
@@ -238,10 +241,15 @@ export async function reprocessViaCloudApi(
       hotwords,
       isCurrent: () => true,
     })
-    : await invoke<{ text: string; elapsed_ms: number }>('cloud_transcribe', {
+    : await invoke<{ text: string; elapsed_ms: number; warning?: AsrWarningCode }>('cloud_transcribe', {
       request: { audio_b64: audioB64, sample_rate: 16000, asr_config: asrConfig, hotwords },
     })
   if (!asrResult) throw new Error('History reprocessing no longer has an active custom ASR request')
+  const asrWarning = asrProvider === 'deepgram'
+    && 'warning' in asrResult
+    && asrResult.warning === DEEPGRAM_KEYTERM_LIMIT
+    ? DEEPGRAM_KEYTERM_LIMIT
+    : undefined
   // 还原被 ASR 拆开加空格的无空格热词（如豆包把 "SayIt" 识别成 "Say It"）
   const asrText = restoreHotwordSpacing(asrResult.text, hotwords)
   const asrMs = asrResult.elapsed_ms || Math.round(performance.now() - asrStart)
@@ -294,6 +302,7 @@ export async function reprocessViaCloudApi(
     aiStatus,
     aiProvider: requestAiProvider,
     aiModel: requestAiModel,
+    ...(asrWarning && { asrWarning }),
     ...(requestModel && { asrEngine: requestEngine, asrModel: requestModel }),
   }
 }
@@ -426,6 +435,8 @@ export default function History() {
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
   const [totalCount, setTotalCount] = useState(0)
   const [exportResult, setExportResult] = useState<{ filePath: string | null; canceled: boolean } | null>(null)
+  const [reprocessWarning, setReprocessWarning] = useState<AsrWarningCode | null>(null)
+  const reprocessWarningGeneration = useRef(0)
 
   const loadRecords = useCallback(async (searchKeyword: string, limit: number, favOnly: boolean) => {
     const [items, total] = await Promise.all([
@@ -505,6 +516,8 @@ export default function History() {
 
   const handleReprocess = async (record: HistoryRecord) => {
     if (!record.audioFilePath) return
+    const warningGeneration = ++reprocessWarningGeneration.current
+    setReprocessWarning(null)
 
     const base64 = await bridge.readAudioFile(record.audioFilePath)
     if (!base64) return
@@ -567,6 +580,9 @@ export default function History() {
       result = await reprocessViaLocal(chunk, hotwords, Boolean(aiEnabled), systemPrompt, speechLanguage)
     } else {
       result = await reprocessViaServer(chunk, hotwords, Boolean(aiEnabled), systemPrompt, clientMeta, speechLanguage)
+    }
+    if (warningGeneration === reprocessWarningGeneration.current) {
+      setReprocessWarning(result.asrWarning ?? null)
     }
 
     // 新链路优先采用显式执行状态；旧的云/本地历史重跑尚未返回状态时才兼容文本比较。
@@ -659,6 +675,10 @@ export default function History() {
       )}
       {exportResult?.canceled && (
         <p className="mb-3 text-xs text-muted-foreground">{t('history.exportCanceled')}</p>
+      )}
+
+      {reprocessWarning === DEEPGRAM_KEYTERM_LIMIT && (
+        <Feedback className="mb-3" tone="warning" message={t('asr.deepgramKeytermLimitWarning')} />
       )}
 
       <HistoryRecordList

@@ -26,6 +26,7 @@ import { SystemAudioSession } from '../systemAudio'
 import { LocalProvider } from '../transcription/LocalProvider'
 import { CloudAPIProvider } from '../transcription/CloudAPIProvider'
 import { ServerProvider } from '../transcription/ServerProvider'
+import { t } from '@/i18n'
 import type { StartOptions, TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
 import type { SubtitleOverlayPayload } from '../recorder/types'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
@@ -432,6 +433,65 @@ describe('system audio subtitle session', () => {
 
     expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Final ASR fallback', error: '' })
     expect(trace.getPipelineSnapshot().runs).toMatchObject([{ status: 'ok', asrOnly: true, asrMs: 7, llmMs: 0 }])
+  })
+
+  it('keeps the Deepgram keyterm warning across captions without counting a failure and clears it on restart', async () => {
+    const trace = enablePipelineDebug()
+    let callbacks: TranscriptionCallbacks | undefined
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider((value) => { callbacks = value }),
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    const warning = t('asr.deepgramKeytermLimitWarning')
+
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onWarning?.('deepgram_keyterm_limit')
+    expect(session.getSnapshot().warning).toBe(warning)
+
+    callbacks?.onASR?.({ text: 'First recognized caption', asrMs: 5, durationSec: 0.64 })
+    callbacks?.onFinal?.({
+      asrText: 'First recognized caption',
+      llmText: '',
+      asrMs: 5,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(session.getSnapshot()).toMatchObject({
+      state: 'listening',
+      caption: 'First recognized caption',
+      warning,
+      error: '',
+    })
+
+    frames(20, 0.9)
+    frames(15, 0)
+    callbacks?.onASR?.({ text: 'Second recognized caption', asrMs: 5, durationSec: 0.64 })
+    callbacks?.onFinal?.({
+      asrText: 'Second recognized caption',
+      llmText: '',
+      asrMs: 5,
+      llmMs: 0,
+      durationSec: 0.64,
+      aiStatus: 'skipped',
+    })
+    callbacks?.onDone?.()
+    await settle()
+
+    expect(session.getSnapshot()).toMatchObject({ caption: 'Second recognized caption', warning })
+    expect(trace.getPipelineSnapshot().counters.failed).toBe(0)
+
+    await session.stop()
+    expect(session.getSnapshot().warning).toBe('')
+    await session.start({ deviceId: '', targetLanguage: 'ru', asrOnly: true })
+    expect(session.getSnapshot().warning).toBe('')
   })
 
   it('does not let an earlier recognition-only timer clear a newer caption', async () => {

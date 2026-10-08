@@ -79,6 +79,16 @@ describe('describeProviderError', () => {
     expect(result.action).toBe('none')
   })
 
+  it('tells the user the dictionary was rejected when the no-hints retry fails too', () => {
+    const detail = 'Deepgram retry without keyterms failed after an explicit keyterm limit rejection'
+    const result = describeProviderError(`sayit_error:deepgram_keyterm_retry_failed:${detail}`)
+
+    expect(result.code).toBe('deepgram_keyterm_retry_failed')
+    expect(result.message.toLowerCase()).toContain('dictionary')
+    expect(result.detail).toBe(detail)
+    expect(result.action).toBe('none')
+  })
+
   // 实测：Groq 在中国大陆 IP 上返回 403 {"error":{"message":"Forbidden"}}，
   // 而假密钥、真密钥、完全不带鉴权头三种情况的响应**完全相同** —— 请求在边缘节点
   // 就被拒了，密钥从未被验证。归成「密钥被拒绝」会把用户引去反复重建密钥。
