@@ -21,6 +21,7 @@ import { Modal } from '@/components/ui/modal'
 import { PasswordInput } from '@/components/ui/password-input'
 import { Segmented } from '@/components/ui/segmented'
 import { Select } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { refreshModeStatus } from '@/stores/modeStatus'
@@ -34,11 +35,11 @@ import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
   asrAvailabilityLabel,
+  asrProfileCheckShouldInvalidate,
   changeAsrProfileProvider,
   describeAsrMissing,
   buildAsrProviderConfig,
   CUSTOM_ASR_PROVIDER,
-  effectiveAsrCredentials,
   emptyAsrProfile,
   findAsrProvider,
   gradeAsrLatency,
@@ -427,6 +428,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   function patchDraft(next: Partial<AsrProfile>) {
     if (!draft) return
     const merged = { ...draft, ...next }
+    if (findAsrProvider(merged.provider)?.platform !== 'deepgram') {
+      delete merged.deepgramKeytermsEnabled
+    }
     setDraft(merged)
     setEngineDraftDirty(JSON.stringify(merged) !== draftBaseline)
   }
@@ -446,9 +450,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     }
     // 平台变了，旧密钥对新家没有意义 —— 留着只会被当成"已配置"而实际发不出去
     const prev = lastProfileOfPlatform(providerId, draft.id)
+    const nextProfile = changeAsrProfileProvider(draft, providerId)
     patchDraft({
-      provider: providerId,
-      model: findAsrProvider(providerId)?.model ?? '',
+      ...nextProfile,
       apiKey: prev?.apiKey ?? '',
       otherKey: prev?.otherKey ?? '',
       appId: prev?.appId ?? '',
@@ -472,11 +476,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       // 等于拿过期结论替新配置作保
       const savedProfile = normalizeAsrProfileForSave(draft)
       const before = profiles.find((p) => p.id === savedProfile.id)
-      const configurationChanged = !before
-        || JSON.stringify(effectiveAsrCredentials(before)) !== JSON.stringify(effectiveAsrCredentials(savedProfile))
-        || before.model !== savedProfile.model
-        || before.baseUrl !== savedProfile.baseUrl
-        || before.protocol !== savedProfile.protocol
+      const configurationChanged = !before || asrProfileCheckShouldInvalidate(before, savedProfile)
       const saved: AsrProfile = { ...savedProfile, check: configurationChanged ? undefined : before?.check }
 
       const next = draftIsNew
@@ -766,6 +766,20 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
                 value={draft.model}
                 onChange={(model) => patchDraft({ model })}
                 options={draftEntry.models.map((model) => ({ value: model, label: model }))}
+              />
+            </div>
+          )}
+
+          {draftPlatform === 'deepgram' && (
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p id="deepgram-keyterms-label" className="text-sm font-medium">{t('asr.deepgramKeyterms')}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t('asr.deepgramKeytermsHelp')}</p>
+              </div>
+              <Switch
+                labelledBy="deepgram-keyterms-label"
+                checked={draft.deepgramKeytermsEnabled === true}
+                onChange={() => patchDraft({ deepgramKeytermsEnabled: draft.deepgramKeytermsEnabled !== true })}
               />
             </div>
           )}

@@ -481,6 +481,21 @@ describe('ASR profile persistence', () => {
     })
   })
 
+  it('does not restore an old check after the Deepgram paid dictionary option changes', async () => {
+    const original = profile('deepgram', { id: 'dg', apiKey: 'key', deepgramKeytermsEnabled: false })
+    await saveAsrProfiles({ profiles: [original], activeId: original.id })
+    const changed = { ...original, deepgramKeytermsEnabled: true }
+    await saveAsrProfiles({ profiles: [changed], activeId: changed.id })
+    await saveAsrProfileChecks([{ profile: original, check: { ok: true, at: 555, latencyMs: 100, audioSec: 2 } }])
+
+    expect(await loadActiveAsrProfile()).toMatchObject({ id: 'dg', deepgramKeytermsEnabled: true, check: undefined })
+    expect(storedSettings.get(ASR_PROFILES_KEY)).toEqual([changed])
+    const current = (await loadActiveAsrProfile())!
+    const check: AsrCheck = { ok: true, at: 556, latencyMs: 90, audioSec: 2 }
+    await saveAsrProfileChecks([{ profile: current, check }])
+    expect((await loadActiveAsrProfile())?.check).toEqual(check)
+  })
+
   // Import writes app_settings verbatim and restarts; the next load is the only
   // migration step. A backup exported under an older catalog must not resurrect
   // a check that belonged to the replaced model.

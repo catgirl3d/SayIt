@@ -21,6 +21,7 @@ import {
   emptyAsrProfile,
   parseAsrProfiles,
   resolveActiveAsrProfile,
+  sameAsrProfileConfiguration,
   type AsrCheck,
   type AsrPlatform,
   type AsrProfile,
@@ -269,20 +270,6 @@ export function saveAsrProfiles(state: AsrProfileState): Promise<AsrProfileState
 export interface AsrProfileCheckUpdate {
   profile: AsrProfile
   check: AsrCheck
-}
-
-function sameAsrProfileConfiguration(left: AsrProfile, right: AsrProfile): boolean {
-  return left.id === right.id
-    && left.provider === right.provider
-    && left.model === right.model
-    && left.baseUrl === right.baseUrl
-    && left.protocol === right.protocol
-    && left.apiKey === right.apiKey
-    && left.otherKey === right.otherKey
-    && left.appId === right.appId
-    && left.console === right.console
-    && left.workspaceId === right.workspaceId
-    && left.omniPrompt === right.omniPrompt
 }
 
 /** Apply completed checks to current profiles without restoring a stale list or active ID. */

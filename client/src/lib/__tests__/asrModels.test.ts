@@ -272,6 +272,7 @@ describe('hotwordCapabilityNoteKey', () => {
     ['doubao', 'dict.note.doubao'],
     ['doubao_v2', 'dict.note.doubao'],
     ['qwen_realtime', 'dict.note.qwenRealtime'],
+    ['deepgram', 'dict.note.deepgram'],
     ['qwen', null],
   ])('maps provider %s to its support note', (provider, expected) => {
     expect(noteKey?.(provider)).toBe(expected)

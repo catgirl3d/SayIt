@@ -366,6 +366,8 @@ export interface AsrProfile {
   workspaceId: string
   /** Omni 模型的 System Prompt（识别与整理一体，属于这份服务的行为） */
   omniPrompt: string
+  /** Deepgram dictionary hints are billable and remain disabled unless explicitly opted in. */
+  deepgramKeytermsEnabled?: boolean
   /** 上次识别测试的结论 */
   check?: AsrCheck
 }
@@ -388,6 +390,7 @@ export function emptyAsrProfile(provider = ASR_PROVIDERS[0].id): AsrProfile {
     otherKey: '',
     workspaceId: '',
     omniPrompt: '',
+    ...(entry?.platform === 'deepgram' && { deepgramKeytermsEnabled: false }),
   }
 }
 
@@ -443,6 +446,7 @@ export function parseAsrProfiles(raw: unknown): AsrProfile[] {
       otherKey: str(v.otherKey),
       workspaceId: str(v.workspaceId),
       omniPrompt: str(v.omniPrompt),
+      ...(entry.platform === 'deepgram' && { deepgramKeytermsEnabled: v.deepgramKeytermsEnabled === true }),
       check: storedModel !== '' && storedModel === model ? parseCheck(v.check) : undefined,
     })
   }
@@ -479,7 +483,9 @@ export function buildAsrProviderConfig(
         base_url: profile.baseUrl?.trim() ?? '',
         protocol: profile.protocol ?? 'transcriptions',
       }
-      : extra,
+      : entry?.platform === 'deepgram' && profile.deepgramKeytermsEnabled === true
+        ? { ...extra, keyterms_enabled: true }
+        : extra,
   }
 }
 
@@ -532,6 +538,7 @@ export function changeAsrProfileProvider(profile: AsrProfile, provider: string):
   const withoutCustomRoute = { ...profile }
   delete withoutCustomRoute.baseUrl
   delete withoutCustomRoute.protocol
+  delete withoutCustomRoute.deepgramKeytermsEnabled
   return {
     ...withoutCustomRoute,
     provider,
@@ -543,6 +550,7 @@ export function changeAsrProfileProvider(profile: AsrProfile, provider: string):
       console: 'new' as const,
       workspaceId: '',
     }),
+    ...(nextEntry?.platform === 'deepgram' && { deepgramKeytermsEnabled: false }),
     ...(nextEntry?.customEndpoint && { baseUrl: '', protocol: 'transcriptions' as const }),
   }
 }
@@ -581,6 +589,33 @@ export function effectiveAsrCredentials(profile: AsrProfile): { apiKey: string; 
     return effectiveDoubaoCredentials(toDoubaoCreds(profile))
   }
   return { apiKey: profile.apiKey.trim(), appId: '' }
+}
+
+/**
+ * Whether two profiles describe the same recognition configuration.
+ *
+ * Single source of truth for every "does a stored test verdict still belong to this
+ * profile" decision — both the settings save path and the late-check application in
+ * asrProfileStore. A recognition-affecting field missing here lets a stale verdict
+ * survive, so new profile fields that can change what a test measures belong in this
+ * list exactly once.
+ */
+export function sameAsrProfileConfiguration(left: AsrProfile, right: AsrProfile): boolean {
+  return left.provider === right.provider
+    && left.model === right.model
+    && left.baseUrl === right.baseUrl
+    && left.protocol === right.protocol
+    && left.apiKey === right.apiKey
+    && left.otherKey === right.otherKey
+    && left.appId === right.appId
+    && left.console === right.console
+    && left.workspaceId === right.workspaceId
+    && left.omniPrompt === right.omniPrompt
+    && (left.deepgramKeytermsEnabled === true) === (right.deepgramKeytermsEnabled === true)
+}
+
+export function asrProfileCheckShouldInvalidate(previous: AsrProfile, next: AsrProfile): boolean {
+  return !sameAsrProfileConfiguration(previous, next)
 }
 
 /**

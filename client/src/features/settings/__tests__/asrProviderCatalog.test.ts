@@ -3,6 +3,7 @@ import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
   asrAvailabilityLabel,
+  asrProfileCheckShouldInvalidate,
   buildAsrProviderConfig,
   changeAsrProfileProvider,
   CUSTOM_ASR_PROVIDER,
@@ -208,7 +209,9 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
   it('round-trips a Deepgram profile and sends the selected language with the model', () => {
     const [deepgram] = parseAsrProfiles([{ id: 'deepgram-a', provider: 'deepgram', apiKey: 'deepgram-key' }])
 
-    expect(deepgram).toMatchObject({ id: 'deepgram-a', model: 'nova-3', apiKey: 'deepgram-key' })
+    expect(deepgram).toMatchObject({
+      id: 'deepgram-a', model: 'nova-3', apiKey: 'deepgram-key', deepgramKeytermsEnabled: false,
+    })
     expect(buildAsrProviderConfig(deepgram, 'ru')).toEqual({
       provider: 'deepgram',
       api_key: 'deepgram-key',
@@ -216,6 +219,45 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
       extra: { model: 'nova-3', language: 'ru' },
     })
     expect(buildAsrProviderConfig(deepgram, 'auto').extra).toEqual({ model: 'nova-3' })
+  })
+
+  it('defaults new and legacy Deepgram profiles to paid keyterms off', () => {
+    const fresh = emptyAsrProfile('deepgram')
+    const [legacy] = parseAsrProfiles([{ id: 'deepgram-legacy', provider: 'deepgram', apiKey: 'deepgram-key' }])
+
+    expect(fresh.deepgramKeytermsEnabled).toBe(false)
+    expect(legacy.deepgramKeytermsEnabled).toBe(false)
+    expect(buildAsrProviderConfig(legacy, 'ru').extra).not.toHaveProperty('keyterms_enabled')
+    expect(parseAsrProfiles([{
+      id: 'deepgram-malformed-opt-in',
+      provider: 'deepgram',
+      deepgramKeytermsEnabled: 'true',
+    }])[0].deepgramKeytermsEnabled).toBe(false)
+  })
+
+  it('sends Deepgram dictionary hints only for a literal profile opt-in', () => {
+    const optedIn = profile({
+      provider: 'deepgram',
+      model: 'nova-3',
+      apiKey: 'deepgram-key',
+      deepgramKeytermsEnabled: true,
+    })
+    const staleNonDeepgramFlag = profile({
+      provider: 'groq_whisper',
+      model: 'whisper-large-v3-turbo',
+      apiKey: 'groq-key',
+      deepgramKeytermsEnabled: true,
+    })
+
+    expect(buildAsrProviderConfig(optedIn, 'ru').extra).toEqual({
+      model: 'nova-3',
+      language: 'ru',
+      keyterms_enabled: true,
+    })
+    expect(buildAsrProviderConfig(staleNonDeepgramFlag, 'uk').extra).toEqual({
+      model: 'whisper-large-v3-turbo',
+      language: 'uk',
+    })
   })
 
   it('round-trips custom endpoint settings and defaults old profiles to one explicit protocol', () => {
@@ -572,6 +614,29 @@ describe('changeAsrProfileProvider', () => {
       baseUrl: '',
       protocol: 'transcriptions',
     })
+  })
+
+  it('does not carry paid Deepgram keyterms when switching away and back', () => {
+    const optedIn = profile({ provider: 'deepgram', deepgramKeytermsEnabled: true })
+
+    const qwen = changeAsrProfileProvider(optedIn, 'qwen')
+    expect(qwen).not.toHaveProperty('deepgramKeytermsEnabled')
+
+    const deepgram = changeAsrProfileProvider(qwen, 'deepgram')
+    expect(deepgram.deepgramKeytermsEnabled).toBe(false)
+    expect(changeAsrProfileProvider(optedIn, 'deepgram').deepgramKeytermsEnabled).toBe(true)
+  })
+})
+
+describe('asrProfileCheckShouldInvalidate', () => {
+  it('invalidates an old check when Deepgram paid keyterms change, but treats missing as off', () => {
+    const saved = profile({ provider: 'deepgram', model: 'nova-3' })
+
+    expect(asrProfileCheckShouldInvalidate(saved, { ...saved, deepgramKeytermsEnabled: true })).toBe(true)
+    expect(asrProfileCheckShouldInvalidate(
+      { ...saved, deepgramKeytermsEnabled: undefined },
+      saved,
+    )).toBe(false)
   })
 })
 

@@ -15,12 +15,13 @@ export interface AsrHotwordCapability {
   clientCap: number | null
 }
 
-export type HotwordCapabilityNoteKey = 'dict.note.doubao' | 'dict.note.qwenRealtime'
+export type HotwordCapabilityNoteKey = 'dict.note.doubao' | 'dict.note.qwenRealtime' | 'dict.note.deepgram'
 
 const HOTWORD_CAPABILITY_NOTE_KEYS: Record<string, HotwordCapabilityNoteKey> = {
   doubao: 'dict.note.doubao',
   doubao_v2: 'dict.note.doubao',
   qwen_realtime: 'dict.note.qwenRealtime',
+  deepgram: 'dict.note.deepgram',
 }
 
 export function hotwordCapabilityNoteKey(provider: string): HotwordCapabilityNoteKey | null {
