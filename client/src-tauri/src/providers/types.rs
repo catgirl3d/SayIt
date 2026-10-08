@@ -10,6 +10,29 @@ pub struct AsrResult {
     pub elapsed_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AsrWarningCode {
+    #[serde(rename = "deepgram_keyterm_limit")]
+    DeepgramKeytermLimit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudTranscribeResult {
+    #[serde(flatten)]
+    pub result: AsrResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<AsrWarningCode>,
+}
+
+impl From<AsrResult> for CloudTranscribeResult {
+    fn from(result: AsrResult) -> Self {
+        Self {
+            result,
+            warning: None,
+        }
+    }
+}
+
 /// AI 校对结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiResult {
@@ -111,4 +134,42 @@ pub struct TextContext {
     pub text_after: String,
     #[serde(default, alias = "selectionTruncated")]
     pub selection_truncated: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloud_transcribe_result_preserves_the_existing_success_shape_without_warning() {
+        let result = CloudTranscribeResult::from(AsrResult {
+            text: "recognized text".to_string(),
+            elapsed_ms: 37,
+        });
+
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({ "text": "recognized text", "elapsed_ms": 37 })
+        );
+    }
+
+    #[test]
+    fn cloud_transcribe_result_serializes_the_warning_code_explicitly() {
+        let result = CloudTranscribeResult {
+            result: AsrResult {
+                text: "recognized text".to_string(),
+                elapsed_ms: 37,
+            },
+            warning: Some(AsrWarningCode::DeepgramKeytermLimit),
+        };
+
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({
+                "text": "recognized text",
+                "elapsed_ms": 37,
+                "warning": "deepgram_keyterm_limit"
+            })
+        );
+    }
 }

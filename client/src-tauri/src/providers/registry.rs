@@ -144,9 +144,14 @@ pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListRes
 
 /// 云端 ASR 转写（Tauri command）
 #[tauri::command]
-pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResult, String> {
+pub async fn cloud_transcribe(
+    request: CloudTranscribeRequest,
+) -> Result<CloudTranscribeResult, String> {
     let config = &request.asr_config;
-    match config.provider.as_str() {
+    let result = match config.provider.as_str() {
+        "deepgram" => return asr_deepgram::transcribe(
+            &request.audio_b64, request.sample_rate, config, &request.hotwords,
+        ).await,
         "doubao" => {
             asr_doubao::transcribe(
                 &request.audio_b64,
@@ -248,20 +253,12 @@ pub async fn cloud_transcribe(request: CloudTranscribeRequest) -> Result<AsrResu
             )
             .await
         }
-        "deepgram" => {
-            asr_deepgram::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
-        }
         other => Err(error_protocol::encode(
             "connect_failed",
             format!("ASR provider \"{}\" is not implemented", other),
         )),
-    }
+    };
+    result.map(CloudTranscribeResult::from)
 }
 
 /// 测试 ASR 连接（Tauri command）
@@ -376,7 +373,8 @@ mod tests {
         .unwrap();
         let request = String::from_utf8_lossy(&server.join().unwrap()).to_string();
 
-        assert_eq!(result.text, "registry fixture transcript");
+        assert_eq!(result.result.text, "registry fixture transcript");
+        assert_eq!(result.warning, None);
         assert!(request.starts_with("POST /v1/audio/transcriptions HTTP/1.1"));
         assert!(request.contains("registry-fixture-model"));
         assert!(request.contains("audio-marker"));

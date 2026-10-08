@@ -37,7 +37,7 @@ const CLOUD_CAPABILITIES: &[(&str, HotwordDelivery, Option<usize>)] = &[
         None,
     ),
     ("openai_compat", HotwordDelivery::Instruction, None),
-    ("deepgram", HotwordDelivery::NotWiredUp, None),
+    ("deepgram", HotwordDelivery::Vocabulary, None),
 ];
 
 const UI_CAPABILITIES: &[(&str, HotwordDelivery, Option<usize>)] = &[
@@ -217,13 +217,17 @@ pub async fn test_asr_connection() {}
                 "{provider}"
             );
         }
-        for provider in ["mimo", "groq_whisper", "openai_transcribe", "local", "deepgram"] {
+        for provider in ["mimo", "groq_whisper", "openai_transcribe", "local"] {
             assert_eq!(
                 hotword_capability(provider).delivery,
                 HotwordDelivery::NotWiredUp,
                 "{provider}"
             );
         }
+        assert_eq!(
+            hotword_capability("deepgram").delivery,
+            HotwordDelivery::Vocabulary
+        );
         assert_eq!(
             hotword_capability("openrouter_transcribe").delivery,
             HotwordDelivery::ProtocolHasNoSlot
@@ -240,6 +244,7 @@ pub async fn test_asr_connection() {}
             hotword_capability("gemini_transcribe").client_cap,
             Some(crate::providers::asr_gemini::hotword_limit_for_docs())
         );
+        assert_eq!(hotword_capability("deepgram").client_cap, None);
 
         let matrix = asr_hotword_capability_matrix();
         let capped_providers: BTreeSet<_> = matrix
