@@ -245,17 +245,24 @@ fn pcm16le_bytes(samples: &[f32; FRAME_SAMPLES]) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn combine_results<T>(
+    operation: Result<T, String>,
+    cleanup: Result<(), String>,
+) -> Result<T, String> {
+    match (operation, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(operation_error), Err(cleanup_error)) => {
+            Err(format!("{operation_error}; additionally, {cleanup_error}"))
+        }
+    }
+}
+
 fn release_packet_after_decode<T>(
     decoded: Result<T, String>,
     release: impl FnOnce() -> Result<(), String>,
 ) -> Result<T, String> {
-    match (decoded, release()) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(decode_error), Err(release_error)) => {
-            Err(format!("{decode_error}; additionally, {release_error}"))
-        }
-    }
+    combine_results(decoded, release())
 }
 
 impl AudioFormat {
@@ -625,9 +632,9 @@ fn request_session_stop(
 #[cfg(windows)]
 mod wasapi {
     use super::{
-        decode_frames, pcm16le_bytes, release_packet_after_decode, request_session_stop,
-        AudioFormat, AudioFrame, CaptureSession, SampleEncoding, SystemAudioDevice,
-        SystemAudioCaptureTimingError, SystemAudioError, SystemAudioFrame,
+        combine_results, decode_frames, pcm16le_bytes, release_packet_after_decode,
+        request_session_stop, AudioFormat, AudioFrame, CaptureSession, SampleEncoding,
+        SystemAudioDevice, SystemAudioCaptureTimingError, SystemAudioError, SystemAudioFrame,
     };
     use base64::{engine::general_purpose::STANDARD, Engine};
     use silero_vad_crs::SileroVad;
@@ -804,14 +811,7 @@ mod wasapi {
         let clear_result = PropVariantClear(&mut value)
             .map_err(|error| format!("PropVariantClear(FriendlyName): {error}"));
 
-        match (name_result, clear_result) {
-            (Ok(name), Ok(())) => Ok(name),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
-            (Err(name_error), Err(clear_error)) => {
-                Err(format!("{name_error}; additionally, {clear_error}"))
-            }
-        }
+        combine_results(name_result, clear_result)
     }
 
     pub(super) fn list_system_audio_devices() -> Result<Vec<SystemAudioDevice>, String> {
@@ -1256,19 +1256,6 @@ mod wasapi {
         Ok(())
     }
 
-    fn combine_results(
-        operation: Result<(), String>,
-        cleanup: Result<(), String>,
-    ) -> Result<(), String> {
-        match (operation, cleanup) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(operation_error), Err(cleanup_error)) => {
-                Err(format!("{operation_error}; additionally, {cleanup_error}"))
-            }
-        }
-    }
-
     fn finish_capture_worker(
         capture_result: Result<(), String>,
         cleanup_result: Result<(), String>,
@@ -1324,10 +1311,8 @@ mod wasapi {
         let mut processor = match super::AudioProcessor::new(running.format) {
             Ok(processor) => processor,
             Err(error) => {
-                let initialization_error = match running.stop() {
-                    Ok(()) => error,
-                    Err(cleanup_error) => format!("{error}; additionally, {cleanup_error}"),
-                };
+                let initialization_error =
+                    combine_results::<()>(Err(error), running.stop()).unwrap_err();
                 return Err(send_initialization_error(&ready, initialization_error));
             }
         };
@@ -1388,13 +1373,14 @@ mod wasapi {
             Some(session) => join_session(session),
             None => Ok(()),
         };
-        match cleanup {
-            Ok(()) => Err(error),
-            Err(cleanup_error) if cleanup_error == error => Err(error),
+        let cleanup = match cleanup {
+            Ok(()) => Ok(()),
+            Err(cleanup_error) if cleanup_error == error => Ok(()),
             Err(cleanup_error) => Err(format!(
-                "{error}; additionally, failed to join failed capture startup: {cleanup_error}"
+                "failed to join failed capture startup: {cleanup_error}"
             )),
-        }
+        };
+        combine_results(Err(error), cleanup)
     }
 
     fn confirm_started(
