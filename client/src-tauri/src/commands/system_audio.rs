@@ -5,6 +5,7 @@ use std::thread::JoinHandle;
 use tauri::{AppHandle, State};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+// The client mirrors this as LIVE_CAPTURE_TIME_TOLERANCE_US in client/src/services/systemAudio.ts; change both together.
 const CAPTURE_TIME_TOLERANCE_US: u64 = 4;
 // Each emitted frame contains exactly FRAME_SAMPLES signed 16-bit little-endian mono samples
 // at TARGET_SAMPLE_RATE (FRAME_SAMPLES * 2 bytes). The client at client/src/services/systemAudio.ts
@@ -667,6 +668,8 @@ mod wasapi {
 
     const FILETIME_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
     const QPC_UNITS_PER_SECOND: i128 = 10_000_000;
+    // Poll for new capture packets every 5 ms while the endpoint is idle.
+    const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
     #[link(name = "kernel32")]
     extern "system" {
@@ -1167,7 +1170,7 @@ mod wasapi {
                     app.emit_to("main", "system-audio-live-idle", idle)
                         .map_err(|error| format!("Emit system-audio-live-idle to main: {error}"))?;
                 }
-                thread::sleep(Duration::from_millis(5));
+                thread::sleep(IDLE_POLL_INTERVAL);
                 continue;
             }
 
@@ -1718,7 +1721,7 @@ mod wasapi {
                             format!("Capture IAudioCaptureClient::GetNextPacketSize: {error}")
                         })?;
                     if capture_only && available_packets == 0 {
-                        thread::sleep(Duration::from_millis(5));
+                        thread::sleep(IDLE_POLL_INTERVAL);
                     }
                     while available_packets > 0 && Instant::now() < deadline {
                         let mut data = ptr::null_mut();

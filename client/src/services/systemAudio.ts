@@ -65,7 +65,7 @@ export interface SystemAudioDevice {
   isDefault: boolean
 }
 
-export interface SystemAudioFrame {
+interface SystemAudioFrame {
   sessionId: number
   audioB64: string
   speechProbability: number
@@ -162,14 +162,24 @@ interface PipelineFinishDetails {
 
 // Must match FRAME_SAMPLES = 512 i16 little-endian samples emitted by client/src-tauri/src/commands/system_audio.rs; receiveFrame hard-fails if the byte length differs.
 const FRAME_BYTES = 512 * 2
+// Cap the displayed live phrase at 16 KiB of UTF-8 text; an oversized phrase stops live recognition.
 const MAX_LIVE_PHRASE_BYTES = 16 * 1024
+// Retain at most 64 live audio-to-capture-time anchors; older anchors are discarded as the stream advances.
 const MAX_LIVE_TIME_ANCHORS = 64
+// Bound unmatched live finalize requests at 32; retire the oldest frontier when the bound is reached.
 const MAX_LIVE_FINALIZE_REQUESTS = 32
+// Require 512 ms (16 frame periods) of native capture time beyond the last audio end before accepting idle confirmation.
 const LIVE_IDLE_CONFIRMATION_US = 512_000
+// Allow 4 microseconds of timestamp tolerance when validating live frame duration and detecting source gaps.
+// Must match CAPTURE_TIME_TOLERANCE_US in client/src-tauri/src/commands/system_audio.rs; change both together.
 const LIVE_CAPTURE_TIME_TOLERANCE_US = 4
+// After 5 seconds, annotate an unconfirmed stop so the UI explains the delay while cleanup continues.
 const LIVE_STOP_WATCHDOG_MS = 5_000
+// Retain up to 8 non-voiced frames (256 ms) before speech starts, preserving audio before voice detection turns voiced.
 const PRE_ROLL_FRAMES = 8
+// Require 8 voiced frames (256 ms) before submitting a segment; a continuation may submit with any voiced frame.
 const MIN_VOICED_FRAMES = 8
+// End an open segment after 15 silent frames (480 ms).
 const END_SILENCE_FRAMES = 15
 // A pause this long (160 ms) is a phrase boundary, not a gap between words or a stop consonant.
 // Once a segment has reached its soft length (see segmentPlan) the first such pause closes it early,
@@ -178,13 +188,17 @@ const PAUSE_SPLIT_FRAMES = 5
 // Silero speech probability at or above which a frame counts as voiced.
 const SPEECH_THRESHOLD = 0.3
 const isVoiced = (frame: SpeechFrame) => frame.probability >= SPEECH_THRESHOLD
+// Bound queued PCM at 12 seconds (16,000 samples/s x 2 bytes x 12); drop the oldest speech when processing lags.
 const MAX_PENDING_BYTES = 16_000 * 2 * 12
 // Close the current speech segment after this receive inactivity interval.
+// This is 512 ms, or 16 frame periods at FRAME_MS = 32 ms.
 const FRAME_RECEIVE_GAP_MS = 512
+// Abandon an ASR job after 30 seconds, cancel the provider, and report the fragment as skipped.
 const PROCESSING_TIMEOUT_MS = 30_000
 // One bad fragment (a slow or failing AI, a recognition error) is skipped or shown untranslated. The session
 // stops only when this many fragments fail back to back, which means the service itself is down or misconfigured.
 const MAX_CONSECUTIVE_FAILURES = 3
+// Keep the latest settled caption visible for 8 seconds before clearing it unless a newer caption replaces it.
 const CAPTION_HOLD_MS = 8_000
 // Streamed translation text is repainted at most this often; the settled caption is always published.
 const PARTIAL_UPDATE_INTERVAL_MS = 100
