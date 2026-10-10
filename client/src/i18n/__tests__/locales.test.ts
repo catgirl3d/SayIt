@@ -27,6 +27,39 @@ import {
  * 断言里出现任何一句人类语言时都要先问：这条会不会在文案改一个字之后就挂？
  */
 describe('locale 表', () => {
+  it('includes the live system-audio settings, errors, overlay label, and diagnostics in both locales', () => {
+    const liveSubtitleKeys = [
+      'systemAudio.liveRecognitionLabel',
+      'systemAudio.liveRecognitionHelp',
+      'systemAudio.liveRecognitionUnsupported',
+      'systemAudio.liveTargetHelp',
+      'systemAudio.liveOriginalLabel',
+      'systemAudio.livePhraseOverflow',
+      'systemAudio.liveTimingUnavailable',
+      'systemAudio.cleanupUnconfirmed',
+      'systemAudio.captureTimingUnavailable',
+      'systemAudio.debug.recognition',
+      'systemAudio.debug.live',
+      'systemAudio.debug.finished',
+    ] as const
+
+    for (const key of liveSubtitleKeys) {
+      expect(en[key], `en.${key}`).toBeTypeOf('string')
+      expect(en[key].trim(), `en.${key}`).not.toBe('')
+      expect(uk[key], `uk.${key}`).toBeTypeOf('string')
+      expect(uk[key].trim(), `uk.${key}`).not.toBe('')
+    }
+  })
+
+  it('says dictation stays blocked until pending live cleanup is confirmed', () => {
+    expect(en['systemAudio.cleanupUnconfirmed']).toMatch(/dictation remains blocked until both are confirmed stopped/i)
+    expect(en['systemAudio.cleanupUnconfirmed']).not.toMatch(/try stopping subtitles again/i)
+    expect(uk['systemAudio.cleanupUnconfirmed']).toMatch(/диктування залишатиметься заблокованим, доки зупинку обох не буде підтверджено/i)
+    expect(uk['systemAudio.cleanupUnconfirmed']).not.toMatch(/спробуйте.*зупинити/i)
+    expect(en['systemAudio.cleanupFailed']).toMatch(/try stopping subtitles again/i)
+    expect(uk['systemAudio.cleanupFailed']).toMatch(/спробуйте зупинити субтитри ще раз/i)
+  })
+
   it('所有 locale 的 key 集合完全一致', () => {
     // 类型层面已经保证 en 不缺 key（i18n/index.ts 的 Record<TranslationKey, string>），
     // 这里补的是另一半：en 里**多出来**的 key 类型查不出来，只能靠测试。

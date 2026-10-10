@@ -37,6 +37,8 @@ interface OverlayPayload {
   subtitleError?: string
   subtitleNotice?: string
   subtitleSource?: string
+  subtitleLiveText?: string
+  subtitleLiveRecognition?: boolean
   micSourceMode?: 'auto' | 'fixed' | null
   micSourceLabel?: string
   /** 界面语言，由主窗随每次更新下发（见 OverlayCommonPayload.locale）。 */
@@ -48,35 +50,138 @@ interface OverlayPayload {
 
 const DEFAULT_BAR_COUNT = 24
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
+const SUBTITLE_STATUS_CLASS = 'mb-2 text-[11px] font-medium tracking-wide'
+const LIVE_STATUS_CLASS = 'max-h-[48px] overflow-hidden break-words text-[11px] font-medium leading-4 tracking-wide line-clamp-3 [@media(max-height:299px)_and_(min-height:255px)]:max-h-[32px] [@media(max-height:299px)_and_(min-height:255px)]:line-clamp-2 [@media(max-height:254px)]:max-h-[12px] [@media(max-height:254px)]:leading-3 [@media(max-height:254px)]:line-clamp-1'
+const LIVE_STATUS_ERROR_CLASS = ' [@media(max-height:360px)_and_(min-height:261px)]:max-h-[32px] [@media(max-height:360px)_and_(min-height:261px)]:line-clamp-2'
+const SUBTITLE_ERROR_CLASS = 'text-base leading-6 text-amber-300'
+const LIVE_SUBTITLE_ERROR_CLASS = 'max-h-[72px] overflow-hidden break-words text-base leading-6 text-amber-300 line-clamp-3 [@media(max-height:260px)]:max-h-[40px] [@media(max-height:260px)]:leading-5 [@media(max-height:260px)]:line-clamp-2'
+const SOURCE_CAPTION_BASE_CLASS = 'mb-1.5 whitespace-pre-wrap break-words text-sm leading-5'
+const LIVE_SOURCE_CAPTION_CLASS = ' max-h-[40px] overflow-hidden line-clamp-2 [@media(max-height:399px)]:mb-1 [@media(max-height:399px)]:max-h-[16px] [@media(max-height:399px)]:leading-4 [@media(max-height:399px)]:line-clamp-1'
+const BATCH_SOURCE_CAPTION_CLASS = ' line-clamp-3'
+const TRANSLATION_CAPTION_BASE_CLASS = 'whitespace-pre-wrap break-words text-xl font-medium leading-8'
+const LIVE_TRANSLATION_CAPTION_CLASS = ' max-h-[64px] overflow-hidden line-clamp-2 [@media(max-height:399px)]:max-h-[24px] [@media(max-height:399px)]:leading-6 [@media(max-height:399px)]:line-clamp-1'
+const PLACEHOLDER_CAPTION_BASE_CLASS = 'text-xl font-medium leading-8'
+const LIVE_PLACEHOLDER_CAPTION_CLASS = ' max-h-[64px] overflow-hidden [@media(max-height:399px)]:leading-6'
+const LIVE_OVERLAY_CONTENT_CLASS = 'pointer-events-none flex h-[384px] max-h-[calc(100vh-16px)] w-full max-w-[700px] flex-col items-center justify-end gap-2 overflow-hidden'
+const BATCH_OVERLAY_CONTENT_CLASS = 'pointer-events-none w-full max-w-[700px] rounded-2xl border px-6 py-4 text-center'
+const LIVE_ORIGINAL_REGION_CLASS = 'h-[120px] max-h-[30vh] w-full max-w-[700px] shrink-0 rounded-2xl border px-6 py-3 text-center'
+const LIVE_ORIGINAL_TEXT_CLASS = 'h-[72px] max-h-[calc(30vh-48px)] overflow-hidden break-words whitespace-pre-wrap text-left text-sm leading-6 line-clamp-3 [@media(max-height:399px)]:line-clamp-1 [@media(max-height:360px)_and_(min-height:261px)]:leading-4 [@media(max-height:260px)]:leading-3'
+const LIVE_SETTLED_REGION_CLASS = 'min-h-0 max-h-[calc(70vh-24px)] w-full shrink-0 overflow-hidden rounded-2xl border px-6 py-4 text-center'
 
 /**
  * `source` is the recognized original of dual-subtitle mode. It sits above the translation so it stays put while the
  * translation arrives below it; until then the translation line is a muted placeholder that holds its space.
  */
-export function SubtitleCaption({ text, source, status, notice, error }: { text: string; source: string; status: string; notice: string; error: string }) {
+export function SubtitleCaption({ text, source, status, notice, error, liveText = '', liveRecognition = false }: {
+  text: string
+  source: string
+  status: string
+  notice: string
+  error: string
+  liveText?: string
+  liveRecognition?: boolean
+}) {
+  const t = useT()
   const label = notice || status
   // With nothing to say the bubble is invisible but keeps its size: the overlay's render probe looks for
   // [data-overlay-content] with a non-zero box and would treat a missing one as a broken window.
   const idle = !label && !text && !source && !error
+  const statusMarkup = label && (
+    <p
+      className={SUBTITLE_STATUS_CLASS}
+      style={{ color: 'var(--overlay-text-muted)' }}
+    >
+      {label}
+    </p>
+  )
+  const liveStatusClass = error ? `${LIVE_STATUS_CLASS}${LIVE_STATUS_ERROR_CLASS}` : LIVE_STATUS_CLASS
+  const liveStatusMarkup = (
+    <>
+      {notice && (
+        <p className={`mb-1 ${liveStatusClass}`} style={{ color: 'var(--overlay-text-muted)' }}>
+          {notice}
+        </p>
+      )}
+      {status && (
+        <p className={`mb-2 ${liveStatusClass}`} style={{ color: 'var(--overlay-text-muted)' }}>
+          {status}
+        </p>
+      )}
+    </>
+  )
+  const captionMarkup = error ? (
+    <p
+      role="alert"
+      className={liveRecognition
+        ? LIVE_SUBTITLE_ERROR_CLASS
+        : SUBTITLE_ERROR_CLASS}
+    >
+      {error}
+    </p>
+  ) : (
+    <>
+      {source && (
+        <p
+          className={`${SOURCE_CAPTION_BASE_CLASS}${liveRecognition ? LIVE_SOURCE_CAPTION_CLASS : BATCH_SOURCE_CAPTION_CLASS}`}
+          style={{ color: 'var(--overlay-text-muted)' }}
+        >
+          {source}
+        </p>
+      )}
+      {text ? (
+        <p className={`${TRANSLATION_CAPTION_BASE_CLASS}${liveRecognition ? LIVE_TRANSLATION_CAPTION_CLASS : ''}`}>{text}</p>
+      ) : source ? (
+        <p
+          aria-hidden
+          className={`${PLACEHOLDER_CAPTION_BASE_CLASS}${liveRecognition ? LIVE_PLACEHOLDER_CAPTION_CLASS : ''}`}
+          style={{ color: 'var(--overlay-text-muted)' }}
+        >…</p>
+      ) : null}
+    </>
+  )
+  const cardStyle = idle
+    ? { background: 'transparent', color: 'var(--overlay-text)', borderColor: 'transparent' }
+    : { background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }
+
+  const liveSettledVisible = Boolean(label || text || source || error)
+
   return (
     <div
       data-overlay-content
-      className="pointer-events-none w-full max-w-[700px] rounded-2xl border px-6 py-4 text-center"
-      style={idle
-        ? { background: 'transparent', color: 'var(--overlay-text)', borderColor: 'transparent' }
-        : { background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }}
+      className={liveRecognition
+        ? LIVE_OVERLAY_CONTENT_CLASS
+        : BATCH_OVERLAY_CONTENT_CLASS}
+      style={liveRecognition ? undefined : cardStyle}
     >
-      {label && <p className="mb-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>{label}</p>}
-      {error ? (
-        <p role="alert" className="text-base leading-6 text-amber-300">{error}</p>
+      {liveRecognition && liveText && (
+        <div
+          data-live-original
+          className={LIVE_ORIGINAL_REGION_CLASS}
+          style={{ background: 'var(--overlay-bg)', color: 'var(--overlay-text)', borderColor: 'var(--overlay-border)' }}
+        >
+          <p className="mb-1 whitespace-nowrap text-[11px] font-medium tracking-wide" style={{ color: 'var(--overlay-text-muted)' }}>
+            {t('systemAudio.liveOriginalLabel')}
+          </p>
+          <p className={LIVE_ORIGINAL_TEXT_CLASS}>
+            {liveText}
+          </p>
+        </div>
+      )}
+      {liveRecognition ? (
+        liveSettledVisible ? (
+          <div
+            data-overlay-settled
+            className={LIVE_SETTLED_REGION_CLASS}
+            style={cardStyle}
+          >
+            {liveStatusMarkup}
+            {captionMarkup}
+          </div>
+        ) : null
       ) : (
         <>
-          {source && <p className="mb-1.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-5" style={{ color: 'var(--overlay-text-muted)' }}>{source}</p>}
-          {text ? (
-            <p className="whitespace-pre-wrap break-words text-xl font-medium leading-8">{text}</p>
-          ) : source ? (
-            <p aria-hidden className="text-xl font-medium leading-8" style={{ color: 'var(--overlay-text-muted)' }}>…</p>
-          ) : null}
+          {statusMarkup}
+          {captionMarkup}
         </>
       )}
     </div>
@@ -197,6 +302,8 @@ export default function Overlay() {
   const [subtitleError, setSubtitleError] = useState('')
   const [subtitleNotice, setSubtitleNotice] = useState('')
   const [subtitleSource, setSubtitleSource] = useState('')
+  const [subtitleLiveText, setSubtitleLiveText] = useState('')
+  const [subtitleLiveRecognition, setSubtitleLiveRecognition] = useState(false)
   const [copied, setCopied] = useState(false)
   const [thinkingDuration, setThinkingDuration] = useState(0)
   const [warning, setWarning] = useState('')
@@ -314,6 +421,8 @@ export default function Overlay() {
       if (typeof payload.subtitleError === 'string') setSubtitleError(payload.subtitleError)
       if (typeof payload.subtitleNotice === 'string') setSubtitleNotice(payload.subtitleNotice)
       if (typeof payload.subtitleSource === 'string') setSubtitleSource(payload.subtitleSource)
+      setSubtitleLiveText(typeof payload.subtitleLiveText === 'string' ? payload.subtitleLiveText : '')
+      setSubtitleLiveRecognition(payload.subtitleLiveRecognition === true)
       if (typeof payload.streaming === 'boolean') setStreamingOn(payload.streaming)
       if (payload.micSourceMode === 'auto' || payload.micSourceMode === 'fixed' || payload.micSourceMode === null) {
         setMicSourceMode(payload.micSourceMode)
@@ -478,7 +587,15 @@ export default function Overlay() {
           }}
         />
       ) : state === 'subtitles' ? (
-        <SubtitleCaption text={subtitleText} source={subtitleSource} status={subtitleStatus} notice={subtitleNotice} error={subtitleError} />
+        <SubtitleCaption
+          text={subtitleText}
+          source={subtitleSource}
+          status={subtitleStatus}
+          notice={subtitleNotice}
+          error={subtitleError}
+          liveText={subtitleLiveText}
+          liveRecognition={subtitleLiveRecognition}
+        />
       ) : state === 'fallback' ? (
         <div
           data-overlay-content

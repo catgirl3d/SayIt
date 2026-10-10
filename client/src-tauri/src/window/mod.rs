@@ -17,6 +17,7 @@ const OVERLAY_FAILURE_WIDTH: f64 = 480.0;
 const OVERLAY_FAILURE_HEIGHT: f64 = 176.0;
 const OVERLAY_SUBTITLE_WIDTH: f64 = 720.0;
 const OVERLAY_SUBTITLE_HEIGHT: f64 = 260.0;
+const OVERLAY_LIVE_SUBTITLE_HEIGHT: f64 = 400.0;
 // 流式实时显示：录音气泡 + 波形条堆叠，需要更宽更高的窗口
 const OVERLAY_STREAMING_WIDTH: f64 = 480.0;
 const OVERLAY_STREAMING_HEIGHT: f64 = 200.0;
@@ -48,6 +49,7 @@ enum OverlayLayout {
     Fallback,
     Failure,
     Subtitles,
+    LiveSubtitles,
     /// 流式实时显示：气泡 + 波形，窗口更大且非交互
     Streaming,
     StreamingWithMicHint,
@@ -70,6 +72,7 @@ impl OverlayLayout {
             OverlayLayout::Fallback => (OVERLAY_FALLBACK_WIDTH, OVERLAY_FALLBACK_HEIGHT),
             OverlayLayout::Failure => (OVERLAY_FAILURE_WIDTH, OVERLAY_FAILURE_HEIGHT),
             OverlayLayout::Subtitles => (OVERLAY_SUBTITLE_WIDTH, OVERLAY_SUBTITLE_HEIGHT),
+            OverlayLayout::LiveSubtitles => (OVERLAY_SUBTITLE_WIDTH, OVERLAY_LIVE_SUBTITLE_HEIGHT),
             OverlayLayout::Streaming => (OVERLAY_STREAMING_WIDTH, OVERLAY_STREAMING_HEIGHT),
             OverlayLayout::StreamingWithMicHint => (
                 OVERLAY_STREAMING_WIDTH,
@@ -445,6 +448,10 @@ impl WindowState {
             OverlayLayout::Fallback
         } else if state == Some("failure") {
             OverlayLayout::Failure
+        } else if state == Some("subtitles")
+            && data.get("subtitleLiveRecognition").and_then(Value::as_bool) == Some(true)
+        {
+            OverlayLayout::LiveSubtitles
         } else if state == Some("subtitles") {
             OverlayLayout::Subtitles
         } else if state == Some("listening") && streaming_on && mic_hint_on {
@@ -1087,6 +1094,62 @@ mod tests {
         assert!(width >= 640.0);
         assert!(height >= 180.0);
         assert!(!layout.is_interactive());
+    }
+
+    #[test]
+    fn live_subtitle_geometry_is_selected_by_flag_and_ignores_payload_text() {
+        let state = WindowState::new();
+
+        state.apply_payload_layout(&json!({
+            "state": "subtitles",
+            "subtitleLiveRecognition": true,
+            "subtitleLiveText": ""
+        }));
+        let empty_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(empty_layout.dimensions(360.0), (720.0, 400.0));
+
+        state.apply_payload_layout(&json!({
+            "state": "subtitles",
+            "subtitleLiveRecognition": true,
+            "subtitleLiveText": "Current original",
+            "subtitleSource": "Settled original",
+            "subtitleText": "Settled translation",
+            "subtitleStatus": "Listening"
+        }));
+        let populated_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(populated_layout, empty_layout);
+        assert_eq!(populated_layout.dimensions(360.0), (720.0, 400.0));
+
+        state.apply_payload_layout(&json!({
+            "state": "subtitles",
+            "subtitleLiveText": "Text alone must not select live geometry"
+        }));
+        let absent_flag_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(absent_flag_layout.dimensions(360.0), (720.0, 260.0));
+
+        state.apply_payload_layout(&json!({
+            "state": "subtitles",
+            "subtitleLiveRecognition": false,
+            "subtitleLiveText": "Text alone must not select live geometry"
+        }));
+        let false_flag_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(false_flag_layout.dimensions(360.0), (720.0, 260.0));
+
+        state.apply_payload_layout(&json!({
+            "state": "subtitles",
+            "subtitleLiveRecognition": "true",
+            "subtitleLiveText": "A non-boolean flag must not select live geometry"
+        }));
+        let non_boolean_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(non_boolean_layout.dimensions(360.0), (720.0, 260.0));
+
+        state.apply_payload_layout(&json!({
+            "state": "listening",
+            "subtitleLiveRecognition": true,
+            "subtitleLiveText": "Live subtitle geometry is only for subtitle payloads"
+        }));
+        let non_subtitle_layout = state.overlay_layout.lock().unwrap().clone();
+        assert_eq!(non_subtitle_layout.dimensions(360.0), (360.0, 56.0));
     }
 }
 

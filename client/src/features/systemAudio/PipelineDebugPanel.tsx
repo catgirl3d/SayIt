@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import CopyButton from '@/components/CopyButton'
 import { Select, type SelectOption } from '@/components/ui/select'
 import { useT } from '@/i18n/useT'
+import { t as translate } from '@/i18n'
 import {
   clearPipelineTrace,
   countCloseReasons,
@@ -56,7 +57,7 @@ export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, 
     'avg LLM ms', 'avg latency ms', 'latency p90 ms', 'latency max ms',
   ]
   const runHeader = [
-    'time', 'mode', 'speech ms', 'cut', 'queue ms', 'ASR ms', 'LLM ms', 'overlay ms', 'latency ms', 'status', 'ASR / caption chars',
+    'time', 'mode', translate('systemAudio.debug.recognition'), 'speech ms', 'cut', 'queue ms', 'ASR ms', 'LLM ms', 'overlay ms', 'latency ms', 'status', 'ASR / caption chars',
   ]
   return [
     tsvRow(summaryHeader),
@@ -77,6 +78,7 @@ export function buildPipelineTsv(summary: ReturnType<typeof summarizeByEngine>, 
     ...runs.map((run) => tsvRow([
       formatTime(run.startedAt),
       withAsrOnly(run.mode, run.asrOnly, asrOnlyMark),
+      translate(`systemAudio.debug.${run.recognitionKind}`),
       formatMs(run.speechMs),
       run.closeReason,
       formatMs(run.queueMs),
@@ -270,11 +272,12 @@ export default function PipelineDebugPanel() {
         <section className="space-y-2">
           <h3 className="text-xs font-semibold">{t('systemAudio.debug.runsList')}</h3>
           <div className="max-h-80 overflow-y-auto overflow-x-auto">
-            <table className="w-full min-w-[1020px] text-left text-xs">
+            <table className="w-full min-w-[1100px] text-left text-xs">
               <thead className="text-muted-foreground">
                 <tr>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.time')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.mode')}</th>
+                  <th className="px-2 py-1 font-medium">{t('systemAudio.debug.recognition')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.speech')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.cut')}</th>
                   <th className="px-2 py-1 font-medium">{t('systemAudio.debug.queue')}</th>
@@ -288,11 +291,12 @@ export default function PipelineDebugPanel() {
               </thead>
               <tbody>
                 {recentRuns.length === 0 ? (
-                  <tr><td colSpan={11} className="px-2 py-2 text-muted-foreground">{t('systemAudio.debug.empty')}</td></tr>
+                  <tr><td colSpan={12} className="px-2 py-2 text-muted-foreground">{t('systemAudio.debug.empty')}</td></tr>
                 ) : recentRuns.map((run) => (
                   <tr key={run.id} className="border-t">
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatTime(run.startedAt)}</td>
                     <td className="px-2 py-1.5">{withAsrOnly(formatMode(run.mode, t), run.asrOnly, t('systemAudio.debug.asrOnlyMark'))}</td>
+                    <td className="px-2 py-1.5">{t(`systemAudio.debug.${run.recognitionKind}`)}</td>
                     <td className="px-2 py-1.5 font-mono tabular-nums">{formatMs(run.speechMs)}</td>
                     <td className={`px-2 py-1.5 ${isProblemCloseReason(run.closeReason) ? WARNING_CLASS : ''}`}>{t(`systemAudio.debug.close.${run.closeReason}`)}</td>
                     <td className={`px-2 py-1.5 font-mono tabular-nums ${run.queueMs !== null && run.queueMs > 1000 ? WARNING_CLASS : ''}`}>{formatMs(run.queueMs)}</td>

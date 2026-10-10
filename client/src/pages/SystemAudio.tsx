@@ -65,10 +65,14 @@ export default function SystemAudio() {
   const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
   const [asrOnlyTest, setAsrOnlyTest] = useState(false)
   const [dualSubtitles, setDualSubtitles] = useState(false)
+  const [liveRecognitionEnabled, setLiveRecognitionEnabled] = useState(false)
+  const [liveRecognitionReady, setLiveRecognitionReady] = useState(false)
+  const [liveRecognitionError, setLiveRecognitionError] = useState('')
   const locale = useLocale()
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
   const active = snapshot.state !== 'idle'
+  const error = snapshot.error || loadError || liveRecognitionError
   const mode = getWorkMode()
   const deviceOptions: SelectOption[] = [
     { value: '', label: t('systemAudio.defaultOutput') },
@@ -90,6 +94,13 @@ export default function SystemAudio() {
       getSetting<boolean>('systemAudio.asrOnlyTest', false),
       getSystemAudioMaxSegmentSeconds(),
       getSystemAudioDualSubtitles(),
+      getSetting<boolean>('systemAudio.liveRecognitionEnabled', false).then((savedLiveRecognitionEnabled) => {
+        if (!disposed) {
+          setLiveRecognitionEnabled(savedLiveRecognitionEnabled)
+          setLiveRecognitionReady(true)
+        }
+        return savedLiveRecognitionEnabled
+      }),
     ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds, savedDualSubtitles]) => {
       if (disposed) return
       setDevices(outputs)
@@ -212,6 +223,27 @@ export default function SystemAudio() {
               <span>{t('duration.seconds', { count: MAX_SEGMENT_SECONDS })}</span>
             </div>
             <p className="text-xs text-muted-foreground">{t('systemAudio.segmentLengthHint')}</p>
+            {liveRecognitionEnabled && <p className="text-xs text-muted-foreground">{t('systemAudio.liveTargetHelp')}</p>}
+          </div>
+          <div className="space-y-1">
+            <Switch
+              checked={liveRecognitionEnabled}
+              onChange={() => {
+                if (!liveRecognitionReady || active || pending) return
+                const enabled = !liveRecognitionEnabled
+                setPending(true)
+                void setSetting('systemAudio.liveRecognitionEnabled', enabled).then(() => {
+                  setLiveRecognitionEnabled(enabled)
+                  setLiveRecognitionError('')
+                }).catch(() => {
+                  setLiveRecognitionError(t('systemAudio.captureFailed'))
+                }).finally(() => { setPending(false) })
+              }}
+              label={t('systemAudio.liveRecognitionLabel')}
+              disabled={!liveRecognitionReady || active || pending}
+            />
+            <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionHelp')}</p>
+            <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionUnsupported')}</p>
           </div>
           <div className="space-y-1">
             <Switch
@@ -259,9 +291,15 @@ export default function SystemAudio() {
             </div>
             <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
           </div>
-          {(snapshot.error || loadError) && <p role="alert" className="text-sm leading-6 text-destructive">{snapshot.error || loadError}</p>}
+          {error && <p role="alert" className="text-sm leading-6 text-destructive">{error}</p>}
           {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
           <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
+          {snapshot.liveRecognition && snapshot.liveOriginal && (
+            <div aria-live="polite" className="min-w-0 space-y-1 rounded-lg border-l-2 border-primary/40 bg-secondary/50 p-4">
+              <p className="text-xs font-medium text-muted-foreground">{t('systemAudio.liveOriginalLabel')}</p>
+              <p className="whitespace-pre-wrap break-words text-sm leading-6">{snapshot.liveOriginal}</p>
+            </div>
+          )}
           {(snapshot.caption || snapshot.source) && (
             <div aria-live="polite" className="space-y-1 rounded-lg bg-secondary p-4">
               {snapshot.source && <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{snapshot.source}</p>}

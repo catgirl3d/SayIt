@@ -81,6 +81,7 @@ export const DEFAULTS: Record<string, unknown> = {
   'systemAudio.sourceLanguage': 'auto',
   'systemAudio.maxSegmentSec': 6,
   'systemAudio.dualSubtitles': false,
+  'systemAudio.liveRecognitionEnabled': false,
   'systemAudio.debugPipeline': false,
   'systemAudio.asrOnlyTest': false,
   // systemAudio.targetLanguage intentionally has no static default: it follows the interface locale (see SystemAudio.tsx).

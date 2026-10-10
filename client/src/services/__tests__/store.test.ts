@@ -8,7 +8,7 @@ const bridge = vi.hoisted(() => ({
 
 vi.mock('../bridge', () => bridge)
 
-import { clearStats, estimateTypingTimeSec, recordStats } from '../store'
+import { clearStats, estimateTypingTimeSec, getSetting, recordStats, setSetting } from '../store'
 
 describe('recordStats', () => {
   beforeEach(() => {
@@ -39,6 +39,29 @@ describe('clearStats', () => {
     expect(bridge.storeSet).toHaveBeenCalledWith('stats', { totalDurationSec: 0, totalChars: 0 })
     expect(bridge.storeGet).not.toHaveBeenCalled()
     expect(bridge.recordStatsDelta).not.toHaveBeenCalled()
+  })
+})
+
+describe('system-audio live recognition setting storage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('loads the saved opt-in and defaults missing values to off', async () => {
+    bridge.storeGet.mockResolvedValueOnce(true).mockResolvedValueOnce(null)
+
+    await expect(getSetting<boolean>('systemAudio.liveRecognitionEnabled')).resolves.toBe(true)
+    await expect(getSetting<boolean>('systemAudio.liveRecognitionEnabled')).resolves.toBe(false)
+
+    expect(bridge.storeGet).toHaveBeenNthCalledWith(1, 'systemAudio.liveRecognitionEnabled')
+    expect(bridge.storeGet).toHaveBeenNthCalledWith(2, 'systemAudio.liveRecognitionEnabled')
+  })
+
+  it('persists only the dedicated system-audio opt-in key', async () => {
+    await setSetting('systemAudio.liveRecognitionEnabled', true)
+
+    expect(bridge.storeSet).toHaveBeenCalledTimes(1)
+    expect(bridge.storeSet).toHaveBeenCalledWith('systemAudio.liveRecognitionEnabled', true)
   })
 })
 

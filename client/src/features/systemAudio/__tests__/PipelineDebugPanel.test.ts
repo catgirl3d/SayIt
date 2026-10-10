@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { setLocale, t } from '@/i18n'
 import { createRun } from '@/services/__tests__/pipelineRunFactory'
 import { buildPipelineTsv, filterRuns } from '../PipelineDebugPanel'
 
@@ -46,11 +47,12 @@ describe('pipeline debug panel', () => {
     expect(lines[0]).toBe('engine/model\tOK / total runs\tavg speech ms\tavg ASR ms\tASR p90 ms\tASR max ms\tavg LLM ms\tavg latency ms\tlatency p90 ms\tlatency max ms')
     expect(lines[1]).toBe('local · sensevoice / small\t1 / 1\t100\t20\t20\t20\t30\t40\t40\t40')
     expect(lines[2]).toBe('')
-    expect(lines[3]).toBe('time\tmode\tspeech ms\tcut\tqueue ms\tASR ms\tLLM ms\toverlay ms\tlatency ms\tstatus\tASR / caption chars')
+    expect(lines[3]).toBe('time\tmode\tRecognition\tspeech ms\tcut\tqueue ms\tASR ms\tLLM ms\toverlay ms\tlatency ms\tstatus\tASR / caption chars')
     expect(lines.slice(4)).toHaveLength(2)
-    expect(lines[4].split('\t')).toHaveLength(11)
-    expect(lines[4].split('\t')[3]).toBe('silence')
-    expect(lines[5].split('\t')[3]).toBe('cap')
+    expect(lines[4].split('\t')).toHaveLength(12)
+    expect(lines[4].split('\t')[2]).toBe('Finished clip')
+    expect(lines[4].split('\t')[4]).toBe('silence')
+    expect(lines[5].split('\t')[4]).toBe('cap')
     expect(lines[4].endsWith('\t15 / 12')).toBe(true)
     expect(tsv).not.toContain('Original speech')
   })
@@ -78,5 +80,30 @@ describe('pipeline debug panel', () => {
 
     expect(lines[1]).toContain('local · sensevoice / small · ASR-only')
     expect(lines[4].split('\t')[1]).toBe('local · ASR-only')
+  })
+
+  it('exports live recognition as distinct from finished-clip ASR', () => {
+    const liveRun = Object.assign(createRun({ id: 7, status: 'ok' }), { recognitionKind: 'live' as const })
+    const lines = buildPipelineTsv([], [liveRun], 'ASR-only').split('\n')
+
+    expect(lines[2]).toContain(t('systemAudio.debug.recognition'))
+    expect(lines[3].split('\t')).toContain(t('systemAudio.debug.live'))
+  })
+
+  it('localizes the recognition mode header and values in the TSV export', () => {
+    const runs = [
+      Object.assign(createRun({ id: 8, status: 'ok' }), { recognitionKind: 'live' as const }),
+      Object.assign(createRun({ id: 9, status: 'ok' }), { recognitionKind: 'finished' as const }),
+    ]
+    setLocale('uk')
+    try {
+      const lines = buildPipelineTsv([], runs, t('systemAudio.debug.asrOnlyMark')).split('\n')
+
+      expect(lines[2]).toContain(t('systemAudio.debug.recognition'))
+      expect(lines[3].split('\t')).toContain(t('systemAudio.debug.live'))
+      expect(lines[4].split('\t')).toContain(t('systemAudio.debug.finished'))
+    } finally {
+      setLocale('en')
+    }
   })
 })
