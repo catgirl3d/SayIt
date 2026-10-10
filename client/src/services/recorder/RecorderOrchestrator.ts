@@ -404,17 +404,18 @@ export class RecorderOrchestrator {
 
   async releaseSystemAudio(): Promise<void> {
     if (!this.subtitleModeActive) return
-    // Exclusivity ends before the dictation provider is reconnected: a failed reconnect must not
-    // keep microphone dictation and engine switching blocked by a subtitle session that has
-    // already stopped. ensureConnection() retries the connection in the background.
-    this.subtitleModeActive = false
+    let reconnectFailed = false
     try {
       await this.refreshRuntimeSettings()
       await this.provider.connect(this.buildProviderCallbacks())
     } catch (error) {
       addRuntimeEvent('warn', 'recorder', 'Dictation provider reconnect after subtitles failed', { error: String(error) })
-      this.ensureConnection()
+      reconnectFailed = true
+    } finally {
+      // Keep ownership through refresh and reconnect; neither can affect a newer subtitle session.
+      this.subtitleModeActive = false
     }
+    if (reconnectFailed) this.ensureConnection()
   }
 
   async init() {

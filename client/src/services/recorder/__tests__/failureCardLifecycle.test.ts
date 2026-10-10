@@ -1148,4 +1148,85 @@ describe('exclusive system-audio ownership', () => {
       level === 'warn' && String(message).includes('reconnect after subtitles failed'))).toBe(true)
     recorder.cleanup()
   })
+
+  it('keeps subtitle ownership until settings refresh and reconnect have completed', async () => {
+    const recorder = new RecorderOrchestrator()
+    const pendingRefresh = deferred<string>()
+    harness.settings.set('selectedMic', pendingRefresh.promise)
+    await recorder.acquireSystemAudio()
+    const provider = await switchProvider('cloud_api')
+    const connect = vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+
+    const staleRelease = recorder.releaseSystemAudio()
+    await flushMicrotasks()
+    await expect(recorder.acquireSystemAudio()).rejects.toThrow(t('systemAudio.busy'))
+    expect(connect).not.toHaveBeenCalled()
+
+    pendingRefresh.resolve('previous-device')
+    await staleRelease
+
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(Reflect.get(recorder, 'cachedMicId')).toBe('previous-device')
+    await recorder.acquireSystemAudio()
+    harness.settings.set('selectedMic', 'device-1')
+    await recorder.releaseSystemAudio()
+    expect(Reflect.get(recorder, 'cachedMicId')).toBe('device-1')
+    recorder.cleanup()
+  })
+
+  it('blocks a new subtitle acquire while dictation reconnect is still pending', async () => {
+    const recorder = new RecorderOrchestrator()
+    await recorder.acquireSystemAudio()
+    const provider = await switchProvider('cloud_api')
+    const reconnect = deferred<void>()
+    vi.spyOn(provider, 'connect').mockReturnValue(reconnect.promise)
+    const releasing = recorder.releaseSystemAudio()
+    await flushMicrotasks()
+    try {
+      await expect(recorder.acquireSystemAudio()).rejects.toThrow(t('systemAudio.busy'))
+    } finally {
+      reconnect.resolve()
+      await releasing
+      recorder.cleanup()
+    }
+  })
+
+  it('releases ownership after a failed refresh and retries dictation without admitting overlap', async () => {
+    const recorder = new RecorderOrchestrator()
+    const pendingRefresh = deferred<string>()
+    harness.settings.set('selectedMic', pendingRefresh.promise)
+    await recorder.acquireSystemAudio()
+    const provider = await switchProvider('cloud_api')
+    const connect = vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    vi.spyOn(provider, 'isReady').mockReturnValue(false)
+
+    const staleRelease = recorder.releaseSystemAudio()
+    await flushMicrotasks()
+    await expect(recorder.acquireSystemAudio()).rejects.toThrow(t('systemAudio.busy'))
+    expect(connect).not.toHaveBeenCalled()
+
+    harness.runtimeEvents.mockClear()
+    pendingRefresh.reject(new Error('stale settings refresh failed'))
+    await staleRelease
+    await flushMicrotasks()
+
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(harness.runtimeEvents.mock.calls.some(([, , message]) =>
+      String(message).includes('reconnect after subtitles failed'))).toBe(true)
+    expect(Reflect.get(recorder, 'subtitleModeActive')).toBe(false)
+    recorder.cleanup()
+  })
+
+  it('reconnects dictation once after a normal subtitle release and ignores duplicate releases', async () => {
+    const recorder = new RecorderOrchestrator()
+    await recorder.acquireSystemAudio()
+    const provider = await switchProvider('cloud_api')
+    const connect = vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+
+    await recorder.releaseSystemAudio()
+    await recorder.releaseSystemAudio()
+
+    expect(connect).toHaveBeenCalledTimes(1)
+    recorder.cleanup()
+  })
 })
