@@ -26,8 +26,17 @@ import { SystemAudioSession } from '../systemAudio'
 import { LocalProvider } from '../transcription/LocalProvider'
 import { CloudAPIProvider } from '../transcription/CloudAPIProvider'
 import { ServerProvider } from '../transcription/ServerProvider'
+import { addRuntimeEvent } from '../debugLog'
+import { DEEPGRAM_KEYTERM_LIMIT } from '../transcription/types'
 import { t } from '@/i18n'
-import type { StartOptions, TranscriptionCallbacks, TranscriptionProvider } from '../transcription/types'
+import type {
+  LiveAsrCallbacks,
+  LiveAsrResult,
+  LiveAsrSession,
+  StartOptions,
+  TranscriptionCallbacks,
+  TranscriptionProvider,
+} from '../transcription/types'
 import type { SubtitleOverlayPayload } from '../recorder/types'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { describeProviderError } from '@/lib/errorMessages'
@@ -71,12 +80,91 @@ function createTestProvider(
   }
 }
 
+type LiveTestProvider = TranscriptionProvider & {
+  openLive: NonNullable<TranscriptionProvider['openLive']>
+  closeLive: NonNullable<TranscriptionProvider['closeLive']>
+}
+
+interface LiveProviderHarness {
+  provider: LiveTestProvider
+  callbacks: LiveAsrCallbacks[]
+  sessions: LiveAsrSession[]
+  sentAudio: Uint8Array[][]
+  order: string[]
+}
+
+function createLiveProviderHarness(options: {
+  open?: (startOptions: StartOptions, callbacks: LiveAsrCallbacks, live: LiveAsrSession) => Promise<LiveAsrSession | null>
+  close?: () => Promise<void>
+} = {}): LiveProviderHarness {
+  const callbacks: LiveAsrCallbacks[] = []
+  const sessions: LiveAsrSession[] = []
+  const sentAudio: Uint8Array[][] = []
+  const order: string[] = []
+  let currentSession: LiveAsrSession | undefined
+  const provider: LiveTestProvider = {
+    ...createTestProvider(() => {}),
+    mode: 'cloud_api',
+    start: vi.fn(() => true),
+    sendAudio: vi.fn(),
+    stop: vi.fn(() => true),
+    connect: vi.fn(async (value) => {
+      order.push('connect')
+      value.onReady?.({ asr: true, llm: true })
+    }),
+    disconnect: vi.fn(() => { order.push('disconnect') }),
+    openLive: vi.fn(async (startOptions, liveCallbacks) => {
+      order.push('openLive')
+      callbacks.push(liveCallbacks)
+      const audio: Uint8Array[] = []
+      const live: LiveAsrSession = {
+        sessionId: `live-${callbacks.length}`,
+        sendAudio: vi.fn((buffer) => { audio.push(new Uint8Array(buffer.slice(0))) }),
+        finalize: vi.fn(async () => { order.push('finalize') }),
+        close: vi.fn(async () => { order.push('live.close'); await options.close?.() }),
+      }
+      sessions.push(live)
+      sentAudio.push(audio)
+      currentSession = live
+      return options.open ? options.open(startOptions, liveCallbacks, live) : live
+    }),
+    closeLive: vi.fn(async () => {
+      order.push('closeLive')
+      await currentSession?.close()
+    }),
+  }
+  return { provider, callbacks, sessions, sentAudio, order }
+}
+
+function liveResult(overrides: Partial<LiveAsrResult> = {}): LiveAsrResult {
+  return {
+    sessionId: 'live-1',
+    resultId: 1,
+    audioStartMs: 0,
+    audioEndMs: 32,
+    text: '',
+    isFinal: false,
+    speechFinal: false,
+    fromFinalize: false,
+    asrEngine: 'deepgram',
+    asrModel: 'nova-3',
+    ...overrides,
+  }
+}
+
+function emitLiveResult(harness: LiveProviderHarness, index: number, overrides: Partial<LiveAsrResult>) {
+  const live = harness.sessions[index]
+  if (!live) throw new Error(`Missing live session ${index}`)
+  harness.callbacks[index]?.onResult(liveResult({ sessionId: live.sessionId, ...overrides }))
+}
+
 let overlay: ReturnType<typeof createOverlayPort>
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
-  return { promise, resolve }
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 
 async function settle() {
@@ -85,6 +173,9 @@ async function settle() {
 
 let session: SystemAudioSession
 let leased = false
+let sourceCaptureEndUnixUs = 0
+let sourceClockOffsetUs = 0
+const sourceFrameSequences = new Map<number, number>()
 
 function enablePipelineDebug() {
   clearPipelineTrace()
@@ -95,14 +186,9 @@ function enablePipelineDebug() {
 function frames(count: number, probability: number, value = 1, sessionId?: number, discontinuity = false) {
   const started = [...native.invoke.mock.calls].reverse().find(([name]) => name === 'start_system_audio_capture')
   const id = sessionId ?? (started?.[1] as { sessionId: number } | undefined)?.sessionId
-  const data = new Int16Array(512).fill(value)
+  if (!id) throw new Error('Missing native capture session ID')
   for (let index = 0; index < count; index++) {
-    native.listeners.get('system-audio-frame')?.({ payload: {
-      sessionId: id,
-      audioB64: uint8ArrayToBase64(new Uint8Array(data.buffer)),
-      speechProbability: probability,
-      discontinuity: discontinuity && index === 0,
-    } })
+    deliverFrame(captureFrame(id, probability, value, discontinuity && index === 0))
   }
 }
 
@@ -128,6 +214,50 @@ function speak() {
   frames(15, 0)
 }
 
+interface CapturedSystemAudioFrame {
+  sessionId: number
+  audioB64: string
+  speechProbability: number
+  discontinuity: boolean
+  frameSequence: number
+  captureStartUnixUs: number
+  captureEndUnixUs: number
+  captureAnchors: Array<{ audioOffsetSamples: number; captureUnixUs: number }>
+}
+
+function captureFrame(sessionId: number, probability: number, value = 1, discontinuity = false): CapturedSystemAudioFrame {
+  sourceCaptureEndUnixUs = Math.max(sourceCaptureEndUnixUs, Date.now() * 1_000 + sourceClockOffsetUs)
+  const captureStartUnixUs = sourceCaptureEndUnixUs
+  sourceCaptureEndUnixUs += 32_000
+  const frameSequence = (sourceFrameSequences.get(sessionId) ?? 0) + 1
+  sourceFrameSequences.set(sessionId, frameSequence)
+  const data = new Int16Array(512).fill(value)
+  return {
+    sessionId,
+    audioB64: uint8ArrayToBase64(new Uint8Array(data.buffer)),
+    speechProbability: probability,
+    discontinuity,
+    frameSequence,
+    captureStartUnixUs,
+    captureEndUnixUs: sourceCaptureEndUnixUs,
+    captureAnchors: [],
+  }
+}
+
+function deliverFrame(frame: CapturedSystemAudioFrame) {
+  native.listeners.get('system-audio-frame')?.({ payload: frame })
+}
+
+function emitLiveIdle(payload: {
+  sessionId: number
+  frameSequence: number
+  lastFrameCaptureEndUnixUs: number
+  lastAudioCaptureEndUnixUs: number
+  confirmedThroughUnixUs: number
+}) {
+  native.listeners.get('system-audio-live-idle')?.({ payload })
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
   setPipelineDebugEnabled(false)
@@ -141,6 +271,9 @@ beforeEach(() => {
   native.settings.set('activePresetId', 'intent')
   native.settings.set('speechInput.language', 'en')
   native.listeners.clear()
+  sourceCaptureEndUnixUs = Date.now() * 1_000
+  sourceClockOffsetUs = 0
+  sourceFrameSequences.clear()
   native.captured.length = 0
   native.transcribeArgs.length = 0
   overlayCalls = []
@@ -1503,6 +1636,7 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().state).toBe('idle')
     expect(leased).toBe(false)
     expect(native.invoke.mock.calls.some(([name]) => name === 'stop_system_audio_capture')).toBe(true)
+    expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
     expect(native.listeners.size).toBe(0)
   })
 
@@ -1523,6 +1657,252 @@ describe('system audio subtitle session', () => {
     pendingUpdate.resolve()
     await stopping
     expect(overlayCalls.map((call) => call.method)).toEqual(['present', 'update', 'update', 'hide'])
+  })
+
+  it('shares one pending Stop and does not resume while recorder release is unfinished', async () => {
+    const pendingRelease = deferred<void>()
+    let releaseCalls = 0
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider(() => {}),
+      acquire: async () => { leased = true },
+      release: async () => { releaseCalls++; await pendingRelease.promise; leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    let settled = false
+    const stopping = session.stop().then(() => { settled = true })
+    await settle()
+    await vi.advanceTimersByTimeAsync(5_001)
+    try {
+      expect(settled).toBe(false)
+      expect(session.getSnapshot()).toMatchObject({ state: 'stopping', error: t('systemAudio.cleanupUnconfirmed') })
+      const resuming = session.resume()
+      const secondStop = session.stop()
+      await settle()
+      expect(releaseCalls).toBe(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(1)
+      expect(leased).toBe(true)
+      pendingRelease.resolve()
+      await Promise.all([stopping, secondStop, resuming])
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    } finally {
+      pendingRelease.resolve()
+      await stopping
+    }
+  })
+
+  it('keeps the lease until the real cloud provider confirms native close', async () => {
+    const pendingSend = deferred<void>()
+    const pendingClose = deferred<void>()
+    const invoke = native.invoke.getMockImplementation()!
+    native.invoke.mockImplementation((name, args) => {
+      if (name === 'deepgram_stream_send') return pendingSend.promise
+      if (name === 'deepgram_stream_close' && args.sessionId) return pendingClose.promise
+      return invoke(name, args)
+    })
+    native.settings.set('systemAudio.liveRecognitionEnabled', true)
+    native.settings.set('cloudAsr.profiles', [{
+      id: 'deepgram', provider: 'deepgram', apiKey: 'test-key', model: 'nova-3',
+      appId: '', console: 'new', otherKey: '', workspaceId: '', omniPrompt: '',
+    }])
+    native.settings.set('cloudAsr.activeProfileId', 'deepgram')
+    const provider = new CloudAPIProvider()
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveRecognition: true })
+    frames(1, 0.9)
+    await settle()
+    let stopped = false
+    const stopping = session.stop().then(() => { stopped = true })
+    try {
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(stopped).toBe(false)
+      expect(leased).toBe(true)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'deepgram_stream_close')).toHaveLength(0)
+      await session.resume()
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'deepgram_stream_open')).toHaveLength(1)
+      pendingSend.resolve()
+      await settle()
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'deepgram_stream_close')).toHaveLength(1)
+      expect(stopped).toBe(false)
+      expect(leased).toBe(true)
+      pendingClose.resolve()
+      await stopping
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    } finally {
+      pendingSend.resolve()
+      pendingClose.resolve()
+      await stopping
+    }
+  })
+
+  it('waits for a hung overlay update and releases the lease once', async () => {
+    const pendingUpdate = deferred<void>()
+    let updateCalls = 0
+    let releaseCalls = 0
+    overlay.update = vi.fn((payload: SubtitleOverlayPayload) => {
+      overlayCalls.push({ method: 'update', payload })
+      return ++updateCalls === 1 ? pendingUpdate.promise : Promise.resolve()
+    })
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider(() => {}),
+      acquire: async () => { leased = true },
+      release: async () => { releaseCalls++; leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+
+    let stopSettled = false
+    const stopping = session.stop().finally(() => { stopSettled = true })
+    await settle()
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(stopSettled).toBe(false)
+    expect(session.getSnapshot().state).toBe('stopping')
+    expect(leased).toBe(true)
+
+    const sameStop = session.stop()
+    pendingUpdate.resolve()
+    await Promise.all([stopping, sameStop])
+    expect(session.getSnapshot().state).toBe('idle')
+    expect(releaseCalls).toBe(1)
+  })
+
+  it('reports an overlay update failure and retries only after that update has finished', async () => {
+    const pendingUpdate = deferred<void>()
+    let updateCalls = 0
+    let releaseCalls = 0
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider(() => {}),
+      acquire: async () => { leased = true },
+      release: async () => { releaseCalls++; leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    overlay.update = vi.fn((payload: SubtitleOverlayPayload) => {
+        overlayCalls.push({ method: 'update', payload })
+        if (++updateCalls === 1) return pendingUpdate.promise
+        return Promise.resolve()
+    })
+
+    const stopping = session.stop()
+    await settle()
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(session.getSnapshot().state).toBe('stopping')
+    pendingUpdate.reject(new Error('new overlay update failed'))
+    await stopping
+
+    expect(session.getSnapshot().state).toBe('error')
+    expect(session.getSnapshot().error).toContain('new overlay update failed')
+    expect(leased).toBe(true)
+    expect(releaseCalls).toBe(0)
+    await session.stop()
+    expect(session.getSnapshot().state).toBe('idle')
+    expect(releaseCalls).toBe(1)
+  })
+
+  it('blocks resume while overlay hide is pending and permits start after confirmed stop', async () => {
+    const pendingHide = deferred<void>()
+    let hideCalls = 0
+    let releaseCalls = 0
+    overlay.hide = vi.fn(() => {
+      overlayCalls.push({ method: 'hide' })
+      return ++hideCalls === 1 ? pendingHide.promise : Promise.resolve()
+    })
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider(() => {}),
+      acquire: async () => { leased = true },
+      release: async () => { releaseCalls++; leased = false },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+
+    let stopSettled = false
+    const stopping = session.stop().finally(() => { stopSettled = true })
+    await settle()
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(stopSettled).toBe(false)
+    expect(session.getSnapshot().state).toBe('stopping')
+
+    await session.resume()
+    expect(session.getSnapshot().state).toBe('stopping')
+    expect(leased).toBe(true)
+    expect(hideCalls).toBe(1)
+    expect(releaseCalls).toBe(0)
+
+    pendingHide.resolve()
+    await stopping
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    expect(session.getSnapshot().state).toBe('listening')
+    expect(leased).toBe(true)
+    await session.stop()
+    expect(session.getSnapshot().state).toBe('idle')
+    expect(releaseCalls).toBe(2)
+  })
+
+  it('retries a hung lease release after its first attempt rejects', async () => {
+    const pendingRelease = deferred<void>()
+    let releaseCalls = 0
+    let successfulReleases = 0
+    session = new SystemAudioSession({
+      getProvider: () => createTestProvider(() => {}),
+      acquire: async () => { leased = true },
+      release: async () => {
+        if (++releaseCalls === 1) await pendingRelease.promise
+        if (leased) {
+          successfulReleases++
+          leased = false
+        }
+      },
+      overlay,
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+
+    let stopSettled = false
+    const stopping = session.stop().finally(() => { stopSettled = true })
+    await settle()
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(stopSettled).toBe(false)
+    expect(session.getSnapshot().state).toBe('stopping')
+    pendingRelease.reject(new Error('first release failed'))
+    await stopping
+    expect(session.getSnapshot().state).toBe('error')
+    expect(leased).toBe(true)
+    await session.stop()
+
+    expect(releaseCalls).toBe(2)
+    expect(successfulReleases).toBe(1)
+    expect(leased).toBe(false)
+    expect(session.getSnapshot().state).toBe('idle')
+  })
+
+  it('allows stop after a failed overlay update was superseded by a successful update', async () => {
+    let updates = 0
+    overlay.update = vi.fn(async (payload: SubtitleOverlayPayload) => {
+      overlayCalls.push({ method: 'update', payload })
+      if (++updates === 1) throw new Error('temporary overlay update failure')
+    })
+    await session.start({ deviceId: '', targetLanguage: 'en' })
+    await settle()
+    expect(updates).toBe(1)
+
+    await session.pause()
+    await settle()
+    expect(updates).toBeGreaterThan(1)
+
+    await session.stop()
+
+    expect(overlayCalls.some((call) => call.method === 'hide')).toBe(true)
+    expect(session.getSnapshot().state).toBe('idle')
+    expect(leased).toBe(false)
   })
 
   it('skips a queued subtitle update when its generation changes before dispatch', async () => {
@@ -1674,6 +2054,27 @@ describe('system audio subtitle session', () => {
     frames(15, 0)
     await settle()
     expect(session.getSnapshot().caption).toBe('Translated speech')
+  })
+
+  it('retries a failed native capture stop before resuming the batch path', async () => {
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    const original = native.invoke.getMockImplementation()!
+    let stopAttempts = 0
+    native.invoke.mockImplementation((name, args) => name === 'stop_system_audio_capture' && ++stopAttempts === 1
+      ? Promise.reject(new Error('temporary native stop failure'))
+      : original(name, args))
+
+    await session.pause()
+    expect(session.getSnapshot().state).toBe('error')
+    expect(session.getSnapshot().error).toContain('temporary native stop failure')
+    expect(leased).toBe(true)
+
+    await session.resume()
+
+    expect(stopAttempts).toBe(2)
+    expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(2)
+    expect(session.getSnapshot().state).toBe('listening')
+    expect(leased).toBe(true)
   })
 
   it('keeps dictation blocked after capture cleanup fails, and can retry that cleanup', async () => {
@@ -2167,6 +2568,1524 @@ describe('system audio subtitle session', () => {
       await settle()
       expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Original speech' })
       expect(session.getSnapshot().captionNotice).toContain('not translated')
+    })
+  })
+
+  describe('live recognition', () => {
+    function useLiveSession(harness: LiveProviderHarness, asrOnly = false) {
+      native.settings.set('systemAudio.liveRecognitionEnabled', true)
+      session = new SystemAudioSession({
+        getProvider: () => harness.provider,
+        acquire: async () => { leased = true },
+        release: async () => { harness.order.push('release'); leased = false },
+        overlay,
+      })
+      return session.start({ deviceId: 'speakers', targetLanguage: asrOnly ? '' : 'ru', asrOnly })
+    }
+
+    it('keeps live recognition opt-in and preserves the finished-clip path when disabled', async () => {
+      const harness = createLiveProviderHarness()
+      session = new SystemAudioSession({
+        getProvider: () => harness.provider,
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+
+      await session.start({ deviceId: 'speakers', targetLanguage: 'ru' })
+      frames(20, 0.9)
+      frames(15, 0)
+      await settle()
+
+      expect(harness.provider.openLive).not.toHaveBeenCalled()
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveOriginal: '', liveRecognition: false })
+      expect(harness.provider.start).toHaveBeenCalledTimes(1)
+    })
+
+    it('uses batch recognition when an opted-in provider reports live as unsupported', async () => {
+      const harness = createLiveProviderHarness({ open: async () => null })
+      await useLiveSession(harness)
+      frames(20, 0.9)
+      frames(15, 0)
+      await settle()
+
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveOriginal: '', liveRecognition: false })
+      expect(harness.provider.start).toHaveBeenCalledTimes(1)
+      const payload = overlayCalls.find((call) => call.method === 'present')?.payload
+      expect(payload).not.toHaveProperty('subtitleLiveRecognition')
+      expect(payload).not.toHaveProperty('subtitleLiveText')
+    })
+
+    it('opens before capture and sends every frame once while interim revisions replace live text', async () => {
+      const harness = createLiveProviderHarness()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation(async (name, args) => {
+        if (name === 'start_system_audio_capture') harness.order.push('start capture')
+        return invoke(name, args)
+      })
+      await useLiveSession(harness)
+      frames(1, 0.9, 31)
+      frames(1, 0, 32)
+      emitLiveResult(harness, 0, { resultId: 1, text: 'First wording', audioEndMs: 32 })
+      emitLiveResult(harness, 0, { resultId: 2, text: 'Revised wording', audioEndMs: 64 })
+      emitLiveResult(harness, 0, { resultId: 4, text: 'Latest wording', audioEndMs: 64 })
+      emitLiveResult(harness, 0, { resultId: 3, text: 'Delayed unseen result', audioEndMs: 64 })
+      await settle()
+
+      expect(harness.order.indexOf('openLive')).toBeLessThan(harness.order.findIndex((entry) => entry === 'start capture'))
+      expect(harness.sentAudio[0]?.map((audio) => new Int16Array(audio.buffer)[0])).toEqual([31, 32])
+      expect(session.getSnapshot()).toMatchObject({ liveRecognition: true, liveOriginal: 'Latest wording' })
+      expect(polishRequests()).toHaveLength(0)
+      expect(overlayCalls.some((call) => call.method !== 'hide'
+        && call.payload.subtitleLiveRecognition === true
+        && call.payload.subtitleLiveText === 'Latest wording')).toBe(true)
+    })
+
+    it('commits repeated stable words once and preserves an empty boundary without closing a newer phrase', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(2, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'go', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'go', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 64, audioEndMs: 64, text: '', speechFinal: true })
+      await settle()
+      expect(polishRequests().map((request) => request.text)).toEqual(['go go'])
+
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 64, audioEndMs: 80, text: 'next' })
+      emitLiveResult(harness, 0, { resultId: 5, audioStartMs: 32, audioEndMs: 64, text: '', speechFinal: true })
+      await settle()
+
+      expect(polishRequests().map((request) => request.text)).toEqual(['go go'])
+      expect(session.getSnapshot().liveOriginal).toBe('next')
+    })
+
+    it.each([
+      { kind: 'interim', isFinal: false },
+      { kind: 'stable', isFinal: true },
+    ])('rejects a $kind range that overlaps the committed phrase boundary', async ({ kind, isFinal }) => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(80, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 1_000, text: 'Earlier phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 1_000, audioEndMs: 2_000, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 1_500, audioEndMs: 2_500, text: `Late old ${kind}`, isFinal })
+      await settle()
+
+      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(polishRequests().map((request) => request.text)).toEqual(['Earlier phrase'])
+    })
+
+    it('does not publish a stable phrase into the unfinished live region when the same result commits it', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      overlayCalls = []
+      emitLiveResult(harness, 0, {
+        resultId: 1,
+        audioStartMs: 0,
+        audioEndMs: 32,
+        text: 'Committed immediately',
+        isFinal: true,
+        speechFinal: true,
+      })
+      await settle()
+
+      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(overlayCalls.filter((call) => call.method === 'update')
+        .some((call) => call.payload.subtitleLiveText === 'Committed immediately')).toBe(false)
+      expect(polishRequests().map((request) => request.text)).toEqual(['Committed immediately'])
+    })
+
+    it('keeps a newer live phrase separate while the previous phrase translation streams', async () => {
+      native.settings.set('systemAudio.dualSubtitles', true)
+      const pending = deferred<{ text: string; elapsed_ms: number }>()
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : original(name, args))
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(2, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+      const requestId = (polishRequests()[0] as { request_id: string }).request_id
+      emitPolishDelta(requestId, 'A translation')
+      await settle()
+
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Phrase B' })
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({
+        caption: 'A translation',
+        source: 'Phrase A',
+        liveOriginal: 'Phrase B',
+      })
+      expect(polishRequests().map((request) => request.text)).toEqual(['Phrase A'])
+    })
+
+    it('keeps the previous translation visible while the next phrase translates', async () => {
+      const pendings = [deferred<{ text: string; elapsed_ms: number }>(), deferred<{ text: string; elapsed_ms: number }>()]
+      let polishCount = 0
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pendings[polishCount++].promise : invoke(name, args))
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(2, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+      const firstRequest = (polishRequests()[0] as { request_id: string }).request_id
+      emitPolishDelta(firstRequest, 'A translation')
+      pendings[0].resolve({ text: 'A translation', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('A translation')
+
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Phrase B', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 64, audioEndMs: 64, text: '', speechFinal: true })
+      await settle()
+      expect(polishRequests()).toHaveLength(2)
+      expect(session.getSnapshot().caption).toBe('A translation')
+
+      await vi.advanceTimersByTimeAsync(120)
+      const secondRequest = (polishRequests()[1] as { request_id: string }).request_id
+      emitPolishDelta(secondRequest, 'B translation')
+      await settle()
+      expect(session.getSnapshot().caption).toBe('B translation')
+
+      pendings[1].resolve({ text: 'B translation', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('B translation')
+    })
+
+    it('marks a live phrase queue delay when it reaches the shared translation scheduler', async () => {
+      const trace = enablePipelineDebug()
+      const firstTranslation = deferred<{ text: string; elapsed_ms: number }>()
+      const invoke = native.invoke.getMockImplementation()!
+      let polishCount = 0
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish' && polishCount++ === 0) return firstTranslation.promise
+        return invoke(name, args)
+      })
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(20, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 320, text: 'Phrase A', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 320, audioEndMs: 320, text: '', speechFinal: true })
+      await settle()
+      expect(polishRequests()).toHaveLength(1)
+
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 320, audioEndMs: 640, text: 'Phrase B', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 640, audioEndMs: 640, text: '', speechFinal: true })
+      await vi.advanceTimersByTimeAsync(125)
+      firstTranslation.resolve({ text: 'Translation A', elapsed_ms: 5 })
+      await settle()
+
+      expect(trace.getPipelineSnapshot().runs.map((run) => ({ text: run.asrChars, queueMs: run.queueMs }))).toEqual([
+        { text: 'Phrase A'.length, queueMs: 0 },
+        { text: 'Phrase B'.length, queueMs: 125 },
+      ])
+    })
+
+    it('composes backlog warnings with keyterm and discontinuity warnings through later captions', async () => {
+      const firstTranslation = deferred<{ text: string; elapsed_ms: number }>()
+      const invoke = native.invoke.getMockImplementation()!
+      let polishCount = 0
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish' && polishCount++ === 0) return firstTranslation.promise
+        return invoke(name, args)
+      })
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9, 88, undefined, true)
+      await settle()
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+
+      harness.callbacks[1]?.onWarning({
+        sessionId: harness.sessions[1]!.sessionId,
+        code: DEEPGRAM_KEYTERM_LIMIT,
+        asrEngine: 'deepgram',
+        asrModel: 'nova-3',
+      })
+      const captureStarts = native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')
+      const successorCapture = (captureStarts[captureStarts.length - 1]?.[1] as { sessionId: number }).sessionId
+      frames(500, 0.9, 1, successorCapture)
+
+      emitLiveResult(harness, 1, { resultId: 1, audioStartMs: 0, audioEndMs: 2_000, text: 'First phrase', isFinal: true })
+      emitLiveResult(harness, 1, { resultId: 2, audioStartMs: 2_000, audioEndMs: 2_000, text: '', speechFinal: true })
+      await settle()
+      expect(polishRequests()).toHaveLength(1)
+
+      emitLiveResult(harness, 1, { resultId: 3, audioStartMs: 2_000, audioEndMs: 9_000, text: 'Second phrase', isFinal: true })
+      emitLiveResult(harness, 1, { resultId: 4, audioStartMs: 9_000, audioEndMs: 9_000, text: '', speechFinal: true })
+      emitLiveResult(harness, 1, { resultId: 5, audioStartMs: 9_000, audioEndMs: 16_000, text: 'Third phrase', isFinal: true })
+      emitLiveResult(harness, 1, { resultId: 6, audioStartMs: 16_000, audioEndMs: 16_000, text: '', speechFinal: true })
+      await settle()
+
+      expect(session.getSnapshot().warning).toContain(t('systemAudio.behind'))
+      expect(session.getSnapshot().warning).toContain(t('asr.deepgramKeytermLimitWarning'))
+      expect(session.getSnapshot().warning).toContain(t('systemAudio.discontinuity'))
+
+      firstTranslation.resolve({ text: 'Translation first', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().warning).toContain(t('asr.deepgramKeytermLimitWarning'))
+      expect(session.getSnapshot().warning).toContain(t('systemAudio.discontinuity'))
+    })
+
+    it('commits only confirmed prefixes at the source-audio target and ignores a delayed old boundary', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(20, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 640, text: 'Confirmed prefix', isFinal: true })
+      frames(74, 0)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
+      expect(session.getSnapshot().liveOriginal).toBe('')
+
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 640, audioEndMs: 704, text: 'Phrase B' })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 0, audioEndMs: 640, text: '', speechFinal: true })
+      await settle()
+
+      expect(session.getSnapshot().liveOriginal).toBe('Phrase B')
+      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
+      expect(harness.sessions).toHaveLength(1)
+    })
+
+    it('measures target-committed ASR delay from the stable result arrival, not the target timer', async () => {
+      const trace = enablePipelineDebug()
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      vi.setSystemTime(new Date('2026-10-08T12:00:00.000Z'))
+      sourceCaptureEndUnixUs = Date.now() * 1_000
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      await vi.advanceTimersByTimeAsync(100)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Confirmed early', isFinal: true })
+      frames(92, 0)
+      await vi.advanceTimersByTimeAsync(400)
+      frames(1, 0)
+      await settle()
+
+      expect(trace.getPipelineSnapshot().runs).toMatchObject([{ asrMs: 68, recognitionKind: 'live' }])
+    })
+
+    it('requests finalization at the target without promoting an interim or waiting for an acknowledgement', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Not confirmed' })
+      frames(93, 0)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: '', liveOriginal: 'Not confirmed' })
+      expect(polishRequests()).toHaveLength(0)
+    })
+
+    it('rearms the audio target from a delayed phrase boundary instead of the current send frontier', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(94, 0.9)
+      vi.spyOn(harness.sessions[0]!, 'finalize').mockClear()
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Continuing speech' })
+      frames(1, 0.9)
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+    })
+
+    it('attributes a delayed finalize result to its request reason and target', async () => {
+      const trace = enablePipelineDebug()
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(93, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 2_944, audioEndMs: 2_976, text: 'First phrase' })
+      frames(1, 0.9)
+
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const gapFrame = captureFrame(captureId, 0.9)
+      deliverFrame(gapFrame)
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 2_976, audioEndMs: 3_024, text: 'Following phrase' })
+      emitLiveIdle({
+        sessionId: captureId,
+        frameSequence: gapFrame.frameSequence,
+        lastFrameCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        confirmedThroughUnixUs: gapFrame.captureEndUnixUs + 512_000,
+      })
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
+
+      emitLiveResult(harness, 0, {
+        resultId: 3,
+        audioStartMs: 2_944,
+        audioEndMs: 2_976,
+        text: 'First phrase',
+        isFinal: true,
+        fromFinalize: true,
+      })
+      await settle()
+
+      expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['cap'])
+
+      frames(93, 0.9)
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(3)
+    })
+
+    it('does not consume finalize metadata when a stale result fails the committed watermark', async () => {
+      const trace = enablePipelineDebug()
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, {
+        resultId: 1,
+        audioStartMs: 0,
+        audioEndMs: 32,
+        text: 'First phrase',
+        isFinal: true,
+        speechFinal: true,
+      })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'Next phrase' })
+      frames(93, 0.9)
+      frames(1, 0.9)
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+
+      emitLiveResult(harness, 0, {
+        resultId: 3,
+        audioStartMs: 0,
+        audioEndMs: 32,
+        text: 'Stale duplicate',
+        isFinal: true,
+        fromFinalize: true,
+      })
+
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const gapFrame = captureFrame(captureId, 0.9)
+      deliverFrame(gapFrame)
+      emitLiveIdle({
+        sessionId: captureId,
+        frameSequence: gapFrame.frameSequence,
+        lastFrameCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        confirmedThroughUnixUs: gapFrame.captureEndUnixUs + 512_000,
+      })
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
+
+      emitLiveResult(harness, 0, {
+        resultId: 4,
+        audioStartMs: 32,
+        audioEndMs: 64,
+        text: 'Next phrase',
+        isFinal: true,
+        fromFinalize: true,
+      })
+      await settle()
+      expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['silence', 'cap'])
+      expect(polishRequests().map((request) => request.text)).toEqual(['First phrase', 'Next phrase'])
+
+      emitLiveResult(harness, 0, { resultId: 5, audioStartMs: 64, audioEndMs: 80, text: 'Later phrase' })
+      frames(93, 0.9)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(3)
+    })
+
+    it('matches a later finalize after an earlier request produces no result', async () => {
+      const trace = enablePipelineDebug()
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(93, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 2_944, audioEndMs: 2_976, text: 'Unflushed phrase' })
+      frames(1, 0.9)
+
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const gapFrame = captureFrame(captureId, 0.9)
+      deliverFrame(gapFrame)
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 3_008, audioEndMs: 3_024, text: 'Later phrase' })
+      emitLiveIdle({
+        sessionId: captureId,
+        frameSequence: gapFrame.frameSequence,
+        lastFrameCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        confirmedThroughUnixUs: gapFrame.captureEndUnixUs + 512_000,
+      })
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
+
+      emitLiveResult(harness, 0, {
+        resultId: 3,
+        audioStartMs: 3_008,
+        audioEndMs: 3_024,
+        text: 'Later phrase',
+        isFinal: true,
+        fromFinalize: true,
+      })
+      await settle()
+
+      expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['gap'])
+      expect(polishRequests().map((request) => request.text)).toEqual(['Later phrase'])
+    })
+
+    it('commits a retired finalize result with the last request metadata', async () => {
+      const trace = enablePipelineDebug()
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Pending text' })
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      for (let index = 0; index < 33; index++) {
+        const frame = captureFrame(captureId, 0.9)
+        deliverFrame(frame)
+        emitLiveIdle({
+          sessionId: captureId,
+          frameSequence: frame.frameSequence,
+          lastFrameCaptureEndUnixUs: frame.captureEndUnixUs,
+          lastAudioCaptureEndUnixUs: frame.captureEndUnixUs,
+          confirmedThroughUnixUs: frame.captureEndUnixUs + 512_000,
+        })
+      }
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(33)
+
+      emitLiveResult(harness, 0, {
+        resultId: 2,
+        audioStartMs: 0,
+        audioEndMs: 32,
+        text: 'Late transcript',
+        isFinal: true,
+        fromFinalize: true,
+      })
+      await settle()
+
+      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['gap'])
+      expect(polishRequests().map((request) => request.text)).toEqual(['Late transcript'])
+    })
+
+    it('skips the target flush while no speech is pending and flushes once speech appears', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(120, 0)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).not.toHaveBeenCalled()
+      expect(session.getSnapshot().state).toBe('listening')
+
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 3_840, audioEndMs: 3_872, text: 'Pending tail' })
+      frames(120, 0)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot().state).toBe('listening')
+    })
+
+    it('flushes an idle tail once per new audio frontier and reuses the live socket', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const first = captureFrame(captureId, 0.9)
+      deliverFrame(first)
+      emitLiveResult(harness, 0, { resultId: 1, text: 'Unfinished' })
+      const firstIdle = {
+        sessionId: captureId,
+        frameSequence: first.frameSequence,
+        lastFrameCaptureEndUnixUs: first.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: first.captureEndUnixUs,
+        confirmedThroughUnixUs: first.captureEndUnixUs + 512_000,
+      }
+      emitLiveIdle(firstIdle)
+      await settle()
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+
+      const second = captureFrame(captureId, 0)
+      deliverFrame(second)
+      const secondIdle = {
+        sessionId: captureId,
+        frameSequence: second.frameSequence,
+        lastFrameCaptureEndUnixUs: second.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: second.captureEndUnixUs,
+        confirmedThroughUnixUs: second.captureEndUnixUs + 512_000,
+      }
+      emitLiveIdle(secondIdle)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(harness.sessions[0]?.close).not.toHaveBeenCalled()
+      expect(harness.sentAudio[0]).toHaveLength(2)
+    })
+
+    it('does not treat delayed frontend frame delivery as a captured source gap', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const first = captureFrame(captureId, 0.9)
+      const second = captureFrame(captureId, 0.9)
+      deliverFrame(first)
+      await vi.advanceTimersByTimeAsync(700)
+      deliverFrame(second)
+      await settle()
+
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(harness.sessions[0]?.finalize).not.toHaveBeenCalled()
+      expect(session.getSnapshot().state).toBe('listening')
+    })
+
+    it('flushes a phrase only after source-confirmed native idle at the current frontier', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 60)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const first = captureFrame(captureId, 0.9)
+      deliverFrame(first)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Idle phrase' })
+
+      emitLiveIdle({
+        sessionId: captureId,
+        frameSequence: first.frameSequence,
+        lastFrameCaptureEndUnixUs: first.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: first.captureEndUnixUs,
+        confirmedThroughUnixUs: first.captureEndUnixUs + 512_000,
+      })
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+      expect(harness.sentAudio[0]).toHaveLength(1)
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+    })
+
+    it('ignores delayed and repeated native idle evidence after a newer source frontier', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const first = captureFrame(captureId, 0.9)
+      deliverFrame(first)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'First' })
+      const second = captureFrame(captureId, 0.9)
+      deliverFrame(second)
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'Second' })
+
+      const idle = {
+        sessionId: captureId,
+        frameSequence: first.frameSequence,
+        lastFrameCaptureEndUnixUs: first.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: first.captureEndUnixUs,
+        confirmedThroughUnixUs: first.captureEndUnixUs + 512_000,
+      }
+      const liveBeforeIdle = session.getSnapshot().liveOriginal
+      emitLiveIdle(idle)
+      emitLiveIdle(idle)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).not.toHaveBeenCalled()
+      expect(session.getSnapshot().liveOriginal).toBe(liveBeforeIdle)
+    })
+
+    it('fails the live epoch on malformed active capture timing', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const malformed = { ...captureFrame(captureId, 0.9), captureEndUnixUs: Number.NaN }
+      deliverFrame(malformed)
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).not.toBe('')
+      expect(harness.sessions[0]?.sendAudio).not.toHaveBeenCalled()
+    })
+
+    it('surfaces invalid native packet timing even when no complete PCM frame was emitted', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      native.listeners.get('system-audio-capture-timing-error')?.({ payload: {
+        sessionId: captureId,
+        message: 'WASAPI capture timestamp was flagged invalid',
+      } })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toBe(t('systemAudio.captureTimingUnavailable'))
+      expect(harness.provider.closeLive).toHaveBeenCalled()
+      expect(leased).toBe(true)
+    })
+
+    it('shows a visible error instead of trimming an unfinished UTF-8 phrase over 16 KiB', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, text: 'é'.repeat(8_193) })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toBe(t('systemAudio.livePhraseOverflow'))
+      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(polishRequests()).toHaveLength(0)
+      expect(harness.provider.closeLive).toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      await session.stop()
+      const combinedHarness = createLiveProviderHarness()
+      await useLiveSession(combinedHarness)
+      frames(2, 0.9)
+      emitLiveResult(combinedHarness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'é'.repeat(8_000), isFinal: true })
+      emitLiveResult(combinedHarness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'a'.repeat(400) })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(polishRequests()).toHaveLength(0)
+    })
+
+    it('localizes a phrase whose capture timing exceeded the retained source-anchor window', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      for (let index = 0; index < 66; index++) {
+        if (index > 0) sourceCaptureEndUnixUs += 5_000
+        frames(1, 0.9)
+      }
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Unmapped phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toBe(t('systemAudio.liveTimingUnavailable'))
+      expect(polishRequests()).toHaveLength(0)
+    })
+
+    it('uses captured source gaps for the existing six-second translation-context reset', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(10, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 320, text: 'Earlier phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 320, audioEndMs: 320, text: '', speechFinal: true })
+      await settle()
+
+      await vi.advanceTimersByTimeAsync(7_000)
+      frames(10, 0.9)
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 320, audioEndMs: 640, text: 'Later phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 640, audioEndMs: 640, text: '', speechFinal: true })
+      await settle()
+
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('maps an idle gap retained inside one native resampled frame into source-time context', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const frame = captureFrame(captureId, 0.9)
+      frame.captureAnchors.push({ audioOffsetSamples: 110, captureUnixUs: frame.captureStartUnixUs + 6_106_876 })
+      frame.captureEndUnixUs = frame.captureStartUnixUs + 6_132_002
+      deliverFrame(frame)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 6.8, text: 'Before idle', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 6.8, audioEndMs: 6.875, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 6.875, audioEndMs: 32, text: 'After idle', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('maps the resumed source start/end from a retained 48 kHz partial frame', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const frame = captureFrame(captureId, 0.9)
+      frame.captureAnchors.push({ audioOffsetSamples: 200, captureUnixUs: frame.captureStartUnixUs + 6_012_501 })
+      frame.captureEndUnixUs = frame.captureStartUnixUs + 6_032_001
+      deliverFrame(frame)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 12.5, text: 'Before 48 kHz idle', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 12.5, audioEndMs: 12.5, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 12.5, audioEndMs: 32, text: 'After 48 kHz idle', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('keeps the session alive through real engine slew jitter in frame and anchor timing', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const first = captureFrame(captureId, 0.9)
+      deliverFrame(first)
+      // Measured on physical hardware (2026-10-09): a frame start can regress ~0.6 ms against the
+      // previous frame end, and a forward slew leaves a sub-millisecond intra-frame anchor.
+      const second = captureFrame(captureId, 0.9)
+      second.captureStartUnixUs = first.captureEndUnixUs - 601
+      second.captureEndUnixUs = second.captureStartUnixUs + 32_000
+      second.captureAnchors.push({ audioOffsetSamples: 110, captureUnixUs: second.captureStartUnixUs + 6_879 })
+      deliverFrame(second)
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(harness.sessions[0]?.sendAudio).toHaveBeenCalledTimes(2)
+    })
+
+    it('resets context by captured source time when an older ASR result arrives after the next phrase', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(10, 0.9)
+      await vi.advanceTimersByTimeAsync(10_000)
+      frames(10, 0.9)
+
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 320, text: 'Earlier source phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 320, audioEndMs: 320, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 320, audioEndMs: 640, text: 'Later source phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 640, audioEndMs: 640, text: '', speechFinal: true })
+      await settle()
+
+      expect(polishRequests().map((request) => request.text_context)).toEqual([null, null])
+    })
+
+    it('keeps overlay delivery bounded to one in-flight and the latest pending snapshot', async () => {
+      const pending = deferred<void>()
+      const updates: SubtitleOverlayPayload[] = []
+      overlay.update = vi.fn((payload: SubtitleOverlayPayload) => {
+        updates.push(payload)
+        return updates.length === 1 ? pending.promise : Promise.resolve()
+      })
+      const harness = createLiveProviderHarness()
+      try {
+        await useLiveSession(harness)
+        await settle()
+        frames(20, 0.9)
+        for (let resultId = 1; resultId <= 20; resultId++) {
+          emitLiveResult(harness, 0, { resultId, audioStartMs: 0, audioEndMs: 32, text: `Revision ${resultId}` })
+        }
+        await settle()
+
+        expect(updates).toHaveLength(1)
+        pending.resolve()
+        await settle()
+
+        expect(updates).toHaveLength(2)
+        expect(updates[1]?.subtitleLiveText).toBe('Revision 20')
+      } finally {
+        pending.resolve()
+      }
+    })
+
+    it('rejects live open without falling back and leaves failed-open cleanup reachable', async () => {
+      let failClose = true
+      const harness = createLiveProviderHarness({
+        open: async () => { throw new Error('live handshake failed') },
+        close: async () => {
+          if (failClose) throw new Error('live owner cleanup failed')
+        },
+      })
+      await useLiveSession(harness)
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('live owner cleanup failed')
+      expect(native.invoke.mock.calls.some(([name]) => name === 'start_system_audio_capture')).toBe(false)
+      expect(harness.provider.start).not.toHaveBeenCalled()
+      expect(harness.provider.disconnect).not.toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      failClose = false
+      await session.stop()
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    })
+
+    it('waits for live close before disconnecting or opening a resumed epoch', async () => {
+      const close = deferred<void>()
+      const harness = createLiveProviderHarness({ close: () => close.promise })
+      await useLiveSession(harness)
+      const pausing = session.pause()
+      await settle()
+      const resuming = session.resume()
+      await settle()
+
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(harness.provider.disconnect).not.toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      close.resolve()
+      await Promise.all([pausing, resuming])
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+      expect(harness.order.indexOf('closeLive')).toBeLessThan(harness.order.lastIndexOf('disconnect'))
+    })
+
+    it('does not open a resumed epoch when Stop supersedes Resume during live close', async () => {
+      const closing = deferred<void>()
+      const harness = createLiveProviderHarness({ close: () => closing.promise })
+      await useLiveSession(harness)
+      const pausing = session.pause()
+      await settle()
+      const resuming = session.resume()
+      const stopping = session.stop()
+      closing.resolve()
+      await Promise.all([pausing, resuming, stopping])
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(1)
+    })
+
+    it('retries each Resume after its previous live cleanup has actually failed', async () => {
+      let attempts = 0
+      const harness = createLiveProviderHarness({ close: async () => {
+        if (++attempts < 3) throw new Error('live close failed')
+      } })
+      await useLiveSession(harness)
+      await session.pause()
+      expect(session.getSnapshot().state).toBe('error')
+      await session.resume()
+      expect(session.getSnapshot().state).toBe('error')
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      await session.resume()
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveRecognition: true, error: '' })
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+    })
+
+    it('cancels live open but retains the lease until startup has settled', async () => {
+      const opening = deferred<LiveAsrSession | null>()
+      const harness = createLiveProviderHarness({ open: () => opening.promise })
+      const starting = useLiveSession(harness)
+      let startupSettled = false
+      void starting.then(() => { startupSettled = true })
+      await settle()
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+
+      let stopSettled = false
+      const stopping = session.stop().then(() => { stopSettled = true })
+      await vi.advanceTimersByTimeAsync(5_001)
+
+      expect(startupSettled).toBe(false)
+      expect(stopSettled).toBe(false)
+      expect(session.getSnapshot().state).toBe('stopping')
+      expect(leased).toBe(true)
+      expect(native.invoke.mock.calls.some(([name]) => name === 'start_system_audio_capture')).toBe(false)
+      expect(harness.provider.closeLive).toHaveBeenCalled()
+
+      opening.resolve(null)
+      await Promise.all([starting, stopping])
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    })
+
+    it('joins a pending live close instead of creating another attempt after the watchdog', async () => {
+      const stalledClose = deferred<void>()
+      let closeCalls = 0
+      const harness = createLiveProviderHarness({ close: async () => {
+        closeCalls++
+        await stalledClose.promise
+      } })
+      await useLiveSession(harness)
+
+      const stopping = session.stop()
+      await vi.advanceTimersByTimeAsync(5_001)
+
+      expect(closeCalls).toBe(1)
+      expect(session.getSnapshot().error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(leased).toBe(true)
+
+      const sameStop = session.stop()
+      await settle()
+      expect(closeCalls).toBe(1)
+      expect(session.getSnapshot().state).toBe('stopping')
+      stalledClose.resolve()
+      await Promise.all([stopping, sameStop])
+
+      expect(closeCalls).toBe(1)
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+
+      const disconnectsAfterRetry = harness.order.filter((event) => event === 'disconnect').length
+      await useLiveSession(harness)
+      await settle()
+      expect(harness.order.filter((event) => event === 'disconnect').length).toBe(disconnectsAfterRetry)
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveRecognition: true })
+      expect(leased).toBe(true)
+    })
+
+    it('finishes the old recorder release before a new session can install provider callbacks', async () => {
+      const pendingRelease = deferred<void>()
+      const harness = createLiveProviderHarness()
+      const connectedCallbacks: TranscriptionCallbacks[] = []
+      let activeCallbacks: TranscriptionCallbacks | undefined
+      let releaseCallbacks: TranscriptionCallbacks | undefined
+      let releaseCalls = 0
+      const connect = harness.provider.connect.bind(harness.provider)
+      harness.provider.connect = vi.fn(async (callbacks) => {
+        connectedCallbacks.push(callbacks)
+        activeCallbacks = callbacks
+        await connect(callbacks)
+      })
+      session = new SystemAudioSession({
+        getProvider: () => harness.provider,
+        acquire: async () => { if (leased) throw new Error('Recorder busy'); leased = true },
+        release: async () => {
+          leased = false
+          if (++releaseCalls === 1) {
+            await pendingRelease.promise
+            await harness.provider.connect(releaseCallbacks!)
+          }
+        },
+        overlay,
+      })
+      native.settings.set('systemAudio.liveRecognitionEnabled', true)
+      await session.start({ deviceId: 'speakers', targetLanguage: 'ru' })
+      releaseCallbacks = { ...connectedCallbacks[0]! }
+
+      const stopping = session.stop()
+      await settle()
+      await vi.advanceTimersByTimeAsync(5_001)
+
+      expect(session.getSnapshot().state).toBe('stopping')
+      expect(session.getSnapshot().error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(leased).toBe(false)
+
+      await session.resume()
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+
+      pendingRelease.resolve()
+      await stopping
+      expect(session.getSnapshot().state).toBe('idle')
+      await session.start({ deviceId: 'speakers', targetLanguage: 'ru' })
+
+      expect(connectedCallbacks).toHaveLength(3)
+      expect(activeCallbacks).toBe(connectedCallbacks[2])
+      expect(activeCallbacks).not.toBe(releaseCallbacks)
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveRecognition: true, error: '' })
+      expect(leased).toBe(true)
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps live Pause pending and resumes only after the same stop completes', async () => {
+      const nativeStop = deferred<void>()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'stop_system_audio_capture' ? nativeStop.promise : invoke(name, args))
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      let pauseSettled = false
+      const pausing = session.pause().finally(() => { pauseSettled = true })
+      await settle()
+      await vi.advanceTimersByTimeAsync(5_001)
+      await settle()
+      const settledAtWatchdog = pauseSettled
+      const watchdogSnapshot = session.getSnapshot()
+      const stopCallsAtWatchdog = native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture').length
+
+      const resuming = session.resume()
+      await settle()
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(1)
+      expect(leased).toBe(true)
+
+      nativeStop.resolve()
+      await Promise.all([pausing, resuming])
+
+      expect(settledAtWatchdog).toBe(false)
+      expect(watchdogSnapshot.state).toBe('paused')
+      expect(watchdogSnapshot.error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(stopCallsAtWatchdog).toBe(1)
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(2)
+      await session.stop()
+    })
+
+    it.each(['pause', 'error'] as const)('removes the temporary delay diagnostic after %s cleanup succeeds', async (action) => {
+      const closing = deferred<void>()
+      const harness = createLiveProviderHarness({ close: () => closing.promise })
+      await useLiveSession(harness)
+      const pausing = action === 'pause' ? session.pause() : Promise.resolve()
+      if (action === 'error') {
+        harness.callbacks[0]!.onError({
+          sessionId: harness.sessions[0]!.sessionId, message: 'Recognition failed',
+          asrEngine: 'deepgram', asrModel: 'nova-3',
+        })
+      }
+      await vi.advanceTimersByTimeAsync(5_001)
+      expect(session.getSnapshot().error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      closing.resolve()
+      await pausing
+      await settle()
+      expect(session.getSnapshot()).toMatchObject({
+        state: action === 'pause' ? 'paused' : 'error',
+        error: action === 'pause' ? '' : 'Recognition failed',
+      })
+      expect(leased).toBe(true)
+    })
+
+    it('starts the watchdog before a pending native start response after timing failure', async () => {
+      const nativeStart = deferred<void>()
+      const nativeStop = deferred<void>()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'start_system_audio_capture') return nativeStart.promise
+        if (name === 'stop_system_audio_capture') return nativeStop.promise
+        return invoke(name, args)
+      })
+      const harness = createLiveProviderHarness()
+      const starting = useLiveSession(harness)
+      await settle()
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      native.listeners.get('system-audio-capture-timing-error')?.({ payload: {
+        sessionId: captureId,
+        message: 'WASAPI capture timestamp was flagged invalid',
+      } })
+      await settle()
+
+      let stopSettled = false
+      const stopping = session.stop().finally(() => { stopSettled = true })
+      await vi.advanceTimersByTimeAsync(5_001)
+      await settle()
+      const settledAtWatchdog = stopSettled
+      const watchdogSnapshot = session.getSnapshot()
+      const stopCallsBeforeStartResponse = native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture').length
+
+      nativeStart.resolve()
+      await settle()
+      const stopCallsAfterStartResponse = native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture').length
+      nativeStop.resolve()
+      await Promise.all([starting, stopping])
+      await settle()
+
+      expect(settledAtWatchdog).toBe(false)
+      expect(watchdogSnapshot.state).toBe('stopping')
+      expect(watchdogSnapshot.error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(stopCallsBeforeStartResponse).toBe(0)
+      expect(stopCallsAfterStartResponse).toBe(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(1)
+      expect(harness.provider.disconnect).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    })
+
+    it('watchdogs Stop while the original native start is pending and stops that capture exactly once', async () => {
+      const nativeStart = deferred<void>()
+      const nativeStop = deferred<void>()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'start_system_audio_capture') return nativeStart.promise
+        if (name === 'stop_system_audio_capture') return nativeStop.promise
+        return invoke(name, args)
+      })
+      const harness = createLiveProviderHarness()
+      const starting = useLiveSession(harness)
+      await settle()
+      let stopSettled = false
+      const stopping = session.stop().finally(() => { stopSettled = true })
+      await vi.advanceTimersByTimeAsync(5_001)
+      await settle()
+      const settledAtWatchdog = stopSettled
+      const watchdogSnapshot = session.getSnapshot()
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(0)
+      expect(harness.provider.disconnect).not.toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      nativeStart.resolve()
+      await settle()
+      const stopCallsAfterStartResponse = native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture').length
+      expect(stopCallsAfterStartResponse).toBe(1)
+      expect(harness.provider.disconnect).not.toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      nativeStop.resolve()
+      await Promise.all([starting, stopping])
+      await settle()
+
+      expect(settledAtWatchdog).toBe(false)
+      expect(watchdogSnapshot.state).toBe('stopping')
+      expect(watchdogSnapshot.error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+      expect(harness.provider.disconnect).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    })
+
+    it('retries after a live capture stop watchdog without duplicating the pending stop', async () => {
+      const nativeStop = deferred<void>()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'stop_system_audio_capture' ? nativeStop.promise : invoke(name, args))
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      let stopSettled = false
+      const stopping = session.stop().finally(() => { stopSettled = true })
+      await settle()
+      await vi.advanceTimersByTimeAsync(5_001)
+      await settle()
+
+      const watchdogSnapshot = session.getSnapshot()
+      const stopCallsAtWatchdog = native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture').length
+      const retrying = session.stop()
+      await settle()
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(5_001)
+      await settle()
+      expect(stopSettled).toBe(false)
+      expect(watchdogSnapshot.state).toBe('stopping')
+      expect(watchdogSnapshot.error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(stopCallsAtWatchdog).toBe(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(1)
+      expect(harness.provider.disconnect).not.toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      nativeStop.resolve()
+      await Promise.all([stopping, retrying])
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+    })
+
+    it('retries a rejected live stop after preserving the capture lease and capture ID', async () => {
+      const retryStop = deferred<void>()
+      let attempts = 0
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'stop_system_audio_capture') {
+          attempts++
+          if (attempts === 1) return Promise.reject(new Error('stop IPC failed'))
+          return retryStop.promise
+        }
+        return invoke(name, args)
+      })
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      await session.stop()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('stop IPC failed')
+      expect(leased).toBe(true)
+
+      let stopSettled = false
+      const retrying = session.stop().finally(() => { stopSettled = true })
+      await settle()
+      await vi.advanceTimersByTimeAsync(5_001)
+      await settle()
+      const settledAtWatchdog = stopSettled
+      const watchdogSnapshot = session.getSnapshot()
+      const stopCallsAtWatchdog = native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture').length
+
+      retryStop.resolve()
+      await retrying
+      await settle()
+
+      expect(settledAtWatchdog).toBe(false)
+      expect(watchdogSnapshot.state).toBe('stopping')
+      expect(watchdogSnapshot.error).toBe(t('systemAudio.cleanupUnconfirmed'))
+      expect(stopCallsAtWatchdog).toBe(2)
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(2)
+    })
+
+    it('surfaces live provider and Finalize failures without network recovery', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const current = harness.sessions[0]!
+      current.finalize = vi.fn(async () => { throw new Error('Finalize failed') })
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const frame = captureFrame(captureId, 0.9)
+      deliverFrame(frame)
+      emitLiveIdle({
+        sessionId: captureId,
+        frameSequence: frame.frameSequence,
+        lastFrameCaptureEndUnixUs: frame.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: frame.captureEndUnixUs,
+        confirmedThroughUnixUs: frame.captureEndUnixUs + 512_000,
+      })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('Finalize failed')
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(harness.provider.closeLive).toHaveBeenCalled()
+    })
+
+    it('surfaces a synchronous PCM send failure and does not fall back to batch recognition', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      harness.sessions[0]!.sendAudio = vi.fn(() => { throw new Error('PCM send failed') })
+      frames(1, 0.9)
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('PCM send failed')
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(harness.provider.start).not.toHaveBeenCalled()
+      expect(harness.provider.closeLive).toHaveBeenCalled()
+      expect(leased).toBe(true)
+    })
+
+    it('preserves the live ASR hint warning through display and a provider interruption', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const sessionId = harness.sessions[0]!.sessionId
+      harness.callbacks[0]?.onWarning({
+        sessionId,
+        code: DEEPGRAM_KEYTERM_LIMIT,
+        asrEngine: 'deepgram',
+        asrModel: 'nova-3',
+      })
+      const warning = session.getSnapshot().warning
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, text: 'Current phrase' })
+      harness.callbacks[0]?.onError({ sessionId, message: 'live provider failed', asrEngine: 'deepgram', asrModel: 'nova-3' })
+      await settle()
+
+      expect(warning).not.toBe('')
+      expect(session.getSnapshot()).toMatchObject({ state: 'error', warning })
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports phrase ASR delay from captured source end separately from translation timing', async () => {
+      const trace = enablePipelineDebug()
+      vi.setSystemTime(new Date('2026-10-08T12:00:00.000Z'))
+      sourceClockOffsetUs = -320_000
+      sourceCaptureEndUnixUs = Date.now() * 1_000 + sourceClockOffsetUs
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(10, 0.9)
+      await vi.advanceTimersByTimeAsync(180)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 320, text: 'Timed phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 320, audioEndMs: 640, text: '', speechFinal: true })
+      await settle()
+
+      expect(trace.getPipelineSnapshot().runs).toMatchObject([{
+        recognitionKind: 'live',
+        asrMs: 180,
+        llmMs: 5,
+      }])
+    })
+
+    it('awaits live close after stop invalidates a pending open and never starts capture late', async () => {
+      const opening = deferred<LiveAsrSession | null>()
+      const close = deferred<void>()
+      const harness = createLiveProviderHarness({
+        open: async (_options, _callbacks, live) => {
+          await opening.promise
+          return live
+        },
+        close: () => close.promise,
+      })
+      const starting = useLiveSession(harness)
+      await settle()
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+
+      const stopping = session.stop()
+      opening.resolve(harness.sessions[0]!)
+      await settle()
+
+      expect(native.invoke.mock.calls.some(([name]) => name === 'start_system_audio_capture')).toBe(false)
+      expect(leased).toBe(true)
+      expect(harness.provider.disconnect).not.toHaveBeenCalled()
+
+      close.resolve()
+      await Promise.all([starting, stopping])
+
+      expect(harness.order.indexOf('closeLive')).toBeLessThan(harness.order.indexOf('disconnect'))
+      expect(harness.order.indexOf('disconnect')).toBeLessThan(harness.order.indexOf('release'))
+      expect(leased).toBe(false)
+    })
+
+    it('keeps the lease and actual cleanup error when live close fails, then allows stop to retry', async () => {
+      let failClose = true
+      const harness = createLiveProviderHarness({ close: async () => {
+        if (failClose) throw new Error('live close unavailable')
+      } })
+      await useLiveSession(harness)
+      await session.stop()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('live close unavailable')
+      expect(leased).toBe(true)
+
+      failClose = false
+      await session.stop()
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+    })
+
+    it('retries failed live cleanup before resuming the capture session', async () => {
+      let failClose = true
+      const harness = createLiveProviderHarness({ close: async () => {
+        if (failClose) throw new Error('live close unavailable')
+      } })
+      await useLiveSession(harness)
+      await session.pause()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toContain('live close unavailable')
+      expect(leased).toBe(true)
+
+      const closeAttemptsBeforeResume = harness.order.filter((event) => event === 'closeLive').length
+      failClose = false
+      await session.resume()
+
+      expect(harness.order.filter((event) => event === 'closeLive').length).toBeGreaterThan(closeAttemptsBeforeResume)
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'start_system_audio_capture')).toHaveLength(2)
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(leased).toBe(true)
+    })
+
+    it('clears live snapshot state when live close succeeds but capture stop fails', async () => {
+      const original = native.invoke.getMockImplementation()!
+      let failStop = true
+      native.invoke.mockImplementation((name, args) => name === 'stop_system_audio_capture' && failStop
+        ? Promise.reject(new Error('temporary native stop failure'))
+        : original(name, args))
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+
+      await session.pause()
+
+      expect(session.getSnapshot()).toMatchObject({
+        state: 'error',
+        liveRecognition: false,
+        liveOriginal: '',
+      })
+      expect(session.getSnapshot().error).toContain('temporary native stop failure')
+      expect(harness.sessions[0]?.close).toHaveBeenCalled()
+      expect(leased).toBe(true)
+
+      failStop = false
+      await session.stop()
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(leased).toBe(false)
+    })
+
+    it('uses the provider owner for cleanup without redundantly closing the live handle', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      harness.sessions[0]!.close = vi.fn(async () => { throw new Error('inner live close failed') })
+      harness.provider.closeLive = vi.fn(async () => { harness.order.push('provider close succeeded') })
+      vi.mocked(addRuntimeEvent).mockClear()
+
+      await session.stop()
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'idle', liveRecognition: false, liveOriginal: '' })
+      expect(leased).toBe(false)
+      expect(harness.provider.disconnect).toHaveBeenCalled()
+      expect(harness.sessions[0]!.close).not.toHaveBeenCalled()
+      expect(harness.provider.closeLive).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not let an old live callback publish into a resumed epoch', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      const oldId = harness.sessions[0]?.sessionId
+      await session.pause()
+      await session.resume()
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, text: 'Stale original' })
+      emitLiveResult(harness, 1, { resultId: 1, text: 'Current original' })
+      await settle()
+
+      expect(oldId).toBe('live-1')
+      expect(session.getSnapshot().liveOriginal).toBe('Current original')
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+    })
+
+    it('fences a discontinuous capture before opening a clean successor stream', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9, 88, undefined, true)
+      await settle()
+
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(2)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'stop_system_audio_capture')).toHaveLength(1)
+      expect(harness.order.indexOf('live.close')).toBeLessThan(harness.order.lastIndexOf('openLive'))
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', liveRecognition: true })
+      expect(session.getSnapshot().warning).toContain('audio gap')
+      expect(harness.sentAudio[0]).toHaveLength(0)
+
+      frames(1, 0.9, 99)
+      expect(harness.sentAudio[1]).toHaveLength(1)
+    })
+
+    it('localizes a missing discontinuity successor while retaining diagnostic detail', async () => {
+      let openCount = 0
+      const harness = createLiveProviderHarness({
+        open: async (_options, _callbacks, live) => ++openCount === 1 ? live : null,
+      })
+      await useLiveSession(harness)
+      frames(1, 0.9, 88, undefined, true)
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('error')
+      expect(session.getSnapshot().error).toBe(t('systemAudio.notReady'))
+    })
+
+    it('does not open a discontinuity successor when native capture fencing fails', async () => {
+      const harness = createLiveProviderHarness()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'stop_system_audio_capture'
+        ? Promise.reject(new Error('native fence failed'))
+        : invoke(name, args))
+      await useLiveSession(harness)
+      frames(1, 0.9, 88, undefined, true)
+      await settle()
+
+      expect(harness.provider.openLive).toHaveBeenCalledTimes(1)
+      expect(session.getSnapshot()).toMatchObject({ state: 'error', liveRecognition: false, liveOriginal: '' })
+      expect(session.getSnapshot().error).toContain('native fence failed')
+      expect(session.getSnapshot().warning).toContain('audio gap')
+      expect(leased).toBe(true)
+
+      native.invoke.mockImplementation(invoke)
+      await session.stop()
+      expect(leased).toBe(false)
+    })
+
+    it('keeps recognition-only live text current and moves each confirmed phrase once', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness, true)
+      frames(2, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'First', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Current' })
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: 'First', liveOriginal: 'Current', source: '' })
+      expect(polishRequests()).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(session.getSnapshot()).toMatchObject({ caption: '', liveOriginal: 'Current' })
+    })
+
+    it('moves recognition-only text from live to settled in one snapshot', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness, true)
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Settled original' })
+      await settle()
+      overlayCalls = []
+      emitLiveResult(harness, 0, {
+        resultId: 2,
+        audioStartMs: 0,
+        audioEndMs: 32,
+        text: 'Settled original',
+        isFinal: true,
+        speechFinal: true,
+      })
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Settled original', liveOriginal: '' })
+      expect(overlayCalls.filter((call) => call.method === 'update')
+        .some((call) => call.payload.subtitleText === 'Settled original'
+          && call.payload.subtitleLiveText === 'Settled original')).toBe(false)
+      expect(polishRequests()).toHaveLength(0)
     })
   })
 })

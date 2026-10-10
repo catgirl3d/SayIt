@@ -87,6 +87,16 @@ describe('pipeline trace', () => {
     })
   })
 
+  it('marks live recognition runs separately from finished clips', async () => {
+    const trace = await loadPipelineTrace()
+    trace.setPipelineDebugEnabled(true)
+    const input = { closeReason: 'silence' as const, mode: 'cloud_api' as const, speechMs: 640, recognitionKind: 'live' as const }
+    const runId = trace.beginRun(input)!
+    trace.finishRun(runId, { asrMs: 18, llmMs: 22 })
+
+    expect(trace.getPipelineSnapshot().runs[0]).toMatchObject({ recognitionKind: 'live', asrMs: 18, llmMs: 22 })
+  })
+
   it('records terminal failure statuses once and excludes cancellations from failures', async () => {
     const trace = await loadPipelineTrace()
     trace.setPipelineDebugEnabled(true)

@@ -26,6 +26,7 @@ export interface PipelineRun {
   readonly mode: WorkMode | 'unknown'
   readonly speechMs: number
   readonly closeReason: SegmentCloseReason
+  readonly recognitionKind: 'finished' | 'live'
   readonly queueMs: number | null
   readonly asrMs: number | null
   readonly llmMs: number | null
@@ -69,6 +70,7 @@ interface ActiveRun {
   mode: WorkMode | 'unknown'
   speechMs: number
   closeReason: SegmentCloseReason
+  recognitionKind: 'finished' | 'live'
   asrOnly?: boolean
   queueMs: number | null
 }
@@ -122,7 +124,13 @@ export function isPipelineDebugEnabled() {
   return enabled
 }
 
-export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number; closeReason: SegmentCloseReason; asrOnly?: boolean }): number | null {
+export function beginRun(input: {
+  mode: WorkMode | 'unknown'
+  speechMs: number
+  closeReason: SegmentCloseReason
+  recognitionKind?: 'finished' | 'live'
+  asrOnly?: boolean
+}): number | null {
   if (!enabled) return null
   const id = ++nextRunId
   activeRuns.set(id, {
@@ -131,6 +139,7 @@ export function beginRun(input: { mode: WorkMode | 'unknown'; speechMs: number; 
     mode: input.mode,
     speechMs: input.speechMs,
     closeReason: input.closeReason,
+    recognitionKind: input.recognitionKind ?? 'finished',
     asrOnly: input.asrOnly,
     queueMs: null,
   })

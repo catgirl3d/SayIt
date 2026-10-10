@@ -4,6 +4,8 @@ import { t } from '@/i18n'
 /** Caption data the subtitle session hands to the overlay; transport shape (state, locale) belongs to OverlayService. */
 export interface SubtitleOverlayPayload {
   subtitleText: string
+  subtitleLiveText?: string
+  subtitleLiveRecognition?: boolean
   subtitleStatus: string
   subtitleError: string
   /** Marks the caption itself (e.g. an original shown untranslated); rendered in the status line, empty hides it. */
