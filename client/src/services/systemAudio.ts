@@ -2,7 +2,23 @@ import * as bridge from './bridge'
 import { t } from '@/i18n'
 import { getPromptPresets, getSetting, TRANSLATION_PRESET_PREFIX } from './store'
 import { normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
-import { chooseForcedSplit, DEFAULT_SEGMENT_SECONDS, FRAME_MS, normalizeSegmentSeconds, segmentPlan, type SegmentPlan } from './subtitleSegmentation'
+import {
+  DEFAULT_SEGMENT_SECONDS,
+  FRAME_BYTES,
+  FRAME_MS,
+  normalizeSegmentSeconds,
+  segmentPlan,
+  SubtitleSegmenter,
+  type SealedSubtitleSegment,
+  type SegmentPlan,
+  type SubtitleFrame,
+} from './subtitleSegmentation'
+import {
+  LiveSpeechAccumulator,
+  type LiveFrameTiming,
+  type LiveIdleTiming,
+  type LiveRecognitionError,
+} from './systemAudioLiveRecognition'
 import { buildSubtitlePrompt, RecentSpeech, SUBTITLE_CONTEXT_SOURCE, subtitleLanguageName } from './subtitleTranslation'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
@@ -65,23 +81,15 @@ export interface SystemAudioDevice {
   isDefault: boolean
 }
 
-interface SystemAudioFrame {
+interface SystemAudioFrame extends LiveFrameTiming {
   sessionId: number
   audioB64: string
   speechProbability: number
   discontinuity: boolean
-  frameSequence: number
-  captureStartUnixUs: number | null
-  captureEndUnixUs: number | null
-  captureAnchors: Array<{ audioOffsetSamples: number; captureUnixUs: number }>
 }
 
-interface SystemAudioLiveIdle {
+interface SystemAudioLiveIdle extends LiveIdleTiming {
   sessionId: number
-  frameSequence: number
-  lastFrameCaptureEndUnixUs: number | null
-  lastAudioCaptureEndUnixUs: number | null
-  confirmedThroughUnixUs: number
 }
 
 interface SystemAudioCaptureTimingError {
@@ -98,11 +106,6 @@ interface SessionDependencies {
     update: (payload: SubtitleOverlayPayload) => Promise<void>
     hide: () => Promise<void>
   }
-}
-
-interface SpeechFrame {
-  audio: Uint8Array
-  probability: number
 }
 
 /** When a segment's speech started and ended, on the clock frames are received on. */
@@ -137,18 +140,6 @@ interface OverlayDelivery {
   finishDetails?: PipelineFinishDetails
 }
 
-interface LiveTimeAnchor {
-  audioMs: number
-  capturedAt: number
-}
-
-interface LiveFinalizeRequest {
-  afterFrontierMs: number
-  frontierMs: number
-  closeReason: SegmentCloseReason
-  targetStartMs: number
-}
-
 interface PipelineFinishDetails {
   asrMs: number
   llmMs: number
@@ -160,34 +151,8 @@ interface PipelineFinishDetails {
   captionChars: number
 }
 
-// Must match FRAME_SAMPLES = 512 i16 little-endian samples emitted by client/src-tauri/src/commands/system_audio.rs; receiveFrame hard-fails if the byte length differs.
-const FRAME_BYTES = 512 * 2
-// Cap the displayed live phrase at 16 KiB of UTF-8 text; an oversized phrase stops live recognition.
-const MAX_LIVE_PHRASE_BYTES = 16 * 1024
-// Retain at most 64 live audio-to-capture-time anchors; older anchors are discarded as the stream advances.
-const MAX_LIVE_TIME_ANCHORS = 64
-// Bound unmatched live finalize requests at 32; retire the oldest frontier when the bound is reached.
-const MAX_LIVE_FINALIZE_REQUESTS = 32
-// Require 512 ms (16 frame periods) of native capture time beyond the last audio end before accepting idle confirmation.
-const LIVE_IDLE_CONFIRMATION_US = 512_000
-// Allow 4 microseconds of timestamp tolerance when validating live frame duration and detecting source gaps.
-// Must match CAPTURE_TIME_TOLERANCE_US in client/src-tauri/src/commands/system_audio.rs; change both together.
-const LIVE_CAPTURE_TIME_TOLERANCE_US = 4
 // After 5 seconds, annotate an unconfirmed stop so the UI explains the delay while cleanup continues.
 const LIVE_STOP_WATCHDOG_MS = 5_000
-// Retain up to 8 non-voiced frames (256 ms) before speech starts, preserving audio before voice detection turns voiced.
-const PRE_ROLL_FRAMES = 8
-// Require 8 voiced frames (256 ms) before submitting a segment; a continuation may submit with any voiced frame.
-const MIN_VOICED_FRAMES = 8
-// End an open segment after 15 silent frames (480 ms).
-const END_SILENCE_FRAMES = 15
-// A pause this long (160 ms) is a phrase boundary, not a gap between words or a stop consonant.
-// Once a segment has reached its soft length (see segmentPlan) the first such pause closes it early,
-// so continuous speech is cut between phrases instead of waiting for the hard cap.
-const PAUSE_SPLIT_FRAMES = 5
-// Silero speech probability at or above which a frame counts as voiced.
-const SPEECH_THRESHOLD = 0.3
-const isVoiced = (frame: SpeechFrame) => frame.probability >= SPEECH_THRESHOLD
 // Bound queued PCM at 12 seconds (16,000 samples/s x 2 bytes x 12); drop the oldest speech when processing lags.
 const MAX_PENDING_BYTES = 16_000 * 2 * 12
 // Close the current speech segment after this receive inactivity interval.
@@ -251,14 +216,10 @@ export class SystemAudioSession {
   private overlayInFlight: Promise<void> | null = null
   private pendingOverlay: OverlayDelivery | null = null
   private overlayFailure: unknown = null
-  private frames: SpeechFrame[] = []
-  private preRoll: SpeechFrame[] = []
   private plan: SegmentPlan = segmentPlan(DEFAULT_SEGMENT_SECONDS)
+  private segmenter = new SubtitleSegmenter(this.plan)
   // Fixed per start: the overlay window is sized once, so the layout must not change under a running session.
   private dual = false
-  private voicedFrames = 0
-  private silenceFrames = 0
-  private continuation = false
   private queue: SegmentJob[] = []
   private queuedBytes = 0
   private activeJob = 0
@@ -283,30 +244,7 @@ export class SystemAudioSession {
   private liveSelected = false
   private liveSession: LiveAsrSession | null = null
   private liveSessionId: string | null = null
-  private liveLastResultId = 0
-  private liveAudioMs = 0
-  private liveTimeAnchors: LiveTimeAnchor[] = []
-  private liveLastCaptureFrameSequence = 0
-  private liveLastCaptureFrameEndUnixUs: number | null = null
-  private liveLastIdleFrameSequence = -1
-  private liveLastIdleAudioEndUnixUs = -1
-  private liveStableWatermark = 0
-  private liveCommittedWatermark = 0
-  private liveConfirmedText = ''
-  private liveConfirmedStartMs: number | null = null
-  private liveConfirmedEndMs = 0
-  private liveConfirmedAt: number | null = null
-  private liveInterimText = ''
-  private liveInterimStartMs: number | null = null
-  private liveInterimEndMs = 0
-  private livePhraseStartMs: number | null = null
-  private livePhraseEngine = ''
-  private livePhraseModel = ''
-  private liveTargetStartMs = 0
-  private liveFinalizedFrontier = -1
-  private liveFinalizeRequests: LiveFinalizeRequest[] = []
-  private liveLastFinalizeRequest: LiveFinalizeRequest | null = null
-  private liveFinalizeRetiredThrough = -1
+  private liveAccumulator: LiveSpeechAccumulator | null = null
   private liveDiscontinuityWarning = ''
 
   getSnapshot = () => this.snapshot
@@ -530,6 +468,7 @@ export class SystemAudioSession {
         ])
         if (generation !== this.generation) return
         this.plan = segmentPlan(maxSegmentSeconds)
+        this.segmenter = new SubtitleSegmenter(this.plan)
         this.dual = dual && !asrOnly
         if (asrOnly) {
           this.startOptions = { systemPrompt: '', language, hotwords: [...hotwords], disableAi: true, aiMinDurationSec: 0, requireTranslation: false, disableStreaming: true }
@@ -641,12 +580,16 @@ export class SystemAudioSession {
           if (reuseSnapshot) throw new Error(t('systemAudio.notReady'))
           this.liveRequested = false
           this.liveSelected = false
+          this.liveAccumulator = null
           this.snapshot = { ...this.snapshot, liveRecognition: false, liveOriginal: '' }
         } else {
           this.liveSession = live
           this.liveSessionId = live.sessionId
           this.liveSelected = true
-          this.resetLiveRecognition()
+          this.liveAccumulator = new LiveSpeechAccumulator({
+            language: this.startOptions?.language ?? '',
+            targetMs: this.plan.hardFrames * FRAME_MS,
+          })
           this.snapshot = { ...this.snapshot, liveRecognition: true, liveOriginal: '' }
           this.listeners.forEach((listener) => listener())
         }
@@ -725,66 +668,31 @@ export class SystemAudioSession {
 
     const now = Date.now()
     if (this.liveSelected) {
-      if (!Number.isSafeInteger(frame.frameSequence) || frame.frameSequence < 1
-        || !Number.isSafeInteger(frame.captureStartUnixUs) || !Number.isSafeInteger(frame.captureEndUnixUs)
-        || frame.captureStartUnixUs === null || frame.captureEndUnixUs === null
-        || frame.captureEndUnixUs - frame.captureStartUnixUs < FRAME_MS * 1_000 - LIVE_CAPTURE_TIME_TOLERANCE_US
-        || !Array.isArray(frame.captureAnchors) || frame.captureAnchors.length > MAX_LIVE_TIME_ANCHORS) {
-        this.fail(t('systemAudio.notReady'), 'Missing or malformed native source capture timing')
+      const accumulator = this.liveAccumulator
+      if (!accumulator) {
+        this.fail(t('systemAudio.notReady'), 'Live recognition state is unavailable')
         return
       }
-      // Native owns the timing policy and already absorbs the audio engine's sub-millisecond
-      // clock slew, so the boundary verifies only that the payload is structurally sound:
-      // never re-derive microsecond arithmetic that would let normal jitter abort the session.
-      let previousAnchorOffset = 0
-      let previousAnchorTime = frame.captureStartUnixUs
-      for (const anchor of frame.captureAnchors) {
-        if (!Number.isSafeInteger(anchor.audioOffsetSamples) || anchor.audioOffsetSamples <= previousAnchorOffset
-          || anchor.audioOffsetSamples >= FRAME_BYTES / 2
-          || !Number.isSafeInteger(anchor.captureUnixUs)
-          || anchor.captureUnixUs <= previousAnchorTime || anchor.captureUnixUs >= frame.captureEndUnixUs) {
-          this.fail(t('systemAudio.notReady'), 'Malformed native intra-frame source timing anchor')
-          return
-        }
-        previousAnchorOffset = anchor.audioOffsetSamples
-        previousAnchorTime = anchor.captureUnixUs
-      }
-      if (frame.frameSequence <= this.liveLastCaptureFrameSequence) return
-      if (frame.frameSequence !== this.liveLastCaptureFrameSequence + 1) {
-        this.fail(t('systemAudio.notReady'), 'Native source frame sequence has a gap')
+      const inspected = accumulator.inspectFrame(frame)
+      if (inspected.kind === 'error') {
+        this.failLiveRecognition(inspected.error)
         return
       }
-      const previousCaptureEnd = this.liveLastCaptureFrameEndUnixUs
-      const frameAudioStartMs = this.liveAudioMs
-      if (previousCaptureEnd === null) {
-        this.addLiveTimeAnchor(this.liveAudioMs, frame.captureStartUnixUs / 1_000)
-      } else {
-        const sourceGapUs = frame.captureStartUnixUs - previousCaptureEnd
-        if (sourceGapUs > LIVE_CAPTURE_TIME_TOLERANCE_US) {
-          if (sourceGapUs >= LIVE_IDLE_CONFIRMATION_US) this.closeLiveGap()
-          this.addLiveTimeAnchor(this.liveAudioMs, frame.captureStartUnixUs / 1_000)
-        }
-      }
-      for (const anchor of frame.captureAnchors) {
-        this.addLiveTimeAnchor(
-          frameAudioStartMs + anchor.audioOffsetSamples * FRAME_MS / (FRAME_BYTES / 2),
-          anchor.captureUnixUs / 1_000,
-        )
-      }
-      this.liveLastCaptureFrameSequence = frame.frameSequence
-      this.liveLastCaptureFrameEndUnixUs = frame.captureEndUnixUs
+      if (inspected.kind === 'duplicate') return
+      if (inspected.closeGap) this.closeLiveGap()
+      accumulator.recordFrame(inspected)
     } else if (this.lastFrameAt) {
       const gapMs = now - this.lastFrameAt
       if (gapMs >= FRAME_RECEIVE_GAP_MS) this.closeGap(gapMs)
-      else if (this.isSpeechOpen()) noteSpeechFrameGap(gapMs)
+      else if (this.segmenter.isSpeechOpen()) noteSpeechFrameGap(gapMs)
     }
     if (this.snapshot.state === 'error') {
       countFrame(audio.byteLength)
       return
     }
-    const speechFrame: SpeechFrame = { audio, probability: frame.speechProbability }
+    const speechFrame: SubtitleFrame = { audio, probability: frame.speechProbability }
     if (this.liveSelected) {
-      countFrame(audio.byteLength, { phase: 'listening', segmentMs: this.liveAudioMs })
+      countFrame(audio.byteLength, { phase: 'listening', segmentMs: this.liveAccumulator?.audioMs ?? 0 })
       this.sendLiveFrame(audio, generation)
       return
     }
@@ -795,89 +703,21 @@ export class SystemAudioSession {
       if (generation !== this.generation) return
       this.closeGap(Date.now() - this.lastFrameAt)
     }, FRAME_RECEIVE_GAP_MS)
-    const voiced = isVoiced(speechFrame)
     // Capture-driven phases must stay out of the way while a queued ASR or translation job is in flight,
     // otherwise the next captured frame immediately hides the stage that stageElapsedMs is timing.
     const processing = this.activeJob !== 0 || this.translating !== null
-    if (!this.frames.length && !this.continuation && !voiced) {
-      this.preRoll.push(speechFrame)
-      if (this.preRoll.length > PRE_ROLL_FRAMES) this.preRoll.shift()
-      countFrame(audio.byteLength, processing ? undefined : { phase: 'listening', segmentMs: 0 })
-      return
-    }
-    if (!this.frames.length) {
-      this.frames = this.preRoll
-      this.preRoll = []
-    }
-    this.frames.push(speechFrame)
-    countFrame(audio.byteLength, processing ? undefined : { phase: 'speech', segmentMs: this.frames.length * FRAME_MS })
-    if (voiced) { this.voicedFrames++; this.silenceFrames = 0 } else { this.silenceFrames++ }
-    if (this.silenceFrames >= END_SILENCE_FRAMES) this.finishSegment('silence')
-    else if (this.frames.length >= this.plan.softFrames && this.silenceFrames >= PAUSE_SPLIT_FRAMES) this.finishSegment('pause')
-    else if (this.frames.length >= this.plan.hardFrames) this.splitAtQuietestPoint()
-  }
-
-  private resetLiveRecognition() {
-    this.liveLastResultId = 0
-    this.liveAudioMs = 0
-    this.liveTimeAnchors = []
-    this.liveLastCaptureFrameSequence = 0
-    this.liveLastCaptureFrameEndUnixUs = null
-    this.liveLastIdleFrameSequence = -1
-    this.liveLastIdleAudioEndUnixUs = -1
-    this.liveStableWatermark = 0
-    this.liveCommittedWatermark = 0
-    this.liveConfirmedText = ''
-    this.liveConfirmedStartMs = null
-    this.liveConfirmedEndMs = 0
-    this.liveConfirmedAt = null
-    this.liveInterimText = ''
-    this.liveInterimStartMs = null
-    this.liveInterimEndMs = 0
-    this.livePhraseStartMs = null
-    this.livePhraseEngine = ''
-    this.livePhraseModel = ''
-    this.liveTargetStartMs = 0
-    this.liveFinalizedFrontier = -1
-    this.liveFinalizeRequests = []
-    this.liveLastFinalizeRequest = null
-    this.liveFinalizeRetiredThrough = -1
-  }
-
-  private addLiveTimeAnchor(audioMs: number, capturedAt: number) {
-    const last = this.liveTimeAnchors[this.liveTimeAnchors.length - 1]
-    if (last?.audioMs === audioMs) {
-      last.capturedAt = capturedAt
-      return
-    }
-    this.liveTimeAnchors.push({ audioMs, capturedAt })
-    if (this.liveTimeAnchors.length > MAX_LIVE_TIME_ANCHORS) this.liveTimeAnchors.shift()
-  }
-
-  private mapLiveAudioTime(audioMs: number, edge: 'start' | 'end'): number | null {
-    for (let index = this.liveTimeAnchors.length - 1; index >= 0; index--) {
-      const anchor = this.liveTimeAnchors[index]!
-      const applies = edge === 'start' ? anchor.audioMs <= audioMs : anchor.audioMs < audioMs || index === 0
-      if (applies) return anchor.capturedAt + audioMs - anchor.audioMs
-    }
-    return null
-  }
-
-  private joinLiveText(left: string, right: string): string {
-    const first = left.trim()
-    const next = right.trim()
-    if (!first) return next
-    if (!next) return first
-    return `${first}${this.startOptions?.language === 'zh' ? '' : ' '}${next}`
-  }
-
-  private liveDisplayText() {
-    return this.joinLiveText(this.liveConfirmedText, this.liveInterimText)
+    const result = this.segmenter.push(speechFrame)
+    countFrame(audio.byteLength, processing ? undefined : {
+      phase: result.segmentMs ? 'speech' : 'listening',
+      segmentMs: result.segmentMs,
+    })
+    if (result.sealed) this.enqueueSegment(result.sealed)
   }
 
   private sendLiveFrame(audio: Uint8Array, generation: number) {
     const live = this.liveSession
-    if (!live || !this.liveSelected || generation !== this.generation) return
+    const accumulator = this.liveAccumulator
+    if (!live || !accumulator || !this.liveSelected || generation !== this.generation) return
     try {
       live.sendAudio(audio.buffer as ArrayBuffer)
     } catch (error) {
@@ -885,125 +725,84 @@ export class SystemAudioSession {
       return
     }
     if (generation !== this.generation || live !== this.liveSession) return
-    this.liveAudioMs += FRAME_MS
-    const targetMs = this.plan.hardFrames * FRAME_MS
-    if (this.liveAudioMs - this.liveTargetStartMs >= targetMs) {
-      this.liveTargetStartMs = this.liveAudioMs
-      // A target crossing during silence must not flush the stream: Deepgram would finalize a
-      // stray word into a phrase of its own. Flush only while speech is actually pending.
-      if (this.liveConfirmedText.trim() || this.liveInterimText.trim()) {
-        if (this.liveConfirmedText.trim()) this.commitLivePhrase(this.liveConfirmedEndMs, 'cap')
-        this.requestLiveFinalize(generation, 'cap')
-      }
+    const sendResult = accumulator.markFrameSent()
+    // A target crossing during silence must not flush the stream: Deepgram would finalize a
+    // stray word into a phrase of its own. Flush only while speech is actually pending.
+    if (!sendResult.targetCrossed || !sendResult.pendingText) return
+    if (sendResult.confirmedBoundaryMs !== null) {
+      this.commitLivePhrase(sendResult.confirmedBoundaryMs, 'cap', sendResult.targetStartMs)
     }
+    this.requestLiveFinalize(generation, 'cap')
   }
 
   private receiveLiveIdle(idle: SystemAudioLiveIdle, generation: number, captureId: number) {
     if (generation !== this.generation || !this.liveSelected || !['starting', 'listening'].includes(this.snapshot.state)
       || idle.sessionId !== captureId || idle.sessionId !== this.captureId) return
-    if (!Number.isSafeInteger(idle.frameSequence) || idle.frameSequence < 0) {
-      this.fail(t('systemAudio.notReady'), 'Malformed native source idle sequence')
+    const accumulator = this.liveAccumulator
+    if (!accumulator) {
+      this.fail(t('systemAudio.notReady'), 'Live recognition state is unavailable')
       return
     }
-    if (idle.frameSequence < this.liveLastCaptureFrameSequence) return
-    if (idle.frameSequence > this.liveLastCaptureFrameSequence) return
-    if (!Number.isSafeInteger(idle.confirmedThroughUnixUs)
-      || !Number.isSafeInteger(idle.lastAudioCaptureEndUnixUs)
-      || idle.lastAudioCaptureEndUnixUs === null
-      || idle.confirmedThroughUnixUs < idle.lastAudioCaptureEndUnixUs + LIVE_IDLE_CONFIRMATION_US) {
-      this.fail(t('systemAudio.notReady'), 'Malformed native source idle confirmation')
+    const outcome = accumulator.acceptIdle(idle)
+    if (outcome.kind === 'error') {
+      this.failLiveRecognition(outcome.error)
       return
     }
-    if (idle.frameSequence === 0 && this.liveLastCaptureFrameEndUnixUs === null) return
-    if (!Number.isSafeInteger(idle.lastFrameCaptureEndUnixUs)
-      || idle.lastFrameCaptureEndUnixUs === null
-      || idle.lastFrameCaptureEndUnixUs !== this.liveLastCaptureFrameEndUnixUs
-      || idle.lastAudioCaptureEndUnixUs < idle.lastFrameCaptureEndUnixUs) {
-      this.fail(t('systemAudio.notReady'), 'Native source idle confirmation does not match the frame frontier')
-      return
-    }
-    if (idle.frameSequence < this.liveLastIdleFrameSequence
-      || (idle.frameSequence === this.liveLastIdleFrameSequence
-        && idle.lastAudioCaptureEndUnixUs <= this.liveLastIdleAudioEndUnixUs)) return
-    this.liveLastIdleFrameSequence = idle.frameSequence
-    this.liveLastIdleAudioEndUnixUs = idle.lastAudioCaptureEndUnixUs
-    this.closeLiveGap()
+    if (outcome.kind === 'closeGap') this.closeLiveGap()
   }
 
   private receiveLiveResult(generation: number, result: LiveAsrResult) {
-    if (generation !== this.generation || !this.liveSelected || this.liveSessionId !== result.sessionId
-      || result.resultId <= this.liveLastResultId) return
-    if (!Number.isFinite(result.audioStartMs) || !Number.isFinite(result.audioEndMs)
-      || result.audioStartMs < 0 || result.audioEndMs < result.audioStartMs || typeof result.text !== 'string') {
-      this.fail(t('systemAudio.notReady'), 'Invalid live recognition range')
+    if (generation !== this.generation || !this.liveSelected || this.liveSessionId !== result.sessionId) return
+    const accumulator = this.liveAccumulator
+    if (!accumulator) {
+      this.fail(t('systemAudio.notReady'), 'Live recognition state is unavailable')
       return
     }
-    this.liveLastResultId = result.resultId
-    const matchedFinalizeRequest = result.fromFinalize ? this.findLiveFinalizeRequest(result.audioEndMs) : null
-    if (result.audioEndMs <= this.liveCommittedWatermark
-      || result.audioStartMs < this.liveCommittedWatermark) return
-
-    let changed = false
-    const text = result.text.trim()
-    if (result.isFinal) {
-      if (result.audioStartMs >= this.liveStableWatermark && result.audioEndMs > this.liveStableWatermark) {
-        this.liveStableWatermark = result.audioEndMs
-        if (text) {
-          if (this.livePhraseStartMs === null) {
-            this.livePhraseStartMs = result.audioStartMs
-            this.livePhraseEngine = result.asrEngine
-            this.livePhraseModel = result.asrModel
-          }
-          this.liveConfirmedStartMs ??= result.audioStartMs
-          this.liveConfirmedText = this.joinLiveText(this.liveConfirmedText, text)
-          this.liveConfirmedEndMs = result.audioEndMs
-          this.liveConfirmedAt = Date.now()
-        }
-        if (this.liveInterimStartMs !== null && this.liveInterimStartMs < this.liveStableWatermark) {
-          this.liveInterimText = ''
-          this.liveInterimStartMs = null
-          this.liveInterimEndMs = 0
-        }
-        changed = true
-      }
-    } else if (result.audioStartMs >= this.liveStableWatermark && result.audioEndMs > this.liveStableWatermark) {
-      this.liveInterimText = text
-      this.liveInterimStartMs = result.audioStartMs
-      this.liveInterimEndMs = result.audioEndMs
-      if (this.livePhraseStartMs === null) {
-        this.livePhraseStartMs = result.audioStartMs
-        this.livePhraseEngine = result.asrEngine
-        this.livePhraseModel = result.asrModel
-      }
-      changed = true
-    }
-
-    if (new TextEncoder().encode(this.liveDisplayText()).byteLength > MAX_LIVE_PHRASE_BYTES) {
-      this.fail(t('systemAudio.livePhraseOverflow'))
+    const outcome = accumulator.acceptResult(result, Date.now())
+    if (outcome.kind === 'error') {
+      this.failLiveRecognition(outcome.error)
       return
     }
-    const finalizeRequest = matchedFinalizeRequest ?? (result.fromFinalize ? this.liveLastFinalizeRequest : null)
-    const fromFinalizeWithMetadata = result.fromFinalize && finalizeRequest !== null
-    if ((result.speechFinal || fromFinalizeWithMetadata)
-      && result.audioEndMs > this.liveCommittedWatermark
-      && result.audioEndMs >= this.liveStableWatermark
-      && (this.livePhraseStartMs === null || result.audioEndMs > this.livePhraseStartMs)) {
-      if (matchedFinalizeRequest) this.consumeLiveFinalizeRequest(matchedFinalizeRequest)
-      const closeReason = finalizeRequest?.closeReason ?? (result.fromFinalize ? 'gap' : 'silence')
-      const targetStartMs = finalizeRequest?.closeReason === 'cap'
-        ? finalizeRequest.targetStartMs
-        : result.speechFinal ? result.audioEndMs : this.liveAudioMs
-      this.commitLivePhrase(result.audioEndMs, closeReason, targetStartMs)
+    if (outcome.kind === 'ignored') return
+    if (outcome.kind === 'updated') {
+      this.publish({ liveOriginal: outcome.liveOriginal })
       return
     }
-    if (changed) this.publish({ liveOriginal: this.liveDisplayText() })
+    if (outcome.matchedFinalizeRequest) accumulator.consumeFinalizeRequest(outcome.matchedFinalizeRequest)
+    this.commitLivePhrase(outcome.boundaryAudioMs, outcome.closeReason, outcome.targetStartMs)
   }
 
-  private commitLivePhrase(boundaryAudioMs: number, closeReason: SegmentCloseReason, targetStartMs = this.liveAudioMs) {
-    if (boundaryAudioMs <= this.liveCommittedWatermark) return
-    const text = this.liveConfirmedText.trim()
-    const startAudioMs = this.liveConfirmedStartMs
-    const endAudioMs = text && this.liveConfirmedEndMs > 0 ? this.liveConfirmedEndMs : boundaryAudioMs
+  private failLiveRecognition(error: LiveRecognitionError) {
+    switch (error.kind) {
+      case 'overflow':
+        this.fail(t('systemAudio.livePhraseOverflow'))
+        return
+      case 'timingUnavailable':
+        this.fail(t('systemAudio.liveTimingUnavailable'))
+        return
+      case 'frameTiming':
+      case 'anchor':
+      case 'frameSequence':
+      case 'idle':
+      case 'resultRange':
+        this.fail(t('systemAudio.notReady'), error.detail)
+        return
+      default: {
+        const unreachable: never = error.kind
+        throw new Error(`Unhandled live recognition error: ${unreachable}`)
+      }
+    }
+  }
+
+  private commitLivePhrase(boundaryAudioMs: number, closeReason: SegmentCloseReason, targetStartMs = this.liveAccumulator?.audioMs ?? 0) {
+    const accumulator = this.liveAccumulator
+    if (!accumulator) return
+    const prepared = accumulator.prepareCommit(boundaryAudioMs, targetStartMs)
+    if (prepared.kind === 'none') return
+    if (prepared.kind === 'error') {
+      this.failLiveRecognition(prepared.error)
+      return
+    }
     const generation = this.generation
     let job: TranslationJob | null = null
     let recognitionOnlyResult: {
@@ -1013,20 +812,15 @@ export class SystemAudioSession {
       finishDetails: PipelineFinishDetails
     } | null = null
 
-    if (text && startAudioMs !== null) {
-      const startedAt = this.mapLiveAudioTime(startAudioMs, 'start')
-      const endedAt = this.mapLiveAudioTime(endAudioMs, 'end')
-      if (startedAt === null || endedAt === null) {
-        this.fail(t('systemAudio.liveTimingUnavailable'))
-        return
-      }
-      const sourceSpan = { startedAt, endedAt: Math.max(startedAt, endedAt) }
+    if (prepared.text && prepared.startedAt !== null && prepared.endedAt !== null) {
+      const text = prepared.text
+      const sourceSpan = { startedAt: prepared.startedAt, endedAt: prepared.endedAt }
       const context = this.translationContext(sourceSpan)
       const phraseId = ++sequence
-      const asrMs = Math.max(0, (this.liveConfirmedAt ?? Date.now()) - sourceSpan.endedAt)
+      const asrMs = Math.max(0, (prepared.confirmedAt ?? Date.now()) - sourceSpan.endedAt)
       const speechMs = Math.max(0, sourceSpan.endedAt - sourceSpan.startedAt)
-      const asrEngine = this.livePhraseEngine || 'deepgram'
-      const asrModel = this.livePhraseModel
+      const asrEngine = prepared.asrEngine || 'deepgram'
+      const asrModel = prepared.asrModel
       const runId = beginRun({
         mode: this.provider?.mode ?? 'unknown',
         speechMs,
@@ -1063,23 +857,7 @@ export class SystemAudioSession {
       }
     }
 
-    this.liveCommittedWatermark = Math.max(this.liveCommittedWatermark, boundaryAudioMs)
-    this.liveConfirmedText = ''
-    this.liveConfirmedStartMs = null
-    this.liveConfirmedEndMs = 0
-    this.liveConfirmedAt = null
-    if (this.liveInterimStartMs === null || this.liveInterimEndMs <= boundaryAudioMs) {
-      this.liveInterimText = ''
-      this.liveInterimStartMs = null
-      this.liveInterimEndMs = 0
-    }
-    this.livePhraseStartMs = this.liveInterimStartMs
-    if (this.livePhraseStartMs === null) {
-      this.livePhraseEngine = ''
-      this.livePhraseModel = ''
-    }
-    this.liveTargetStartMs = targetStartMs
-    const liveOriginal = this.liveDisplayText()
+    const liveOriginal = accumulator.completeCommit(prepared).liveOriginal
     if (recognitionOnlyResult) {
       this.publish({
         caption: recognitionOnlyResult.caption,
@@ -1100,47 +878,21 @@ export class SystemAudioSession {
 
   private requestLiveFinalize(generation: number, reason: SegmentCloseReason) {
     const live = this.liveSession
-    const frontier = this.liveAudioMs
-    if (!live || frontier <= this.liveFinalizedFrontier) return
-    const request: LiveFinalizeRequest = {
-      afterFrontierMs: this.liveFinalizedFrontier,
-      frontierMs: frontier,
-      closeReason: reason,
-      targetStartMs: this.liveTargetStartMs,
-    }
-    if (this.liveFinalizeRequests.length >= MAX_LIVE_FINALIZE_REQUESTS) {
-      const retired = this.liveFinalizeRequests.shift()!
-      this.liveFinalizeRetiredThrough = Math.max(this.liveFinalizeRetiredThrough, retired.frontierMs)
-    }
-    this.liveFinalizeRequests.push(request)
-    this.liveLastFinalizeRequest = request
-    this.liveFinalizedFrontier = frontier
+    const accumulator = this.liveAccumulator
+    if (!live || !accumulator) return
+    const request = accumulator.registerFinalize(reason)
+    if (!request) return
     void live.finalize().catch((error: unknown) => {
       if (generation === this.generation && live === this.liveSession) this.fail(String(error))
     })
   }
 
-  private findLiveFinalizeRequest(audioEndMs: number) {
-    // Results have no request ID; match only their audio window and never shift a later result into an expired one.
-    if (audioEndMs <= this.liveFinalizeRetiredThrough) return null
-    return this.liveFinalizeRequests.find((request) =>
-      audioEndMs > request.afterFrontierMs && audioEndMs <= request.frontierMs)
-      ?? null
-  }
-
-  private consumeLiveFinalizeRequest(request: LiveFinalizeRequest) {
-    const index = this.liveFinalizeRequests.indexOf(request)
-    if (index < 0) return
-    this.liveFinalizeRequests.splice(0, index + 1)
-    this.liveFinalizeRetiredThrough = Math.max(this.liveFinalizeRetiredThrough, request.frontierMs)
-  }
-
   private closeLiveGap() {
-    if (!this.liveSelected) return
-    if (this.liveConfirmedText) this.commitLivePhrase(this.liveConfirmedEndMs, 'gap')
-    if (this.liveAudioMs > this.liveFinalizedFrontier) {
-      this.requestLiveFinalize(this.generation, 'gap')
-    }
+    const accumulator = this.liveAccumulator
+    if (!this.liveSelected || !accumulator) return
+    const action = accumulator.prepareGapClose()
+    if (action.confirmedBoundaryMs !== null) this.commitLivePhrase(action.confirmedBoundaryMs, 'gap')
+    if (action.shouldFinalize) this.requestLiveFinalize(this.generation, 'gap')
   }
 
   private recoverLiveAfterDiscontinuity() {
@@ -1170,18 +922,6 @@ export class SystemAudioSession {
     })
   }
 
-  // A speech segment is open while it holds frames, or while the one before it was cut mid-speech.
-  private isSpeechOpen() {
-    return this.frames.length > 0 || this.continuation
-  }
-
-  // The segment hit its hard cap without a phrase boundary. Cut at the quietest point of the tail window and
-  // carry the frames after it into the next segment, so a word is not severed on an arbitrary frame.
-  private splitAtQuietestPoint() {
-    const keep = chooseForcedSplit(this.frames.map((frame) => frame.probability), this.plan.softFrames)
-    this.finishSegment('cap', this.frames.splice(keep))
-  }
-
   // No frame arrived for `gapMs`: either playback stopped or frame delivery stalled. The two look the same here, but
   // the last frame tells them apart for diagnostics: a voiced one means speech was cut off mid-way.
   private closeGap(gapMs: number) {
@@ -1189,36 +929,21 @@ export class SystemAudioSession {
     this.gapTimer = null
     if (this.liveSelected) {
       this.closeLiveGap()
-      this.preRoll = []
       this.lastFrameAt = 0
       return
     }
-    if (this.isSpeechOpen()) noteSpeechFrameGap(gapMs)
-    const last = this.frames[this.frames.length - 1]
-    this.finishSegment(last && isVoiced(last) ? 'dropout' : 'gap')
-    this.preRoll = []
+    if (this.segmenter.isSpeechOpen()) noteSpeechFrameGap(gapMs)
+    const sealed = this.segmenter.closeGap()
+    if (sealed) this.enqueueSegment(sealed)
     this.lastFrameAt = 0
   }
 
-  // `carry` holds frames that were captured after the cut point and open the next segment. A pause or length-limit
-  // cut means speech is still going on, so the next segment continues it; every other reason ends the utterance.
-  private finishSegment(reason: SegmentCloseReason, carry: SpeechFrame[] = []) {
-    const eligible = this.voicedFrames >= MIN_VOICED_FRAMES || (this.continuation && this.voicedFrames > 0)
-    const frames = this.frames
-    this.frames = carry
-    this.voicedFrames = carry.filter(isVoiced).length
-    this.silenceFrames = 0
-    while (this.silenceFrames < carry.length && !isVoiced(carry[carry.length - 1 - this.silenceFrames])) this.silenceFrames++
-    this.continuation = (reason === 'pause' || reason === 'cap') && eligible
-    if (!eligible || !frames.length) return
-    // A short continuation still contains real speech; pad only the submitted job to the ASR minimum.
-    const audio = new Uint8Array(Math.max(10, frames.length) * FRAME_BYTES)
-    frames.forEach((frame, index) => audio.set(frame.audio, index * FRAME_BYTES))
-    this.dropOldestToFit(audio.byteLength)
-    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: frames.length * FRAME_MS, closeReason: reason, asrOnly: this.options?.asrOnly ?? false })
+  private enqueueSegment(segment: SealedSubtitleSegment) {
+    this.dropOldestToFit(segment.audio.byteLength)
+    const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: segment.speechMs, closeReason: segment.closeReason, asrOnly: this.options?.asrOnly ?? false })
     const endedAt = Date.now()
-    this.queue.push({ audio, runId, startedAt: endedAt - frames.length * FRAME_MS, endedAt })
-    this.queuedBytes += audio.byteLength
+    this.queue.push({ audio: segment.audio, runId, startedAt: endedAt - segment.speechMs, endedAt })
+    this.queuedBytes += segment.audio.byteLength
     this.publishQueueDepth()
     this.processNext()
   }
@@ -1427,10 +1152,8 @@ export class SystemAudioSession {
   private resetSegment() {
     if (this.gapTimer) clearTimeout(this.gapTimer)
     this.gapTimer = null
-    this.frames = []
-    this.preRoll = []
-    this.voicedFrames = this.silenceFrames = this.lastFrameAt = 0
-    this.continuation = false
+    this.segmenter.reset()
+    this.lastFrameAt = 0
   }
 
   private clearWork(preserveWarnings = false) {
@@ -1459,7 +1182,7 @@ export class SystemAudioSession {
     if (!preserveWarnings) this.asrWarning = null
     this.queuedBytes = this.activeJob = 0
     this.publishedAsrJob = 0
-    this.resetLiveRecognition()
+    this.liveAccumulator?.reset()
     setQueueDepth(0)
     setPipelineActivity({ phase: 'idle', segmentMs: 0, stageStartedAt: null })
     this.unlisteners.splice(0).forEach((unlisten) => unlisten())
@@ -1479,6 +1202,7 @@ export class SystemAudioSession {
     this.liveSession = null
     this.liveSessionId = null
     this.liveSelected = false
+    this.liveAccumulator = null
     if (this.snapshot.liveRecognition) this.publish({ liveRecognition: false, liveOriginal: '' })
   }
 
@@ -1631,6 +1355,7 @@ export class SystemAudioSession {
       this.liveSelected = false
       this.liveSession = null
       this.liveSessionId = null
+      this.liveAccumulator = null
       this.liveDiscontinuityWarning = ''
       this.publish({ state: 'idle', ...NO_CAPTION, liveRecognition: false, error: '', warning: '' })
     } catch (error) {
