@@ -29,10 +29,83 @@ import {
   type TranscriptionCallbacks,
   type StartOptions,
   type StopOptions,
+  type LiveAsrCallbacks,
+  type LiveAsrError,
+  type LiveAsrResult,
+  type LiveAsrSession,
+  type LiveAsrWarning,
   type WorkMode,
 } from './types'
 
 interface AsrResult { text: string; elapsed_ms: number; warning?: AsrWarningCode }
+
+const LIVE_PCM_BUDGET_BYTES = 384_000
+const LIVE_PCM_BATCH_BYTES = 16_000
+const LIVE_CONTROL_QUEUE_LIMIT = 32
+const LIVE_OPEN_STALL_MS = 10_000
+const LIVE_OPERATION_STALL_MS = 5_000
+
+interface NativeLiveResult {
+  sessionId: string
+  resultId: number
+  audioStartMs: number
+  audioEndMs: number
+  text: string
+  isFinal: boolean
+  speechFinal: boolean
+  fromFinalize: boolean
+}
+
+interface LiveAudioOperation {
+  kind: 'audio'
+  buffer: ArrayBuffer
+  offset: number
+}
+
+interface LiveFinalizeOperation {
+  kind: 'finalize'
+  resolve: () => void
+  reject: (error: Error) => void
+}
+
+type LiveOperation = LiveAudioOperation | LiveFinalizeOperation
+
+interface LiveOwner {
+  sessionId: string
+  callbacks: LiveAsrCallbacks
+  asrEngine: string
+  asrModel: string
+  cancelled: boolean
+  closing: boolean
+  terminalError: Error | null
+  nativeOpenAttempted: boolean
+  nativeOpenOperation: Promise<{ opened: boolean; payload: unknown }> | null
+  nativeOpenError: unknown
+  unlisteners: Array<() => void>
+  operations: LiveOperation[]
+  pendingAudioBytes: number
+  audioFrontier: number
+  pendingFinalizeCount: number
+  lastFinalize: { frontier: number; promise: Promise<void> } | null
+  drainPromise: Promise<void> | null
+  closePromise: Promise<void> | null
+}
+
+function isNativeLiveResult(value: unknown): value is NativeLiveResult {
+  if (typeof value !== 'object' || value === null) return false
+  const result = value as Record<string, unknown>
+  return typeof result.sessionId === 'string'
+    && typeof result.resultId === 'number'
+    && Number.isFinite(result.resultId)
+    && typeof result.audioStartMs === 'number'
+    && Number.isFinite(result.audioStartMs)
+    && typeof result.audioEndMs === 'number'
+    && Number.isFinite(result.audioEndMs)
+    && typeof result.text === 'string'
+    && typeof result.isFinal === 'boolean'
+    && typeof result.speechFinal === 'boolean'
+    && typeof result.fromFinalize === 'boolean'
+}
 
 /**
  * 千问两个流式模型各有一组原生命令。
@@ -114,6 +187,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
   // 原生流生命周期串行化：open / finish / close 共用 Provider 级队列。
   // cancel 会先把 close 排入旧 open 之后；下一代 open 因而只能在旧 close 完成后执行。
   private nativeLifecycleQueue: Promise<void> = Promise.resolve()
+  private liveOwner: LiveOwner | null = null
   private streamStartup: Promise<void> | null = null
   /** Terminal retry failure parked by the streaming startup, bound to the run that produced it. */
   private streamOpenFailure: { runId: number; error: string } | null = null
@@ -202,7 +276,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.qwenCommands = null
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     this.teardownPartials()
-    void this.queueNativeClose(sendLockToDrain)
+    void this.queueNativeClose(sendLockToDrain, this.liveOwner !== null)
   }
 
   private enqueueNativeLifecycle<T>(operation: () => Promise<T>): Promise<T> {
@@ -211,14 +285,14 @@ export class CloudAPIProvider implements TranscriptionProvider {
     return result
   }
 
-  private queueNativeClose(sendLockToDrain: Promise<void>): Promise<void> {
+  private queueNativeClose(sendLockToDrain: Promise<void>, preserveLiveDeepgramOwner = false): Promise<void> {
     return this.enqueueNativeLifecycle(async () => {
       await sendLockToDrain.catch(() => { })
       // 逐个关：每个 close 在没有会话时都是无操作，所以不需要先判断开了哪一个。
       await invoke('doubao_stream_close').catch(() => { })
       await invoke('qwen_stream_close').catch(() => { })
       await invoke('qwen_audio_stream_close').catch(() => { })
-      await invoke('deepgram_stream_close').catch(() => { })
+      if (!preserveLiveDeepgramOwner) await invoke('deepgram_stream_close').catch(() => { })
     })
   }
 
@@ -313,6 +387,20 @@ export class CloudAPIProvider implements TranscriptionProvider {
   }
 
   cancel(): void {
+    const liveOwner = this.liveOwner
+    if (liveOwner) {
+      // Keep ownership until serialized cleanup completes; cancellation cannot await from this API.
+      if (!liveOwner.closing && !liveOwner.terminalError) {
+        this.failLiveOwner(liveOwner, new Error('Live ASR session was cancelled'))
+      }
+      void this.closeLiveOwner(liveOwner).catch((error: unknown) => {
+        addRuntimeEvent('error', 'cloud_api', 'Live ASR cleanup failed after cancellation', {
+          sessionId: liveOwner.sessionId,
+          error: String(error),
+        })
+      })
+    }
+
     // 必须先使 run 失效，再清理前端状态；close 最后入队且等待此刻的旧发送链。
     this.activeRunId = 0
     this.activeStartOpts = undefined
@@ -331,7 +419,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.qwenCommands = null
     this.teardownPartials()
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
-    void this.queueNativeClose(sendLockToDrain)
+    void this.queueNativeClose(sendLockToDrain, liveOwner !== null)
   }
 
   disconnect(): void {
@@ -342,6 +430,382 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
   isReady(): boolean {
     return this.ready
+  }
+
+  async openLive(options: StartOptions, callbacks: LiveAsrCallbacks): Promise<LiveAsrSession | null> {
+    if (this.liveOwner) {
+      if (this.liveOwner.closing) {
+        throw new Error('Live ASR cleanup is pending; call closeLive() again after the native operation settles')
+      }
+      throw new Error('A live ASR session is already active; call closeLive() before opening another')
+    }
+
+    const startOptions = this.snapshotStartOptions(options)
+    const owner: LiveOwner = {
+      sessionId: crypto.randomUUID(),
+      callbacks,
+      asrEngine: '',
+      asrModel: '',
+      cancelled: false,
+      closing: false,
+      terminalError: null,
+      nativeOpenAttempted: false,
+      nativeOpenOperation: null,
+      nativeOpenError: undefined,
+      unlisteners: [],
+      operations: [],
+      pendingAudioBytes: 0,
+      audioFrontier: 0,
+      pendingFinalizeCount: 0,
+      lastFinalize: null,
+      drainPromise: null,
+      closePromise: null,
+    }
+    this.liveOwner = owner
+
+    try {
+      const loadedProfile = await loadActiveAsrProfile()
+      if (!this.isLiveOwnerCurrent(owner)) return null
+      if (!loadedProfile || loadedProfile.provider !== 'deepgram') {
+        await this.closeLiveOwner(owner)
+        return null
+      }
+
+      const profile = { ...loadedProfile }
+      const metadata = resolveAsrRequestMetadata(profile)
+      owner.asrEngine = metadata.engine
+      owner.asrModel = metadata.model ?? profile.model
+
+      if (!await this.subscribeLiveEvents(owner)) {
+        await this.closeLiveOwner(owner)
+        return null
+      }
+
+      const openOperation = this.invokeLiveNative(owner, 'deepgram_stream_open', {
+        config: buildAsrProviderConfig(profile, normalizeSpeechInputLanguage(startOptions.language)),
+        sampleRate: 16000,
+        hotwords: startOptions.hotwords ?? [],
+        sessionId: owner.sessionId,
+      }, LIVE_OPEN_STALL_MS, () => {
+        if (!this.isLiveOwnerCurrent(owner) || owner.terminalError) return false
+        owner.nativeOpenAttempted = true
+        return true
+      }).then((payload) => ({ opened: owner.nativeOpenAttempted, payload }))
+      owner.nativeOpenOperation = openOperation
+      const opened = await openOperation
+      if (owner.terminalError) throw owner.terminalError
+      if (!opened.opened || owner.cancelled || this.liveOwner !== owner) {
+        await this.closeLiveOwner(owner)
+        return null
+      }
+
+      if (opened.payload === DEEPGRAM_KEYTERM_LIMIT) {
+        const warning: LiveAsrWarning = {
+          sessionId: owner.sessionId,
+          code: DEEPGRAM_KEYTERM_LIMIT,
+          asrEngine: owner.asrEngine,
+          asrModel: owner.asrModel,
+        }
+        owner.callbacks.onWarning(warning)
+      }
+
+      return {
+        sessionId: owner.sessionId,
+        sendAudio: (buffer) => this.sendLiveAudio(owner, buffer),
+        finalize: () => this.finalizeLive(owner),
+        close: () => this.closeLiveOwner(owner),
+      }
+    } catch (error) {
+      if (this.liveOwner === owner) {
+        try {
+          await this.closeLiveOwner(owner)
+        } catch (cleanupError) {
+          const openError = owner.nativeOpenError ?? error
+          throw new Error(`Live ASR open failed: ${String(openError)}; cleanup failed: ${String(cleanupError)}`)
+        }
+        throw owner.nativeOpenError ?? error
+      }
+      throw error
+    }
+  }
+
+  async closeLive(): Promise<void> {
+    const owner = this.liveOwner
+    if (!owner) return
+    await this.closeLiveOwner(owner)
+  }
+
+  private isLiveOwnerCurrent(owner: LiveOwner): boolean {
+    return this.liveOwner === owner && !owner.cancelled
+  }
+
+  private async subscribeLiveEvents(owner: LiveOwner): Promise<boolean> {
+    const resultUnlisten = await listen<NativeLiveResult>('deepgram-live-result', (event) => {
+      const result = event.payload
+      if (!this.isLiveOwnerCurrent(owner) || owner.terminalError || !isNativeLiveResult(result)) return
+      if (result.sessionId !== owner.sessionId) return
+      const liveResult: LiveAsrResult = {
+        ...result,
+        asrEngine: owner.asrEngine,
+        asrModel: owner.asrModel,
+      }
+      owner.callbacks.onResult(liveResult)
+    })
+    if (!this.isLiveOwnerCurrent(owner)) {
+      resultUnlisten()
+      return false
+    }
+    owner.unlisteners.push(resultUnlisten)
+
+    const errorUnlisten = await listen<{ sessionId: string; message: string }>('deepgram-live-error', (event) => {
+      const payload = event.payload
+      if (this.liveOwner !== owner || owner.terminalError || !payload) return
+      if (payload.sessionId !== owner.sessionId || typeof payload.message !== 'string') return
+      this.failLiveOwner(owner, new Error(payload.message))
+    })
+    if (!this.isLiveOwnerCurrent(owner)) {
+      errorUnlisten()
+      return false
+    }
+    owner.unlisteners.push(errorUnlisten)
+    return true
+  }
+
+  private async invokeLiveNative(
+    owner: LiveOwner,
+    command: string,
+    args: Record<string, unknown>,
+    stallTimeoutMs = LIVE_OPERATION_STALL_MS,
+    beforeInvoke: () => boolean = () => true,
+  ): Promise<unknown> {
+    let rejectStall!: (error: Error) => void
+    let stallTimer: ReturnType<typeof setTimeout> | null = null
+    const stalled = new Promise<never>((_, reject) => { rejectStall = reject })
+
+    // Keep the lifecycle queue tied to the uncancellable invoke; only the caller's wait times out.
+    const operation = this.enqueueNativeLifecycle(() => {
+      if (!beforeInvoke()) return Promise.resolve(undefined)
+      const nativeOperation = invoke<unknown>(command, args)
+      stallTimer = setTimeout(() => {
+        const error = new Error(`Live ASR ${command} operation stalled`)
+        this.failLiveOwner(owner, error)
+        rejectStall(error)
+      }, stallTimeoutMs)
+      void nativeOperation.then(
+        () => { if (stallTimer) clearTimeout(stallTimer) },
+        () => { if (stallTimer) clearTimeout(stallTimer) },
+      )
+      return nativeOperation
+    })
+
+    return Promise.race([operation, stalled])
+  }
+
+  private sendLiveAudio(owner: LiveOwner, buffer: ArrayBuffer): void {
+    if (!buffer.byteLength || !this.isLiveOwnerCurrent(owner) || owner.closing || owner.terminalError) return
+    if (owner.pendingAudioBytes + buffer.byteLength > LIVE_PCM_BUDGET_BYTES) {
+      this.failLiveOwner(owner, new Error(`Live ASR audio exceeded the ${LIVE_PCM_BUDGET_BYTES}-byte pending limit`))
+      return
+    }
+
+    owner.operations.push({ kind: 'audio', buffer: buffer.slice(0), offset: 0 })
+    owner.pendingAudioBytes += buffer.byteLength
+    owner.audioFrontier += buffer.byteLength
+    void this.startLiveDrain(owner)
+  }
+
+  private finalizeLive(owner: LiveOwner): Promise<void> {
+    if (owner.terminalError) return Promise.reject(owner.terminalError)
+    if (!this.isLiveOwnerCurrent(owner) || owner.closing) {
+      return Promise.reject(new Error('Live ASR session is no longer accepting controls'))
+    }
+
+    const frontier = owner.audioFrontier
+    if (owner.lastFinalize?.frontier === frontier) return owner.lastFinalize.promise
+    if (owner.pendingFinalizeCount >= LIVE_CONTROL_QUEUE_LIMIT) {
+      return Promise.reject(this.failLiveOwner(owner, new Error('Live ASR control queue limit exceeded')))
+    }
+
+    let resolve!: () => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise
+      reject = rejectPromise
+    })
+    owner.operations.push({ kind: 'finalize', resolve, reject })
+    owner.pendingFinalizeCount++
+    owner.lastFinalize = { frontier, promise }
+    void this.startLiveDrain(owner)
+    return promise
+  }
+
+  private startLiveDrain(owner: LiveOwner): Promise<void> {
+    if (owner.drainPromise) return owner.drainPromise
+    const drainPromise = this.drainLiveOperations(owner)
+    owner.drainPromise = drainPromise
+    void drainPromise.then(() => {
+      if (owner.drainPromise !== drainPromise) return
+      owner.drainPromise = null
+      if (owner.operations.length && !owner.terminalError) void this.startLiveDrain(owner)
+    }, (error: unknown) => {
+      if (owner.drainPromise !== drainPromise) return
+      owner.drainPromise = null
+      const wasTerminal = Boolean(owner.terminalError)
+      this.failLiveOwner(owner, error)
+      if (wasTerminal) {
+        addRuntimeEvent('error', 'cloud_api', 'Live ASR operation drain failed after terminal error', {
+          sessionId: owner.sessionId,
+          error: String(error),
+        })
+      }
+    })
+    return drainPromise
+  }
+
+  private async drainLiveOperations(owner: LiveOwner): Promise<void> {
+    while (!owner.terminalError) {
+      const nextOperation = owner.operations[0]
+      if (!nextOperation) return
+
+      if (nextOperation.kind === 'finalize') {
+        owner.operations.shift()
+        try {
+          await this.invokeLiveNative(
+            owner,
+            'deepgram_stream_finalize',
+            { sessionId: owner.sessionId },
+            LIVE_OPERATION_STALL_MS,
+            () => {
+              if (owner.terminalError) throw owner.terminalError
+              if (this.liveOwner !== owner) throw new Error('Live ASR owner changed before Finalize')
+              return true
+            },
+          )
+          nextOperation.resolve()
+        } catch (error) {
+          nextOperation.reject(this.failLiveOwner(owner, error))
+        } finally {
+          owner.pendingFinalizeCount--
+        }
+        continue
+      }
+
+      const batch = this.takeLiveAudioBatch(owner)
+      try {
+        await this.invokeLiveNative(owner, 'deepgram_stream_send', {
+          pcmB64: uint8ArrayToBase64(new Uint8Array(batch)),
+          sessionId: owner.sessionId,
+        }, LIVE_OPERATION_STALL_MS, () => {
+          if (owner.terminalError) throw owner.terminalError
+          if (this.liveOwner !== owner) throw new Error('Live ASR owner changed before audio send')
+          return true
+        })
+      } catch (error) {
+        this.failLiveOwner(owner, error)
+      } finally {
+        owner.pendingAudioBytes -= batch.byteLength
+      }
+    }
+  }
+
+  private takeLiveAudioBatch(owner: LiveOwner): ArrayBuffer {
+    const parts: Uint8Array[] = []
+    let totalBytes = 0
+    while (totalBytes < LIVE_PCM_BATCH_BYTES) {
+      const operation = owner.operations[0]
+      if (!operation || operation.kind !== 'audio') break
+      const availableBytes = operation.buffer.byteLength - operation.offset
+      const batchBytes = Math.min(availableBytes, LIVE_PCM_BATCH_BYTES - totalBytes)
+      parts.push(new Uint8Array(operation.buffer, operation.offset, batchBytes))
+      operation.offset += batchBytes
+      totalBytes += batchBytes
+      if (operation.offset === operation.buffer.byteLength) owner.operations.shift()
+    }
+
+    const merged = new Uint8Array(totalBytes)
+    let offset = 0
+    for (const part of parts) {
+      merged.set(part, offset)
+      offset += part.byteLength
+    }
+    return merged.buffer
+  }
+
+  private failLiveOwner(owner: LiveOwner, cause: unknown): Error {
+    const error = cause instanceof Error ? cause : new Error(String(cause))
+    if (owner.terminalError) return owner.terminalError
+    owner.terminalError = error
+    let discardedAudioBytes = 0
+    for (const operation of owner.operations.splice(0)) {
+      if (operation.kind === 'audio') {
+        discardedAudioBytes += operation.buffer.byteLength - operation.offset
+      } else {
+        owner.pendingFinalizeCount--
+        operation.reject(error)
+      }
+    }
+    owner.pendingAudioBytes -= discardedAudioBytes
+
+    // Cleanup has its own result; a send failure cannot turn a successful close into a failed one.
+    if (!owner.closing) {
+      const liveError: LiveAsrError = {
+        sessionId: owner.sessionId,
+        message: error.message,
+        asrEngine: owner.asrEngine,
+        asrModel: owner.asrModel,
+      }
+      try {
+        owner.callbacks.onError(liveError)
+      } catch (callbackError) {
+        addRuntimeEvent('error', 'cloud_api', 'Live ASR error callback failed', { error: String(callbackError) })
+      }
+    } else {
+      addRuntimeEvent('warn', 'cloud_api', 'Live operation failed while closing', {
+        sessionId: owner.sessionId, error: error.message,
+      })
+    }
+    return error
+  }
+
+  private closeLiveOwner(owner: LiveOwner): Promise<void> {
+    if (this.liveOwner !== owner) return Promise.resolve()
+    if (owner.closePromise) return owner.closePromise
+
+    owner.cancelled = true
+    owner.closing = true
+    // Resolving this promise confirms native cleanup. A timeout cannot release ownership.
+    owner.closePromise = this.performLiveClose(owner).then(() => {
+      if (this.liveOwner === owner) this.liveOwner = null
+    }, (error: unknown) => {
+      owner.closePromise = null
+      throw error
+    })
+    return owner.closePromise
+  }
+
+  private async performLiveClose(owner: LiveOwner): Promise<void> {
+    if (owner.nativeOpenOperation) {
+      try {
+        await owner.nativeOpenOperation
+      } catch (error) {
+        owner.nativeOpenError = error
+      }
+    }
+    await this.startLiveDrain(owner)
+
+    if (owner.nativeOpenAttempted) {
+      await this.enqueueNativeLifecycle(() => invoke<void>('deepgram_stream_close', { sessionId: owner.sessionId }))
+    }
+
+    const unlistenErrors: unknown[] = []
+    for (const unlisten of owner.unlisteners.splice(0)) {
+      try {
+        unlisten()
+      } catch (error) {
+        unlistenErrors.push(error)
+      }
+    }
+    if (unlistenErrors.length) throw new Error(`Live ASR event cleanup failed: ${unlistenErrors.map(String).join('; ')}`)
   }
 
 

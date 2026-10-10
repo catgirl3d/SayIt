@@ -679,6 +679,7 @@ fn main() {
             // Deepgram Nova-3 streaming ASR
             providers::asr_deepgram::deepgram_stream_open,
             providers::asr_deepgram::deepgram_stream_send,
+            providers::asr_deepgram::deepgram_stream_finalize,
             providers::asr_deepgram::deepgram_stream_finish,
             providers::asr_deepgram::deepgram_stream_close,
             // Models (local model management)

@@ -9,7 +9,10 @@
 // mono PCM16 sample):
 //  - Auth: `Authorization: Token <API key>` on the WebSocket handshake.
 //  - Query: model=nova-3, language=multi|ru|en, interim_results=true,
-//    smart_format=true, encoding=linear16, sample_rate=<rate>, channels=1.
+//    smart_format=true, encoding=linear16, sample_rate=<rate>, channels=1,
+//    endpointing=500. Deepgram's default endpointing is 10 ms, which ends an
+//    utterance at the slightest pause and turns single words into phrases for
+//    computer subtitles; 500 ms groups speech between natural pauses.
 //  - Results: {"type":"Results","is_final":bool,"speech_final":bool,
 //    "channel":{"alternatives":[{"transcript":"..."}]}}. Interim transcripts are
 //    per-segment (not cumulative across segments), so the display text is
@@ -47,6 +50,12 @@ const MULTILINGUAL_LANGUAGE: &str = "multi";
 const FRAME_BYTES: usize = 3200;
 const FINISH_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+const TASK_RETIRE_TIMEOUT: Duration = Duration::from_secs(5);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(4);
+const MAX_LIVE_PCM_BYTES: usize = 384_000;
+const MAX_LIVE_PCM_BASE64_BYTES: usize = ((MAX_LIVE_PCM_BYTES + 2) / 3) * 4;
 /// Lowercase marker inside Deepgram's `err_msg` that identifies the keyterm-overflow
 /// rejection. Matching the marker instead of the full sentence keeps the recovery path
 /// working when Deepgram adds context around it; the HTTP 400 gate, the non-empty
@@ -58,14 +67,7 @@ type WsStream = tokio_tungstenite::WebSocketStream<
     tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
 >;
 type WsSink = SplitSink<WsStream, tungstenite::Message>;
-
-/// Realtime mode: the write half; the read half goes to the background reader.
-static RT_SINK: once_cell::sync::Lazy<Arc<Mutex<Option<WsSink>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
-
-/// Realtime mode background reader handle (aborted on cleanup).
-static RT_READER: once_cell::sync::Lazy<Arc<Mutex<Option<JoinHandle<()>>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
+type EventEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// Realtime mode shared state.
 #[derive(Default)]
@@ -82,10 +84,21 @@ struct RtState {
     saw_metadata: bool,
 }
 
-static RT_STATE: once_cell::sync::Lazy<Arc<Mutex<RtState>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(RtState::default())));
+struct RealtimeSession {
+    session_id: Option<String>,
+    sink: Arc<Mutex<WsSink>>,
+    state: Arc<Mutex<RtState>>,
+    active: Arc<AtomicBool>,
+    last_audio_at: Arc<Mutex<Instant>>,
+    reader: Option<JoinHandle<()>>,
+    keepalive: Option<JoinHandle<()>>,
+    emitter: EventEmitter,
+}
 
-static RT_ACTIVE: AtomicBool = AtomicBool::new(false);
+static RT_LIFECYCLE: once_cell::sync::Lazy<Mutex<()>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(()));
+static RT_SESSION: once_cell::sync::Lazy<Mutex<Option<RealtimeSession>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 // ─────────────────────────── protocol helpers ───────────────────────────
 
@@ -156,11 +169,20 @@ impl Transcript {
 /// One parsed server message.
 #[derive(Debug, PartialEq, Eq)]
 enum ServerEvent {
-    Interim(String),
-    Final(String),
+    Results(DeepgramResult),
     Metadata,
     Error(String),
     Other,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DeepgramResult {
+    audio_start_ms: u64,
+    audio_end_ms: u64,
+    text: String,
+    is_final: bool,
+    speech_final: bool,
+    from_finalize: bool,
 }
 
 fn parse_event(raw: &str) -> ServerEvent {
@@ -169,22 +191,36 @@ fn parse_event(raw: &str) -> ServerEvent {
     };
     match data.get("type").and_then(|t| t.as_str()).unwrap_or("") {
         "Results" => {
-            let transcript = data
+            let text = data
                 .get("channel")
                 .and_then(|channel| channel.get("alternatives"))
                 .and_then(|alternatives| alternatives.get(0))
                 .and_then(|alternative| alternative.get("transcript"))
                 .and_then(|text| text.as_str())
                 .unwrap_or("");
-            if data
+            let start = data.get("start").and_then(|value| value.as_f64()).unwrap_or(0.0).max(0.0);
+            let duration = data
+                .get("duration")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0)
+                .max(0.0);
+            ServerEvent::Results(DeepgramResult {
+                audio_start_ms: (start * 1000.0).round() as u64,
+                audio_end_ms: ((start + duration) * 1000.0).round() as u64,
+                text: text.to_string(),
+                is_final: data
                 .get("is_final")
                 .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
-                ServerEvent::Final(transcript.to_string())
-            } else {
-                ServerEvent::Interim(transcript.to_string())
-            }
+                    .unwrap_or(false),
+                speech_final: data
+                    .get("speech_final")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+                from_finalize: data
+                    .get("from_finalize")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            })
         }
         "Metadata" => ServerEvent::Metadata,
         "Error" => {
@@ -278,7 +314,7 @@ fn build_listen_url(
     keyterms: &[String],
 ) -> String {
     let mut url = format!(
-        "{}?model={}&language={}&interim_results=true&smart_format=true&encoding=linear16&sample_rate={}&channels=1",
+        "{}?model={}&language={}&interim_results=true&smart_format=true&encoding=linear16&sample_rate={}&channels=1&endpointing=500",
         base,
         encode_query_value(model),
         encode_query_value(language),
@@ -446,8 +482,10 @@ async fn collect_results(ws: &mut WsStream, transcript: &mut Transcript) -> Resu
             message.map_err(|e| diag::fail(SCOPE, "recv", format!("Failed to receive result: {}", e)))?;
         match message {
             tungstenite::Message::Text(text) => match parse_event(&text) {
-                ServerEvent::Final(segment) => transcript.apply_final(&segment),
-                ServerEvent::Interim(segment) => transcript.apply_interim(&segment),
+                ServerEvent::Results(result) if result.is_final => {
+                    transcript.apply_final(&result.text)
+                }
+                ServerEvent::Results(result) => transcript.apply_interim(&result.text),
                 ServerEvent::Metadata => return Ok(true),
                 ServerEvent::Error(message) => {
                     return Err(diag::fail(
@@ -741,8 +779,52 @@ pub async fn deepgram_stream_open(
     config: AsrProviderConfig,
     sample_rate: u32,
     hotwords: Option<Vec<String>>,
+    session_id: Option<String>,
 ) -> Result<Option<AsrWarningCode>, String> {
-    cleanup_realtime().await;
+    let emitter: EventEmitter = Arc::new(move |event, payload| {
+        let _ = app.emit(event, payload);
+    });
+    open_realtime_session(
+        WS_BASE,
+        config,
+        sample_rate,
+        hotwords,
+        session_id,
+        emitter,
+    )
+    .await
+}
+
+async fn open_realtime_session(
+    base: &str,
+    config: AsrProviderConfig,
+    sample_rate: u32,
+    hotwords: Option<Vec<String>>,
+    session_id: Option<String>,
+    emitter: EventEmitter,
+) -> Result<Option<AsrWarningCode>, String> {
+    let mut lifecycle = RT_LIFECYCLE.lock().await;
+    if let Some(current) = RT_SESSION.lock().await.as_ref() {
+        match (session_id.as_deref(), current.session_id.as_deref()) {
+            (None, Some(_)) => {
+                return Err(diag::fail(
+                    SCOPE,
+                    "session_owner_mismatch",
+                    "An untagged microphone operation cannot replace a live subtitle session"
+                        .to_string(),
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(diag::fail(
+                    SCOPE,
+                    "session_owner_mismatch",
+                    "A live subtitle session still owns Deepgram; close it before opening another".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    cleanup_realtime(&mut lifecycle).await?;
 
     if missing_api_key(&config) {
         return Err(missing_key_error());
@@ -751,22 +833,100 @@ pub async fn deepgram_stream_open(
     let language = resolve_language(&config);
     let keyterms = resolve_keyterms(&config, hotwords.as_deref().unwrap_or(&[]));
     let (ws, warning) =
-        connect_for_stream(WS_BASE, &model, &language, sample_rate, &config, &keyterms).await?;
+        connect_for_stream(base, &model, &language, sample_rate, &config, &keyterms).await?;
     crate::commands::system::write_log_line(&format!(
         "[RUST] [deepgram_stream] connected model={} language={}",
         model, language
     ));
 
     let (sink, stream) = ws.split();
+    let sink = Arc::new(Mutex::new(sink));
+    let state = Arc::new(Mutex::new(RtState::default()));
     {
-        let mut state = RT_STATE.lock().await;
-        *state = RtState::default();
-        state.transcript.separator = separator_for_language(&language);
+        state.lock().await.transcript.separator = separator_for_language(&language);
     }
-    *RT_SINK.lock().await = Some(sink);
-    let handle = tokio::spawn(run_realtime_reader(stream, app.clone(), RT_STATE.clone()));
-    *RT_READER.lock().await = Some(handle);
-    RT_ACTIVE.store(true, Ordering::SeqCst);
+    let active = Arc::new(AtomicBool::new(true));
+    let last_audio_at = Arc::new(Mutex::new(Instant::now()));
+    let reader = tokio::spawn(run_realtime_reader(
+        stream,
+        state.clone(),
+        session_id.clone(),
+        emitter.clone(),
+        active.clone(),
+    ));
+    let keepalive = if session_id.is_some() {
+        let keepalive_sink = sink.clone();
+        let keepalive_active = active.clone();
+        let keepalive_last_audio = last_audio_at.clone();
+        let keepalive_emitter = emitter.clone();
+        let keepalive_session_id = session_id.clone().unwrap();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(KEEPALIVE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if !keepalive_active.load(Ordering::SeqCst) {
+                    break;
+                }
+                if keepalive_last_audio.lock().await.elapsed() < KEEPALIVE_INTERVAL {
+                    continue;
+                }
+                let outcome = tokio::time::timeout(WRITE_TIMEOUT, async {
+                    let mut sink = keepalive_sink.lock().await;
+                    if !keepalive_active.load(Ordering::SeqCst) {
+                        return Ok(false);
+                    }
+                    sink.send(tungstenite::Message::Text(
+                        serde_json::json!({ "type": "KeepAlive" })
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .map(|_| true)
+                })
+                .await;
+                match outcome {
+                    Ok(Ok(true)) => {}
+                    Ok(Ok(false)) => break,
+                    Ok(Err(error)) => {
+                        keepalive_active.store(false, Ordering::SeqCst);
+                        keepalive_emitter(
+                            "deepgram-live-error",
+                            serde_json::json!({
+                                "sessionId": keepalive_session_id,
+                                "message": format!("Deepgram KeepAlive write failed: {}", error),
+                            }),
+                        );
+                        break;
+                    }
+                    Err(_) => {
+                        keepalive_active.store(false, Ordering::SeqCst);
+                        keepalive_emitter(
+                            "deepgram-live-error",
+                            serde_json::json!({
+                                "sessionId": keepalive_session_id,
+                                "message": "Deepgram KeepAlive write timed out",
+                            }),
+                        );
+                        break;
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
+    *RT_SESSION.lock().await = Some(RealtimeSession {
+        session_id,
+        sink,
+        state,
+        active,
+        last_audio_at,
+        reader: Some(reader),
+        keepalive,
+        emitter,
+    });
 
     Ok(warning)
 }
@@ -774,32 +934,107 @@ pub async fn deepgram_stream_open(
 /// Background reader: accumulate transcripts and emit interim updates.
 async fn run_realtime_reader(
     mut stream: SplitStream<WsStream>,
-    app: AppHandle,
     state: Arc<Mutex<RtState>>,
+    session_id: Option<String>,
+    emitter: EventEmitter,
+    active: Arc<AtomicBool>,
 ) {
     let mut emit_count = 0usize;
+    let mut result_id = 0u64;
+    let mut terminal_error_emitted = false;
     while let Some(message) = stream.next().await {
         let text = match message {
             Ok(tungstenite::Message::Text(text)) => text,
             Ok(tungstenite::Message::Close(_)) => {
                 let mut s = state.lock().await;
                 s.finished = true;
+                drop(s);
+                if active.load(Ordering::SeqCst) {
+                    if let Some(session_id) = &session_id {
+                        emitter(
+                            "deepgram-live-error",
+                            serde_json::json!({
+                                "sessionId": session_id,
+                                "message": "Deepgram closed the live stream unexpectedly",
+                            }),
+                        );
+                        terminal_error_emitted = true;
+                    }
+                }
                 break;
             }
             Err(error) => {
                 let mut s = state.lock().await;
                 s.transport_error = Some(error.to_string());
                 s.finished = true;
+                drop(s);
+                if active.load(Ordering::SeqCst) {
+                    if let Some(session_id) = &session_id {
+                        emitter(
+                            "deepgram-live-error",
+                            serde_json::json!({
+                                "sessionId": session_id,
+                                "message": format!("Deepgram WebSocket reader failed: {}", error),
+                            }),
+                        );
+                        terminal_error_emitted = true;
+                    }
+                }
                 break;
             }
             _ => continue,
         };
 
         let event = parse_event(&text);
+        if let Some(session_id) = &session_id {
+            match event {
+                ServerEvent::Results(result) => {
+                    result_id += 1;
+                    emitter(
+                        "deepgram-live-result",
+                        serde_json::json!({
+                            "sessionId": session_id,
+                            "resultId": result_id,
+                            "audioStartMs": result.audio_start_ms,
+                            "audioEndMs": result.audio_end_ms,
+                            "text": result.text,
+                            "isFinal": result.is_final,
+                            "speechFinal": result.speech_final,
+                            "fromFinalize": result.from_finalize,
+                        }),
+                    );
+                }
+                ServerEvent::Metadata => {
+                    if active.load(Ordering::SeqCst) {
+                        emitter(
+                            "deepgram-live-error",
+                            serde_json::json!({
+                                "sessionId": session_id,
+                                "message": "Deepgram ended the live stream unexpectedly",
+                            }),
+                        );
+                        terminal_error_emitted = true;
+                    }
+                    break;
+                }
+                ServerEvent::Error(message) => {
+                    emitter(
+                        "deepgram-live-error",
+                        serde_json::json!({ "sessionId": session_id, "message": message }),
+                    );
+                    terminal_error_emitted = true;
+                    break;
+                }
+                ServerEvent::Other => {}
+            }
+            continue;
+        }
+
         let (display, done) = {
             let mut s = state.lock().await;
             match &event {
-                ServerEvent::Interim(segment) => {
+                ServerEvent::Results(result) if !result.is_final => {
+                    let segment = &result.text;
                     if segment.is_empty() {
                         (None, false)
                     } else {
@@ -807,7 +1042,8 @@ async fn run_realtime_reader(
                         (Some(s.transcript.display()), false)
                     }
                 }
-                ServerEvent::Final(segment) => {
+                ServerEvent::Results(result) => {
+                    let segment = &result.text;
                     if segment.trim().is_empty() {
                         (None, false)
                     } else {
@@ -835,7 +1071,7 @@ async fn run_realtime_reader(
                         "[RUST] [deepgram_stream] emitted first asr-partial",
                     );
                 }
-                let _ = app.emit(
+                emitter(
                     "asr-partial",
                     serde_json::json!({ "text": display, "provider": "deepgram" }),
                 );
@@ -850,45 +1086,297 @@ async fn run_realtime_reader(
         "[RUST] [deepgram_stream] reader stopped emits={}",
         emit_count
     ));
+    if !terminal_error_emitted && active.load(Ordering::SeqCst) {
+        if let Some(session_id) = &session_id {
+            emitter(
+                "deepgram-live-error",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "message": "Deepgram ended the live stream unexpectedly",
+                }),
+            );
+        }
+    }
+    active.store(false, Ordering::SeqCst);
     let mut s = state.lock().await;
     s.finished = true;
 }
 
-async fn cleanup_realtime() {
-    RT_ACTIVE.store(false, Ordering::SeqCst);
-    if let Some(mut sink) = RT_SINK.lock().await.take() {
-        let _ = sink.close().await;
+async fn cleanup_realtime(_lifecycle: &mut tokio::sync::MutexGuard<'_, ()>) -> Result<(), String> {
+    let mut current = RT_SESSION.lock().await;
+    let Some(session) = current.as_mut() else {
+        return Ok(());
+    };
+
+    session.active.store(false, Ordering::SeqCst);
+    if let Some(keepalive) = session.keepalive.as_mut() {
+        keepalive.abort();
+        match tokio::time::timeout(TASK_RETIRE_TIMEOUT, keepalive).await {
+            Ok(Ok(())) => session.keepalive = None,
+            Ok(Err(error)) if error.is_cancelled() => session.keepalive = None,
+            Ok(Err(error)) => {
+                session.keepalive = None;
+                return Err(diag::fail(
+                    SCOPE,
+                    "keepalive_cleanup",
+                    format!("Deepgram KeepAlive task did not retire cleanly: {}", error),
+                ));
+            }
+            Err(_) => {
+                return Err(diag::fail(
+                    SCOPE,
+                    "keepalive_cleanup_timeout",
+                    "Deepgram KeepAlive task did not retire before timeout".to_string(),
+                ));
+            }
+        }
     }
-    if let Some(handle) = RT_READER.lock().await.take() {
-        handle.abort();
+
+    let close_result = tokio::time::timeout(CLOSE_TIMEOUT, async {
+        let mut sink = session.sink.lock().await;
+        sink.close().await
+    })
+    .await;
+    match close_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            return Err(diag::fail(
+                SCOPE,
+                "close_stream",
+                format!("Failed to close Deepgram stream: {}", error),
+            ));
+        }
+        Err(_) => {
+            return Err(diag::fail(
+                SCOPE,
+                "close_stream_timeout",
+                "Deepgram stream close timed out; owner remains reserved".to_string(),
+            ));
+        }
     }
-    let mut state = RT_STATE.lock().await;
-    *state = RtState::default();
+
+    if let Some(reader) = session.reader.as_mut() {
+        match tokio::time::timeout(TASK_RETIRE_TIMEOUT, reader).await {
+            Ok(Ok(())) => session.reader = None,
+            Ok(Err(error)) => {
+                session.reader = None;
+                return Err(diag::fail(
+                    SCOPE,
+                    "reader_cleanup",
+                    format!("Deepgram reader task failed during cleanup: {}", error),
+                ));
+            }
+            Err(_) => {
+                return Err(diag::fail(
+                    SCOPE,
+                    "reader_cleanup_timeout",
+                    "Deepgram reader did not retire before timeout; owner remains reserved"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    *current = None;
+    Ok(())
 }
 
 /// Send one audio frame (raw PCM16, base64-encoded by the caller).
 #[tauri::command]
-pub async fn deepgram_stream_send(pcm_b64: String) -> Result<(), String> {
+pub async fn deepgram_stream_send(
+    pcm_b64: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    if pcm_b64.len() > MAX_LIVE_PCM_BASE64_BYTES {
+        return Err(diag::fail(
+            SCOPE,
+            "audio_chunk_too_large",
+            format!("Deepgram PCM chunk exceeds {} bytes", MAX_LIVE_PCM_BYTES),
+        ));
+    }
     let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &pcm_b64)
-        .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
-    let message = tungstenite::Message::Binary(pcm.into());
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
+    if pcm.len() > MAX_LIVE_PCM_BYTES {
+        return Err(diag::fail(
+            SCOPE,
+            "audio_chunk_too_large",
+            format!("Deepgram PCM chunk exceeds {} bytes", MAX_LIVE_PCM_BYTES),
+        ));
+    }
 
-    if !RT_ACTIVE.load(Ordering::SeqCst) {
+    let _lifecycle = RT_LIFECYCLE.try_lock().map_err(|_| {
+        diag::fail(
+            SCOPE,
+            "send_busy",
+            "Another Deepgram operation is still in progress".to_string(),
+        )
+    })?;
+    let current = RT_SESSION.lock().await;
+    let session = current.as_ref().ok_or_else(|| {
+        diag::fail(
+            SCOPE,
+            "send_without_session",
+            "Session is not open".to_string(),
+        )
+    })?;
+    if session.session_id != session_id {
+        return Err(diag::fail(
+            SCOPE,
+            "session_owner_mismatch",
+            "Deepgram audio send does not own the active session".to_string(),
+        ));
+    }
+    if !session.active.load(Ordering::SeqCst) {
         return Err(diag::fail(
             SCOPE,
             "send_without_session",
             "Session is not open".to_string(),
         ));
     }
-
-    let mut sink = RT_SINK.lock().await;
-    let s = sink.as_mut().ok_or_else(|| {
-        diag::fail(SCOPE, "send_without_session", "Session is not open".to_string())
-    })?;
-    s.send(message)
-        .await
-        .map_err(|e| diag::fail(SCOPE, "send_audio", format!("Failed to send audio: {}", e)))?;
+    let sink = session.sink.clone();
+    let active = session.active.clone();
+    let last_audio_at = session.last_audio_at.clone();
+    let emitter = session.emitter.clone();
+    let owner_id = session.session_id.clone();
+    let result = tokio::time::timeout(WRITE_TIMEOUT, async {
+        let mut sink = sink.lock().await;
+        if !active.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        sink.send(tungstenite::Message::Binary(pcm.into()))
+            .await
+            .map(|_| true)
+    })
+    .await;
+    match result {
+        Ok(Ok(true)) => *last_audio_at.lock().await = Instant::now(),
+        Ok(Ok(false)) => {
+            return Err(diag::fail(
+                SCOPE,
+                "send_without_session",
+                "Session stopped before the audio write began".to_string(),
+            ));
+        }
+        Ok(Err(error)) => {
+            active.store(false, Ordering::SeqCst);
+            if let Some(session_id) = owner_id {
+                emitter(
+                    "deepgram-live-error",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "message": format!("Deepgram audio write failed: {}", error),
+                    }),
+                );
+            }
+            return Err(diag::fail(
+                SCOPE,
+                "send_audio",
+                format!("Failed to send audio: {}", error),
+            ));
+        }
+        Err(_) => {
+            active.store(false, Ordering::SeqCst);
+            if let Some(session_id) = owner_id {
+                emitter(
+                    "deepgram-live-error",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "message": "Deepgram audio write timed out",
+                    }),
+                );
+            }
+            return Err(diag::fail(
+                SCOPE,
+                "send_audio_timeout",
+                "Deepgram audio write timed out; owner remains reserved".to_string(),
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Request Deepgram to finalize its current recognition buffer without waiting for a response.
+#[tauri::command]
+pub async fn deepgram_stream_finalize(session_id: String) -> Result<(), String> {
+    let _lifecycle = RT_LIFECYCLE.lock().await;
+    let current = RT_SESSION.lock().await;
+    let session = current.as_ref().ok_or_else(|| {
+        diag::fail(
+            SCOPE,
+            "finalize_without_session",
+            "Session is not open".to_string(),
+        )
+    })?;
+    if session.session_id.as_deref() != Some(session_id.as_str()) {
+        return Err(diag::fail(
+            SCOPE,
+            "session_owner_mismatch",
+            "Deepgram finalize does not own the active session".to_string(),
+        ));
+    }
+    if !session.active.load(Ordering::SeqCst) {
+        return Err(diag::fail(
+            SCOPE,
+            "finalize_without_session",
+            "Session is not open".to_string(),
+        ));
+    }
+    let sink = session.sink.clone();
+    let active = session.active.clone();
+    let emitter = session.emitter.clone();
+    let result = tokio::time::timeout(WRITE_TIMEOUT, async {
+        let mut sink = sink.lock().await;
+        if !active.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        sink.send(tungstenite::Message::Text(
+            serde_json::json!({ "type": "Finalize" }).to_string().into(),
+        ))
+        .await
+        .map(|_| true)
+    })
+    .await;
+    match result {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => Err(diag::fail(
+            SCOPE,
+            "finalize_without_session",
+            "Session stopped before Finalize could be sent".to_string(),
+        )),
+        Ok(Err(error)) => {
+            active.store(false, Ordering::SeqCst);
+            emitter(
+                "deepgram-live-error",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "message": format!("Deepgram Finalize write failed: {}", error),
+                }),
+            );
+            Err(diag::fail(
+                SCOPE,
+                "finalize",
+                format!("Failed to send Deepgram Finalize: {}", error),
+            ))
+        }
+        Err(_) => {
+            active.store(false, Ordering::SeqCst);
+            emitter(
+                "deepgram-live-error",
+                serde_json::json!({ "sessionId": session_id, "message": "Deepgram Finalize write timed out" }),
+            );
+            Err(diag::fail(
+                SCOPE,
+                "finalize_timeout",
+                "Deepgram Finalize write timed out; owner remains reserved".to_string(),
+            ))
+        }
+    }
 }
 
 /// Why a finished realtime session has no usable result.
@@ -924,83 +1412,136 @@ fn realtime_finish_result(state: &RtState) -> Result<String, RealtimeFailure> {
 
 /// Finish the session: send CloseStream, wait for the final transcript.
 #[tauri::command]
-pub async fn deepgram_stream_finish() -> Result<String, String> {
-    if RT_ACTIVE.load(Ordering::SeqCst) {
-        let already_finished = { RT_STATE.lock().await.finished };
-        if !already_finished {
-            let mut sink = RT_SINK.lock().await;
-            if let Some(s) = sink.as_mut() {
-                if let Err(e) = s.send(close_stream_message()).await {
-                    crate::commands::system::write_log_line(&format!(
-                        "[RUST] [deepgram_stream] finish send CloseStream err(ignored)={}",
-                        e
-                    ));
-                }
+pub async fn deepgram_stream_finish(session_id: Option<String>) -> Result<String, String> {
+    let mut lifecycle = RT_LIFECYCLE.lock().await;
+    let (state, sink, active) = {
+        let current = RT_SESSION.lock().await;
+        let session = current.as_ref().ok_or_else(|| {
+            diag::fail(
+                SCOPE,
+                "finish_without_session",
+                "Session is not open".to_string(),
+            )
+        })?;
+        if session.session_id != session_id {
+            return Err(diag::fail(
+                SCOPE,
+                "session_owner_mismatch",
+                "Deepgram finish does not own the active microphone session".to_string(),
+            ));
+        }
+        if session.session_id.is_some() {
+            return Err(diag::fail(
+                SCOPE,
+                "live_finish_unsupported",
+                "Live subtitle streams use Finalize and close, not cumulative finish".to_string(),
+            ));
+        }
+        (
+            session.state.clone(),
+            session.sink.clone(),
+            session.active.clone(),
+        )
+    };
+
+    if !state.lock().await.finished {
+        let result = tokio::time::timeout(WRITE_TIMEOUT, async {
+            let mut sink = sink.lock().await;
+            sink.send(close_stream_message()).await
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => active.store(false, Ordering::SeqCst),
+            Ok(Err(error)) => {
+                active.store(false, Ordering::SeqCst);
+                crate::commands::system::write_log_line(&format!(
+                    "[RUST] [deepgram_stream] finish send CloseStream failed: {}",
+                    error
+                ));
+            }
+            Err(_) => {
+                active.store(false, Ordering::SeqCst);
+                crate::commands::system::write_log_line(
+                    "[RUST] [deepgram_stream] finish send CloseStream timed out",
+                );
             }
         }
-
-        let deadline = Instant::now() + FINISH_TIMEOUT;
-        loop {
-            let verdict = {
-                let state = RT_STATE.lock().await;
-                if state.finished {
-                    Some(realtime_finish_result(&state))
-                } else {
-                    None
-                }
-            };
-            if let Some(verdict) = verdict {
-                cleanup_realtime().await;
-                return match verdict {
-                    Ok(text) => Ok(text),
-                    Err(RealtimeFailure::Recognition(message)) => Err(diag::fail(
-                        SCOPE,
-                        "recognition_error",
-                        format!("Recognition error: {}", message),
-                    )),
-                    Err(RealtimeFailure::Transport(message)) => Err(diag::fail(
-                        SCOPE,
-                        "recv",
-                        format!("Failed to receive result: {}", message),
-                    )),
-                    Err(RealtimeFailure::ClosedBeforeResult) => Err(diag::fail(
-                        SCOPE,
-                        "closed_before_result",
-                        "Deepgram closed the connection before recognition completed".to_string(),
-                    )),
-                };
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(30)).await;
-        }
-
-        let text = RT_STATE.lock().await.transcript.display();
-        cleanup_realtime().await;
-        return Ok(text);
     }
 
-    Err(diag::fail(
-        SCOPE,
-        "finish_without_session",
-        "Session is not open".to_string(),
-    ))
+    let deadline = Instant::now() + FINISH_TIMEOUT;
+    let verdict = loop {
+        let verdict = {
+            let state = state.lock().await;
+            if state.finished {
+                Some(realtime_finish_result(&state))
+            } else {
+                None
+            }
+        };
+        if let Some(verdict) = verdict {
+            break Some(verdict);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    let text = match verdict {
+        Some(Ok(text)) => Ok(text),
+        Some(Err(RealtimeFailure::Recognition(message))) => Err(diag::fail(
+            SCOPE,
+            "recognition_error",
+            format!("Recognition error: {}", message),
+        )),
+        Some(Err(RealtimeFailure::Transport(message))) => Err(diag::fail(
+            SCOPE,
+            "recv",
+            format!("Failed to receive result: {}", message),
+        )),
+        Some(Err(RealtimeFailure::ClosedBeforeResult)) => Err(diag::fail(
+            SCOPE,
+            "closed_before_result",
+            "Deepgram closed the connection before recognition completed".to_string(),
+        )),
+        None => Ok(state.lock().await.transcript.display()),
+    };
+    cleanup_realtime(&mut lifecycle).await?;
+    text
 }
 
 /// Close the session without waiting for results (interrupted recording).
 #[tauri::command]
-pub async fn deepgram_stream_close() -> Result<(), String> {
-    if RT_ACTIVE.load(Ordering::SeqCst) {
-        cleanup_realtime().await;
+pub async fn deepgram_stream_close(session_id: Option<String>) -> Result<(), String> {
+    let mut lifecycle = RT_LIFECYCLE.lock().await;
+    if let Some(session) = RT_SESSION.lock().await.as_ref() {
+        if session.session_id != session_id {
+            return Err(diag::fail(
+                SCOPE,
+                "session_owner_mismatch",
+                "Deepgram close does not own the active session".to_string(),
+            ));
+        }
     }
-    Ok(())
+    cleanup_realtime(&mut lifecycle).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    static REALTIME_TEST_LOCK: once_cell::sync::Lazy<StdMutex<()>> =
+        once_cell::sync::Lazy::new(|| StdMutex::new(()));
+
+    struct TaskRetirementSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for TaskRetirementSignal {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
 
     fn test_config(extra: serde_json::Value) -> AsrProviderConfig {
         AsrProviderConfig {
@@ -1016,7 +1557,7 @@ mod tests {
         let url = build_listen_url("wss://api.deepgram.com/v1/listen", "nova-3", "multi", 16000, &[]);
         assert_eq!(
             url,
-            "wss://api.deepgram.com/v1/listen?model=nova-3&language=multi&interim_results=true&smart_format=true&encoding=linear16&sample_rate=16000&channels=1"
+            "wss://api.deepgram.com/v1/listen?model=nova-3&language=multi&interim_results=true&smart_format=true&encoding=linear16&sample_rate=16000&channels=1&endpointing=500"
         );
     }
 
@@ -1051,13 +1592,27 @@ mod tests {
             parse_event(
                 r#"{"type":"Results","is_final":false,"speech_final":false,"channel":{"alternatives":[{"transcript":"The quick brown fod"}]}}"#
             ),
-            ServerEvent::Interim("The quick brown fod".to_string())
+            ServerEvent::Results(DeepgramResult {
+                audio_start_ms: 0,
+                audio_end_ms: 0,
+                text: "The quick brown fod".to_string(),
+                is_final: false,
+                speech_final: false,
+                from_finalize: false,
+            })
         );
         assert_eq!(
             parse_event(
                 r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"The quick brown fox jumps over the lazy dog."}]}}"#
             ),
-            ServerEvent::Final("The quick brown fox jumps over the lazy dog.".to_string())
+            ServerEvent::Results(DeepgramResult {
+                audio_start_ms: 0,
+                audio_end_ms: 0,
+                text: "The quick brown fox jumps over the lazy dog.".to_string(),
+                is_final: true,
+                speech_final: true,
+                from_finalize: false,
+            })
         );
         assert_eq!(
             parse_event(r#"{"type":"Metadata","request_id":"req-1"}"#),
@@ -1069,6 +1624,38 @@ mod tests {
         );
         assert_eq!(parse_event(r#"{"type":"SpeechStarted"}"#), ServerEvent::Other);
         assert_eq!(parse_event("not json"), ServerEvent::Other);
+    }
+
+    #[test]
+    fn live_result_parser_distinguishes_empty_boundaries_and_ranges() {
+        let empty_boundary = parse_event(
+            r#"{"type":"Results","is_final":true,"speech_final":true,"start":1.25,"duration":0.0,"from_finalize":true,"channel":{"alternatives":[{"transcript":""}]}}"#,
+        );
+        let empty_non_boundary = parse_event(
+            r#"{"type":"Results","is_final":true,"speech_final":false,"start":1.25,"duration":0.0,"from_finalize":false,"channel":{"alternatives":[{"transcript":""}]}}"#,
+        );
+        let repeated_text_later = parse_event(
+            r#"{"type":"Results","is_final":true,"speech_final":false,"start":2.0,"duration":0.5,"channel":{"alternatives":[{"transcript":"again"}]}}"#,
+        );
+        let repeated_text_earlier = parse_event(
+            r#"{"type":"Results","is_final":true,"speech_final":false,"start":0.5,"duration":0.5,"channel":{"alternatives":[{"transcript":"again"}]}}"#,
+        );
+
+        for (actual, audio_start_ms, audio_end_ms, text, speech_final, from_finalize) in [
+            (empty_boundary, 1250, 1250, "", true, true),
+            (empty_non_boundary, 1250, 1250, "", false, false),
+            (repeated_text_later, 2000, 2500, "again", false, false),
+            (repeated_text_earlier, 500, 1000, "again", false, false),
+        ] {
+            assert_eq!(actual, ServerEvent::Results(DeepgramResult {
+                audio_start_ms,
+                audio_end_ms,
+                text: text.to_string(),
+                is_final: true,
+                speech_final,
+                from_finalize,
+            }));
+        }
     }
 
     #[test]
@@ -1170,6 +1757,622 @@ mod tests {
         (format!("ws://{}/v1/listen", address), handle)
     }
 
+    async fn spawn_live_results_fixture(messages: Vec<&'static str>) -> (String, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for message in messages {
+                ws.send(tungstenite::Message::Text(message.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+            let _ = ws.close(None).await;
+        });
+        (format!("ws://{}/v1/listen", address), server)
+    }
+
+    async fn spawn_command_fixture() -> (String, JoinHandle<Vec<serde_json::Value>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = ws.next().await {
+                match message.unwrap() {
+                    tungstenite::Message::Binary(audio) => {
+                        received.push(serde_json::json!({ "binary": Vec::from(audio) }));
+                    }
+                    tungstenite::Message::Text(text) => {
+                        received.push(serde_json::from_str(&text).unwrap());
+                    }
+                    tungstenite::Message::Close(_) => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            received
+        });
+        (format!("ws://{}/v1/listen", address), server)
+    }
+
+    async fn spawn_finish_fixture() -> (String, JoinHandle<Vec<serde_json::Value>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = ws.next().await {
+                match message.unwrap() {
+                    tungstenite::Message::Text(text) => {
+                        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        if value["type"] == "CloseStream" {
+                            received.push(value);
+                            ws.send(tungstenite::Message::Text(
+                                r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"microphone result"}]}}"#.into(),
+                            ))
+                            .await
+                            .unwrap();
+                            ws.send(tungstenite::Message::Text(
+                                r#"{"type":"Metadata"}"#.into(),
+                            ))
+                            .await
+                            .unwrap();
+                        }
+                    }
+                    tungstenite::Message::Close(_) => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            received
+        });
+        (format!("ws://{}/v1/listen", address), server)
+    }
+
+    async fn spawn_keepalive_fixture() -> (
+        String,
+        JoinHandle<Vec<serde_json::Value>>,
+        tokio::sync::oneshot::Receiver<Instant>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (keepalive_tx, keepalive_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            let mut keepalive_tx = Some(keepalive_tx);
+            ws.send(tungstenite::Message::Text(
+                r#"{"type":"Results","is_final":false,"start":0.5,"duration":0.25,"channel":{"alternatives":[{"transcript":"before keepalive"}]}}"#.into(),
+            ))
+            .await
+            .unwrap();
+            while let Some(message) = ws.next().await {
+                match message.unwrap() {
+                    tungstenite::Message::Text(text) => {
+                        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        if value["type"] == "KeepAlive" {
+                            received.push(value);
+                            if let Some(keepalive_tx) = keepalive_tx.take() {
+                                let _ = keepalive_tx.send(Instant::now());
+                            }
+                            ws.send(tungstenite::Message::Text(
+                                r#"{"type":"Results","is_final":false,"start":1.0,"duration":0.25,"channel":{"alternatives":[{"transcript":"after keepalive"}]}}"#.into(),
+                            ))
+                            .await
+                            .unwrap();
+                        } else {
+                            received.push(value);
+                        }
+                    }
+                    tungstenite::Message::Binary(audio) => {
+                        received.push(serde_json::json!({ "binary": Vec::from(audio) }));
+                    }
+                    tungstenite::Message::Close(_) => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            received
+        });
+        (format!("ws://{}/v1/listen", address), server, keepalive_rx)
+    }
+
+    async fn spawn_delayed_open_fixture() -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+        JoinHandle<Vec<serde_json::Value>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = accepted_tx.send(());
+            release_rx.await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(message) = ws.next().await {
+                match message.unwrap() {
+                    tungstenite::Message::Text(text) => {
+                        received.push(serde_json::from_str(&text).unwrap());
+                    }
+                    tungstenite::Message::Close(_) => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            received
+        });
+        (
+            format!("ws://{}/v1/listen", address),
+            accepted_rx,
+            release_tx,
+            server,
+        )
+    }
+
+    async fn install_fixture_owner(
+        base: &str,
+        session_id: &str,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (ws, _) = connect_for_stream(
+            base,
+            "nova-3",
+            "en",
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
+        let (sink, stream) = ws.split();
+        let sink = Arc::new(Mutex::new(sink));
+        let state = Arc::new(Mutex::new(RtState::default()));
+        let active = Arc::new(AtomicBool::new(true));
+        let last_audio_at = Arc::new(Mutex::new(Instant::now()));
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+        let reader = tokio::spawn(run_realtime_reader(
+            stream,
+            state.clone(),
+            Some(session_id.to_string()),
+            emitter.clone(),
+            active.clone(),
+        ));
+        let (retirement_tx, retirement_rx) = tokio::sync::oneshot::channel();
+        let keepalive = tokio::spawn(async move {
+            let _retirement_signal = TaskRetirementSignal(Some(retirement_tx));
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        *RT_SESSION.lock().await = Some(RealtimeSession {
+            session_id: Some(session_id.to_string()),
+            sink,
+            state,
+            active,
+            last_audio_at,
+            reader: Some(reader),
+            keepalive: Some(keepalive),
+            emitter,
+        });
+        retirement_rx
+    }
+
+    #[tokio::test]
+    async fn live_reader_routes_every_result_with_its_range_and_boundary_flags() {
+        let (base, server) = spawn_live_results_fixture(vec![
+            r#"{"type":"Results","is_final":false,"speech_final":false,"start":0.1,"duration":0.3,"channel":{"alternatives":[{"transcript":"hello wor"}]}}"#,
+            r#"{"type":"Results","is_final":false,"speech_final":false,"start":0.1,"duration":0.4,"channel":{"alternatives":[{"transcript":"hello world"}]}}"#,
+            r#"{"type":"Results","is_final":true,"speech_final":false,"start":0.5,"duration":0.3,"channel":{"alternatives":[{"transcript":"again"}]}}"#,
+            r#"{"type":"Results","is_final":true,"speech_final":false,"start":1.5,"duration":0.3,"channel":{"alternatives":[{"transcript":"again"}]}}"#,
+            r#"{"type":"KeepAlive"}"#,
+            r#"{"type":"Results","is_final":true,"speech_final":true,"start":1.8,"duration":0.0,"from_finalize":true,"channel":{"alternatives":[{"transcript":""}]}}"#,
+            r#"{"type":"Metadata"}"#,
+        ])
+        .await;
+        let (ws, _) = connect_for_stream(
+            &base,
+            "nova-3",
+            "en",
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
+        let (_, stream) = ws.split();
+        let state = Arc::new(Mutex::new(RtState::default()));
+        let observed_state = state.clone();
+        let active = Arc::new(AtomicBool::new(false));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+
+        run_realtime_reader(
+            stream,
+            state,
+            Some("session-live".to_string()),
+            emitter,
+            active,
+        )
+        .await;
+        server.await.unwrap();
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert_eq!(events.len(), 5);
+        assert!(events
+            .iter()
+            .all(|(event, _)| event == "deepgram-live-result"));
+        assert_eq!(
+            events[0].1,
+            serde_json::json!({
+                "sessionId": "session-live",
+                "resultId": 1,
+                "audioStartMs": 100,
+                "audioEndMs": 400,
+                "text": "hello wor",
+                "isFinal": false,
+                "speechFinal": false,
+                "fromFinalize": false,
+            })
+        );
+        assert_eq!(events[1].1["text"], "hello world");
+        assert_eq!(events[2].1["text"], "again");
+        assert_eq!(events[3].1["text"], "again");
+        assert_eq!(events[3].1["audioStartMs"], 1500);
+        assert_eq!(events[4].1["resultId"], 5);
+        assert_eq!(events[4].1["text"], "");
+        assert_eq!(events[4].1["audioStartMs"], 1800);
+        assert_eq!(events[4].1["speechFinal"], true);
+        assert_eq!(events[4].1["fromFinalize"], true);
+        assert!(observed_state.lock().await.transcript.display().is_empty());
+    }
+
+    #[tokio::test]
+    async fn untagged_reader_keeps_cumulative_microphone_events_and_ignores_empty_final() {
+        let (base, server) = spawn_live_results_fixture(vec![
+            r#"{"type":"Results","is_final":false,"start":0.0,"duration":0.2,"channel":{"alternatives":[{"transcript":"hello"}]}}"#,
+            r#"{"type":"Results","is_final":true,"start":0.0,"duration":0.4,"channel":{"alternatives":[{"transcript":"hello there"}]}}"#,
+            r#"{"type":"Results","is_final":true,"speech_final":true,"start":0.4,"duration":0.0,"channel":{"alternatives":[{"transcript":""}]}}"#,
+            r#"{"type":"Metadata"}"#,
+        ])
+        .await;
+        let (ws, _) = connect_for_stream(
+            &base,
+            "nova-3",
+            "en",
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
+        let (_, stream) = ws.split();
+        let state = Arc::new(Mutex::new(RtState::default()));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+
+        run_realtime_reader(
+            stream,
+            state.clone(),
+            None,
+            emitter,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await;
+        server.await.unwrap();
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].0, "asr-partial");
+        assert_eq!(events[0].1["text"], "hello");
+        assert_eq!(events[1].1["text"], "hello there");
+        let state = state.lock().await;
+        assert_eq!(state.transcript.display(), "hello there");
+        assert!(state.finished);
+    }
+
+    #[tokio::test]
+    async fn live_reader_emits_provider_errors_immediately_with_captured_owner() {
+        let (base, server) = spawn_live_results_fixture(vec![
+            r#"{"type":"Error","err_code":"BAD_REQUEST","err_msg":"Invalid stream"}"#,
+        ])
+        .await;
+        let (ws, _) = connect_for_stream(
+            &base,
+            "nova-3",
+            "en",
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
+        let (_, stream) = ws.split();
+        let state = Arc::new(Mutex::new(RtState::default()));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+
+        run_realtime_reader(
+            stream,
+            state,
+            Some("captured-owner".to_string()),
+            emitter,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await;
+        server.await.unwrap();
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            (
+                "deepgram-live-error".to_string(),
+                serde_json::json!({
+                    "sessionId": "captured-owner",
+                    "message": "Invalid stream (BAD_REQUEST)",
+                })
+            )
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn live_reader_reports_unexpected_socket_close_with_captured_owner() {
+        let (base, server) = spawn_live_results_fixture(Vec::new()).await;
+        let (ws, _) = connect_for_stream(
+            &base,
+            "nova-3",
+            "en",
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
+        let (_, stream) = ws.split();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+
+        run_realtime_reader(
+            stream,
+            Arc::new(Mutex::new(RtState::default())),
+            Some("closed-owner".to_string()),
+            emitter,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await;
+        server.await.unwrap();
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            (
+                "deepgram-live-error".to_string(),
+                serde_json::json!({
+                    "sessionId": "closed-owner",
+                    "message": "Deepgram closed the live stream unexpectedly",
+                })
+            )
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn live_commands_fence_stale_owner_and_order_audio_finalize_and_close() {
+        let _test_guard = REALTIME_TEST_LOCK.lock().unwrap();
+        let (base, server) = spawn_command_fixture().await;
+        let keepalive_retired = install_fixture_owner(&base, "current-owner").await;
+
+        let stale_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [9u8]);
+        assert!(deepgram_stream_send(stale_audio, Some("old-owner".to_string())).await.is_err());
+        assert!(deepgram_stream_finalize("old-owner".to_string()).await.is_err());
+        assert!(deepgram_stream_close(Some("old-owner".to_string())).await.is_err());
+        let untagged_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [8u8]);
+        assert!(deepgram_stream_send(untagged_audio, None).await.is_err());
+        assert!(deepgram_stream_close(None).await.is_err());
+        let oversized_pcm = vec![0u8; MAX_LIVE_PCM_BYTES + 1];
+        let oversized_audio =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, oversized_pcm);
+        assert!(deepgram_stream_send(oversized_audio, Some("current-owner".to_string()))
+            .await
+            .is_err());
+
+        let first_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8, 2]);
+        let second_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [3u8, 4]);
+        deepgram_stream_send(first_audio, Some("current-owner".to_string()))
+            .await
+            .unwrap();
+        deepgram_stream_finalize("current-owner".to_string())
+            .await
+            .unwrap();
+        deepgram_stream_send(second_audio, Some("current-owner".to_string()))
+            .await
+            .unwrap();
+        deepgram_stream_close(Some("current-owner".to_string()))
+            .await
+            .unwrap();
+        keepalive_retired.await.unwrap();
+
+        let received = server.await.unwrap();
+        assert_eq!(
+            received,
+            vec![
+                serde_json::json!({ "binary": [1, 2] }),
+                serde_json::json!({ "type": "Finalize" }),
+                serde_json::json!({ "binary": [3, 4] }),
+            ]
+        );
+        assert!(RT_SESSION.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn production_open_sends_idle_keepalive_without_advancing_provider_audio_time() {
+        let _test_guard = REALTIME_TEST_LOCK.lock().unwrap();
+        let (base, server, keepalive_observed) = spawn_keepalive_fixture().await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+        let opened_at = Instant::now();
+
+        open_realtime_session(
+            &base,
+            test_config(serde_json::json!({})),
+            16000,
+            None,
+            Some("keepalive-owner".to_string()),
+            emitter,
+        )
+        .await
+        .unwrap();
+
+        let first = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(first["resultId"], 1);
+        assert_eq!(first["audioStartMs"], 500);
+        assert_eq!(first["audioEndMs"], 750);
+
+        let keepalive_at = tokio::time::timeout(Duration::from_secs(5), keepalive_observed)
+            .await
+            .unwrap()
+            .unwrap();
+        let idle_elapsed = keepalive_at.duration_since(opened_at);
+        assert!(idle_elapsed >= Duration::from_secs(3));
+        assert!(idle_elapsed <= Duration::from_secs(5));
+
+        let after_keepalive = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(after_keepalive["resultId"], 2);
+        assert_eq!(after_keepalive["audioStartMs"], 1000);
+        assert_eq!(after_keepalive["audioEndMs"], 1250);
+
+        deepgram_stream_close(Some("keepalive-owner".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(server.await.unwrap(), vec![serde_json::json!({ "type": "KeepAlive" })]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn close_waits_for_delayed_production_open_then_retires_its_socket_and_tasks() {
+        let _test_guard = REALTIME_TEST_LOCK.lock().unwrap();
+        let (base, accepted, release_handshake, server) = spawn_delayed_open_fixture().await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+        let emitter_weak = Arc::downgrade(&emitter);
+        let open_base = base.clone();
+        let open_emitter = emitter.clone();
+        let open = tokio::spawn(async move {
+            open_realtime_session(
+                &open_base,
+                test_config(serde_json::json!({})),
+                16000,
+                None,
+                Some("racing-owner".to_string()),
+                open_emitter,
+            )
+            .await
+        });
+        accepted.await.unwrap();
+
+        let (close_started_tx, close_started_rx) = tokio::sync::oneshot::channel();
+        let (close_tx, mut close_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = close_started_tx.send(());
+            let _ = close_tx.send(deepgram_stream_close(Some("racing-owner".to_string())).await);
+        });
+        close_started_rx.await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut close_rx)
+            .await
+            .is_err());
+        assert!(RT_SESSION.lock().await.is_none());
+
+        release_handshake.send(()).unwrap();
+        open.await.unwrap().unwrap();
+        close_rx.await.unwrap().unwrap();
+        assert!(RT_SESSION.lock().await.is_none());
+        assert!(server.await.unwrap().is_empty());
+        drop(emitter);
+        assert!(emitter_weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn untagged_finish_sends_close_stream_and_returns_cumulative_microphone_text() {
+        let _test_guard = REALTIME_TEST_LOCK.lock().unwrap();
+        let (base, server) = spawn_finish_fixture().await;
+        let (ws, _) = connect_for_stream(
+            &base,
+            "nova-3",
+            "en",
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
+        let (sink, stream) = ws.split();
+        let state = Arc::new(Mutex::new(RtState::default()));
+        let active = Arc::new(AtomicBool::new(true));
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+        let emitter: EventEmitter = Arc::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        });
+        let reader = tokio::spawn(run_realtime_reader(
+            stream,
+            state.clone(),
+            None,
+            emitter.clone(),
+            active.clone(),
+        ));
+        *RT_SESSION.lock().await = Some(RealtimeSession {
+            session_id: None,
+            sink: Arc::new(Mutex::new(sink)),
+            state,
+            active,
+            last_audio_at: Arc::new(Mutex::new(Instant::now())),
+            reader: Some(reader),
+            keepalive: None,
+            emitter,
+        });
+
+        let transcript = deepgram_stream_finish(None).await.unwrap();
+
+        assert_eq!(transcript, "microphone result");
+        assert_eq!(server.await.unwrap(), vec![serde_json::json!({ "type": "CloseStream" })]);
+        assert!(RT_SESSION.lock().await.is_none());
+    }
+
     // Exercise the same collector used by buffered session finish and connection probes.
     async fn collect_fixture_result(base: &str, pcm: &[u8], config: &AsrProviderConfig) -> Result<(String, bool), String> {
         let (mut ws, _) =
@@ -1212,6 +2415,7 @@ mod tests {
         assert!(captured.uri.contains("encoding=linear16"), "uri={}", captured.uri);
         assert!(captured.uri.contains("sample_rate=16000"), "uri={}", captured.uri);
         assert!(captured.uri.contains("channels=1"), "uri={}", captured.uri);
+        assert!(captured.uri.contains("endpointing=500"), "uri={}", captured.uri);
         assert!(captured.close_stream);
         assert_eq!(captured.audio_bytes, pcm.len());
     }

@@ -4,16 +4,31 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   getSetting: vi.fn(),
   loadActiveAsrProfile: vi.fn(),
+  listen: vi.fn(),
+  listeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
+  eventOrder: [] as string[],
+  boundaryOrder: [] as string[],
   polishWithClientAi: vi.fn(),
+  addRuntimeEvent: vi.fn(),
 }))
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => mocks.invoke(...args) }))
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: unknown[]) => {
+    mocks.boundaryOrder.push(`invoke:${String(args[0])}`)
+    return mocks.invoke(...args)
+  },
+}))
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (...args: unknown[]) => {
+    mocks.boundaryOrder.push(`listen:${String(args[0])}`)
+    return mocks.listen(...args)
+  },
+}))
 vi.mock('@/services/store', () => ({ getSetting: (...args: unknown[]) => mocks.getSetting(...args) }))
 vi.mock('@/features/settings/asrProfileStore', () => ({
   loadActiveAsrProfile: (...args: unknown[]) => mocks.loadActiveAsrProfile(...args),
 }))
-vi.mock('../debugLog', () => ({ addRuntimeEvent: vi.fn() }))
+vi.mock('../../debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => mocks.addRuntimeEvent(...args) }))
 vi.mock('../clientAiPolish', () => ({
   polishWithClientAi: (...args: unknown[]) => mocks.polishWithClientAi(...args),
 }))
@@ -25,7 +40,12 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     mocks.invoke.mockReset()
     mocks.getSetting.mockReset()
     mocks.loadActiveAsrProfile.mockReset()
+    mocks.listen.mockReset()
+    mocks.listeners.clear()
+    mocks.eventOrder.length = 0
+    mocks.boundaryOrder.length = 0
     mocks.polishWithClientAi.mockReset()
+    mocks.addRuntimeEvent.mockReset()
 
     mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
       if (key === 'cloudAsr.provider') return 'openai_transcribe'
@@ -36,6 +56,16 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     mocks.invoke.mockImplementation(async (command: string) => (
       command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
     ))
+    mocks.listen.mockImplementation(async (
+      eventName: string,
+      handler: (event: { payload: unknown }) => void,
+    ) => {
+      mocks.eventOrder.push(eventName)
+      const listeners = mocks.listeners.get(eventName) ?? new Set()
+      listeners.add(handler)
+      mocks.listeners.set(eventName, listeners)
+      return () => listeners.delete(handler)
+    })
     mocks.polishWithClientAi.mockImplementation(async ({ asrText }: { asrText: string }) => ({
       llmText: asrText,
       llmMs: 0,
@@ -591,5 +621,886 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_finish')).toBe(false)
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')).toHaveLength(1)
     expect(finals).toEqual([expect.objectContaining({ asrText: 'recognized' })])
+  })
+
+  it('opens a tagged live session from one immutable Deepgram profile and forwards tagged events', async () => {
+    const profile = {
+      id: 'deepgram-live',
+      provider: 'deepgram',
+      apiKey: 'live-key',
+      appId: '',
+      console: 'new',
+      otherKey: '',
+      workspaceId: '',
+      model: 'nova-3',
+      omniPrompt: '',
+      deepgramKeytermsEnabled: true,
+    }
+    mocks.loadActiveAsrProfile.mockResolvedValue(profile)
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'deepgram_stream_open' ? 'deepgram_keyterm_limit' : undefined
+    ))
+    const options = { runId: 50, language: 'uk', hotwords: ['SayIt'] }
+    const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const provider = new CloudAPIProvider()
+    const openPromise = provider.openLive(options, callbacks)
+    options.hotwords[0] = 'mutated-caller-value'
+
+    const session = await openPromise
+    expect(session).not.toBeNull()
+    expect(mocks.loadActiveAsrProfile).toHaveBeenCalledTimes(1)
+    expect(mocks.getSetting).not.toHaveBeenCalled()
+    expect(mocks.eventOrder).toEqual(['deepgram-live-result', 'deepgram-live-error'])
+    expect(mocks.boundaryOrder.slice(0, 3)).toEqual([
+      'listen:deepgram-live-result',
+      'listen:deepgram-live-error',
+      'invoke:deepgram_stream_open',
+    ])
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_open')).toHaveLength(1)
+    const openArgs = mocks.invoke.mock.calls.find(([command]) => command === 'deepgram_stream_open')?.[1]
+    expect(openArgs).toMatchObject({
+      config: {
+        provider: 'deepgram',
+        api_key: 'live-key',
+        app_id: '',
+        extra: { model: 'nova-3', language: 'uk', keyterms_enabled: true },
+      },
+      sampleRate: 16000,
+      hotwords: ['SayIt'],
+    })
+    const sessionId = (openArgs as { sessionId: string }).sessionId
+    expect(typeof sessionId).toBe('string')
+    expect(sessionId.length).toBeGreaterThan(0)
+    expect(callbacks.onWarning).toHaveBeenCalledExactlyOnceWith({
+      sessionId,
+      code: 'deepgram_keyterm_limit',
+      asrEngine: 'deepgram',
+      asrModel: 'nova-3',
+    })
+
+    for (const listener of mocks.listeners.get('deepgram-live-result') ?? []) {
+      listener({ payload: {
+        sessionId,
+        resultId: 7,
+        audioStartMs: 1250,
+        audioEndMs: 1500,
+        text: '',
+        isFinal: true,
+        speechFinal: true,
+        fromFinalize: true,
+      } })
+    }
+    expect(callbacks.onResult).toHaveBeenCalledExactlyOnceWith({
+      sessionId,
+      resultId: 7,
+      audioStartMs: 1250,
+      audioEndMs: 1500,
+      text: '',
+      isFinal: true,
+      speechFinal: true,
+      fromFinalize: true,
+      asrEngine: 'deepgram',
+      asrModel: 'nova-3',
+    })
+    expect(profile.apiKey).toBe('live-key')
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+    expect(mocks.polishWithClientAi).not.toHaveBeenCalled()
+    await session?.close()
+  })
+
+  it('returns null for a known unsupported live profile without opening or using batch recognition', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'openai-profile', provider: 'openai_transcribe', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'whisper-1', omniPrompt: '',
+    })
+    const provider = new CloudAPIProvider()
+
+    await expect(provider.openLive(
+      { runId: 51 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )).resolves.toBeNull()
+
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    expect(mocks.polishWithClientAi).not.toHaveBeenCalled()
+  })
+
+  it('rejects a failed Deepgram live open instead of returning unsupported or falling back to HTTP', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_open') throw new Error('Deepgram handshake failed')
+      return undefined
+    })
+    const provider = new CloudAPIProvider()
+
+    await expect(provider.openLive(
+      { runId: 52 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )).rejects.toThrow('Deepgram handshake failed')
+
+    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+      'deepgram_stream_open',
+      'deepgram_stream_close',
+    ])
+    expect(mocks.invoke.mock.calls[1][1]).toEqual({ sessionId: expect.any(String) })
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+    expect(mocks.polishWithClientAi).not.toHaveBeenCalled()
+  })
+
+  it('rejects stale live events after closing and opening a replacement session', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    const provider = new CloudAPIProvider()
+    const oldCallbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const oldSession = await provider.openLive({ runId: 53 }, oldCallbacks)
+    const oldHandler = [...(mocks.listeners.get('deepgram-live-result') ?? [])][0]
+    await oldSession?.close()
+
+    const newCallbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const newSession = await provider.openLive({ runId: 54 }, newCallbacks)
+    const openCalls = mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_open')
+    const newOpenArgs = openCalls[openCalls.length - 1]?.[1] as { sessionId: string }
+    const staleResult = {
+      sessionId: oldSession?.sessionId,
+      resultId: 1,
+      audioStartMs: 0,
+      audioEndMs: 100,
+      text: 'stale',
+      isFinal: true,
+      speechFinal: true,
+      fromFinalize: false,
+    }
+
+    expect(newOpenArgs.sessionId).not.toBe(oldSession?.sessionId)
+    expect(oldHandler).toBeTypeOf('function')
+    oldHandler!({ payload: staleResult })
+    expect(oldCallbacks.onResult).not.toHaveBeenCalled()
+
+    const currentHandler = [...(mocks.listeners.get('deepgram-live-result') ?? [])][0]
+    expect(currentHandler).toBeTypeOf('function')
+    currentHandler!({ payload: staleResult })
+    expect(newCallbacks.onResult).not.toHaveBeenCalled()
+    const currentResult = { ...staleResult, sessionId: newOpenArgs.sessionId, resultId: 2, text: 'current' }
+    currentHandler!({ payload: currentResult })
+    expect(newCallbacks.onResult).toHaveBeenCalledExactlyOnceWith({
+      ...currentResult,
+      asrEngine: 'deepgram',
+      asrModel: 'nova-3',
+    })
+    await newSession?.close()
+  })
+
+  it('sends bounded ordered audio with only one unresolved IPC send at a time', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let releaseFirstSend!: () => void
+    let activeSends = 0
+    let totalSends = 0
+    let maxActiveSends = 0
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command !== 'deepgram_stream_send') return Promise.resolve(undefined)
+      totalSends++
+      activeSends++
+      maxActiveSends = Math.max(maxActiveSends, activeSends)
+      if (totalSends === 1) {
+        return new Promise<void>((resolve) => {
+          releaseFirstSend = () => {
+            activeSends--
+            resolve()
+          }
+        })
+      }
+      activeSends--
+      return Promise.resolve(undefined)
+    })
+    const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const provider = new CloudAPIProvider()
+    const session = await provider.openLive({ runId: 55 }, callbacks)
+    const first = new Uint8Array(12000).fill(0x11)
+    const second = new Uint8Array(8000).fill(0x22)
+    const third = new Uint8Array(5000).fill(0x33)
+
+    session?.sendAudio(first.slice().buffer)
+    session?.sendAudio(second.slice().buffer)
+    session?.sendAudio(third.slice().buffer)
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(1))
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(1)
+    releaseFirstSend()
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(2))
+    await session?.close()
+
+    const sentBytes = mocks.invoke.mock.calls
+      .filter(([command]) => command === 'deepgram_stream_send')
+      .map(([, args]) => new Uint8Array(atob((args as { pcmB64: string }).pcmB64).split('').map((char) => char.charCodeAt(0))))
+    const concatenated = new Uint8Array(sentBytes.reduce((sum, bytes) => sum + bytes.length, 0))
+    let offset = 0
+    for (const bytes of sentBytes) {
+      concatenated.set(bytes, offset)
+      offset += bytes.length
+    }
+    expect(concatenated).toEqual(new Uint8Array([...first, ...second, ...third]))
+    expect(maxActiveSends).toBe(1)
+    expect(mocks.invoke.mock.calls
+      .filter(([command]) => command === 'deepgram_stream_send')
+      .map(([, args]) => (args as { sessionId: string }).sessionId))
+      .toEqual([session?.sessionId, session?.sessionId])
+  })
+
+  it('charges in-flight audio against the 384000-byte cap and makes overflow terminal', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let releaseSend!: () => void
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'deepgram_stream_send') {
+        return new Promise<void>((resolve) => { releaseSend = resolve })
+      }
+      return Promise.resolve(undefined)
+    })
+    const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const provider = new CloudAPIProvider()
+    const session = await provider.openLive({ runId: 56 }, callbacks)
+
+    session?.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => expect(releaseSend).toBeTypeOf('function'))
+    session?.sendAudio(new ArrayBuffer(368000))
+    session?.sendAudio(new ArrayBuffer(1))
+
+    expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: session?.sessionId,
+      asrEngine: 'deepgram',
+      asrModel: 'nova-3',
+    }))
+    releaseSend()
+    await session?.close()
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(1)
+  })
+
+  it('places Finalize at its audio frontier, coalesces identical frontiers, and waits only for native write completion', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    const pending: Array<() => void> = []
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'deepgram_stream_send' || command === 'deepgram_stream_finalize') {
+        return new Promise<void>((resolve) => { pending.push(resolve) })
+      }
+      return Promise.resolve(undefined)
+    })
+    const provider = new CloudAPIProvider()
+    const session = await provider.openLive(
+      { runId: 57 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )
+    session?.sendAudio(new ArrayBuffer(16000))
+    const finalize = session?.finalize()
+    const repeatedFinalize = session?.finalize()
+    session?.sendAudio(new ArrayBuffer(16000))
+    expect(repeatedFinalize).toBe(finalize)
+
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(1))
+    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+      'deepgram_stream_open',
+      'deepgram_stream_send',
+    ])
+    pending.shift()?.()
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+      'deepgram_stream_open',
+      'deepgram_stream_send',
+      'deepgram_stream_finalize',
+    ]))
+    let closed = false
+    const closing = session?.close().then(() => { closed = true })
+    await Promise.resolve()
+    expect(closed).toBe(false)
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close')).toBe(false)
+    let finalized = false
+    void finalize?.then(() => { finalized = true })
+    pending.shift()?.()
+    await finalize
+    expect(finalized).toBe(true)
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(2))
+    pending.shift()?.()
+    await closing
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_finalize')).toHaveLength(1)
+    expect(mocks.invoke.mock.calls.find(([command]) => command === 'deepgram_stream_finalize')?.[1])
+      .toEqual({ sessionId: session?.sessionId })
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_finish')).toBe(false)
+  })
+
+  it('cancels an opening epoch only after the captured tagged owner is closed', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let completeOpen!: () => void
+    mocks.invoke.mockImplementation((command: string) => command === 'deepgram_stream_open'
+      ? new Promise<void>((resolve) => { completeOpen = resolve })
+      : Promise.resolve(undefined))
+    const provider = new CloudAPIProvider()
+    const open = provider.openLive(
+      { runId: 58 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )
+    await vi.waitFor(() => expect(completeOpen).toBeTypeOf('function'))
+    const openArgs = mocks.invoke.mock.calls.find(([command]) => command === 'deepgram_stream_open')?.[1] as { sessionId: string }
+    let closed = false
+    const close = provider.closeLive().then(() => { closed = true })
+    await Promise.resolve()
+
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close')).toBe(false)
+    expect(closed).toBe(false)
+    completeOpen()
+    await expect(open).resolves.toBeNull()
+    await close
+
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+      ['deepgram_stream_close', { sessionId: openArgs.sessionId }],
+    ])
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_finish')).toBe(false)
+  })
+
+  it('rejects a native open that settles after its watchdog, after awaiting tagged cleanup', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+        console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+      })
+      let completeOpen!: () => void
+      let completeClose!: () => void
+      mocks.invoke.mockImplementation((command: string) => {
+        if (command === 'deepgram_stream_open') {
+          return new Promise<void>((resolve) => { completeOpen = resolve })
+        }
+        if (command === 'deepgram_stream_close') {
+          return new Promise<void>((resolve) => { completeClose = resolve })
+        }
+        return Promise.resolve(undefined)
+      })
+      const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+      const provider = new CloudAPIProvider()
+      let openingSettled = false
+      const opening = provider.openLive({ runId: 65 }, callbacks).then(
+        (session) => {
+          openingSettled = true
+          return { session }
+        },
+        (error: unknown) => {
+          openingSettled = true
+          return { error }
+        },
+      )
+      for (let attempt = 0; attempt < 12 && !completeOpen; attempt++) await Promise.resolve()
+      expect(completeOpen).toBeTypeOf('function')
+      const openArgs = mocks.invoke.mock.calls.find(([command]) => command === 'deepgram_stream_open')?.[1] as { sessionId: string }
+
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        sessionId: openArgs.sessionId,
+        message: expect.stringMatching(/stalled/i),
+      }))
+      completeOpen()
+      for (let attempt = 0; attempt < 12 && !completeClose; attempt++) await Promise.resolve()
+
+      expect(completeClose).toBeTypeOf('function')
+      expect(openingSettled).toBe(false)
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+        ['deepgram_stream_close', { sessionId: openArgs.sessionId }],
+      ])
+
+      completeClose()
+      const outcome = await opening
+      expect(outcome).toHaveProperty('error')
+      expect(outcome).not.toHaveProperty('session')
+      expect(String((outcome as { error: unknown }).error)).toMatch(/stalled/i)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a tagged open error after settling and leaves failed tagged cleanup retryable', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let completeOpen!: () => void
+    let closeAttempts = 0
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'deepgram_stream_open') {
+        return new Promise<void>((resolve) => { completeOpen = resolve })
+      }
+      if (command === 'deepgram_stream_close' && ++closeAttempts === 1) {
+        return Promise.reject(new Error('captured owner close failed'))
+      }
+      return Promise.resolve(undefined)
+    })
+    const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const provider = new CloudAPIProvider()
+    let returnedSession: Awaited<ReturnType<CloudAPIProvider['openLive']>> | undefined
+    let openError: unknown
+    const opening = provider.openLive({ runId: 66 }, callbacks).then(
+      (session) => { returnedSession = session },
+      (error: unknown) => { openError = error },
+    )
+    for (let attempt = 0; attempt < 12 && !completeOpen; attempt++) await Promise.resolve()
+    expect(completeOpen).toBeTypeOf('function')
+    const openArgs = mocks.invoke.mock.calls.find(([command]) => command === 'deepgram_stream_open')?.[1] as { sessionId: string }
+    for (const listener of mocks.listeners.get('deepgram-live-error') ?? []) {
+      listener({ payload: { sessionId: openArgs.sessionId, message: 'Deepgram closed the live stream unexpectedly' } })
+    }
+    completeOpen()
+    await opening
+
+    expect(returnedSession).toBeUndefined()
+    expect(openError).toBeInstanceOf(Error)
+    expect(String(openError)).toMatch(/Deepgram closed the live stream unexpectedly/)
+    expect(String(openError)).toMatch(/captured owner close failed/)
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+      ['deepgram_stream_close', { sessionId: openArgs.sessionId }],
+    ])
+    await expect(provider.openLive(
+      { runId: 67 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )).rejects.toThrow(/owner|cleanup|close/i)
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_open')).toHaveLength(1)
+
+    await provider.closeLive()
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+      ['deepgram_stream_close', { sessionId: openArgs.sessionId }],
+      ['deepgram_stream_close', { sessionId: openArgs.sessionId }],
+    ])
+  })
+
+  it('keeps a failed live cleanup owner retryable and blocks replacement opens', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let closeAttempts = 0
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_close' && ++closeAttempts === 1) throw new Error('native owner still active')
+      return undefined
+    })
+    const provider = new CloudAPIProvider()
+    const first = await provider.openLive(
+      { runId: 59 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )
+
+    await expect(first?.close()).rejects.toThrow('native owner still active')
+    expect(closeAttempts).toBe(1)
+    await expect(provider.openLive(
+      { runId: 60 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )).rejects.toThrow(/cleanup|close|owner/i)
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_open')).toHaveLength(1)
+
+    await provider.closeLive()
+    expect(closeAttempts).toBe(2)
+    const replacement = await provider.openLive(
+      { runId: 61 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )
+    expect(replacement).not.toBeNull()
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_open')).toHaveLength(2)
+    await replacement?.close()
+  })
+
+  it('releases the owner after a close-window watchdog when tagged native close succeeds', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+        console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+      })
+      let releaseSend!: () => void
+      let releaseClose!: () => void
+      let closeAttempts = 0
+      mocks.invoke.mockImplementation((command: string) => {
+        if (command === 'deepgram_stream_send') return new Promise<void>((resolve) => { releaseSend = resolve })
+        if (command === 'deepgram_stream_close' && ++closeAttempts === 1) {
+          return new Promise<void>((resolve) => { releaseClose = resolve })
+        }
+        return Promise.resolve(undefined)
+      })
+      const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+      const provider = new CloudAPIProvider()
+      const session = await provider.openLive({ runId: 73 }, callbacks)
+      session?.sendAudio(new ArrayBuffer(16000))
+      for (let attempt = 0; attempt < 12 && !releaseSend; attempt++) await Promise.resolve()
+      expect(releaseSend).toBeTypeOf('function')
+
+      const closing = session?.close()
+      await vi.advanceTimersByTimeAsync(5001)
+      expect(callbacks.onError).not.toHaveBeenCalled()
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close')).toBe(false)
+
+      releaseSend()
+      for (let attempt = 0; attempt < 12 && !releaseClose; attempt++) await Promise.resolve()
+      expect(releaseClose).toBeTypeOf('function')
+      await expect(provider.openLive(
+        { runId: 74 },
+        { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+      )).rejects.toThrow(/cleanup.*pending/i)
+
+      releaseClose()
+      await expect(closing).resolves.toBeUndefined()
+      expect(callbacks.onError).not.toHaveBeenCalled()
+      expect(mocks.addRuntimeEvent).toHaveBeenCalledWith(
+        'warn',
+        'cloud_api',
+        expect.stringMatching(/live operation failed while closing/i),
+        expect.objectContaining({
+          sessionId: session?.sessionId,
+          error: expect.stringMatching(/deepgram_stream_send operation stalled/i),
+        }),
+      )
+
+      const replacement = await provider.openLive(
+        { runId: 75 },
+        { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+      )
+      expect(replacement).not.toBeNull()
+      await replacement?.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps all close callers pending until an in-flight native operation actually completes', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+        console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+      })
+      let releaseSend!: () => void
+      mocks.invoke.mockImplementation((command: string) => command === 'deepgram_stream_send'
+        ? new Promise<void>((resolve) => { releaseSend = resolve })
+        : Promise.resolve(undefined))
+      const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+      const provider = new CloudAPIProvider()
+      const session = await provider.openLive({ runId: 76 }, callbacks)
+      session?.sendAudio(new ArrayBuffer(16000))
+      await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_send')).toBe(true))
+      let completed = 0
+      let closeError: unknown
+      const closing = session?.close().then(() => { completed++ }, (error: unknown) => { closeError = error; completed++ })
+
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(completed).toBe(0)
+      expect(closeError).toBeUndefined()
+      expect(callbacks.onError).not.toHaveBeenCalled()
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close')).toBe(false)
+
+      const retry = provider.closeLive().then(() => { completed++ })
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(completed).toBe(0)
+      await expect(provider.openLive(
+        { runId: 77 },
+        { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+      )).rejects.toThrow(/cleanup.*pending/i)
+      releaseSend()
+      await Promise.all([closing, retry])
+      expect(completed).toBe(2)
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps failed-open cleanup reachable through closeLive and never invokes an untagged close', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let closeAttempts = 0
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_open') throw new Error('handshake failed')
+      if (command === 'deepgram_stream_close' && ++closeAttempts === 1) throw new Error('close timed out')
+      return undefined
+    })
+    const provider = new CloudAPIProvider()
+
+    await expect(provider.openLive(
+      { runId: 62 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )).rejects.toThrow(/handshake failed|close timed out/)
+    await provider.closeLive()
+
+    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+      'deepgram_stream_open',
+      'deepgram_stream_close',
+      'deepgram_stream_close',
+    ])
+    expect(mocks.invoke.mock.calls.slice(1).every(([, args]) => (
+      typeof (args as { sessionId?: unknown }).sessionId === 'string'
+    ))).toBe(true)
+  })
+
+  it('reports a stalled send as terminal without releasing its in-flight owner or budget', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+        console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+      })
+      let releaseSend!: () => void
+      mocks.invoke.mockImplementation((command: string) => command === 'deepgram_stream_send'
+        ? new Promise<void>((resolve) => { releaseSend = resolve })
+        : Promise.resolve(undefined))
+      const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+      const provider = new CloudAPIProvider()
+      const session = await provider.openLive({ runId: 63 }, callbacks)
+      session?.sendAudio(new ArrayBuffer(16000))
+      for (let attempt = 0; attempt < 12 && !releaseSend; attempt++) await Promise.resolve()
+      expect(releaseSend).toBeTypeOf('function')
+      await vi.advanceTimersByTimeAsync(5001)
+
+      expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        sessionId: session?.sessionId,
+        message: expect.stringMatching(/stalled|timeout/i),
+      }))
+      let closed = false
+      const close = session?.close().then(() => { closed = true })
+      await Promise.resolve()
+      expect(closed).toBe(false)
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close')).toBe(false)
+
+      releaseSend()
+      await close
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(1)
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a stalled finalize but waits for native completion before confirming close', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+        console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+      })
+      let releaseFinalize!: () => void
+      mocks.invoke.mockImplementation((command: string) => command === 'deepgram_stream_finalize'
+        ? new Promise<void>((resolve) => { releaseFinalize = resolve })
+        : Promise.resolve(undefined))
+      const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+      const provider = new CloudAPIProvider()
+      const session = await provider.openLive({ runId: 68 }, callbacks)
+      const finalize = session?.finalize()
+      let finalizeSettled = false
+      let finalizeError: unknown
+      void finalize?.then(
+        () => { finalizeSettled = true },
+        (error: unknown) => { finalizeSettled = true; finalizeError = error },
+      )
+      for (let attempt = 0; attempt < 12 && !releaseFinalize; attempt++) await Promise.resolve()
+      expect(releaseFinalize).toBeTypeOf('function')
+
+      await vi.advanceTimersByTimeAsync(5001)
+      expect(finalizeSettled).toBe(true)
+      expect(finalizeError).toBeInstanceOf(Error)
+      expect(String(finalizeError)).toMatch(/stalled/i)
+      expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        sessionId: session?.sessionId,
+        message: expect.stringMatching(/stalled/i),
+      }))
+
+      let closeSettled = false
+      const close = session?.close().then(() => { closeSettled = true })
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(closeSettled).toBe(false)
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close')).toBe(false)
+      expect(mocks.listeners.get('deepgram-live-result')?.size).toBe(1)
+      expect(mocks.listeners.get('deepgram-live-error')?.size).toBe(1)
+
+      releaseFinalize()
+      await close
+      expect(closeSettled).toBe(true)
+      expect(mocks.listeners.get('deepgram-live-result')?.size).toBe(0)
+      expect(mocks.listeners.get('deepgram-live-error')?.size).toBe(0)
+      for (let attempt = 0; attempt < 12 && !mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_close'); attempt++) {
+        await Promise.resolve()
+      }
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+        ['deepgram_stream_close', { sessionId: session?.sessionId }],
+      ])
+      expect(callbacks.onError).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('disconnects a live owner and allows opening again after deferred cleanup completes', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    let releaseSend!: () => void
+    mocks.invoke.mockImplementation((command: string) => command === 'deepgram_stream_send'
+      ? new Promise<void>((resolve) => { releaseSend = resolve })
+      : Promise.resolve(undefined))
+    const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const provider = new CloudAPIProvider()
+    const session = await provider.openLive({ runId: 69 }, callbacks)
+    session?.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => expect(releaseSend).toBeTypeOf('function'))
+
+    provider.disconnect()
+    await expect(provider.openLive(
+      { runId: 70 },
+      { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+    )).rejects.toThrow(/cleanup.*native operation settles/i)
+    expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: session?.sessionId,
+      message: expect.stringMatching(/disconnect|cancel/i),
+    }))
+
+    releaseSend()
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+      ['deepgram_stream_close', { sessionId: session?.sessionId }],
+    ]))
+    const replacement = await vi.waitFor(async () => {
+      const opened = await provider.openLive(
+        { runId: 71 },
+        { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+      )
+      if (!opened) throw new Error('Live ASR replacement did not open')
+      return opened
+    })
+    await replacement.close()
+    expect(mocks.listeners.get('deepgram-live-result')?.size).toBe(0)
+    expect(mocks.listeners.get('deepgram-live-error')?.size).toBe(0)
+  })
+
+  it('does not retry a timed-out native close after its late success', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+        console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+      })
+      let releaseClose!: () => void
+      let closeAttempts = 0
+      let originalSessionId = ''
+      mocks.invoke.mockImplementation((command: string, args: unknown) => {
+        if (command === 'deepgram_stream_close') {
+          const closeArgs = args as { sessionId: string }
+          if (closeArgs.sessionId === originalSessionId) {
+            closeAttempts++
+            if (closeAttempts === 1) return new Promise<void>((resolve) => { releaseClose = resolve })
+            throw new Error('duplicate tagged close after prior completion')
+          }
+        }
+        return Promise.resolve(undefined)
+      })
+      const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+      const provider = new CloudAPIProvider()
+      const session = await provider.openLive({ runId: 72 }, callbacks)
+      originalSessionId = session?.sessionId ?? ''
+      let closeError: unknown
+      let closeSettled = false
+      const close = session?.close().then(
+        () => { closeSettled = true },
+        (error: unknown) => { closeSettled = true; closeError = error },
+      )
+      for (let attempt = 0; attempt < 12 && !releaseClose; attempt++) await Promise.resolve()
+      expect(releaseClose).toBeTypeOf('function')
+
+      await vi.advanceTimersByTimeAsync(5001)
+      expect(closeSettled).toBe(false)
+      expect(closeError).toBeUndefined()
+      expect(callbacks.onError).not.toHaveBeenCalled()
+
+      const retry = provider.closeLive()
+      releaseClose()
+      await expect(close).resolves.toBeUndefined()
+      await expect(retry).resolves.toBeUndefined()
+      const replacement = await provider.openLive(
+        { runId: 78 },
+        { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() },
+      )
+      expect(replacement).not.toBeNull()
+      expect(closeAttempts).toBe(1)
+      await replacement?.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats a matching native stream error as terminal and preserves its provider metadata', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    const callbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const provider = new CloudAPIProvider()
+    const session = await provider.openLive({ runId: 64 }, callbacks)
+    for (const listener of mocks.listeners.get('deepgram-live-error') ?? []) {
+      listener({ payload: { sessionId: session?.sessionId, message: 'Deepgram reader failed' } })
+    }
+
+    expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith({
+      sessionId: session?.sessionId,
+      message: 'Deepgram reader failed',
+      asrEngine: 'deepgram',
+      asrModel: 'nova-3',
+    })
+    session?.sendAudio(new ArrayBuffer(16000))
+    await session?.close()
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_send')).toBe(false)
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+  })
+
+  it('does not leave an unhandled rejection when the live error callback throws an unstringifiable value', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'deepgram_stream_send') throw new Error('socket is gone')
+      return undefined
+    })
+    const onError = vi.fn(() => { throw Object.create(null) })
+    const provider = new CloudAPIProvider()
+    const session = await provider.openLive(
+      { runId: 79 },
+      { onResult: vi.fn(), onError, onWarning: vi.fn() },
+    )
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    const processEvents = Reflect.get(globalThis, 'process') as {
+      on: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+      off: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+    }
+    processEvents.on('unhandledRejection', onUnhandledRejection)
+    try {
+      session?.sendAudio(new ArrayBuffer(16000))
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+      expect(unhandledRejections).toEqual([])
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: session?.sessionId }))
+      expect(mocks.addRuntimeEvent).toHaveBeenCalledWith(
+        'error',
+        'cloud_api',
+        expect.stringMatching(/drain/i),
+        expect.objectContaining({ sessionId: session?.sessionId }),
+      )
+    } finally {
+      processEvents.off('unhandledRejection', onUnhandledRejection)
+      await provider.closeLive()
+    }
   })
 })

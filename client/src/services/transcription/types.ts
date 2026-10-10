@@ -57,6 +57,46 @@ export interface TranscriptionCallbacks {
   onWarning?: (code: AsrWarningCode) => void
 }
 
+export interface LiveAsrResult {
+  sessionId: string
+  resultId: number
+  audioStartMs: number
+  audioEndMs: number
+  text: string
+  isFinal: boolean
+  speechFinal: boolean
+  fromFinalize: boolean
+  asrEngine: string
+  asrModel: string
+}
+
+export interface LiveAsrError {
+  sessionId: string
+  message: string
+  asrEngine: string
+  asrModel: string
+}
+
+export interface LiveAsrWarning {
+  sessionId: string
+  code: AsrWarningCode
+  asrEngine: string
+  asrModel: string
+}
+
+export interface LiveAsrCallbacks {
+  onResult: (result: LiveAsrResult) => void
+  onError: (error: LiveAsrError) => void
+  onWarning: (warning: LiveAsrWarning) => void
+}
+
+export interface LiveAsrSession {
+  readonly sessionId: string
+  sendAudio(buffer: ArrayBuffer): void
+  finalize(): Promise<void>
+  close(): Promise<void>
+}
+
 export interface StartOptions {
   /** 当前录音代次；取消或开始下一次后，旧代次的异步结果必须全部丢弃。 */
   runId: number
@@ -122,6 +162,12 @@ export interface TranscriptionProvider {
 
   /** 结束录音，触发处理 */
   stop(opts?: StopOptions): boolean
+
+  /** Open the provider's optional independent incremental recognition path. */
+  openLive?(options: StartOptions, callbacks: LiveAsrCallbacks): Promise<LiveAsrSession | null>
+
+  /** Retry cleanup of a live owner, including one whose open operation failed. */
+  closeLive?(): Promise<void>
 
   /** 断开连接 / 释放资源 */
   disconnect(): void
