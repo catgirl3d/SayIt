@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import AIProviderSection from '../AIProviderSection'
-import { blankProfile } from '../aiProviderCatalog'
+import { blankProfile, type AiProfile } from '../aiProviderCatalog'
 
 const storeMocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
   setSetting: vi.fn(),
+  setSettings: vi.fn(),
 }))
 
 const profileStoreMocks = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const profileStoreMocks = vi.hoisted(() => ({
 vi.mock('@/services/store', () => ({
   getSetting: storeMocks.getSetting,
   setSetting: storeMocks.setSetting,
+  setSettings: storeMocks.setSettings,
 }))
 
 vi.mock('../aiProfileStore', () => ({
@@ -96,7 +98,7 @@ describe('AIProviderSection persistence failures', () => {
     expect(screen.getByRole('radio')).toBeTruthy()
   })
 
-  it('reconciles to the stored list when a partial write already applied the deletion', async () => {
+  it('reconciles to the stored list when a committed deletion loses its acknowledgement', async () => {
     profileStoreMocks.saveAiProfiles.mockRejectedValue(saveFailure)
     profileStoreMocks.loadAiProfiles.mockReset()
     profileStoreMocks.loadAiProfiles
@@ -107,8 +109,8 @@ describe('AIProviderSection persistence failures', () => {
     fireEvent.click(await screen.findByLabelText(t('ai.deleteAria', { title: 'deepseek-v4-flash' })))
     fireEvent.click(await screen.findByRole('button', { name: t('common.delete') }))
 
-    // Storage can be ahead of the UI when the list key landed before the runtime mirror
-    // failed: after the error the list must show what is actually stored, not the stale card.
+    // The database may commit before IPC reports an error. Show the saved list,
+    // without claiming that the rejected call preserved the card.
     expect(await screen.findByText(deleteFailureText)).toBeTruthy()
     expect(screen.queryByRole('radio')).toBeNull()
   })
@@ -127,5 +129,117 @@ describe('AIProviderSection persistence failures', () => {
       expect(button.disabled).toBe(false)
       expect(button.querySelector('svg')?.getAttribute('class') ?? '').not.toContain('animate-spin')
     })
+  })
+})
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+describe('AIProviderSection deletion with the real profile store', () => {
+  const settings = new Map<string, unknown>()
+  const first = { ...profile, id: 'p-first', model: 'first-model' }
+  const third = { ...profile, id: 'p-third', model: 'third-model' }
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../aiProfileStore')>('../aiProfileStore')
+    profileStoreMocks.loadAiProfiles.mockReset().mockImplementation(actual.loadAiProfiles)
+    profileStoreMocks.saveAiProfiles.mockReset().mockImplementation(actual.saveAiProfiles)
+    settings.clear()
+    settings.set('workMode', 'local')
+    settings.set('cloudAi.profilesMigrated', true)
+    settings.set('cloudAi.profiles', [first, profile, third])
+    settings.set('cloudAi.activeProfileId', first.id)
+    storeMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => settings.get(key) ?? fallback)
+    storeMocks.setSetting.mockReset().mockImplementation(async (key: string, value: unknown) => {
+      settings.set(key, structuredClone(value))
+    })
+    storeMocks.setSettings.mockReset().mockImplementation(async (values: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(values)) settings.set(key, structuredClone(value))
+    })
+  })
+
+  async function deleteProfile() {
+    fireEvent.click(await screen.findByLabelText(t('ai.deleteAria', { title: profile.model })))
+    fireEvent.click(await screen.findByRole('button', { name: t('common.delete') }))
+  }
+
+  it('blocks activation during deletion and never restores the deleted profile on a later activation', async () => {
+    render(<AIProviderSection />)
+    await screen.findByRole('radio', { name: /third-model/ })
+    const gate = deferred()
+    const writing = deferred()
+    const holdWrite = async () => { writing.resolve(); await gate.promise }
+    const commit = storeMocks.setSettings.getMockImplementation()!
+    storeMocks.setSettings.mockImplementationOnce(async (values: Record<string, unknown>) => {
+      await holdWrite()
+      await commit(values)
+    })
+    try {
+      await deleteProfile()
+      const radio = screen.getByRole('radio', { name: /third-model/ }) as HTMLButtonElement
+      expect(radio.disabled).toBe(true)
+      await writing.promise
+      fireEvent.click(radio)
+      expect((screen.getByRole('button', { name: t('ai.testAll') }) as HTMLButtonElement).disabled).toBe(true)
+    } finally {
+      await act(async () => {
+        gate.resolve()
+        await profileStoreMocks.loadAiProfiles()
+      })
+    }
+    await waitFor(() => expect(screen.queryByRole('radio', { name: /deepseek-v4-flash/ })).toBeNull())
+    await waitFor(() => expect((screen.getByRole('radio', { name: /third-model/ }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('radio', { name: /third-model/ }))
+    await waitFor(() => expect(screen.getByRole('radio', { name: /third-model/ }).getAttribute('aria-checked')).toBe('true'))
+    expect((settings.get('cloudAi.profiles') as AiProfile[]).map((item) => item.id)).toEqual([first.id, third.id])
+    expect(settings.get('cloudAi.activeProfileId')).toBe(third.id)
+    expect(settings.get('cloudAi.model')).toBe('third-model')
+  })
+
+  it('keeps deletion busy through error reconciliation and allows retry after reconciliation finishes', async () => {
+    render(<AIProviderSection />)
+    await screen.findByRole('radio', { name: /third-model/ })
+    const gate = deferred()
+    const rereading = deferred()
+    const read = storeMocks.getSetting.getMockImplementation()!
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'cloudAi.profiles') {
+        rereading.resolve()
+        await gate.promise
+      }
+      return read(key, fallback)
+    })
+    storeMocks.setSettings.mockRejectedValueOnce(saveFailure)
+    try {
+      await deleteProfile()
+      await rereading.promise
+      expect((screen.getByRole('radio', { name: /third-model/ }) as HTMLButtonElement).disabled).toBe(true)
+      expect((screen.getByLabelText(t('ai.deleteAria', { title: profile.model })) as HTMLButtonElement).disabled).toBe(true)
+    } finally {
+      await act(async () => {
+        gate.resolve()
+        await profileStoreMocks.loadAiProfiles()
+      })
+    }
+    expect(await screen.findByText(deleteFailureText)).toBeTruthy()
+    await waitFor(() => expect((screen.getByRole('radio', { name: /third-model/ }) as HTMLButtonElement).disabled).toBe(false))
+    await deleteProfile()
+    await waitFor(() => expect(screen.queryByRole('radio', { name: /deepseek-v4-flash/ })).toBeNull())
+    expect((settings.get('cloudAi.profiles') as AiProfile[]).map((item) => item.id)).toEqual([first.id, third.id])
+  })
+
+  it('deleting the last profile clears the active selection and every runtime field', async () => {
+    settings.set('cloudAi.profiles', [profile])
+    settings.set('cloudAi.activeProfileId', profile.id)
+    render(<AIProviderSection />)
+    await deleteProfile()
+    await waitFor(() => expect(screen.queryByRole('radio')).toBeNull())
+    expect(settings.get('cloudAi.profiles')).toEqual([])
+    for (const key of ['activeProfileId', 'provider', 'apiUrl', 'apiKey', 'model', 'reasoningEffort', 'serviceTier']) {
+      expect(settings.get(`cloudAi.${key}`)).toBe('')
+    }
   })
 })

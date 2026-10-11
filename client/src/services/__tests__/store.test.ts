@@ -6,9 +6,25 @@ const bridge = vi.hoisted(() => ({
   storeSet: vi.fn(),
 }))
 
+const nativeInvoke = vi.hoisted(() => vi.fn())
+vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }))
+
 vi.mock('../bridge', () => bridge)
 
 import { clearStats, estimateTypingTimeSec, getSetting, recordStats, setSetting } from '../store'
+
+describe('native app settings batch', () => {
+  it('uses the registered transaction command and propagates a failed commit', async () => {
+    const actual = await vi.importActual<typeof import('../bridge')>('../bridge')
+    const settings = { 'cloudAi.model': 'saved-model', 'cloudAi.apiKey': 'saved-key' }
+    const failure = new Error('transaction failed')
+    nativeInvoke.mockRejectedValueOnce(failure)
+
+    await expect(actual.storeSetAppSettings(settings)).rejects.toBe(failure)
+
+    expect(nativeInvoke).toHaveBeenCalledExactlyOnceWith('store_set_app_settings', { settings })
+  })
+})
 
 describe('recordStats', () => {
   beforeEach(() => {

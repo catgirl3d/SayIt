@@ -13,6 +13,11 @@ pub fn store_set(key: String, value: Value, storage: State<Storage>) -> Result<(
 }
 
 #[tauri::command]
+pub fn store_set_app_settings(settings: serde_json::Map<String, Value>, storage: State<Storage>) -> Result<(), String> {
+    storage.set_app_settings(&settings).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn store_delete(key: String, storage: State<Storage>) -> Result<(), String> {
     storage.delete(&key).map_err(|e| e.to_string())
 }

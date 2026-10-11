@@ -246,6 +246,14 @@ impl Storage {
         Ok(())
     }
 
+    /// Save ordinary settings atomically without bypassing collection-specific storage.
+    pub fn set_app_settings(&self, settings: &serde_json::Map<String, Value>) -> SqlResult<()> {
+        if let Some(key) = settings.keys().find(|key| is_collection_key(key)) {
+            return Err(rusqlite::Error::InvalidParameterName(key.clone()));
+        }
+        self.apply_config_transaction(settings, &[], None, None)
+    }
+
     pub fn delete(&self, key: &str) -> SqlResult<()> {
         let db = self.db.lock().unwrap();
         if let Some(table) = collection_table(key) {
@@ -902,6 +910,71 @@ mod tests {
 
     fn test_db_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sayit-{name}-{}.db", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn app_settings_batch_rolls_back_all_ai_keys_on_runtime_write_failure() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let original = serde_json::json!({
+            "cloudAi.profiles": [{ "id": "p-old" }],
+            "cloudAi.activeProfileId": "p-old",
+            "cloudAi.provider": "old-provider",
+            "cloudAi.apiUrl": "https://old.example.test/v1",
+            "cloudAi.apiKey": "old-key",
+            "cloudAi.model": "old-model",
+            "cloudAi.reasoningEffort": "low",
+            "cloudAi.serviceTier": "fast"
+        });
+        let replacement = serde_json::json!({
+            "cloudAi.profiles": [{ "id": "p-new" }],
+            "cloudAi.activeProfileId": "p-new",
+            "cloudAi.provider": "new-provider",
+            "cloudAi.apiUrl": "https://new.example.test/v1",
+            "cloudAi.apiKey": "new-key",
+            "cloudAi.model": "new-model",
+            "cloudAi.reasoningEffort": "high",
+            "cloudAi.serviceTier": ""
+        });
+        for (key, value) in original.as_object().unwrap() {
+            storage.set(key, value).unwrap();
+        }
+        // Fail only after the new selection was written inside the transaction,
+        // proving that earlier writes are rolled back rather than never attempted.
+        storage.db.lock().unwrap().execute_batch(
+            "CREATE TRIGGER fail_ai_runtime_write BEFORE UPDATE ON app_settings
+             WHEN NEW.key = 'cloudAi.provider'
+              AND (SELECT value_json FROM app_settings WHERE key = 'cloudAi.activeProfileId') = '\"p-new\"'
+             BEGIN SELECT RAISE(ABORT, 'injected AI runtime write failure'); END;"
+        ).unwrap();
+
+        let error = storage.set_app_settings(replacement.as_object().unwrap()).unwrap_err();
+        assert!(error.to_string().contains("injected AI runtime write failure"));
+        for (key, value) in original.as_object().unwrap() {
+            assert_eq!(storage.get(key, None), *value, "changed setting: {key}");
+        }
+
+        storage.db.lock().unwrap().execute_batch("DROP TRIGGER fail_ai_runtime_write").unwrap();
+        storage.set_app_settings(replacement.as_object().unwrap()).unwrap();
+        for (key, value) in replacement.as_object().unwrap() {
+            assert_eq!(storage.get(key, None), *value);
+        }
+    }
+
+    #[test]
+    fn app_settings_batch_rejects_collection_keys_without_changing_stored_data() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage.set("cloudAi.model", &serde_json::json!("original-model")).unwrap();
+        let before = storage.export_app_settings(&[]);
+        for key in COLLECTION_KEYS {
+            let collection = storage.get(key, None);
+            let mut settings = serde_json::Map::new();
+            settings.insert("cloudAi.model".to_owned(), serde_json::json!("new-model"));
+            settings.insert((*key).to_owned(), serde_json::json!([]));
+
+            assert!(storage.set_app_settings(&settings).is_err());
+            assert_eq!(storage.export_app_settings(&[]), before);
+            assert_eq!(storage.get(key, None), collection);
+        }
     }
 
     #[test]

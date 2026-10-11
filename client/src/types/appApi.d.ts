@@ -125,6 +125,7 @@ export interface AppAPI {
   appendDebugLog: (payload: unknown) => void
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
+  storeSetAppSettings: (settings: Record<string, unknown>) => Promise<void>
   storeDelete: (key: string) => Promise<void>
   historyList: (query?: {
     keyword?: string

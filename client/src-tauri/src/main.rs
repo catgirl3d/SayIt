@@ -566,6 +566,7 @@ fn main() {
             // Store
             commands::storage::store_get,
             commands::storage::store_set,
+            commands::storage::store_set_app_settings,
             commands::storage::store_delete,
             commands::storage::record_stats_delta,
             // History

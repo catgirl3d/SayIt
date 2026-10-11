@@ -270,6 +270,7 @@ export default function AIProviderSection() {
   const [saving, setSaving] = useState(false)
   /** Another card is being switched active; also disables the other write paths. */
   const [activating, setActivating] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [testingDraft, setTestingDraft] = useState(false)
   const [checkingId, setCheckingId] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState('')
@@ -303,7 +304,7 @@ export default function AIProviderSection() {
     && draftIsNew
     && draft.apiKey.trim() !== ''
     && lastProfileOf(profiles, draft.provider)?.apiKey === draft.apiKey
-  const busy = saving || activating || fetchingModels || testingDraft || checkingId !== '' || batch !== null
+  const busy = saving || activating || deleting || fetchingModels || testingDraft || checkingId !== '' || batch !== null
   const isChecking = (id: string) => checkingId === id || isRunning(id)
   const pendingDelete = profiles.find((p) => p.id === pendingDeleteId) ?? null
 
@@ -361,9 +362,8 @@ export default function AIProviderSection() {
     try {
       await saveAiProfiles({ profiles: nextProfiles, activeId: nextActiveId })
     } catch (error) {
-      // saveAiProfiles writes the list and active keys before the runtime mirror, so a
-      // partial failure can leave storage ahead of the UI. Re-read what is actually
-      // stored before reporting the failure, so the list does not lie about it.
+      // A transaction can commit before its IPC acknowledgement fails. Re-read the
+      // saved state before reporting the error rather than assuming nothing changed.
       try {
         const state = await loadAiProfiles()
         setProfiles(state.profiles)
@@ -496,6 +496,8 @@ export default function AIProviderSection() {
   }
 
   async function handleDelete(id: string) {
+    if (busy) return
+    setDeleting(true)
     const next = profiles.filter((p) => p.id !== id)
     setPendingDeleteId('')
     if (draft?.id === id) closeEditor()
@@ -510,6 +512,8 @@ export default function AIProviderSection() {
         message: t('ai.msg.deleteFailed', { message: friendly.message }),
         detail: friendly.detail,
       })
+    } finally {
+      setDeleting(false)
     }
   }
 

@@ -378,6 +378,11 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
   await api().storeSet(key, value)
 }
 
+/** Save ordinary settings together; collection keys use their dedicated APIs. */
+export async function setSettings(settings: Record<string, unknown>): Promise<void> {
+  await api().storeSetAppSettings(settings)
+}
+
 // Prompt presets
 
 export function normalizeBuiltinPromptLanguage(value: unknown): BuiltinPromptLanguage {

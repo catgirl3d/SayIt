@@ -201,6 +201,10 @@ export function storeSet(key: string, value: unknown) {
   return invoke('store_set', { key, value })
 }
 
+export function storeSetAppSettings(settings: Record<string, unknown>) {
+  return invoke<void>('store_set_app_settings', { settings })
+}
+
 export function storeDelete(key: string) {
   return invoke('store_delete', { key })
 }

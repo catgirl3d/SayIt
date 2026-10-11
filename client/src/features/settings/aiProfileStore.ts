@@ -15,7 +15,7 @@
 // Profiles include API keys and are included in full configuration exports. Public support bundles
 // use an explicit categorical environment contract and never include cloudAi settings.
 
-import { getSetting, setSetting } from '@/services/store'
+import { getSetting, setSetting, setSettings } from '@/services/store'
 import {
   AI_PROVIDERS,
   aiSettingKey,
@@ -39,10 +39,8 @@ export interface AiProfileState {
   activeId: string
 }
 
-// One profile save is a multi-key write (list, active ID, runtime mirror). Overlapping
-// saves — activation while a card test is finishing, an edit while a batch is committing —
-// can interleave and pair the list of one save with the active ID of another. The queue
-// gives every caller the same ordered view, the same pattern as asrProfileStore.
+// Each save commits one atomic batch. Keep reads, migrations and saves ordered so a
+// profile read waits for the preceding save before deriving a normalized selection.
 let profileOperationQueue: Promise<void> = Promise.resolve()
 
 function enqueueProfileRead<T>(operation: () => Promise<T>): Promise<T> {
@@ -55,31 +53,6 @@ function enqueueProfileSave<T>(operation: () => Promise<T>): Promise<T> {
   const result = profileOperationQueue.then(operation, operation)
   profileOperationQueue = result.then(() => undefined, () => undefined)
   return result
-}
-
-/**
- * Write the active entry into the flat runtime keys. No usable profile writes empty
- * strings so downstream code skips the AI step on its own.
- *
- * Tuning values are mirrored per capability: each one only when the active provider's
- * endpoint accepts it, so switching providers never leaks a field the new endpoint would
- * reject.
- */
-async function syncRuntimeActive(profile: AiProfile | null): Promise<void> {
-  await Promise.all([
-    setSetting('cloudAi.provider', profile?.provider ?? ''),
-    setSetting('cloudAi.apiUrl', profile?.apiUrl ?? ''),
-    setSetting('cloudAi.apiKey', profile?.apiKey ?? ''),
-    setSetting('cloudAi.model', profile?.model ?? ''),
-    setSetting(
-      'cloudAi.reasoningEffort',
-      profile && supportsReasoningEffort(profile.provider) ? profile.reasoningEffort ?? '' : '',
-    ),
-    setSetting(
-      'cloudAi.serviceTier',
-      profile && supportsServiceTier(profile.provider) ? profile.serviceTier ?? '' : '',
-    ),
-  ])
 }
 
 /** Read the legacy per-provider config groups. Keys are never deleted so a downgrade still works. */
@@ -168,11 +141,23 @@ export function loadAiProfiles(): Promise<AiProfileState> {
   return enqueueProfileRead(loadAiProfilesUnlocked)
 }
 
-/** Persist the list + active entry and mirror the active one into the runtime settings. */
+/**
+ * Commit the list, selection and runtime mirror together. No profile clears the runtime
+ * keys so downstream code skips AI. Tuning is mirrored only when the selected endpoint
+ * accepts it, preventing a provider switch from leaking fields the new endpoint rejects.
+ */
 async function saveAiProfilesUnlocked(state: AiProfileState): Promise<void> {
   const active = resolveActiveProfile(state.profiles, state.activeId)
-  await Promise.all([setSetting(AI_PROFILES_KEY, state.profiles), setSetting(AI_ACTIVE_PROFILE_KEY, active?.id ?? '')])
-  await syncRuntimeActive(active)
+  await setSettings({
+    [AI_PROFILES_KEY]: state.profiles,
+    [AI_ACTIVE_PROFILE_KEY]: active?.id ?? '',
+    'cloudAi.provider': active?.provider ?? '',
+    'cloudAi.apiUrl': active?.apiUrl ?? '',
+    'cloudAi.apiKey': active?.apiKey ?? '',
+    'cloudAi.model': active?.model ?? '',
+    'cloudAi.reasoningEffort': active && supportsReasoningEffort(active.provider) ? active.reasoningEffort ?? '' : '',
+    'cloudAi.serviceTier': active && supportsServiceTier(active.provider) ? active.serviceTier ?? '' : '',
+  })
 }
 
 /** Every write path must go through here; the call is serialized with all other profile operations. */

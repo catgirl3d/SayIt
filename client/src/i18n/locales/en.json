@@ -891,7 +891,7 @@
   "ai.msg.incompleteCard": "\"{title}\" is incomplete. Edit the card and add the URL, key, and model before testing.",
   "ai.msg.modelFailed": "{model} isn't working: {message}",
   "ai.msg.activationFailed": "Activation could not complete: {message}. The stored selection may not match the settings in use; retry saving before the next dictation.",
-  "ai.msg.deleteFailed": "The service could not be deleted: {message}. Deletion was not confirmed — retry if the card is still listed.",
+  "ai.msg.deleteFailed": "Deletion could not be confirmed: {message}. Check the service list before trying again.",
   "ai.msg.nothingToTest": "No complete service to test. Add the URL, key and model first, then run the test.",
   "ai.msg.batchLineOk": "{model}: works · {latency}",
   "ai.msg.batchLineFail": "{model}: not working — {message}",
