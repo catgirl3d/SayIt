@@ -25,7 +25,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
-import { CheckCircle2, ExternalLink, Info, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { ExternalLink, Info, Plus, RefreshCw, X } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Feedback, FormatHint, type FeedbackTone } from '@/components/ui/feedback'
@@ -72,6 +72,10 @@ import {
   type AiProfileCheck,
 } from './aiProviderCatalog'
 import { loadAiProfiles, saveAiProfiles } from './aiProfileStore'
+import { ConfirmDeleteModal } from './ConfirmDeleteModal'
+import { helpIconClass, inputClass, linkClass } from './formStyles'
+import { ProfileCard } from './ProfileCard'
+import { useBatchTest, type BatchRunResult } from './useBatchTest'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 
@@ -246,11 +250,6 @@ function describeStatus(profile: AiProfile, checking: boolean): CardStatus {
 
 const pickAdvice = () => t('ai.pickAdvice')
 
-const inputClass = 'h-9 w-full rounded-md border border-input-border bg-input-bg px-3 text-sm transition-colors focus:border-input-focus-border'
-const linkClass = 'inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2 decoration-primary/40 transition-colors hover:decoration-primary'
-const cardIconButtonClass = 'pointer-events-auto rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40'
-const helpIconClass = 'h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground'
-
 export default function AIProviderSection() {
   useT()
   const [profiles, setProfiles] = useState<AiProfile[]>([])
@@ -269,6 +268,8 @@ export default function AIProviderSection() {
   /** Snapshot taken when opening the modal, used to determine unsaved changes */
   const [draftBaseline, setDraftBaseline] = useState('')
   const [saving, setSaving] = useState(false)
+  /** Another card is being switched active; also disables the other write paths. */
+  const [activating, setActivating] = useState(false)
   const [testingDraft, setTestingDraft] = useState(false)
   const [checkingId, setCheckingId] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState('')
@@ -278,8 +279,15 @@ export default function AIProviderSection() {
   const [serverAiSourceError, setServerAiSourceError] = useState(false)
   const [serverAiSourceLoaded, setServerAiSourceLoaded] = useState(false)
   const [isServerMode, setIsServerMode] = useState(false)
-  const [batch, setBatch] = useState<{ done: number; total: number } | null>(null)
-  const [checkingIds, setCheckingIds] = useState<string[]>([])
+
+  /**
+   * Batch "test all" runner. Its commit callback persists the collected checks
+   * and posts the summary while the batch state still keeps the page busy.
+   */
+  const { batch, isRunning, runBatch } = useBatchTest<AiProfile, TestOutcome>({
+    runOne: runTest,
+    commit: commitBatchResults,
+  })
 
   const draftProvider = findProvider(draft?.provider ?? '')
   const draftNeedsKey = !draftProvider.keyless
@@ -295,8 +303,8 @@ export default function AIProviderSection() {
     && draftIsNew
     && draft.apiKey.trim() !== ''
     && lastProfileOf(profiles, draft.provider)?.apiKey === draft.apiKey
-  const busy = saving || fetchingModels || testingDraft || checkingId !== '' || batch !== null
-  const isChecking = (id: string) => checkingId === id || checkingIds.includes(id)
+  const busy = saving || activating || fetchingModels || testingDraft || checkingId !== '' || batch !== null
+  const isChecking = (id: string) => checkingId === id || isRunning(id)
   const pendingDelete = profiles.find((p) => p.id === pendingDeleteId) ?? null
 
   useEffect(() => {
@@ -708,33 +716,13 @@ export default function AIProviderSection() {
     setCheckingId('')
   }
 
-  async function handleCheckAll() {
-    if (busy) return
-    const targets = profiles.filter(isProfileComplete)
-    const skipped = profiles.length - targets.length
-    if (targets.length === 0) {
-      setNotice({
-        tone: 'warning',
-        scope: 'list',
-        message: t('ai.msg.nothingToTest'),
-      })
-      return
-    }
-
-    setNotice(null)
-    setBatch({ done: 0, total: targets.length })
-    setCheckingIds(targets.map((p) => p.id))
-
-    let done = 0
-    const results = await Promise.all(targets.map(async (target) => {
-      const outcome = await runTest(target)
-      done += 1
-      setBatch({ done, total: targets.length })
-      setCheckingIds((prev) => prev.filter((id) => id !== target.id))
-      return { target, outcome }
-    }))
-
-    const checks = new Map(results.map((r) => [r.target.id, outcomeToCheck(r.outcome)]))
+  /**
+   * Persist the collected checks and post the batch summary. Runs inside the
+   * batch runner before its state is cleared, so the page stays busy until the
+   * write actually finishes.
+   */
+  async function commitBatchResults(results: BatchRunResult<AiProfile, TestOutcome>[]) {
+    const checks = new Map(results.map(({ item, result }) => [item.id, outcomeToCheck(result)]))
     await persist(
       profiles.map((p) => {
         const check = checks.get(p.id)
@@ -742,24 +730,23 @@ export default function AIProviderSection() {
       }),
       activeId,
     )
-    setCheckingIds([])
-    setBatch(null)
 
     let okCount = 0
     let failCount = 0
-    const lines = results.map(({ target, outcome }) => {
-      if (outcome.ok) {
+    const lines = results.map(({ item, result }) => {
+      if (result.ok) {
         okCount += 1
-        return t('ai.msg.batchLineOk', { model: target.model, latency: formatLatency(outcome.elapsedMs) })
+        return t('ai.msg.batchLineOk', { model: item.model, latency: formatLatency(result.elapsedMs) })
       }
       failCount += 1
-      return t('ai.msg.batchLineFail', { model: target.model, message: outcome.message })
+      return t('ai.msg.batchLineFail', { model: item.model, message: result.message })
     })
 
+    const skipped = profiles.length - results.length
     const parts = [t('ai.msg.batchOk', { count: okCount })]
     if (failCount > 0) parts.push(t('ai.msg.batchFail', { count: failCount }))
     if (skipped > 0) parts.push(t('ai.msg.batchSkipped', { count: skipped }))
-    if (targets.length > 1) {
+    if (results.length > 1) {
       lines.push('', t('ai.msg.batchNote'))
     }
 
@@ -771,86 +758,62 @@ export default function AIProviderSection() {
     })
   }
 
+  async function handleCheckAll() {
+    if (busy) return
+    const targets = profiles.filter(isProfileComplete)
+    if (targets.length === 0) {
+      setNotice({
+        tone: 'warning',
+        scope: 'list',
+        message: t('ai.msg.nothingToTest'),
+      })
+      return
+    }
+
+    setNotice(null)
+    try {
+      await runBatch(targets)
+    } catch (err) {
+      setNotice({ tone: 'error', scope: 'list', message: t('ai.err.saveFailed'), detail: String(err) })
+    }
+  }
+
   function renderCard(profile: AiProfile) {
-    const isActive = profile.id === activeId
     const checking = isChecking(profile.id)
     const status = describeStatus(profile, checking)
 
     return (
-      <div
+      <ProfileCard
         key={profile.id}
-        className={cn(
-          'group relative rounded-lg border p-2.5 transition-colors',
-          isActive ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent/50',
-        )}
-      >
-        <button
-          type="button"
-          role="radio"
-          aria-checked={isActive}
-          aria-label={t('common.cardStatusAria', {
-            title: profileTitle(profile),
-            subtitle: profileSubtitle(profile),
-            status: status.spoken,
-          })}
-          onClick={() => handleActivate(profile.id)}
-          className="absolute inset-0 rounded-lg"
-        />
-
-        <div className="flex items-center gap-1.5">
-          {isActive && (
-            <Tooltip className="pointer-events-auto relative z-10 shrink-0" content={t('common.inUse')}>
-              <CheckCircle2 className="h-4 w-4 shrink-0 cursor-help text-success-strong" aria-label={t('common.inUse')} />
-            </Tooltip>
-          )}
-          <span className="min-w-0 flex-1 truncate text-xs font-medium" title={profileTitle(profile)}>
-            {profileTitle(profile)}
-          </span>
-          {renderStatusChip(status)}
-        </div>
-
-        <div className="mt-1 flex items-center gap-1.5">
-          <span
-            className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
-            title={profile.apiUrl}
-          >
-            {profileSubtitle(profile)}
-          </span>
-          <div className="pointer-events-none relative z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-            <Tooltip className="pointer-events-auto" content={t('common.test')}>
-              <button
-                type="button"
-                onClick={() => void handleCheck(profile)}
-                disabled={busy}
-                aria-label={t('ai.testAria', { title: profileTitle(profile) })}
-                className={cardIconButtonClass}
-              >
-                <RefreshCw className={cn('h-3.5 w-3.5', checking && 'animate-spin')} aria-hidden />
-              </button>
-            </Tooltip>
-            <Tooltip className="pointer-events-auto" content={t('common.edit')}>
-              <button
-                type="button"
-                onClick={() => openEditor({ ...profile }, false)}
-                aria-label={t('ai.editAria', { title: profileTitle(profile) })}
-                className={cardIconButtonClass}
-              >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </Tooltip>
-            <Tooltip className="pointer-events-auto" content={t('common.delete')}>
-              <button
-                type="button"
-                onClick={() => setPendingDeleteId(profile.id)}
-                aria-label={t('ai.deleteAria', { title: profileTitle(profile) })}
-                className={cardIconButtonClass}
-              >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </Tooltip>
-          </div>
-        </div>
-      </div>
+        active={profile.id === activeId}
+        onActivate={() => void handleActivate(profile.id)}
+        activateDisabled={busy}
+        ariaLabel={t('common.cardStatusAria', {
+          title: profileTitle(profile),
+          subtitle: profileSubtitle(profile),
+          status: status.spoken,
+        })}
+        title={profileTitle(profile)}
+        subtitle={profileSubtitle(profile)}
+        subtitleTitle={profile.apiUrl}
+        statusChip={renderStatusChip(status)}
+        test={{
+          ariaLabel: t('ai.testAria', { title: profileTitle(profile) }),
+          onClick: () => void handleCheck(profile),
+          disabled: busy,
+          spinning: checking,
+        }}
+        edit={{
+          ariaLabel: t('ai.editAria', { title: profileTitle(profile) }),
+          onClick: () => openEditor({ ...profile }, false),
+          disabled: activating,
+        }}
+        delete={{
+          ariaLabel: t('ai.deleteAria', { title: profileTitle(profile) }),
+          onClick: () => setPendingDeleteId(profile.id),
+          disabled: busy,
+        }}
+      />
     )
   }
 
@@ -1187,23 +1150,13 @@ export default function AIProviderSection() {
       )}
 
       {pendingDelete && (
-        <Modal title={t('ai.deleteTitle')} onClose={() => setPendingDeleteId('')} panelClassName="w-[420px]">
-          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-            {profileTitle(pendingDelete)} ({profileSubtitle(pendingDelete)}). {t('ai.deleteBody')}
-          </p>
-          <div className="mt-4 flex items-center justify-end gap-2">
-            <Button variant="outline" size="sm" className="h-9" onClick={() => setPendingDeleteId('')}>
-              {t('common.cancel')}
-            </Button>
-            <button
-              type="button"
-              onClick={() => void handleDelete(pendingDelete.id)}
-              className="h-9 rounded-md border border-destructive/30 bg-destructive/5 px-3 text-sm font-medium text-destructive-strong transition-colors hover:bg-destructive/10"
-            >
-              {t('common.delete')}
-            </button>
-          </div>
-        </Modal>
+        <ConfirmDeleteModal
+          title={t('ai.deleteTitle')}
+          danger
+          body={`${profileTitle(pendingDelete)} (${profileSubtitle(pendingDelete)}). ${t('ai.deleteBody')}`}
+          onCancel={() => setPendingDeleteId('')}
+          onConfirm={() => void handleDelete(pendingDelete.id)}
+        />
       )}
     </Card>
   )

@@ -1,19 +1,24 @@
-// 云 API 模式配置面板 —— 一张卡 = 一份语音识别服务配置
+// Cloud API mode settings panel — one card = one speech recognition service configuration.
 //
-// 结构与「AI 服务」页对齐（同一套卡片、同一套弹窗、同一套状态语义）：可以新建多份，
-// 同一家也能存多份（两个百炼账号、两套豆包密钥），点一张即启用。
+// Structure mirrors the AI Services page (same card anatomy, same dialogs, same state
+// semantics): several profiles can be stored, including multiple ones for a vendor
+// (two Bailian accounts, two Doubao key sets), and clicking a card activates it.
 //
-// 与 AI 服务的唯一实质差别：供应商从内置清单里选，不能填任意地址 —— 每家 ASR 的协议
-// 都要一份专门的 Rust 实现，不像 AI 整理那边只要 OpenAI 兼容端点就能接。
+// The one substantive difference from AI services: the provider comes from a built-in
+// catalog and arbitrary URLs cannot be entered — every ASR vendor's protocol needs a
+// dedicated Rust implementation, unlike AI cleanup, which only needs an
+// OpenAI-compatible endpoint.
 //
-// 「同平台重复粘密钥」不靠把凭据提到平台级来解决（那样一张卡就不再是一份完整配置、
-// 也没法存两个账号），而是照 AI 服务的做法：新建时自动沿用同平台上一份的密钥，
-// 并在界面上说明它从哪来。
+// "Pasting the same key twice for one platform" is not solved by lifting credentials to
+// platform level (that would stop a card from being one complete configuration, and two
+// accounts could not be stored). It follows the AI services approach instead: a newly
+// created profile inherits the key of the previous profile on the same platform, and the
+// UI says where it came from.
 
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
-import { CheckCircle2, ExternalLink, Info, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ExternalLink, Info, Plus, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Feedback, FormatHint, type FeedbackTone } from '@/components/ui/feedback'
@@ -30,7 +35,7 @@ import { getCloudAsrSupportedLanguages } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { describeProviderError } from '@/lib/errorMessages'
 import { doubaoKeyLabel } from '@/lib/cloudAsrCreds'
-import { prepareTestPcm } from './testAudio'
+import { prepareTestPcm, type PreparedTestAudio } from './testAudio'
 import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
@@ -49,6 +54,10 @@ import {
   type AsrProfile,
 } from './asrProviderCatalog'
 import { loadAsrProfiles, saveAsrProfileChecks, saveAsrProfiles } from './asrProfileStore'
+import { ConfirmDeleteModal } from './ConfirmDeleteModal'
+import { helpIconClass, inputClass, linkClass } from './formStyles'
+import { ProfileCard } from './ProfileCard'
+import { useBatchTest, type BatchRunResult } from './useBatchTest'
 import { formatCheckedAt, formatLatency, isCheckFresh } from './aiProviderCatalog'
 import { t, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
@@ -59,9 +68,10 @@ const DOUBAO_CONSOLE_OPTIONS = [
   { value: 'legacy', labelKey: 'asr.console.legacy' },
 ] as const
 
-// ⚠️ 下面两段是**发给模型的 System Prompt**，不是界面文案，所以刻意保持中文、
-// 不进 locale 文件。Prompt 的语种取决于用户说什么话，不取决于界面语言 ——
-// 直译成英文会让中文口述的整理质量下降。英文 Prompt 集是独立的一件事，见
+// ⚠️ The two blocks below are System Prompts SENT TO THE MODEL, not UI copy, so they
+// deliberately stay out of the locale files. The prompt language follows what the user
+// speaks, not the interface language — a literal translation into English would degrade
+// cleanup quality for Chinese dictation. The English prompt set is a separate concern.
 const DEFAULT_OMNI_PROMPT = 'You are a speech-to-text transcription assistant. Accurately transcribe the user speech, maintaining the original meaning and spoken language with proper punctuation. Do not add extra explanations or commentary.'
 
 const OMNI_PROMPT_POLISH = `You are a speech-to-text refinement assistant. The input is raw ASR transcription. Your task is to clean it into clear, accurate, and concise text.
@@ -80,20 +90,22 @@ const OMNI_PROMPT_PRESETS = [
   { value: OMNI_PROMPT_POLISH, labelKey: 'asr.omniPreset.polish' },
 ] as const satisfies readonly { value: string; labelKey: TranslationKey }[]
 
-const inputClass = 'h-9 w-full rounded-md border border-input-border bg-input-bg px-3 text-sm transition-colors focus:border-input-focus-border'
-const linkClass = 'inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2 decoration-primary/40 transition-colors hover:decoration-primary'
-const cardIconButtonClass = 'pointer-events-auto rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40'
-const helpIconClass = 'h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground'
-
 interface Notice {
   tone: FeedbackTone
   message: string
   detail?: string
+  /**
+   * Where the message belongs. Editor-scoped messages must render inside the editor
+   * modal — the page notice sits behind the overlay and the user would never see it.
+   * Older call sites omit the scope and keep rendering on the page.
+   */
+  scope?: 'list' | 'editor'
 }
 
 /**
- * 一次识别测试的结果。`check` 无论成败都要写回卡片 —— 失败也得让卡上显示「不可用」，
- * 而不是停在「未测试」让人以为没测过。
+ * Outcome of one recognition test. `check` is written back to the card on success AND
+ * failure — a failed test must show "unavailable" on the card, not stay at "untested"
+ * as if it had never been run.
  */
 type AsrTestOutcome =
   | { ok: true; check: AsrCheck; text: string; latencyMs: number; audioSec: number }
@@ -163,7 +175,7 @@ async function runAsrTest(
   }
 }
 
-/** 卡片标题：同一家有多份时补上密钥尾巴，否则两张卡长得一模一样 */
+/** Card title: append the key fingerprint when a vendor has several profiles, otherwise the cards would look identical */
 function profileTitle(profile: AsrProfile, siblings: number): string {
   const entry = findAsrProvider(profile.provider)
   const base = entry?.label ?? profile.provider
@@ -180,12 +192,18 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   const [testingId, setTestingId] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [pendingDeleteId, setPendingDeleteId] = useState('')
-  /** 「测试全部」的进度；null = 没在批量测试 */
-  const [batch, setBatch] = useState<{ done: number; total: number } | null>(null)
-  /** 批量测试是并发的，所以「正在测哪张」是一组而不是一张 */
-  const [testingIds, setTestingIds] = useState<string[]>([])
 
-  /** 正在编辑的那份（新建也走这里）。null = 弹窗关着 */
+  /**
+   * Batch "Test all" runner. Its commit callback persists the collected checks and
+   * posts the summary while the batch state still keeps the page busy.
+   */
+  const { batch, isRunning, runBatch } = useBatchTest<AsrProfile, AsrTestOutcome, PreparedTestAudio>({
+    prepare: () => prepareTestPcm(speechLanguage),
+    runOne: (profile, audio) => runAsrTest(profile, audio, speechLanguage),
+    commit: commitBatchResults,
+  })
+
+  /** The profile being edited (new profiles go through here too). null = dialog closed */
   const [draft, setDraft] = useState<AsrProfile | null>(null)
   const [draftIsNew, setDraftIsNew] = useState(false)
   const [draftBaseline, setDraftBaseline] = useState('')
@@ -199,15 +217,16 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     || activeProvider === 'gemini_transcribe'
     || activeProvider === 'openrouter_transcribe'
     || activeProvider === CUSTOM_ASR_PROVIDER
-  /** 这张卡正在测吗 —— 单张测试和并发批量测试都要算上 */
-  const isTesting = (id: string) => testingId === id || testingIds.includes(id)
+  /** Is this card testing right now — both single-card and concurrent batch runs count */
+  const isTesting = (id: string) => testingId === id || isRunning(id)
   const draftEntry = draft ? findAsrProvider(draft.provider) : undefined
   const draftPlatform = draftEntry?.platform ?? 'doubao'
   const draftIsDoubao = draftPlatform === 'doubao'
   const draftDirty = draft !== null && JSON.stringify(draft) !== draftBaseline
   /**
-   * 密钥是不是从同平台上一份带过来的。
-   * 用「当前值是否还等于那份的密钥」判断：用户一改成别的，这句提示自己就消失。
+   * Whether the key was inherited from the previous profile on the same platform.
+   * Decided by "the current value still equals that profile's key": as soon as the
+   * user types something else, the hint disappears on its own.
    */
   const draftKeyInherited = draft !== null
     && draftIsNew
@@ -271,14 +290,16 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     }
   }
 
-  // ─────────────────────── 测试 ───────────────────────
+  // ───────────────────────── Tests ─────────────────────────
 
   /**
-   * 用内置测试音频真跑一次识别。
+   * Run one real recognition pass with the bundled test clip.
    *
-   * 为什么不用更便宜的 test_asr_connection：那个只做握手鉴权，握手过了识别仍可能失败
-   * （资源没开通、额度用尽），而且它测不出耗时。这一页要回答「哪个更快」，
-   * 就得测真实转写。代价是一次真实计费调用，页面上写明了。
+   * Why not the cheaper test_asr_connection: it only performs a handshake/auth check,
+   * and recognition can still fail after a passing handshake (resource not enabled,
+   * quota exhausted); it also cannot measure latency. This page must answer "which one
+   * is faster", so it has to run real transcription. The cost is one real billable
+   * call, and the page discloses that.
    */
   async function handleTest(profile: AsrProfile) {
     if (busy) return
@@ -305,7 +326,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
         detail: t('asr.msg.testDetail', { text: outcome.text }),
       })
     } catch (err) {
-      // 只有准备测试音频这一步会漏到这里；识别本身的失败由 runAsrTest 收成 outcome
+      // Only the test-audio preparation step reaches here; recognition failures are folded into outcomes by runAsrTest
       const friendly = describeProviderError(err)
       setNotice({ tone: 'error', message: t('asr.msg.testCrashed', { label: entry.label, message: friendly.message }), detail: friendly.detail })
     } finally {
@@ -314,24 +335,62 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   }
 
   /**
-   * 一键测试全部：**并发**真跑一次识别，一次点击直接开始（没有二次确认）。
+   * Persist the collected checks and post the batch summary. Runs inside the batch
+   * runner before its state is cleared, so the page stays busy until the write actually
+   * finishes.
    *
-   * ⚠️ 并发的代价，改回串行前先想清楚：卡上的耗时是用来横向比较「哪个更快」的，
-   * 并发跑出来的数字互相污染 —— 同平台的卡尤其明显（千问那几个变体共用一把百炼
-   * 密钥，打的是同一个服务），还可能撞上限流被记成「不可用」。所以批量结果里会
-   * 注明这批耗时不宜横向比较；要拿准数字，用卡上的单张测试。
+   * The batch runs its recognition passes CONCURRENTLY on a single click (no second
+   * confirmation). Know the costs before switching back to serial execution: the card
+   * timings exist to compare "which one is faster", and concurrent numbers pollute each
+   * other — especially cards on the same platform (the Qwen variants share one Bailian
+   * key and hit the same service) — and they can trip rate limits that get recorded as
+   * "unavailable". That is why the summary notes its timings are not comparable; for
+   * trustworthy numbers use the per-card test.
    *
-   * 另外两个决定：
-   *  · **一次性落盘**，不逐张写。并发下每个回调拿到的都是同一份旧 profiles，
-   *    逐张 persist 会互相覆盖，只剩最后一个的结论。代价是中途关页面这批就没了 ——
-   *    并发之后整批只等最慢那张，这个窗口很短。
-   *  · **跳过没配完的**，不给它们写「不可用」。它们缺的是密钥而不是可用性，
-   *    写进结论只会污染卡片状态；跳过几张会在结果里说明。
+   * The checks are persisted in one write, not per card: under concurrency every
+   * callback sees the same stale profiles list, so per-card persists would overwrite
+   * each other and keep only the last verdict. The cost is that closing the page
+   * mid-batch loses the whole batch — after parallelization the batch only waits for
+   * the slowest card, so that window is very short.
+   *
+   * Also: profiles missing configuration are skipped rather than marked "unavailable".
+   * What they lack is a key, not availability; the summary reports how many were skipped.
    */
+  async function commitBatchResults(results: BatchRunResult<AsrProfile, AsrTestOutcome>[]) {
+    // The test clip was prepared once and shared by every card by the batch runner
+    await persistChecks(results.map(({ item, result }) => ({ profile: item, check: result.check })))
+
+    let okCount = 0
+    let failCount = 0
+    const lines = results.map(({ item, result }) => {
+      const label = findAsrProvider(item.provider)?.label ?? item.provider
+      if (result.ok) {
+        okCount += 1
+        const grade = gradeAsrLatency(result.latencyMs, result.audioSec)
+        return t('asr.msg.batchLine', { label, latency: formatLatency(result.latencyMs), grade: grade.label })
+      }
+      failCount += 1
+      return `${label}: ${result.message}`
+    })
+
+    const skipped = profiles.length - results.length
+    const parts = [t('asr.msg.batchOk', { count: okCount })]
+    if (failCount > 0) parts.push(t('asr.msg.batchFail', { count: failCount }))
+    if (skipped > 0) parts.push(t('asr.msg.batchSkipped', { count: skipped }))
+    if (results.length > 1) {
+      lines.push('', t('asr.msg.batchNote'))
+    }
+    setNotice({
+      tone: failCount > 0 ? 'warning' : 'success',
+      // The separator also comes from the locale: Chinese uses "，", English ", "
+      message: t('asr.msg.batchDone', { parts: parts.join(t('asr.listSeparator')) }),
+      detail: lines.join('\n'),
+    })
+  }
+
   async function handleTestAll() {
     if (busy) return
     const targets = profiles.filter((p) => !describeAsrMissing(p))
-    const skipped = profiles.length - targets.length
     if (targets.length === 0) {
       setNotice({
         tone: 'warning',
@@ -341,60 +400,18 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     }
 
     setNotice(null)
-    setBatch({ done: 0, total: targets.length })
-    setTestingIds(targets.map((p) => p.id))
-
     try {
-      // The test clip is prepared once and shared by N cards
-      const audio = await prepareTestPcm(speechLanguage)
-      let done = 0
-      const results = await Promise.all(targets.map(async (target) => {
-        const outcome = await runAsrTest(target, audio, speechLanguage)
-        // 每张自己测完就把图标停下、进度加一，不用等整批结束
-        done += 1
-        setBatch({ done, total: targets.length })
-        setTestingIds((prev) => prev.filter((id) => id !== target.id))
-        return { target, outcome }
-      }))
-
-      await persistChecks(results.map(({ target, outcome }) => ({ profile: target, check: outcome.check })))
-
-      let okCount = 0
-      let failCount = 0
-      const lines = results.map(({ target, outcome }) => {
-        const label = findAsrProvider(target.provider)?.label ?? target.provider
-        if (outcome.ok) {
-          okCount += 1
-          const grade = gradeAsrLatency(outcome.latencyMs, outcome.audioSec)
-          return t('asr.msg.batchLine', { label, latency: formatLatency(outcome.latencyMs), grade: grade.label })
-        }
-        failCount += 1
-        return `${label}: ${outcome.message}`
-      })
-
-      const parts = [t('asr.msg.batchOk', { count: okCount })]
-      if (failCount > 0) parts.push(t('asr.msg.batchFail', { count: failCount }))
-      if (skipped > 0) parts.push(t('asr.msg.batchSkipped', { count: skipped }))
-      if (targets.length > 1) {
-        lines.push('', t('asr.msg.batchNote'))
-      }
-      setNotice({
-        tone: failCount > 0 ? 'warning' : 'success',
-        // 连接词也走 locale：中文用「，」，英文用「, 」
-        message: t('asr.msg.batchDone', { parts: parts.join(t('asr.listSeparator')) }),
-        detail: lines.join('\n'),
-      })
+      await runBatch(targets)
     } catch (err) {
-      // 只有准备测试音频这一步会漏到这里；识别本身的失败由 runAsrTest 收成 outcome
+      // Only the shared test-clip preparation fails this way; recognition failures are
+      // folded into outcomes by runAsrTest. A persist failure inside the commit also
+      // lands here, same as the previous single try block.
       const friendly = describeProviderError(err)
       setNotice({ tone: 'error', message: t('asr.msg.batchCrashed', { message: friendly.message }), detail: friendly.detail })
-    } finally {
-      setTestingIds([])
-      setBatch(null)
     }
   }
 
-  // ─────────────────────── 新建 / 编辑 ───────────────────────
+  // ───────────────────── New / Edit ─────────────────────
 
   function openEditor(profile: AsrProfile, isNew: boolean) {
     setDraft(profile)
@@ -405,8 +422,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
 
   function handleNew() {
     const fresh = emptyAsrProfile()
-    // 同平台已有配置时把密钥带过来：最常见的一次操作是「同一个账号、换个模型再存一份」，
-    // 否则又要回控制台复制粘贴一遍
+    // Inherit the key when the same platform already has a profile: the most common
+    // operation is "same account, another model, save one more card", and this spares
+    // the user another copy-paste trip to the console.
     const prev = lastProfileOfPlatform(fresh.provider, fresh.id)
     if (prev) {
       fresh.apiKey = prev.apiKey
@@ -435,7 +453,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     setEngineDraftDirty(JSON.stringify(merged) !== draftBaseline)
   }
 
-  /** 换供应商：跨平台时清掉不属于新平台的凭据，并沿用新平台已有的密钥 */
+  /** Switch provider: clear credentials that don't belong to the new platform, and inherit the new platform's existing key */
   function handleDraftProvider(providerId: string) {
     if (!draft) return
     const nextPlatform = findAsrProvider(providerId)?.platform
@@ -448,7 +466,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       patchDraft({ provider: providerId, model: findAsrProvider(providerId)?.model ?? '' })
       return
     }
-    // 平台变了，旧密钥对新家没有意义 —— 留着只会被当成"已配置"而实际发不出去
+    // The platform changed and the old key means nothing to the new home — keeping it
+    // would mark the profile "configured" while requests keep failing
     const prev = lastProfileOfPlatform(providerId, draft.id)
     const nextProfile = changeAsrProfileProvider(draft, providerId)
     patchDraft({
@@ -461,7 +480,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     })
   }
 
-  /** 切换豆包控制台代次：把当前密钥留给这一代，取出另一代的填进来 */
+  /** Switch the Doubao console generation: park the current key with this generation and bring in the other generation's key */
   function switchConsole(next: string) {
     if (!draft || (next !== 'new' && next !== 'legacy')) return
     if (next === draft.console) return
@@ -472,8 +491,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     if (!draft || saving) return
     setSaving(true)
     try {
-      // 改过凭据就把旧结论作废：否则卡上那枚用旧 key 测出来的「可用」还挂着，
-      // 等于拿过期结论替新配置作保
+      // Invalidate the old verdict when credentials changed: otherwise the "available"
+      // badge measured with the old key stays on the card, vouching for a configuration
+      // it never tested
       const savedProfile = normalizeAsrProfileForSave(draft)
       const before = profiles.find((p) => p.id === savedProfile.id)
       const configurationChanged = !before || asrProfileCheckShouldInvalidate(before, savedProfile)
@@ -482,7 +502,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       const next = draftIsNew
         ? [...profiles, saved]
         : profiles.map((p) => (p.id === saved.id ? saved : p))
-      // 新建的那份直接启用：用户刚配好它，多半就是想用它
+      // Newly saved profile becomes active immediately: the user just configured it, so they most likely want to use it
       await persist(next, draftIsNew ? saved.id : activeId)
 
       setDraft(null)
@@ -512,9 +532,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     spoken: string
     hint: string
     /**
-     * 这张卡还缺配置。
-     * 单独一个标志而不是复用 tone === 'warn'：延迟「偏慢」也是 warn，
-     * 但那不需要用户去填任何东西，按钮不必常驻。
+     * This card is still missing configuration.
+     * A separate flag instead of reusing tone === 'warn': a "slow" latency is also
+     * warn, but it asks nothing of the user, so the buttons need not stay visible.
      */
     needsSetup?: boolean
   }
@@ -558,7 +578,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     const grade = gradeAsrLatency(ms, check.audioSec ?? 0)
     return {
       label: formatLatency(ms),
-      // 结论过期就把颜色收回中性：绿色只代表「刚刚验过，可以信」
+      // A stale verdict drops back to neutral: green only means "verified just now, trustworthy"
       tone: fresh ? grade.tone : 'neutral',
       spoken: t('asr.status.availableSpoken', { grade: grade.label, latency: formatLatency(ms) }),
       hint: t('asr.status.availableDetailHint', {
@@ -588,94 +608,50 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     const availability = asrAvailabilityLabel(entry)
     const model = entry.customEndpoint ? profile.model || t('asr.customModelPlaceholder') : entry.models ? profile.model : entry.model
     return (
-      <div
+      <ProfileCard
         key={profile.id}
-        className={cn(
-          'group relative rounded-lg border p-2.5 transition-colors',
-          isActive ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent/50',
-        )}
-      >
-        {/* 铺满整卡的单选按钮：卡上还有自己的图标按钮，不能把整张卡做成 <button>
-            （按钮套按钮，读屏和键盘都会错） */}
-        <button
-          type="button"
-          role="radio"
-          aria-checked={isActive}
-          aria-label={t('common.cardStatusAria', { title, subtitle: model, status: status.spoken })}
-          disabled={activating}
-          onClick={() => void handleActivate(profile.id)}
-          className="absolute inset-0 rounded-lg"
-        />
-        <div className="flex items-center gap-1.5">
-          {isActive && (
-            <Tooltip className="pointer-events-auto relative z-10 shrink-0" content={t('common.inUse')}>
-              <CheckCircle2 className="h-4 w-4 shrink-0 cursor-help text-success-strong" aria-label={t('common.inUse')} />
-            </Tooltip>
-          )}
-          <span className="min-w-0 flex-1 truncate text-xs font-medium" title={title}>{title}</span>
+        active={isActive}
+        onActivate={() => void handleActivate(profile.id)}
+        activateDisabled={activating}
+        ariaLabel={t('common.cardStatusAria', { title, subtitle: model, status: status.spoken })}
+        title={title}
+        subtitle={model}
+        statusChip={
           <Tooltip className="pointer-events-auto relative z-10 shrink-0" variant="light" content={status.hint}>
             <span className={cn('cursor-help rounded-full px-2 py-0.5 text-[11px] font-medium', chipToneClass[status.tone])}>
               {status.label}
             </span>
           </Tooltip>
-        </div>
-        <div className="mt-1 flex items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={model}>
-            {model}
-          </span>
-          {/* 待配置的卡片按钮常驻：它正在等用户去填东西，把唯一的入口藏进 hover
-              等于让人对着一张没有可点之处的卡发呆。配好之后回到 hover 显隐 */}
-          <div
-            className={cn(
-              'pointer-events-none relative z-10 flex shrink-0 items-center gap-0.5 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
-              status.needsSetup ? 'opacity-100' : 'opacity-0',
-            )}
-          >
-            <Tooltip className="pointer-events-auto" content={t('common.test')}>
-              <button
-                type="button"
-                onClick={() => void handleTest(profile)}
-                disabled={busy}
-                aria-label={t('asr.testAria', { title })}
-                className={cardIconButtonClass}
-              >
-                <RefreshCw className={cn('h-3.5 w-3.5', isTesting(profile.id) && 'animate-spin')} aria-hidden />
-              </button>
-            </Tooltip>
-            <Tooltip className="pointer-events-auto" content={t('common.edit')}>
-              <button
-                type="button"
-                onClick={() => openEditor({ ...profile }, false)}
-                disabled={activating}
-                aria-label={t('asr.editAria', { title })}
-                className={cardIconButtonClass}
-              >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </Tooltip>
-            <Tooltip className="pointer-events-auto" content={t('common.delete')}>
-              <button
-                type="button"
-                onClick={() => setPendingDeleteId(profile.id)}
-                disabled={busy}
-                aria-label={t('asr.deleteAria', { title })}
-                className={cardIconButtonClass}
-              >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </Tooltip>
-          </div>
-        </div>
+        }
+        actionsVisible={status.needsSetup}
+        test={{
+          ariaLabel: t('asr.testAria', { title }),
+          onClick: () => void handleTest(profile),
+          disabled: busy,
+          spinning: isTesting(profile.id),
+        }}
+        edit={{
+          ariaLabel: t('asr.editAria', { title }),
+          onClick: () => openEditor({ ...profile }, false),
+          disabled: activating,
+        }}
+        delete={{
+          ariaLabel: t('asr.deleteAria', { title }),
+          onClick: () => setPendingDeleteId(profile.id),
+          disabled: busy,
+        }}
+      >
         <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground/80">
           {entry.blurb}
-          {/* 地区提示多数供应商为空（见 asrAvailabilityLabel），条件渲染避免留一个空 span 和多余空格 */}
+          {/* Most providers have no region note (see asrAvailabilityLabel), so render the
+              span only when non-empty to avoid a dangling span and stray whitespace */}
           {availability !== '' && <> <span className="font-medium">{availability}</span></>}
         </p>
-      </div>
+      </ProfileCard>
     )
   }
 
-  // ─────────────────────── 弹窗 ───────────────────────
+  // ───────────────────── Dialogs ─────────────────────
 
   function renderEditor() {
     if (!draft) return null
@@ -791,7 +767,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
                 label={t('asr.consoleVersionLabel')}
                 size="sm"
                 value={draft.console}
-                // 常量表存的是 key，到这里才翻成当前语言
+                // The constant table stores keys; they are translated to the current language here
                 options={DOUBAO_CONSOLE_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }))}
                 onChange={switchConsole}
               />
@@ -820,8 +796,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
             </div>
           )}
 
-          {/* data-modal-autofocus：弹窗打开时焦点落在密钥上（这才是要干的事），
-              而不是第一个可聚焦元素 */}
+          {/* data-modal-autofocus: on open, focus lands on the key field (the thing the
+              user came to do) instead of the first focusable element */}
           <div data-modal-autofocus>
             <label htmlFor="asr-api-key" className="mb-1 block text-sm text-muted-foreground">
               {draftEntry?.customEndpoint ? t('asr.customApiKeyOptional') : keyLabel}
@@ -841,7 +817,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
             {draftPlatform === 'qwen' && draft.apiKey.trim() && !/^sk-/.test(draft.apiKey.trim()) && (
               <FormatHint text={t('asr.hint.bailianKey')} />
             )}
-            {/* 密钥不是凭空出现的：说一句它从哪来，免得用户以为自己看错了 */}
+            {/* The key did not appear out of thin air: say where it came from so the user doesn't think they misread */}
             {draftKeyInherited && (
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {t('asr.keyReused')}
@@ -876,8 +852,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
             </div>
           )}
 
-          {/* Omni 是「识别 + 整理」一体的模型，System Prompt 决定它整理成什么样，
-              属于这份服务自己的行为，所以放在这份配置里 */}
+          {/* Omni models combine "recognition + cleanup"; the System Prompt decides how
+              the cleanup looks. That is behavior of this service configuration, so it
+              lives on this profile */}
           {draftEntry?.omni && (
             <div>
               <label htmlFor="omni-system-prompt" className="mb-1.5 block text-sm text-muted-foreground">
@@ -937,8 +914,9 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {/* 并发跑，所以没有「停止」：invoke 发出去的请求没法撤回，
-                摆一颗停不掉任何东西的按钮比没有更糟。整批只等最慢那张，很快。 */}
+            {/* Runs concurrently, so there is no "Stop": an invoke request cannot be
+                withdrawn, and a button that stops nothing is worse than none. The batch
+                only waits for the slowest card anyway. */}
             <Button
               variant="outline"
               size="sm"
@@ -990,17 +968,13 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       {renderEditor()}
 
       {pendingDelete && (
-        <Modal title={t('asr.deleteTitle')} onClose={() => setPendingDeleteId('')} showCloseButton panelClassName="w-[420px]">
-          <div className="mt-3 space-y-4">
-            <p className="text-sm text-muted-foreground">
-              {t('asr.deleteBody', { name: profileTitle(pendingDelete, profiles.filter((p) => p.provider === pendingDelete.provider).length) })}
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setPendingDeleteId('')}>{t('common.cancel')}</Button>
-              <Button size="sm" onClick={() => void handleDelete(pendingDelete.id)}>{t('common.delete')}</Button>
-            </div>
-          </div>
-        </Modal>
+        <ConfirmDeleteModal
+          title={t('asr.deleteTitle')}
+          showCloseButton
+          body={t('asr.deleteBody', { name: profileTitle(pendingDelete, profiles.filter((p) => p.provider === pendingDelete.provider).length) })}
+          onCancel={() => setPendingDeleteId('')}
+          onConfirm={() => void handleDelete(pendingDelete.id)}
+        />
       )}
     </Card>
   )
