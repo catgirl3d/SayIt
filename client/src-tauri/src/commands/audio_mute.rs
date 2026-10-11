@@ -35,11 +35,11 @@ where
 {
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+        IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, CLSCTX_INPROC_SERVER,
-        COINIT_APARTMENTTHREADED,
+        CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance,
+        CoInitializeEx, CoUninitialize,
     };
 
     let co_init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -119,8 +119,11 @@ pub fn restore_system_output() -> Result<bool, String> {
 
         match saved {
             Some(prev) => with_endpoint_volume(|ep| {
-                ep.SetMute(windows::Win32::Foundation::BOOL::from(prev), std::ptr::null())
-                    .map_err(|e| format!("SetMute restore: {}", e))?;
+                ep.SetMute(
+                    windows::Win32::Foundation::BOOL::from(prev),
+                    std::ptr::null(),
+                )
+                .map_err(|e| format!("SetMute restore: {}", e))?;
                 crate::commands::system::write_log_line(&format!(
                     "[RUST] [audio_mute] restored output (mute={})",
                     prev
@@ -190,8 +193,7 @@ unsafe fn get_device_friendly_name(
         CoTaskMemFree(Some(ptr.0.cast()));
         text
     })();
-    let clear_result = PropVariantClear(&mut value)
-        .map_err(|e| format!("PropVariantClear: {}", e));
+    let clear_result = PropVariantClear(&mut value).map_err(|e| format!("PropVariantClear: {}", e));
     clear_result?;
     name_result
 }
@@ -205,12 +207,11 @@ unsafe fn get_device_friendly_name(
 unsafe fn query_mic_mute(label: Option<&str>) -> Result<MicMuteState, String> {
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{
-        eCapture, eConsole, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-        DEVICE_STATE_ACTIVE,
+        DEVICE_STATE_ACTIVE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eConsole,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, CLSCTX_INPROC_SERVER,
-        COINIT_APARTMENTTHREADED,
+        CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance,
+        CoInitializeEx, CoUninitialize,
     };
 
     let co_init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -221,53 +222,52 @@ unsafe fn query_mic_mute(label: Option<&str>) -> Result<MicMuteState, String> {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| format!("CoCreateInstance MMDeviceEnumerator: {}", e))?;
 
-        let device: IMMDevice = if let Some(target_label) =
-            label.map(str::trim).filter(|s| !s.is_empty())
-        {
-            let target = normalize_mic_label(target_label);
-            let devices = enumerator
-                .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
-                .map_err(|e| format!("EnumAudioEndpoints(eCapture): {}", e))?;
-            let count = devices
-                .GetCount()
-                .map_err(|e| format!("IMMDeviceCollection.GetCount: {}", e))?;
-            let mut matched: Option<IMMDevice> = None;
+        let device: IMMDevice =
+            if let Some(target_label) = label.map(str::trim).filter(|s| !s.is_empty()) {
+                let target = normalize_mic_label(target_label);
+                let devices = enumerator
+                    .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+                    .map_err(|e| format!("EnumAudioEndpoints(eCapture): {}", e))?;
+                let count = devices
+                    .GetCount()
+                    .map_err(|e| format!("IMMDeviceCollection.GetCount: {}", e))?;
+                let mut matched: Option<IMMDevice> = None;
 
-            for index in 0..count {
-                let candidate = devices
-                    .Item(index)
-                    .map_err(|e| format!("IMMDeviceCollection.Item({}): {}", index, e))?;
-                let friendly_name = match get_device_friendly_name(&candidate) {
-                    Ok(name) => name,
-                    Err(_) => continue,
-                };
-                if normalize_mic_label(&friendly_name) != target {
-                    continue;
+                for index in 0..count {
+                    let candidate = devices
+                        .Item(index)
+                        .map_err(|e| format!("IMMDeviceCollection.Item({}): {}", index, e))?;
+                    let friendly_name = match get_device_friendly_name(&candidate) {
+                        Ok(name) => name,
+                        Err(_) => continue,
+                    };
+                    if normalize_mic_label(&friendly_name) != target {
+                        continue;
+                    }
+                    if matched.is_some() {
+                        // 同名设备无法可靠区分；宁可回退信号检测，也不查询错端点。
+                        return Ok(MicMuteState {
+                            matched: false,
+                            muted: false,
+                        });
+                    }
+                    matched = Some(candidate);
                 }
-                if matched.is_some() {
-                    // 同名设备无法可靠区分；宁可回退信号检测，也不查询错端点。
-                    return Ok(MicMuteState {
-                        matched: false,
-                        muted: false,
-                    });
-                }
-                matched = Some(candidate);
-            }
 
-            match matched {
-                Some(device) => device,
-                None => {
-                    return Ok(MicMuteState {
-                        matched: false,
-                        muted: false,
-                    })
+                match matched {
+                    Some(device) => device,
+                    None => {
+                        return Ok(MicMuteState {
+                            matched: false,
+                            muted: false,
+                        });
+                    }
                 }
-            }
-        } else {
-            enumerator
-                .GetDefaultAudioEndpoint(eCapture, eConsole)
-                .map_err(|e| format!("GetDefaultAudioEndpoint(eCapture): {}", e))?
-        };
+            } else {
+                enumerator
+                    .GetDefaultAudioEndpoint(eCapture, eConsole)
+                    .map_err(|e| format!("GetDefaultAudioEndpoint(eCapture): {}", e))?
+            };
 
         let endpoint: IAudioEndpointVolume = device
             .Activate(CLSCTX_ALL, None)
@@ -276,7 +276,10 @@ unsafe fn query_mic_mute(label: Option<&str>) -> Result<MicMuteState, String> {
             .GetMute()
             .map_err(|e| format!("GetMute: {}", e))?
             .as_bool();
-        Ok(MicMuteState { matched: true, muted })
+        Ok(MicMuteState {
+            matched: true,
+            muted,
+        })
     })();
 
     if need_co_uninit {
@@ -300,14 +303,20 @@ pub fn get_mic_mute_state(device_label: Option<String>) -> MicMuteState {
                     "[RUST] [audio_mute] get_mic_mute_state failed: {}",
                     e
                 ));
-                MicMuteState { matched: false, muted: false }
+                MicMuteState {
+                    matched: false,
+                    muted: false,
+                }
             }
         }
     }
     #[cfg(not(windows))]
     {
         let _ = device_label;
-        MicMuteState { matched: false, muted: false }
+        MicMuteState {
+            matched: false,
+            muted: false,
+        }
     }
 }
 

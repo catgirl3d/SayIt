@@ -115,7 +115,11 @@ where
     let mut bytes = resp.bytes_stream();
     while let Some(chunk) = bytes.next().await {
         let chunk = chunk.map_err(|e| {
-            diag::fail(scope, "stream_read", format!("Failed to read stream: {}", e))
+            diag::fail(
+                scope,
+                "stream_read",
+                format!("Failed to read stream: {}", e),
+            )
         })?;
         stream.push(&chunk, &mut on_visible);
         if stream.done {
@@ -190,7 +194,9 @@ mod tests {
         let mut stream = LineTextStream::new(stub_line_step);
         let mut snapshots: Vec<String> = Vec::new();
 
-        stream.push(b"one\n[END]\n", &mut |text| snapshots.push(text.to_string()));
+        stream.push(b"one\n[END]\n", &mut |text| {
+            snapshots.push(text.to_string())
+        });
         stream.push(b"late\n", &mut |text| snapshots.push(text.to_string()));
         stream.finish(&mut |text| snapshots.push(text.to_string()));
 

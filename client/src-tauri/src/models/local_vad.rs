@@ -7,9 +7,7 @@
 
 use std::ops::Range;
 
-use silero_vad_crs::{
-    get_timestamps_from_probs_with_config, SileroVad, TimestampConfig,
-};
+use silero_vad_crs::{SileroVad, TimestampConfig, get_timestamps_from_probs_with_config};
 
 /// 与 Handy 一致使用较宽松的 0.3，优先避免漏掉轻声说话。
 const SPEECH_THRESHOLD: f32 = 0.3;
@@ -151,8 +149,10 @@ mod tests {
             .expect("前后两段真实语音应被检测到");
         assert!(span.start < pause_start);
         assert!(span.end > pause_end);
-        assert!(audio[span.clone()][pause_start - span.start..pause_end - span.start]
-            .iter()
-            .all(|sample| *sample == 0.0));
+        assert!(
+            audio[span.clone()][pause_start - span.start..pause_end - span.start]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
     }
 }

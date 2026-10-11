@@ -214,7 +214,7 @@ fn decode_frames(
                         _ => {
                             return Err(format!(
                                 "Unsupported PCM container width: {container_bits}"
-                            ))
+                            ));
                         }
                     };
                     let aligned = signed >> (container_bits - valid_bits);
@@ -343,13 +343,14 @@ impl StreamingResampler {
         capture_start_unix_us: Option<u64>,
     ) -> Result<Vec<(f32, Option<u64>)>, String> {
         self.samples.extend_from_slice(samples);
-        self.capture_times_unix_us.extend(samples.iter().enumerate().map(|(index, _)| {
-            capture_start_unix_us.and_then(|start| {
-                let offset = (index as u128 * 1_000_000 + self.input_rate as u128 / 2)
-                    / self.input_rate as u128;
-                u64::try_from(start as u128 + offset).ok()
-            })
-        }));
+        self.capture_times_unix_us
+            .extend(samples.iter().enumerate().map(|(index, _)| {
+                capture_start_unix_us.and_then(|start| {
+                    let offset = (index as u128 * 1_000_000 + self.input_rate as u128 / 2)
+                        / self.input_rate as u128;
+                    u64::try_from(start as u128 + offset).ok()
+                })
+            }));
         let mut output = Vec::new();
 
         loop {
@@ -372,15 +373,15 @@ impl StreamingResampler {
             };
             let capture_time = match (self.capture_times_unix_us[left_index], fraction) {
                 (Some(left), 0) => Some(left),
-                (Some(left), fraction) => self.capture_times_unix_us[left_index + 1]
-                    .and_then(|right| {
+                (Some(left), fraction) => {
+                    self.capture_times_unix_us[left_index + 1].and_then(|right| {
                         let interval_us = right.checked_sub(left)?;
-                        let expected_input_interval_us = (1_000_000 + self.input_rate / 2)
-                            / self.input_rate;
+                        let expected_input_interval_us =
+                            (1_000_000 + self.input_rate / 2) / self.input_rate;
                         if interval_us > expected_input_interval_us + CAPTURE_TIME_TOLERANCE_US {
                             let divisor = TARGET_SAMPLE_RATE as u128 * self.input_rate as u128;
-                            let nominal_offset_us = (fraction as u128 * 1_000_000 + divisor / 2)
-                                / divisor;
+                            let nominal_offset_us =
+                                (fraction as u128 * 1_000_000 + divisor / 2) / divisor;
                             u64::try_from(left as u128 + nominal_offset_us).ok()
                         } else {
                             let interpolated = left as i128
@@ -388,7 +389,8 @@ impl StreamingResampler {
                                     / TARGET_SAMPLE_RATE as i128;
                             u64::try_from(interpolated).ok()
                         }
-                    }),
+                    })
+                }
                 (None, _) => None,
             };
             output.push((sample, capture_time));
@@ -499,29 +501,39 @@ impl AudioProcessor {
             u64::try_from(start as u128 + last_offset_us).ok()
         });
 
-        let device_position_matches = self.expected_device_position
+        let device_position_matches = self
+            .expected_device_position
             .map_or(true, |expected| expected == device_position);
-        let packet_capture_start = device_position_matches.then_some(capture_start_unix_us).flatten();
+        let packet_capture_start = device_position_matches
+            .then_some(capture_start_unix_us)
+            .flatten();
         self.expected_device_position = device_position.checked_add(samples.len() as u64);
-        let packet_duration_us = (samples.len() as u128 * 1_000_000
-            + self.resampler.input_rate as u128 - 1)
-            / self.resampler.input_rate as u128;
-        self.last_audio_capture_end_unix_us = packet_capture_start.and_then(|start| {
-            u64::try_from(start as u128 + packet_duration_us).ok()
-        });
+        let packet_duration_us =
+            (samples.len() as u128 * 1_000_000 + self.resampler.input_rate as u128 - 1)
+                / self.resampler.input_rate as u128;
+        self.last_audio_capture_end_unix_us = packet_capture_start
+            .and_then(|start| u64::try_from(start as u128 + packet_duration_us).ok());
         self.last_idle_frontier = None;
 
         let resampled = self.resampler.push(samples, packet_capture_start)?;
         let mut frames = Vec::new();
         for (sample, capture_time_unix_us) in resampled {
             self.pending_samples.push(sample);
-            self.pending_capture_times_unix_us.push(capture_time_unix_us);
+            self.pending_capture_times_unix_us
+                .push(capture_time_unix_us);
             if self.pending_samples.len() == FRAME_SAMPLES {
                 let mut frame_samples = [0.0; FRAME_SAMPLES];
                 frame_samples.copy_from_slice(&self.pending_samples);
                 self.pending_samples.clear();
-                let all_capture_times_valid = self.pending_capture_times_unix_us.iter().all(Option::is_some);
-                let capture_start = self.pending_capture_times_unix_us.first().copied().flatten();
+                let all_capture_times_valid = self
+                    .pending_capture_times_unix_us
+                    .iter()
+                    .all(Option::is_some);
+                let capture_start = self
+                    .pending_capture_times_unix_us
+                    .first()
+                    .copied()
+                    .flatten();
                 let mut capture_anchors = Vec::new();
                 let mut capture_gap_us = 0_u64;
                 let mut capture_intervals_valid = all_capture_times_valid;
@@ -571,7 +583,9 @@ impl AudioProcessor {
                     capture_anchors.clear();
                 }
                 self.pending_capture_times_unix_us.clear();
-                self.frame_sequence = self.frame_sequence.checked_add(1)
+                self.frame_sequence = self
+                    .frame_sequence
+                    .checked_add(1)
                     .ok_or_else(|| "System audio frame sequence overflow".to_string())?;
                 self.last_frame_capture_end_unix_us = capture_end;
                 frames.push(AudioFrame {
@@ -588,7 +602,11 @@ impl AudioProcessor {
         Ok(frames)
     }
 
-    fn confirm_idle(&mut self, session_id: u64, confirmed_through_unix_us: u64) -> Option<SystemAudioLiveIdle> {
+    fn confirm_idle(
+        &mut self,
+        session_id: u64,
+        confirmed_through_unix_us: u64,
+    ) -> Option<SystemAudioLiveIdle> {
         let last_audio_capture_end_unix_us = self.last_audio_capture_end_unix_us?;
         if confirmed_through_unix_us < last_audio_capture_end_unix_us.saturating_add(512_000) {
             return None;
@@ -633,11 +651,11 @@ fn request_session_stop(
 #[cfg(windows)]
 mod wasapi {
     use super::{
-        combine_results, decode_frames, pcm16le_bytes, release_packet_after_decode,
-        request_session_stop, AudioFormat, AudioFrame, CaptureSession, SampleEncoding,
-        SystemAudioDevice, SystemAudioCaptureTimingError, SystemAudioError, SystemAudioFrame,
+        AudioFormat, AudioFrame, CaptureSession, SampleEncoding, SystemAudioCaptureTimingError,
+        SystemAudioDevice, SystemAudioError, SystemAudioFrame, combine_results, decode_frames,
+        pcm16le_bytes, release_packet_after_decode, request_session_stop,
     };
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use silero_vad_crs::SileroVad;
     use std::ffi::c_void;
     use std::ptr;
@@ -648,23 +666,23 @@ mod wasapi {
     use std::thread;
     use std::time::Duration;
     use tauri::{AppHandle, Emitter};
-    use windows::core::{Interface, GUID, PCWSTR};
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
-        IMMEndpoint, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
-        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
-        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
-        WAVEFORMATEXTENSIBLE,
+        AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
+        AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK, DEVICE_STATE_ACTIVE, IAudioCaptureClient, IAudioClient,
+        IMMDevice, IMMDeviceEnumerator, IMMEndpoint, MMDeviceEnumerator, WAVEFORMATEX,
+        WAVEFORMATEXTENSIBLE, eConsole, eRender,
     };
     use windows::Win32::System::Com::StructuredStorage::{
         PropVariantClear, PropVariantToStringAlloc,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
-        CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, STGM_READ,
+        CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+        CoTaskMemFree, CoUninitialize, STGM_READ,
     };
     use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
+    use windows::core::{GUID, Interface, PCWSTR};
 
     const FILETIME_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
     const QPC_UNITS_PER_SECOND: i128 = 10_000_000;
@@ -691,8 +709,7 @@ mod wasapi {
             }
             let mut before = 0_i64;
             let mut after = 0_i64;
-            if unsafe { QueryPerformanceCounter(&mut before) } == 0
-            {
+            if unsafe { QueryPerformanceCounter(&mut before) } == 0 {
                 return Err("QueryPerformanceCounter failed for the capture clock".into());
             }
             let file_time = unsafe { GetSystemTimePreciseAsFileTime() };
@@ -715,9 +732,14 @@ mod wasapi {
                 return None;
             }
             let unix_origin_us = (file_time_100ns as i128 - FILETIME_UNIX_EPOCH_100NS) / 10;
-            let qpc_origin_100ns = ((qpc_before as i128 + qpc_after as i128) * QPC_UNITS_PER_SECOND)
+            let qpc_origin_100ns = ((qpc_before as i128 + qpc_after as i128)
+                * QPC_UNITS_PER_SECOND)
                 / (2 * frequency as i128);
-            Some(Self { qpc_origin_100ns, unix_origin_us, frequency })
+            Some(Self {
+                qpc_origin_100ns,
+                unix_origin_us,
+                frequency,
+            })
         }
 
         fn unix_us_at_qpc_100ns(&self, qpc_100ns: u64) -> Option<u64> {
@@ -941,7 +963,7 @@ mod wasapi {
             _ => {
                 return Err(format!(
                     "Unsupported Windows audio format tag: {format_tag}"
-                ))
+                ));
             }
         };
 
@@ -1096,7 +1118,12 @@ mod wasapi {
             unsafe { running.capture.ReleaseBuffer(frame_count) }
                 .map_err(|error| format!("IAudioCaptureClient::ReleaseBuffer: {error}"))
         })?;
-        processor.push_packet(&samples, discontinuity, device_position, capture_start_unix_us)
+        processor.push_packet(
+            &samples,
+            discontinuity,
+            device_position,
+            capture_start_unix_us,
+        )
     }
 
     fn speech_probability(vad: &mut SileroVad, frame: &AudioFrame) -> Result<f32, String> {
@@ -1134,7 +1161,7 @@ mod wasapi {
                 capture_anchors: frame.capture_anchors,
             },
         )
-            .map_err(|error| format!("Emit system-audio-frame to main: {error}"))
+        .map_err(|error| format!("Emit system-audio-frame to main: {error}"))
     }
 
     fn emit_capture_error(app: &AppHandle, session_id: u64, message: String) -> Result<(), String> {
@@ -1184,24 +1211,24 @@ mod wasapi {
                 let mut device_position = 0;
                 let mut qpc_position_100ns = 0;
                 unsafe {
-                    running
-                        .capture
-                        .GetBuffer(
-                            &mut data,
-                            &mut frame_count,
-                            &mut flags,
-                            Some(&mut device_position),
-                            Some(&mut qpc_position_100ns),
-                        )
+                    running.capture.GetBuffer(
+                        &mut data,
+                        &mut frame_count,
+                        &mut flags,
+                        Some(&mut device_position),
+                        Some(&mut qpc_position_100ns),
+                    )
                 }
                 .map_err(|error| format!("IAudioCaptureClient::GetBuffer: {error}"))?;
 
-                let capture_start_unix_us = if flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0 {
-                    clock.and_then(|clock| clock.unix_us_at_qpc_100ns(qpc_position_100ns))
-                } else {
-                    None
-                };
-                let device_position_matches = processor.expected_device_position
+                let capture_start_unix_us =
+                    if flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0 {
+                        clock.and_then(|clock| clock.unix_us_at_qpc_100ns(qpc_position_100ns))
+                    } else {
+                        None
+                    };
+                let device_position_matches = processor
+                    .expected_device_position
                     .map_or(true, |expected| expected == device_position);
                 let capture_time_moved_backwards = capture_start_unix_us
                     .zip(processor.last_audio_capture_end_unix_us)
@@ -1322,7 +1349,9 @@ mod wasapi {
         let clock = match CaptureClock::new() {
             Ok(clock) => Some(clock),
             Err(error) => {
-                log::warn!("System audio source timing is unavailable for session {session_id}: {error}");
+                log::warn!(
+                    "System audio source timing is unavailable for session {session_id}: {error}"
+                );
                 None
             }
         };
@@ -1492,19 +1521,29 @@ mod wasapi {
                 frequency: 10_000_000,
             };
 
-            assert_eq!(clock.unix_us_at_qpc_100ns(50_123_450), Some(1_800_000_000_012_345));
-            assert_eq!(clock.unix_us_at_qpc_100ns(49_990_000), Some(1_799_999_999_999_000));
+            assert_eq!(
+                clock.unix_us_at_qpc_100ns(50_123_450),
+                Some(1_800_000_000_012_345)
+            );
+            assert_eq!(
+                clock.unix_us_at_qpc_100ns(49_990_000),
+                Some(1_799_999_999_999_000)
+            );
         }
 
         #[test]
         fn pairs_wall_time_with_the_midpoint_inside_the_qpc_bracket() {
             let wall_unix_us = 1_800_000_000_000_000_i128;
             let file_time_100ns = (wall_unix_us * 10 + FILETIME_UNIX_EPOCH_100NS) as u64;
-            let clock = CaptureClock::from_bracket(10_000_000, file_time_100ns, 30_000_000, 10_000_000)
-                .expect("valid QPC and FILETIME bracket");
+            let clock =
+                CaptureClock::from_bracket(10_000_000, file_time_100ns, 30_000_000, 10_000_000)
+                    .expect("valid QPC and FILETIME bracket");
 
             assert_eq!(clock.qpc_origin_100ns, 20_000_000);
-            assert_eq!(clock.unix_us_at_qpc_100ns(20_000_000), Some(wall_unix_us as u64));
+            assert_eq!(
+                clock.unix_us_at_qpc_100ns(20_000_000),
+                Some(wall_unix_us as u64)
+            );
         }
     }
 
@@ -1512,7 +1551,7 @@ mod wasapi {
     mod live_tests {
         use super::*;
         use std::time::Instant;
-        use windows::Win32::Media::Audio::{IAudioRenderClient, AUDCLNT_BUFFERFLAGS_SILENT};
+        use windows::Win32::Media::Audio::{AUDCLNT_BUFFERFLAGS_SILENT, IAudioRenderClient};
 
         struct SilentRenderStream {
             client: IAudioClient,
@@ -1666,7 +1705,9 @@ mod wasapi {
                     Ok(render) => Some(render),
                     Err(error) => {
                         let capture_stop = capture.stop();
-                        panic!("Silent render initialization failed: {error}; capture Stop: {capture_stop:?}");
+                        panic!(
+                            "Silent render initialization failed: {error}; capture Stop: {capture_stop:?}"
+                        );
                     }
                 },
             };
@@ -1675,7 +1716,10 @@ mod wasapi {
                 capture.format.sample_rate,
                 capture.format.channels,
                 capture.buffer_frames,
-                render.as_ref().map(|render| render.buffer_frames).unwrap_or(0)
+                render
+                    .as_ref()
+                    .map(|render| render.buffer_frames)
+                    .unwrap_or(0)
             );
 
             let mut observed_audio = Vec::new();
@@ -1916,7 +1960,11 @@ mod wasapi {
             } else {
                 (sample_square_sum / observed_audio.len() as f64).sqrt()
             };
-            eprintln!("Live timing/signal: duration_ms={duration_ms} capture_only={capture_only} max_read_interval_ms={:.3} max_vad_ms={:.3} position_gap_frames={position_gap_frames} position_rewinds={position_rewinds} timestamp_errors={timestamp_errors} production_backward_hits={production_backward_hits} voiced_frames={voiced_frames} peak={sample_peak:.6} rms={rms:.6} offline_speech={offline_speech}", max_read_interval.as_secs_f64() * 1000.0, max_vad_duration.as_secs_f64() * 1000.0);
+            eprintln!(
+                "Live timing/signal: duration_ms={duration_ms} capture_only={capture_only} max_read_interval_ms={:.3} max_vad_ms={:.3} position_gap_frames={position_gap_frames} position_rewinds={position_rewinds} timestamp_errors={timestamp_errors} production_backward_hits={production_backward_hits} voiced_frames={voiced_frames} peak={sample_peak:.6} rms={rms:.6} offline_speech={offline_speech}",
+                max_read_interval.as_secs_f64() * 1000.0,
+                max_vad_duration.as_secs_f64() * 1000.0
+            );
             assert!(
                 packet_count > 0,
                 "No loopback packets arrived during the smoke test"
@@ -2131,11 +2179,11 @@ mod wasapi {
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_clock_regressed, decode_frames, request_session_stop, AudioFormat, AudioProcessor,
-        SampleEncoding, StreamingResampler, FRAME_SAMPLES, TARGET_SAMPLE_RATE,
+        AudioFormat, AudioProcessor, FRAME_SAMPLES, SampleEncoding, StreamingResampler,
+        TARGET_SAMPLE_RATE, capture_clock_regressed, decode_frames, request_session_stop,
     };
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn format(
         sample_rate: u32,
@@ -2322,8 +2370,12 @@ mod tests {
                 .collect();
             let mut contiguous = StreamingResampler::new(input_rate).unwrap();
             let mut fragmented = StreamingResampler::new(input_rate).unwrap();
-            let contiguous_output: Vec<f32> = contiguous.push(&samples, None).unwrap()
-                .into_iter().map(|(sample, _)| sample).collect();
+            let contiguous_output: Vec<f32> = contiguous
+                .push(&samples, None)
+                .unwrap()
+                .into_iter()
+                .map(|(sample, _)| sample)
+                .collect();
             let fragmented_output = push_in_chunks(&mut fragmented, &samples, &[1, 17, 239, 3, 64]);
 
             assert!(
@@ -2341,20 +2393,56 @@ mod tests {
             48_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
 
-        assert!(processor.push_packet(&vec![0.1; 500], false, 100, Some(source_start_us)).unwrap().is_empty());
-        assert!(processor.push_packet(&vec![0.1; 900], false, 600, Some(source_start_us + 10_417)).unwrap().is_empty());
-        let frames = processor.push_packet(&vec![0.1; 1_672], false, 1_500, Some(source_start_us + 29_167)).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 500], false, 100, Some(source_start_us))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 900], false, 600, Some(source_start_us + 10_417))
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(
+                &vec![0.1; 1_672],
+                false,
+                1_500,
+                Some(source_start_us + 29_167),
+            )
+            .unwrap();
 
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
-        assert_eq!(frames[0].capture_end_unix_us, Some(source_start_us + 32_000));
+        assert_eq!(
+            frames[0].capture_end_unix_us,
+            Some(source_start_us + 32_000)
+        );
         assert_eq!(frames[0].frame_sequence, 1);
-        assert!(frames[1].capture_start_unix_us.unwrap().abs_diff(source_start_us + 32_000) <= 2);
-        assert!(frames[1].capture_end_unix_us.unwrap().abs_diff(source_start_us + 64_000) <= 2);
+        assert!(
+            frames[1]
+                .capture_start_unix_us
+                .unwrap()
+                .abs_diff(source_start_us + 32_000)
+                <= 2
+        );
+        assert!(
+            frames[1]
+                .capture_end_unix_us
+                .unwrap()
+                .abs_diff(source_start_us + 64_000)
+                <= 2
+        );
         assert_eq!(frames[1].frame_sequence, 2);
     }
 
@@ -2364,20 +2452,59 @@ mod tests {
             44_100,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
 
-        let mut frames = processor.push_packet(&vec![0.1; 700], false, 500, Some(source_start_us)).unwrap();
-        frames.extend(processor.push_packet(&vec![0.1; 800], false, 1_200, Some(source_start_us + 15_873)).unwrap());
-        frames.extend(processor.push_packet(&vec![0.1; 1_323], false, 2_000, Some(source_start_us + 34_014)).unwrap());
+        let mut frames = processor
+            .push_packet(&vec![0.1; 700], false, 500, Some(source_start_us))
+            .unwrap();
+        frames.extend(
+            processor
+                .push_packet(
+                    &vec![0.1; 800],
+                    false,
+                    1_200,
+                    Some(source_start_us + 15_873),
+                )
+                .unwrap(),
+        );
+        frames.extend(
+            processor
+                .push_packet(
+                    &vec![0.1; 1_323],
+                    false,
+                    2_000,
+                    Some(source_start_us + 34_014),
+                )
+                .unwrap(),
+        );
 
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
-        assert_eq!(frames[0].capture_end_unix_us, Some(source_start_us + 32_000));
+        assert_eq!(
+            frames[0].capture_end_unix_us,
+            Some(source_start_us + 32_000)
+        );
         assert!(frames[0].capture_anchors.is_empty());
-        assert!(frames[1].capture_start_unix_us.unwrap().abs_diff(source_start_us + 32_000) <= 2);
-        assert!(frames[1].capture_end_unix_us.unwrap().abs_diff(source_start_us + 64_000) <= 2);
+        assert!(
+            frames[1]
+                .capture_start_unix_us
+                .unwrap()
+                .abs_diff(source_start_us + 32_000)
+                <= 2
+        );
+        assert!(
+            frames[1]
+                .capture_end_unix_us
+                .unwrap()
+                .abs_diff(source_start_us + 64_000)
+                <= 2
+        );
         assert!(frames[1].capture_anchors.is_empty());
     }
 
@@ -2387,16 +2514,30 @@ mod tests {
             16_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
 
-        assert!(processor.push_packet(&vec![0.1; 300], false, 20, Some(source_start_us)).unwrap().is_empty());
-        let frames = processor.push_packet(&vec![0.1; 212], false, 320, Some(source_start_us + 18_750)).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 300], false, 20, Some(source_start_us))
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(&vec![0.1; 212], false, 320, Some(source_start_us + 18_750))
+            .unwrap();
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
-        assert_eq!(frames[0].capture_end_unix_us, Some(source_start_us + 32_000));
+        assert_eq!(
+            frames[0].capture_end_unix_us,
+            Some(source_start_us + 32_000)
+        );
     }
 
     #[test]
@@ -2405,18 +2546,35 @@ mod tests {
             16_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
-        assert!(processor.push_packet(&vec![0.1; 256], false, 40, Some(source_start_us)).unwrap().is_empty());
-        let frames = processor.push_packet(&vec![0.2; 256], false, 296, Some(source_start_us + 16_500)).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 256], false, 40, Some(source_start_us))
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(&vec![0.2; 256], false, 296, Some(source_start_us + 16_500))
+            .unwrap();
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
-        assert_eq!(frames[0].capture_end_unix_us, Some(source_start_us + 32_500));
+        assert_eq!(
+            frames[0].capture_end_unix_us,
+            Some(source_start_us + 32_500)
+        );
         assert_eq!(frames[0].capture_anchors.len(), 1);
         assert_eq!(frames[0].capture_anchors[0].audio_offset_samples, 256);
-        assert_eq!(frames[0].capture_anchors[0].capture_unix_us, source_start_us + 16_500);
+        assert_eq!(
+            frames[0].capture_anchors[0].capture_unix_us,
+            source_start_us + 16_500
+        );
     }
 
     #[test]
@@ -2425,19 +2583,41 @@ mod tests {
             44_100,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
         let resumed_start_us = source_start_us + 6_106_826;
-        assert!(processor.push_packet(&vec![0.1; 301], false, 50, Some(source_start_us)).unwrap().is_empty());
-        let frames = processor.push_packet(&vec![0.2; 1_200], false, 351, Some(resumed_start_us)).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 301], false, 50, Some(source_start_us))
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(&vec![0.2; 1_200], false, 351, Some(resumed_start_us))
+            .unwrap();
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
         assert_eq!(frames[0].capture_anchors.len(), 1);
         assert_eq!(frames[0].capture_anchors[0].audio_offset_samples, 110);
-        assert!(frames[0].capture_anchors[0].capture_unix_us.abs_diff(resumed_start_us + 50) <= 1);
-        assert!(frames[0].capture_end_unix_us.unwrap().abs_diff(source_start_us + 6_132_000) <= 4);
+        assert!(
+            frames[0].capture_anchors[0]
+                .capture_unix_us
+                .abs_diff(resumed_start_us + 50)
+                <= 1
+        );
+        assert!(
+            frames[0]
+                .capture_end_unix_us
+                .unwrap()
+                .abs_diff(source_start_us + 6_132_000)
+                <= 4
+        );
     }
 
     #[test]
@@ -2446,19 +2626,36 @@ mod tests {
             48_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
         let resumed_start_us = source_start_us + 6_012_500;
-        assert!(processor.push_packet(&vec![0.1; 600], false, 100, Some(source_start_us)).unwrap().is_empty());
-        let frames = processor.push_packet(&vec![0.2; 936], false, 700, Some(resumed_start_us)).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 600], false, 100, Some(source_start_us))
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(&vec![0.2; 936], false, 700, Some(resumed_start_us))
+            .unwrap();
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
         assert_eq!(frames[0].capture_anchors.len(), 1);
         assert_eq!(frames[0].capture_anchors[0].audio_offset_samples, 200);
-        assert_eq!(frames[0].capture_anchors[0].capture_unix_us, resumed_start_us);
-        assert_eq!(frames[0].capture_end_unix_us, Some(source_start_us + 6_032_000));
+        assert_eq!(
+            frames[0].capture_anchors[0].capture_unix_us,
+            resumed_start_us
+        );
+        assert_eq!(
+            frames[0].capture_end_unix_us,
+            Some(source_start_us + 6_032_000)
+        );
     }
 
     #[test]
@@ -2467,10 +2664,16 @@ mod tests {
             16_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
 
-        let frames = processor.push_packet(&vec![0.1; 512], false, 0, None).unwrap();
+        let frames = processor
+            .push_packet(&vec![0.1; 512], false, 0, None)
+            .unwrap();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].capture_start_unix_us, None);
         assert_eq!(frames[0].capture_end_unix_us, None);
@@ -2482,15 +2685,29 @@ mod tests {
             16_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
-        assert!(processor.push_packet(&vec![0.1; 256], false, 50, Some(source_start_us)).unwrap().is_empty());
-        let frames = processor.push_packet(&vec![0.1; 256], false, 306, Some(source_start_us + 15_900)).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 256], false, 50, Some(source_start_us))
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(&vec![0.1; 256], false, 306, Some(source_start_us + 15_900))
+            .unwrap();
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].capture_start_unix_us, Some(source_start_us));
-        assert_eq!(frames[0].capture_end_unix_us, Some(source_start_us + 32_000));
+        assert_eq!(
+            frames[0].capture_end_unix_us,
+            Some(source_start_us + 32_000)
+        );
         assert!(frames[0].capture_anchors.is_empty());
     }
 
@@ -2500,8 +2717,12 @@ mod tests {
             48_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let t0 = 1_800_000_000_000_000_u64;
         // Real WASAPI packets on physical hardware (measured 2026-10-09): consecutive 480-frame
         // starts advance by 9.94-10.01 ms instead of exactly 10 ms, and periodic slew steps
@@ -2546,7 +2767,10 @@ mod tests {
         }
         assert!(!capture_clock_regressed(previous_end - 5_000, previous_end));
         assert!(capture_clock_regressed(previous_end - 5_001, previous_end));
-        assert!(capture_clock_regressed(previous_end - 250_000, previous_end));
+        assert!(capture_clock_regressed(
+            previous_end - 250_000,
+            previous_end
+        ));
     }
 
     #[test]
@@ -2555,10 +2779,18 @@ mod tests {
             16_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
-        let first = processor.push_packet(&vec![0.1; 512], false, 100, Some(1_800_000_000_000_000)).unwrap();
-        let after_gap = processor.push_packet(&vec![-0.5; 512], false, 900, Some(1_800_000_000_500_000)).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
+        let first = processor
+            .push_packet(&vec![0.1; 512], false, 100, Some(1_800_000_000_000_000))
+            .unwrap();
+        let after_gap = processor
+            .push_packet(&vec![-0.5; 512], false, 900, Some(1_800_000_000_500_000))
+            .unwrap();
 
         assert_eq!(first.len(), 1);
         assert_eq!(after_gap.len(), 1);
@@ -2572,20 +2804,42 @@ mod tests {
             16_000,
             1,
             2,
-            SampleEncoding::PcmInt { container_bits: 16, valid_bits: 16 },
-        )).unwrap();
+            SampleEncoding::PcmInt {
+                container_bits: 16,
+                valid_bits: 16,
+            },
+        ))
+        .unwrap();
         let source_start_us = 1_800_000_000_000_000_u64;
-        let frames = processor.push_packet(&vec![0.1; 512], false, 0, Some(source_start_us)).unwrap();
+        let frames = processor
+            .push_packet(&vec![0.1; 512], false, 0, Some(source_start_us))
+            .unwrap();
         assert_eq!(frames.len(), 1);
 
-        assert!(processor.confirm_idle(71, source_start_us + 543_999).is_none());
-        let idle = processor.confirm_idle(71, source_start_us + 544_000).unwrap();
+        assert!(
+            processor
+                .confirm_idle(71, source_start_us + 543_999)
+                .is_none()
+        );
+        let idle = processor
+            .confirm_idle(71, source_start_us + 544_000)
+            .unwrap();
         assert_eq!(idle.session_id, 71);
         assert_eq!(idle.frame_sequence, 1);
-        assert_eq!(idle.last_frame_capture_end_unix_us, Some(source_start_us + 32_000));
-        assert_eq!(idle.last_audio_capture_end_unix_us, Some(source_start_us + 32_000));
+        assert_eq!(
+            idle.last_frame_capture_end_unix_us,
+            Some(source_start_us + 32_000)
+        );
+        assert_eq!(
+            idle.last_audio_capture_end_unix_us,
+            Some(source_start_us + 32_000)
+        );
         assert_eq!(idle.confirmed_through_unix_us, source_start_us + 544_000);
-        assert!(processor.confirm_idle(71, source_start_us + 600_000).is_none());
+        assert!(
+            processor
+                .confirm_idle(71, source_start_us + 600_000)
+                .is_none()
+        );
     }
 
     #[test]
@@ -2601,21 +2855,29 @@ mod tests {
         );
         let mut processor = AudioProcessor::new(audio_format).unwrap();
 
-        assert!(processor
-            .push_packet(&vec![0.25; 300], false, 0, None)
-            .unwrap()
-            .is_empty());
-        assert!(processor
-            .push_packet(&vec![-0.25; 300], true, 300, None)
-            .unwrap()
-            .is_empty());
-        let frames = processor.push_packet(&vec![-0.25; 212], false, 600, None).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.25; 300], false, 0, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            processor
+                .push_packet(&vec![-0.25; 300], true, 300, None)
+                .unwrap()
+                .is_empty()
+        );
+        let frames = processor
+            .push_packet(&vec![-0.25; 212], false, 600, None)
+            .unwrap();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].samples.len(), FRAME_SAMPLES);
         assert!(frames[0].discontinuity);
         assert!(frames[0].samples.iter().all(|sample| *sample == -0.25));
 
-        let following = processor.push_packet(&vec![0.5; 512], false, 812, None).unwrap();
+        let following = processor
+            .push_packet(&vec![0.5; 512], false, 812, None)
+            .unwrap();
         assert_eq!(following.len(), 1);
         assert!(!following[0].discontinuity);
     }
@@ -2633,23 +2895,33 @@ mod tests {
         );
         let mut processor = AudioProcessor::new(audio_format).unwrap();
 
-        assert!(processor
-            .push_packet(&vec![0.1; 450], true, 0, None)
-            .unwrap()
-            .is_empty());
-        let startup_frame = processor.push_packet(&vec![0.1; 318], false, 450, None).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.1; 450], true, 0, None)
+                .unwrap()
+                .is_empty()
+        );
+        let startup_frame = processor
+            .push_packet(&vec![0.1; 318], false, 450, None)
+            .unwrap();
         assert_eq!(startup_frame.len(), 1);
         assert!(!startup_frame[0].discontinuity);
-        assert!(startup_frame[0]
-            .samples
-            .iter()
-            .all(|sample| (*sample - 0.1).abs() < 0.0001));
+        assert!(
+            startup_frame[0]
+                .samples
+                .iter()
+                .all(|sample| (*sample - 0.1).abs() < 0.0001)
+        );
 
-        assert!(processor
-            .push_packet(&vec![0.25; 450], false, 768, None)
-            .unwrap()
-            .is_empty());
-        let gap_frame = processor.push_packet(&vec![-0.5; 768], true, 1_218, None).unwrap();
+        assert!(
+            processor
+                .push_packet(&vec![0.25; 450], false, 768, None)
+                .unwrap()
+                .is_empty()
+        );
+        let gap_frame = processor
+            .push_packet(&vec![-0.5; 768], true, 1_218, None)
+            .unwrap();
         assert_eq!(gap_frame.len(), 1);
         assert!(gap_frame[0].discontinuity);
         assert!(gap_frame[0].samples.iter().all(|sample| *sample == -0.5));

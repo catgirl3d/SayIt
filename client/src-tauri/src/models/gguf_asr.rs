@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
+#[cfg(test)]
+use transcribe_cpp::TimestampKind;
 use transcribe_cpp::{
     Backend, Feature, Itn, Model, ModelOptions, Pnc, RunOptions, Session, SessionOptions,
 };
-#[cfg(test)]
-use transcribe_cpp::TimestampKind;
 
 use super::downloader::model_dir;
 
@@ -286,7 +286,9 @@ fn resolve_backend(pref: &str) -> Backend {
 /// 加载模型（若 key 未变则复用）。`accelerator` 取 "auto" | "cpu" | "gpu"。
 /// 换加速器要重建：后端是 Model::load_with 时绑定的，之后改不了。
 fn ensure_loaded(model_id: &str, accelerator: &str) -> Result<(), String> {
-    let mut cache = CACHE.lock().map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
 
     if let Some(ref c) = *cache {
         if c.model_id == model_id && c.accelerator == accelerator {
@@ -404,7 +406,10 @@ fn warmup(entry: &mut Loaded) -> u128 {
         entry.supports_pnc,
     );
     if let Err(e) = entry.session.run(&pcm, &opts) {
-        log::warn!("Warm-up inference failed; functionality is unaffected, but the first run will be slower: {}", e);
+        log::warn!(
+            "Warm-up inference failed; functionality is unaffected, but the first run will be slower: {}",
+            e
+        );
     }
     t0.elapsed().as_millis()
 }
@@ -472,7 +477,9 @@ fn transcribe_with_cache(
     sample_rate: usize,
     language: &str,
 ) -> Result<String, String> {
-    let mut cache = CACHE.lock().map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
     let entry = cache.as_mut().ok_or("Model is not loaded")?;
     // 守卫会在所有成功/错误返回路径上、释放 CACHE 锁之前刷新最后活动时间。
     let _activity_guard = ActivityGuard;
@@ -591,8 +598,7 @@ impl Drop for ActivityGuard {
 }
 
 /// 当前空闲卸载配置。0 = 永不自动卸载；设置页可动态改为 10 / 30 / 60。
-static IDLE_UNLOAD_MINUTES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static IDLE_UNLOAD_MINUTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static IDLE_UNLOADER_STARTED: std::sync::Once = std::sync::Once::new();
 
 pub fn set_idle_unload_minutes(idle_minutes: u64) {
@@ -600,7 +606,10 @@ pub fn set_idle_unload_minutes(idle_minutes: u64) {
     if idle_minutes == 0 {
         log::info!("Local model idle unload is disabled; the model will remain in memory");
     } else {
-        log::info!("Local model idle unload interval set to {} minutes", idle_minutes);
+        log::info!(
+            "Local model idle unload interval set to {} minutes",
+            idle_minutes
+        );
     }
 }
 
@@ -613,45 +622,49 @@ pub fn set_idle_unload_minutes(idle_minutes: u64) {
 pub fn spawn_idle_unloader(initial_idle_minutes: u64) {
     set_idle_unload_minutes(initial_idle_minutes);
     IDLE_UNLOADER_STARTED.call_once(|| {
-        std::thread::spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-            // 配置为 0 时避免无意义地争用推理锁；拿到锁后还会再读一次，防止
-            // 用户恰在这段间隙切换为“不自动卸载”却仍按旧配置卸载一次。
-            if IDLE_UNLOAD_MINUTES.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-                continue;
-            }
-
-            let mut cache = match CACHE.lock() {
-                Ok(cache) => cache,
-                Err(error) => {
-                    log::warn!("Failed to acquire lock during local model idle check: {}", error);
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                // 配置为 0 时避免无意义地争用推理锁；拿到锁后还会再读一次，防止
+                // 用户恰在这段间隙切换为“不自动卸载”却仍按旧配置卸载一次。
+                if IDLE_UNLOAD_MINUTES.load(std::sync::atomic::Ordering::SeqCst) == 0 {
                     continue;
                 }
-            };
-            let idle_minutes =
-                IDLE_UNLOAD_MINUTES.load(std::sync::atomic::Ordering::SeqCst);
-            if idle_minutes == 0 {
-                continue;
-            }
-            let idle_ms = idle_minutes.saturating_mul(60).saturating_mul(1000);
-            if cache.is_none() {
-                continue;
-            }
 
-            let last = LAST_USE_MS.load(std::sync::atomic::Ordering::Relaxed);
-            if last == 0 || now_ms().saturating_sub(last) < idle_ms {
-                continue;
-            }
+                let mut cache = match CACHE.lock() {
+                    Ok(cache) => cache,
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to acquire lock during local model idle check: {}",
+                            error
+                        );
+                        continue;
+                    }
+                };
+                let idle_minutes = IDLE_UNLOAD_MINUTES.load(std::sync::atomic::Ordering::SeqCst);
+                if idle_minutes == 0 {
+                    continue;
+                }
+                let idle_ms = idle_minutes.saturating_mul(60).saturating_mul(1000);
+                if cache.is_none() {
+                    continue;
+                }
 
-            if let Some(entry) = cache.take() {
-                log::info!(
-                    "Local model was idle for {} minutes; unloaded to free memory: {}",
-                    idle_minutes,
-                    entry.model_id
-                );
-                // 这里是直接 take 而不是走 unload()（已经持着 CACHE 锁了），
-                // 所以状态镜像要自己同步，否则诊断页会一直报着已卸载的后端。
-                mark_unloaded();
+                let last = LAST_USE_MS.load(std::sync::atomic::Ordering::Relaxed);
+                if last == 0 || now_ms().saturating_sub(last) < idle_ms {
+                    continue;
+                }
+
+                if let Some(entry) = cache.take() {
+                    log::info!(
+                        "Local model was idle for {} minutes; unloaded to free memory: {}",
+                        idle_minutes,
+                        entry.model_id
+                    );
+                    // 这里是直接 take 而不是走 unload()（已经持着 CACHE 锁了），
+                    // 所以状态镜像要自己同步，否则诊断页会一直报着已卸载的后端。
+                    mark_unloaded();
+                }
             }
         });
     });
@@ -793,7 +806,10 @@ mod tests {
         let text = run_with(id, 1, read_test_en_wav(), "en");
         eprintln!("[text] {id}: {text}");
         assert!(!text.trim().is_empty(), "{id} 输出为空");
-        assert!(!text.contains("<|") && !text.contains('<'), "残留特殊标签: {text:?}");
+        assert!(
+            !text.contains("<|") && !text.contains('<'),
+            "残留特殊标签: {text:?}"
+        );
         assert!(
             text.contains('.') || text.contains(','),
             "{id} 英文输出没有标点: {text:?}"
@@ -826,7 +842,10 @@ mod tests {
         );
         // auto 检测模式会在原始 token 流里插 <en-US> 这类标签，库默认会清掉。
         // 漏到最终文本里就会被当成用户说的话插进目标程序。
-        assert!(!text.contains('<') && !text.contains('>'), "残留语种标签: {text:?}");
+        assert!(
+            !text.contains('<') && !text.contains('>'),
+            "残留语种标签: {text:?}"
+        );
         unload();
     }
 
@@ -842,7 +861,10 @@ mod tests {
         let text = run_with(id, 3, read_test_wav(), "zh");
         eprintln!("[text] {id} (language=zh): {text}");
         assert!(!text.trim().is_empty(), "{id} 在 language=zh 下输出为空");
-        assert!(!text.contains('<') && !text.contains('>'), "残留语种标签: {text:?}");
+        assert!(
+            !text.contains('<') && !text.contains('>'),
+            "残留语种标签: {text:?}"
+        );
         unload();
     }
 
@@ -1206,7 +1228,11 @@ mod tests {
         // 单遍、不重复 —— 和识别测试 run_asr_benchmark 用的时长一致
         let base = read_test_wav();
         eprintln!("[lang] clip = {:.2}s", base.len() as f64 / SR_U as f64);
-        for id in ["qwen3-asr-0.6b-gguf", "qwen3-asr-1.7b-q4-gguf", "qwen3-asr-1.7b-gguf"] {
+        for id in [
+            "qwen3-asr-0.6b-gguf",
+            "qwen3-asr-1.7b-q4-gguf",
+            "qwen3-asr-1.7b-gguf",
+        ] {
             if !model_present(id) {
                 eprintln!("skip: {id} 未下载");
                 continue;
@@ -1378,5 +1404,4 @@ mod tests {
         );
         unload();
     }
-
 }

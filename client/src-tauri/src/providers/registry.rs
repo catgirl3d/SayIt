@@ -125,7 +125,7 @@ pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListRes
             return Err(error_protocol::encode(
                 "connect_failed",
                 format!("Unknown AI provider: {}", other),
-            ))
+            ));
         }
     };
     match fetch {
@@ -149,9 +149,15 @@ pub async fn cloud_transcribe(
 ) -> Result<CloudTranscribeResult, String> {
     let config = &request.asr_config;
     let result = match config.provider.as_str() {
-        "deepgram" => return asr_deepgram::transcribe(
-            &request.audio_b64, request.sample_rate, config, &request.hotwords,
-        ).await,
+        "deepgram" => {
+            return asr_deepgram::transcribe(
+                &request.audio_b64,
+                request.sample_rate,
+                config,
+                &request.hotwords,
+            )
+            .await;
+        }
         "doubao" => {
             asr_doubao::transcribe(
                 &request.audio_b64,
@@ -358,10 +364,8 @@ mod tests {
             "model": "registry-fixture-model",
             "protocol": "transcriptions"
         });
-        let audio_b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            b"audio-marker",
-        );
+        let audio_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
 
         let result = cloud_transcribe(CloudTranscribeRequest {
             audio_b64,

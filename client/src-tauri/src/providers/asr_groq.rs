@@ -161,14 +161,7 @@ fn build_groq_form(
 ) -> Result<(String, reqwest::multipart::Form, bool), String> {
     let model = resolve_groq_model(config);
     let with_prompt = language == Some("zh");
-    let form = build_form(
-        wav,
-        &model,
-        language,
-        "language",
-        with_prompt,
-        scope,
-    )?;
+    let form = build_form(wav, &model, language, "language", with_prompt, scope)?;
     Ok((model, form, with_prompt))
 }
 
@@ -339,8 +332,7 @@ pub async fn transcribe(
         )?;
         (model, form, OPENAI_API_URL, with_prompt)
     } else {
-        let (model, form, with_prompt) =
-            build_groq_form(wav, config, language.as_deref(), scope)?;
+        let (model, form, with_prompt) = build_groq_form(wav, config, language.as_deref(), scope)?;
         (model, form, API_URL, with_prompt)
     };
 
@@ -496,7 +488,7 @@ async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
                 message,
                 elapsed_ms: 0,
                 detail: format!("Model: {}", model),
-            }
+            };
         }
     };
 
@@ -512,7 +504,7 @@ async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
                 ),
                 elapsed_ms: 0,
                 detail: format!("Model: {}", model),
-            }
+            };
         }
     };
     let start = Instant::now();
@@ -544,7 +536,7 @@ async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
                             ),
                             elapsed_ms,
                             detail: format!("Model: {}", model),
-                        }
+                        };
                     }
                 }
             } else {
@@ -576,7 +568,7 @@ async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResu
                 message: e,
                 elapsed_ms: 0,
                 detail: String::new(),
-            }
+            };
         }
     };
 
@@ -867,9 +859,10 @@ mod tests {
             let response = client.execute(request).await.unwrap();
             assert!(response.status().is_success());
             let wire = server.join().unwrap();
-            assert!(wire
-                .to_ascii_lowercase()
-                .contains("authorization: bearer groq-test-key"));
+            assert!(
+                wire.to_ascii_lowercase()
+                    .contains("authorization: bearer groq-test-key")
+            );
             assert!(wire.contains("name=\"file\"; filename=\"audio.wav\""));
             assert!(wire.contains("Content-Type: audio/wav"));
             assert!(wire.contains("RIFF"));
@@ -944,13 +937,17 @@ mod tests {
 
         assert!(!result.ok);
         assert!(!result.message.contains(marker));
-        assert!(result
-            .message
-            .starts_with("sayit_error:provider_forbidden:"));
+        assert!(
+            result
+                .message
+                .starts_with("sayit_error:provider_forbidden:")
+        );
         assert!(result.message.contains("http=403"));
-        assert!(result
-            .message
-            .contains("x-request-id=groq-connection-trace"));
+        assert!(
+            result
+                .message
+                .contains("x-request-id=groq-connection-trace")
+        );
     }
 
     #[tokio::test]
@@ -979,9 +976,10 @@ mod tests {
         let response = client.execute(request).await.unwrap();
         assert!(response.status().is_success());
         let wire = server.join().unwrap();
-        assert!(wire
-            .to_ascii_lowercase()
-            .contains("authorization: bearer openai-test-key"));
+        assert!(
+            wire.to_ascii_lowercase()
+                .contains("authorization: bearer openai-test-key")
+        );
         assert!(wire.contains("name=\"model\"\r\n\r\ngpt-transcribe"));
         assert!(wire.contains("name=\"languages[]\"\r\n\r\nzh"));
         assert!(wire.contains("name=\"response_format\"\r\n\r\njson"));
@@ -1026,21 +1024,25 @@ mod tests {
     #[test]
     fn transcription_response_rejects_http_and_malformed_json_errors() {
         let headers = reqwest::header::HeaderMap::new();
-        assert!(parse_transcription_response(
-            reqwest::StatusCode::UNAUTHORIZED,
-            &headers,
-            r#"{"error":"invalid key"}"#,
-            OPENAI_SCOPE,
-        )
-        .unwrap_err()
-        .contains("401"));
-        assert!(parse_transcription_response(
-            reqwest::StatusCode::OK,
-            &headers,
-            "not json",
-            OPENAI_SCOPE,
-        )
-        .is_err());
+        assert!(
+            parse_transcription_response(
+                reqwest::StatusCode::UNAUTHORIZED,
+                &headers,
+                r#"{"error":"invalid key"}"#,
+                OPENAI_SCOPE,
+            )
+            .unwrap_err()
+            .contains("401")
+        );
+        assert!(
+            parse_transcription_response(
+                reqwest::StatusCode::OK,
+                &headers,
+                "not json",
+                OPENAI_SCOPE,
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -169,7 +169,13 @@ pub async fn transcribe(
 ) -> Result<AsrResult, String> {
     let pcm = base64::engine::general_purpose::STANDARD
         .decode(audio_pcm_b64)
-        .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
 
     if pcm.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
@@ -192,13 +198,22 @@ pub async fn transcribe(
     let request = tungstenite::http::Request::builder()
         .uri(&url)
         .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
         .header("Sec-WebSocket-Version", "13")
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Host", "dashscope.aliyuncs.com")
         .body(())
-        .map_err(|e| diag::fail(SCOPE, "build_request", format!("Failed to build request: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "build_request",
+                format!("Failed to build request: {}", e),
+            )
+        })?;
 
     let audio_sec = pcm.len() as f64 / 32000.0; // 16kHz / 16bit / mono
     diag::log(
@@ -217,18 +232,30 @@ pub async fn transcribe(
 
     let (mut ws, _) = tokio_tungstenite::connect_async(request)
         .await
-        .map_err(|e| diag::fail(SCOPE, "connect", format!("WebSocket connection failed: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "connect",
+                format!("WebSocket connection failed: {}", e),
+            )
+        })?;
 
     // 等待 session.created
     wait_for_event(&mut ws, "session.created", SCOPE).await?;
 
     // 发送 session.update — 仅输出文本，禁用 VAD（Manual 模式）
     let session_update = build_session_update(&model, &instructions);
-    ws.send(tungstenite::Message::Text(session_update.to_string().into()))
-        .await
-        .map_err(|e| {
-            diag::fail(SCOPE, "send_session_update", format!("Failed to send session.update: {}", e))
-        })?;
+    ws.send(tungstenite::Message::Text(
+        session_update.to_string().into(),
+    ))
+    .await
+    .map_err(|e| {
+        diag::fail(
+            SCOPE,
+            "send_session_update",
+            format!("Failed to send session.update: {}", e),
+        )
+    })?;
 
     // 等待 session.updated
     wait_for_event(&mut ws, "session.updated", SCOPE).await?;
@@ -251,7 +278,12 @@ pub async fn transcribe(
                 diag::fail(
                     SCOPE,
                     "send_audio",
-                    format!("Failed to send audio chunk {}/{}: {}", idx + 1, total_chunks, e),
+                    format!(
+                        "Failed to send audio chunk {}/{}: {}",
+                        idx + 1,
+                        total_chunks,
+                        e
+                    ),
                 )
             })?;
     }
@@ -260,14 +292,26 @@ pub async fn transcribe(
     let commit = serde_json::json!({ "type": "input_audio_buffer.commit" });
     ws.send(tungstenite::Message::Text(commit.to_string().into()))
         .await
-        .map_err(|e| diag::fail(SCOPE, "send_commit", format!("Failed to send commit: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "send_commit",
+                format!("Failed to send commit: {}", e),
+            )
+        })?;
 
     let create_response = serde_json::json!({ "type": "response.create" });
-    ws.send(tungstenite::Message::Text(create_response.to_string().into()))
-        .await
-        .map_err(|e| {
-            diag::fail(SCOPE, "send_response_create", format!("Failed to send response.create: {}", e))
-        })?;
+    ws.send(tungstenite::Message::Text(
+        create_response.to_string().into(),
+    ))
+    .await
+    .map_err(|e| {
+        diag::fail(
+            SCOPE,
+            "send_response_create",
+            format!("Failed to send response.create: {}", e),
+        )
+    })?;
 
     diag::log(SCOPE, "audio_sent", &format!("chunks={}", total_chunks));
 
@@ -303,10 +347,7 @@ pub async fn transcribe(
                     Err(_) => continue,
                 };
 
-                let event_type = event
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
+                let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
                 match event_type {
                     "response.text.delta" => {
@@ -397,17 +438,21 @@ async fn wait_for_event(
                     scope,
                     &stage,
                     format!("Timed out waiting for {}", expected_type),
-                ))
+                ));
             }
             Ok(None) => {
                 return Err(diag::fail(
                     scope,
                     &stage,
                     format!("Connection closed while waiting for {}", expected_type),
-                ))
+                ));
             }
             Ok(Some(Err(e))) => {
-                return Err(diag::fail(scope, &stage, format!("Failed to receive message: {}", e)))
+                return Err(diag::fail(
+                    scope,
+                    &stage,
+                    format!("Failed to receive message: {}", e),
+                ));
             }
             Ok(Some(Ok(m))) => m,
         };
@@ -418,10 +463,7 @@ async fn wait_for_event(
                     diag::fail(scope, &stage, format!("Failed to parse event: {}", e))
                 })?;
 
-                let event_type = event
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
+                let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
                 if event_type == "error" {
                     let err_msg = event
@@ -452,7 +494,10 @@ async fn wait_for_event(
                 return Err(diag::fail(
                     scope,
                     &stage,
-                    format!("Server closed the connection while waiting for {} ({})", expected_type, reason),
+                    format!(
+                        "Server closed the connection while waiting for {} ({})",
+                        expected_type, reason
+                    ),
                 ));
             }
             _ => {}
@@ -467,7 +512,10 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     let request = tungstenite::http::Request::builder()
         .uri(&url)
         .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
         .header("Sec-WebSocket-Version", "13")
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
@@ -504,7 +552,11 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
             let elapsed_ms = start.elapsed().as_millis() as u64;
             TestResult {
                 ok: false,
-                message: diag::fail("qwen/omni-test", "connect", format!("Connection failed: {}", e)),
+                message: diag::fail(
+                    "qwen/omni-test",
+                    "connect",
+                    format!("Connection failed: {}", e),
+                ),
                 elapsed_ms,
                 detail: String::new(),
             }
@@ -514,7 +566,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
 
 #[cfg(test)]
 mod response_end_tests {
-    use super::{finish_response, ResponseEnd};
+    use super::{ResponseEnd, finish_response};
 
     fn finish(result_text: &str, end: ResponseEnd) -> Result<super::AsrResult, String> {
         finish_response(
@@ -566,8 +618,7 @@ mod response_end_tests {
             ResponseEnd::StreamEnded,
             ResponseEnd::ReceiveError("socket reset".to_string()),
         ] {
-            let result =
-                finish("partial transcript", end).expect("nonempty partial is retained");
+            let result = finish("partial transcript", end).expect("nonempty partial is retained");
             assert_eq!(result.text, "partial transcript");
         }
     }
@@ -612,7 +663,7 @@ mod response_end_tests {
 
 #[cfg(test)]
 mod session_configuration_tests {
-    use super::{build_session_update, ws_url, DEFAULT_MODEL};
+    use super::{DEFAULT_MODEL, build_session_update, ws_url};
 
     #[test]
     fn only_the_exact_qwen38_model_adds_tina_and_other_session_fields_stay_unchanged() {

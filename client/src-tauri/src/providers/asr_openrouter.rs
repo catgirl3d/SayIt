@@ -363,12 +363,14 @@ mod tests {
             ""
         );
         assert!(parse_response(&serde_json::json!({})).is_err());
-        assert!(parse_response_status(
-            reqwest::StatusCode::UNAUTHORIZED,
-            r#"{"error":{"message":"invalid key"}}"#,
-        )
-        .unwrap_err()
-        .contains("401"));
+        assert!(
+            parse_response_status(
+                reqwest::StatusCode::UNAUTHORIZED,
+                r#"{"error":{"message":"invalid key"}}"#,
+            )
+            .unwrap_err()
+            .contains("401")
+        );
         assert!(parse_response_status(reqwest::StatusCode::OK, "not json",).is_err());
     }
 
@@ -435,9 +437,11 @@ mod tests {
         let request = String::from_utf8_lossy(&server.join().unwrap()).into_owned();
 
         assert_eq!(result.text, "fixture transcript");
-        assert!(request
-            .to_ascii_lowercase()
-            .contains("authorization: bearer fixture-api-key"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer fixture-api-key")
+        );
         let header_end = request.find("\r\n\r\n").unwrap() + 4;
         let body: serde_json::Value = serde_json::from_str(&request[header_end..]).unwrap();
         assert_eq!(body["model"], "vendor/model-slug");

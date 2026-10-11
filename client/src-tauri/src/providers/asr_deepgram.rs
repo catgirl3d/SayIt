@@ -27,16 +27,16 @@ use super::types::{
 };
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite;
 use tungstenite::client::IntoClientRequest;
-use tungstenite::http::header::{AUTHORIZATION, USER_AGENT};
 use tungstenite::http::HeaderValue;
+use tungstenite::http::header::{AUTHORIZATION, USER_AGENT};
 
 const SCOPE: &str = "deepgram/asr";
 const WS_BASE: &str = "wss://api.deepgram.com/v1/listen";
@@ -63,9 +63,8 @@ const MAX_LIVE_PCM_BASE64_BYTES: usize = ((MAX_LIVE_PCM_BYTES + 2) / 3) * 4;
 const KEYTERM_LIMIT_MARKER: &str = "keyterm limit exceeded";
 const MAX_KEYTERM_ERROR_BODY_BYTES: usize = 16 * 1024;
 
-type WsStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type WsSink = SplitSink<WsStream, tungstenite::Message>;
 type EventEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
@@ -198,7 +197,11 @@ fn parse_event(raw: &str) -> ServerEvent {
                 .and_then(|alternative| alternative.get("transcript"))
                 .and_then(|text| text.as_str())
                 .unwrap_or("");
-            let start = data.get("start").and_then(|value| value.as_f64()).unwrap_or(0.0).max(0.0);
+            let start = data
+                .get("start")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0)
+                .max(0.0);
             let duration = data
                 .get("duration")
                 .and_then(|value| value.as_f64())
@@ -209,8 +212,8 @@ fn parse_event(raw: &str) -> ServerEvent {
                 audio_end_ms: ((start + duration) * 1000.0).round() as u64,
                 text: text.to_string(),
                 is_final: data
-                .get("is_final")
-                .and_then(|value| value.as_bool())
+                    .get("is_final")
+                    .and_then(|value| value.as_bool())
                     .unwrap_or(false),
                 speech_final: data
                     .get("speech_final")
@@ -241,11 +244,22 @@ fn parse_event(raw: &str) -> ServerEvent {
 
 fn parse_batch_transcript(body: &str) -> Result<String, String> {
     let data: serde_json::Value = serde_json::from_str(body).map_err(|error| {
-        diag::fail(SCOPE, "parse_response", format!("Invalid Deepgram batch JSON: {}", error))
+        diag::fail(
+            SCOPE,
+            "parse_response",
+            format!("Invalid Deepgram batch JSON: {}", error),
+        )
     })?;
-    let text = data.pointer("/results/channels/0/alternatives/0/transcript")
+    let text = data
+        .pointer("/results/channels/0/alternatives/0/transcript")
         .and_then(|value| value.as_str())
-        .ok_or_else(|| diag::fail(SCOPE, "parse_response", "Deepgram batch response is missing the transcript".to_string()))?;
+        .ok_or_else(|| {
+            diag::fail(
+                SCOPE,
+                "parse_response",
+                "Deepgram batch response is missing the transcript".to_string(),
+            )
+        })?;
     Ok(text.trim().to_string())
 }
 
@@ -402,9 +416,14 @@ async fn connect_attempt(
 ) -> Result<WsStream, WsConnectFailure> {
     let request = build_request(url, config.api_key.trim()).map_err(WsConnectFailure::Failed)?;
     let result = tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request))
-        .await.map_err(|_| WsConnectFailure::Failed(diag::fail(
-            SCOPE, "connect", "Deepgram WebSocket connection timed out".to_string(),
-        )))?;
+        .await
+        .map_err(|_| {
+            WsConnectFailure::Failed(diag::fail(
+                SCOPE,
+                "connect",
+                "Deepgram WebSocket connection timed out".to_string(),
+            ))
+        })?;
     match result {
         Ok((ws, response)) => {
             diag::log(SCOPE, "connected", &format!("status={}", response.status()));
@@ -471,15 +490,19 @@ async fn connect_for_stream(
 }
 
 fn close_stream_message() -> tungstenite::Message {
-    tungstenite::Message::Text(serde_json::json!({ "type": "CloseStream" }).to_string().into())
+    tungstenite::Message::Text(
+        serde_json::json!({ "type": "CloseStream" })
+            .to_string()
+            .into(),
+    )
 }
 
 /// Read Results until Metadata, an error, or a close; returns whether Metadata
 /// (the reliable end-of-stream marker) was seen.
 async fn collect_results(ws: &mut WsStream, transcript: &mut Transcript) -> Result<bool, String> {
     while let Some(message) = ws.next().await {
-        let message =
-            message.map_err(|e| diag::fail(SCOPE, "recv", format!("Failed to receive result: {}", e)))?;
+        let message = message
+            .map_err(|e| diag::fail(SCOPE, "recv", format!("Failed to receive result: {}", e)))?;
         match message {
             tungstenite::Message::Text(text) => match parse_event(&text) {
                 ServerEvent::Results(result) if result.is_final => {
@@ -492,7 +515,7 @@ async fn collect_results(ws: &mut WsStream, transcript: &mut Transcript) -> Resu
                         SCOPE,
                         "recognition_error",
                         format!("Recognition error: {}", message),
-                    ))
+                    ));
                 }
                 ServerEvent::Other => {}
             },
@@ -513,7 +536,11 @@ async fn send_batch(
     let model = resolve_model(config);
     let language = resolve_language(config);
     let client = super::http_client::shared_no_redirect().map_err(|error| {
-        diag::fail(SCOPE, "http_client", format!("HTTP client unavailable: {}", error))
+        diag::fail(
+            SCOPE,
+            "http_client",
+            format!("HTTP client unavailable: {}", error),
+        )
     })?;
     let mut request = client.post(base).query(&[
         ("model", model),
@@ -673,7 +700,13 @@ pub async fn transcribe(
         return Err(missing_key_error());
     }
     let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64)
-        .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
     if pcm.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
         return Ok(AsrResult {
@@ -715,7 +748,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
                 message: e,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 detail: String::new(),
-            }
+            };
         }
     };
 
@@ -724,9 +757,13 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
         ws.send(tungstenite::Message::Binary(silence.into()))
             .await
             .map_err(|e| diag::fail(SCOPE, "send_audio", format!("Failed to send audio: {}", e)))?;
-        ws.send(close_stream_message())
-            .await
-            .map_err(|e| diag::fail(SCOPE, "send_finish", format!("Failed to send CloseStream: {}", e)))?;
+        ws.send(close_stream_message()).await.map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "send_finish",
+                format!("Failed to send CloseStream: {}", e),
+            )
+        })?;
         let mut transcript = Transcript::default();
         collect_results(ws, &mut transcript).await
     }
@@ -736,12 +773,10 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     match outcome {
-        Ok(Ok(true)) => {
-            super::connection::success_result(
-                elapsed_ms,
-                format!("Model: {}, language: {}", model, language),
-            )
-        }
+        Ok(Ok(true)) => super::connection::success_result(
+            elapsed_ms,
+            format!("Model: {}, language: {}", model, language),
+        ),
         Ok(Ok(false)) => TestResult {
             ok: false,
             message: "Deepgram closed the stream before completing the probe".to_string(),
@@ -779,15 +814,7 @@ pub async fn deepgram_stream_open(
     let emitter: EventEmitter = Arc::new(move |event, payload| {
         let _ = app.emit(event, payload);
     });
-    open_realtime_session(
-        WS_BASE,
-        config,
-        sample_rate,
-        hotwords,
-        session_id,
-        emitter,
-    )
-    .await
+    open_realtime_session(WS_BASE, config, sample_rate, hotwords, session_id, emitter).await
 }
 
 async fn open_realtime_session(
@@ -813,7 +840,8 @@ async fn open_realtime_session(
                 return Err(diag::fail(
                     SCOPE,
                     "session_owner_mismatch",
-                    "A live subtitle session still owns Deepgram; close it before opening another".to_string(),
+                    "A live subtitle session still owns Deepgram; close it before opening another"
+                        .to_string(),
                 ));
             }
             _ => {}
@@ -1549,7 +1577,13 @@ mod tests {
 
     #[test]
     fn listen_url_carries_the_verified_parameters() {
-        let url = build_listen_url("wss://api.deepgram.com/v1/listen", "nova-3", "multi", 16000, &[]);
+        let url = build_listen_url(
+            "wss://api.deepgram.com/v1/listen",
+            "nova-3",
+            "multi",
+            16000,
+            &[],
+        );
         assert_eq!(
             url,
             "wss://api.deepgram.com/v1/listen?model=nova-3&language=multi&interim_results=true&smart_format=true&encoding=linear16&sample_rate=16000&channels=1&endpointing=500"
@@ -1558,7 +1592,13 @@ mod tests {
 
     #[test]
     fn listen_url_encodes_config_values() {
-        let url = build_listen_url("wss://api.deepgram.com/v1/listen", "nova&keyterm=x", "ru", 16000, &[]);
+        let url = build_listen_url(
+            "wss://api.deepgram.com/v1/listen",
+            "nova&keyterm=x",
+            "ru",
+            16000,
+            &[],
+        );
         assert!(url.contains("model=nova%26keyterm%3Dx"), "url={}", url);
         assert!(!url.contains("&keyterm="), "url={}", url);
     }
@@ -1614,10 +1654,15 @@ mod tests {
             ServerEvent::Metadata
         );
         assert_eq!(
-            parse_event(r#"{"type":"Error","err_code":"INVALID_AUTH","err_msg":"Invalid credentials."}"#),
+            parse_event(
+                r#"{"type":"Error","err_code":"INVALID_AUTH","err_msg":"Invalid credentials."}"#
+            ),
             ServerEvent::Error("Invalid credentials. (INVALID_AUTH)".to_string())
         );
-        assert_eq!(parse_event(r#"{"type":"SpeechStarted"}"#), ServerEvent::Other);
+        assert_eq!(
+            parse_event(r#"{"type":"SpeechStarted"}"#),
+            ServerEvent::Other
+        );
         assert_eq!(parse_event("not json"), ServerEvent::Other);
     }
 
@@ -1642,14 +1687,17 @@ mod tests {
             (repeated_text_later, 2000, 2500, "again", false, false),
             (repeated_text_earlier, 500, 1000, "again", false, false),
         ] {
-            assert_eq!(actual, ServerEvent::Results(DeepgramResult {
-                audio_start_ms,
-                audio_end_ms,
-                text: text.to_string(),
-                is_final: true,
-                speech_final,
-                from_finalize,
-            }));
+            assert_eq!(
+                actual,
+                ServerEvent::Results(DeepgramResult {
+                    audio_start_ms,
+                    audio_end_ms,
+                    text: text.to_string(),
+                    is_final: true,
+                    speech_final,
+                    from_finalize,
+                })
+            );
         }
     }
 
@@ -1657,8 +1705,18 @@ mod tests {
     fn batch_response_returns_recognized_text_and_distinguishes_empty_from_malformed() {
         let response = r#"{"metadata":{"request_id":"fixture"},"results":{"channels":[{"alternatives":[{"transcript":"Hello world.","confidence":0.99}]}]}}"#;
         assert_eq!(parse_batch_transcript(response).unwrap(), "Hello world.");
-        assert_eq!(parse_batch_transcript(r#"{"results":{"channels":[{"alternatives":[{"transcript":""}]}]}}"#).unwrap(), "");
-        for malformed in ["not json", r#"{"results":{}}"#, r#"{"results":{"channels":[{"alternatives":[{"transcript":null}]}]}}"#] {
+        assert_eq!(
+            parse_batch_transcript(
+                r#"{"results":{"channels":[{"alternatives":[{"transcript":""}]}]}}"#
+            )
+            .unwrap(),
+            ""
+        );
+        for malformed in [
+            "not json",
+            r#"{"results":{}}"#,
+            r#"{"results":{"channels":[{"alternatives":[{"transcript":null}]}]}}"#,
+        ] {
             assert!(parse_batch_transcript(malformed).is_err());
         }
     }
@@ -1681,16 +1739,20 @@ mod tests {
             "The quick brown fox jumps over the lazy dog. Please transcribe this sentence with punctuation. Numbers like"
         );
         transcript.apply_interim("Numbers like twenty twenty six.");
-        assert!(transcript
-            .display()
-            .ends_with("Numbers like twenty twenty six."));
+        assert!(
+            transcript
+                .display()
+                .ends_with("Numbers like twenty twenty six.")
+        );
 
         // A final clears the interim and commits the segment.
         transcript.apply_final("Numbers like twenty twenty six.");
         assert_eq!(transcript.interim, "");
-        assert!(transcript
-            .display()
-            .ends_with("Numbers like twenty twenty six."));
+        assert!(
+            transcript
+                .display()
+                .ends_with("Numbers like twenty twenty six.")
+        );
     }
 
     #[derive(Default)]
@@ -1813,11 +1875,9 @@ mod tests {
                             ))
                             .await
                             .unwrap();
-                            ws.send(tungstenite::Message::Text(
-                                r#"{"type":"Metadata"}"#.into(),
-                            ))
-                            .await
-                            .unwrap();
+                            ws.send(tungstenite::Message::Text(r#"{"type":"Metadata"}"#.into()))
+                                .await
+                                .unwrap();
                         }
                     }
                     tungstenite::Message::Close(_) => {
@@ -2013,9 +2073,11 @@ mod tests {
 
         let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
         assert_eq!(events.len(), 5);
-        assert!(events
-            .iter()
-            .all(|(event, _)| event == "deepgram-live-result"));
+        assert!(
+            events
+                .iter()
+                .all(|(event, _)| event == "deepgram-live-result")
+        );
         assert_eq!(
             events[0].1,
             serde_json::json!({
@@ -2182,21 +2244,38 @@ mod tests {
         let keepalive_retired = install_fixture_owner(&base, "current-owner").await;
 
         let stale_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [9u8]);
-        assert!(deepgram_stream_send(stale_audio, Some("old-owner".to_string())).await.is_err());
-        assert!(deepgram_stream_finalize("old-owner".to_string()).await.is_err());
-        assert!(deepgram_stream_close(Some("old-owner".to_string())).await.is_err());
-        let untagged_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [8u8]);
+        assert!(
+            deepgram_stream_send(stale_audio, Some("old-owner".to_string()))
+                .await
+                .is_err()
+        );
+        assert!(
+            deepgram_stream_finalize("old-owner".to_string())
+                .await
+                .is_err()
+        );
+        assert!(
+            deepgram_stream_close(Some("old-owner".to_string()))
+                .await
+                .is_err()
+        );
+        let untagged_audio =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [8u8]);
         assert!(deepgram_stream_send(untagged_audio, None).await.is_err());
         assert!(deepgram_stream_close(None).await.is_err());
         let oversized_pcm = vec![0u8; MAX_LIVE_PCM_BYTES + 1];
         let oversized_audio =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, oversized_pcm);
-        assert!(deepgram_stream_send(oversized_audio, Some("current-owner".to_string()))
-            .await
-            .is_err());
+        assert!(
+            deepgram_stream_send(oversized_audio, Some("current-owner".to_string()))
+                .await
+                .is_err()
+        );
 
-        let first_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8, 2]);
-        let second_audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [3u8, 4]);
+        let first_audio =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8, 2]);
+        let second_audio =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [3u8, 4]);
         deepgram_stream_send(first_audio, Some("current-owner".to_string()))
             .await
             .unwrap();
@@ -2273,7 +2352,10 @@ mod tests {
         deepgram_stream_close(Some("keepalive-owner".to_string()))
             .await
             .unwrap();
-        assert_eq!(server.await.unwrap(), vec![serde_json::json!({ "type": "KeepAlive" })]);
+        assert_eq!(
+            server.await.unwrap(),
+            vec![serde_json::json!({ "type": "KeepAlive" })]
+        );
         assert!(rx.try_recv().is_err());
     }
 
@@ -2308,9 +2390,11 @@ mod tests {
             let _ = close_tx.send(deepgram_stream_close(Some("racing-owner".to_string())).await);
         });
         close_started_rx.await.unwrap();
-        assert!(tokio::time::timeout(Duration::from_millis(100), &mut close_rx)
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut close_rx)
+                .await
+                .is_err()
+        );
         assert!(RT_SESSION.lock().await.is_none());
 
         release_handshake.send(()).unwrap();
@@ -2364,15 +2448,31 @@ mod tests {
         let transcript = deepgram_stream_finish(None).await.unwrap();
 
         assert_eq!(transcript, "microphone result");
-        assert_eq!(server.await.unwrap(), vec![serde_json::json!({ "type": "CloseStream" })]);
+        assert_eq!(
+            server.await.unwrap(),
+            vec![serde_json::json!({ "type": "CloseStream" })]
+        );
         assert!(RT_SESSION.lock().await.is_none());
     }
 
     // Exercise the same collector used by buffered session finish and connection probes.
-    async fn collect_fixture_result(base: &str, pcm: &[u8], config: &AsrProviderConfig) -> Result<(String, bool), String> {
-        let (mut ws, _) =
-            connect_for_stream(base, &resolve_model(config), &resolve_language(config), 16000, config, &[]).await?;
-        ws.send(tungstenite::Message::Binary(pcm.to_vec().into())).await.unwrap();
+    async fn collect_fixture_result(
+        base: &str,
+        pcm: &[u8],
+        config: &AsrProviderConfig,
+    ) -> Result<(String, bool), String> {
+        let (mut ws, _) = connect_for_stream(
+            base,
+            &resolve_model(config),
+            &resolve_language(config),
+            16000,
+            config,
+            &[],
+        )
+        .await?;
+        ws.send(tungstenite::Message::Binary(pcm.to_vec().into()))
+            .await
+            .unwrap();
         ws.send(close_stream_message()).await.unwrap();
         let mut transcript = Transcript::default();
         let result = collect_results(&mut ws, &mut transcript).await;
@@ -2391,26 +2491,51 @@ mod tests {
         .await;
 
         let pcm = vec![7u8; FRAME_BYTES * 2];
-        let (text, metadata) = collect_fixture_result(&base, &pcm, &test_config(serde_json::json!({})))
-            .await
-            .unwrap();
+        let (text, metadata) =
+            collect_fixture_result(&base, &pcm, &test_config(serde_json::json!({})))
+                .await
+                .unwrap();
         let captured = server.await.unwrap();
 
         assert_eq!(text, "Hello world.");
         assert!(metadata);
         assert_eq!(captured.authorization.as_deref(), Some("Token fixture-key"));
-        assert!(captured.uri.contains("model=nova-3"), "uri={}", captured.uri);
-        assert!(captured.uri.contains("language=multi"), "uri={}", captured.uri);
+        assert!(
+            captured.uri.contains("model=nova-3"),
+            "uri={}",
+            captured.uri
+        );
+        assert!(
+            captured.uri.contains("language=multi"),
+            "uri={}",
+            captured.uri
+        );
         assert!(
             captured.uri.contains("interim_results=true"),
             "uri={}",
             captured.uri
         );
-        assert!(captured.uri.contains("smart_format=true"), "uri={}", captured.uri);
-        assert!(captured.uri.contains("encoding=linear16"), "uri={}", captured.uri);
-        assert!(captured.uri.contains("sample_rate=16000"), "uri={}", captured.uri);
+        assert!(
+            captured.uri.contains("smart_format=true"),
+            "uri={}",
+            captured.uri
+        );
+        assert!(
+            captured.uri.contains("encoding=linear16"),
+            "uri={}",
+            captured.uri
+        );
+        assert!(
+            captured.uri.contains("sample_rate=16000"),
+            "uri={}",
+            captured.uri
+        );
         assert!(captured.uri.contains("channels=1"), "uri={}", captured.uri);
-        assert!(captured.uri.contains("endpointing=500"), "uri={}", captured.uri);
+        assert!(
+            captured.uri.contains("endpointing=500"),
+            "uri={}",
+            captured.uri
+        );
         assert!(captured.close_stream);
         assert_eq!(captured.audio_bytes, pcm.len());
     }
@@ -2478,16 +2603,32 @@ mod tests {
             r#"{"metadata":{"request_id":"fixture"},"results":{"channels":[{"alternatives":[{"transcript":"Hello world."}]}]}}"#.to_string(),
         );
         let pcm = vec![7u8; FRAME_BYTES * 2];
-        let config = test_config(serde_json::json!({ "model": "nova&keyterm=x", "language": "uk" }));
-        let result = run_batch(&base, &pcm, 16000, &config, &["not-opted-in".to_string()]).await.unwrap();
+        let config =
+            test_config(serde_json::json!({ "model": "nova&keyterm=x", "language": "uk" }));
+        let result = run_batch(&base, &pcm, 16000, &config, &["not-opted-in".to_string()])
+            .await
+            .unwrap();
         let request = server.join().unwrap();
-        let header_end = request.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
+        let header_end = request
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap();
         let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
         assert_eq!(result.result.text, "Hello world.");
         assert_eq!(result.warning, None);
         assert!(headers.starts_with("post /response?"));
-        for parameter in ["model=nova%26keyterm%3dx", "language=uk", "smart_format=true", "encoding=linear16", "sample_rate=16000", "channels=1"] {
-            assert!(headers.contains(parameter), "missing {parameter}: {headers}");
+        for parameter in [
+            "model=nova%26keyterm%3dx",
+            "language=uk",
+            "smart_format=true",
+            "encoding=linear16",
+            "sample_rate=16000",
+            "channels=1",
+        ] {
+            assert!(
+                headers.contains(parameter),
+                "missing {parameter}: {headers}"
+            );
         }
         assert!(!headers.contains("&keyterm="));
         assert!(!headers.contains("interim_results="));
@@ -2500,21 +2641,50 @@ mod tests {
     #[tokio::test]
     async fn batch_empty_transcript_is_a_valid_empty_result() {
         let (base, server) = super::super::http_client::test_support::spawn_response_server(
-            200, r#"{"results":{"channels":[{"alternatives":[{"transcript":""}]}]}}"#.to_string(),
+            200,
+            r#"{"results":{"channels":[{"alternatives":[{"transcript":""}]}]}}"#.to_string(),
         );
-        let result = run_batch(&base, &[0u8; FRAME_BYTES], 16000, &test_config(serde_json::json!({})), &[]).await.unwrap();
+        let result = run_batch(
+            &base,
+            &[0u8; FRAME_BYTES],
+            16000,
+            &test_config(serde_json::json!({})),
+            &[],
+        )
+        .await
+        .unwrap();
         server.join().unwrap();
         assert!(result.result.text.is_empty());
     }
 
     #[tokio::test]
     async fn batch_rejects_http_errors_and_redirects_without_exposing_provider_body() {
-        for (status, code) in [(307, "connect_failed"), (401, "provider_bad_key"), (403, "provider_forbidden"), (429, "provider_rate_limit"), (500, "connect_failed")] {
+        for (status, code) in [
+            (307, "connect_failed"),
+            (401, "provider_bad_key"),
+            (403, "provider_forbidden"),
+            (429, "provider_rate_limit"),
+            (500, "connect_failed"),
+        ] {
             let marker = "private-provider-body-marker";
-            let (base, server) = super::super::http_client::test_support::spawn_response_server(status, format!(r#"{{"error":"{marker}"}}"#));
-            let error = run_batch(&base, &[1u8; FRAME_BYTES], 16000, &test_config(serde_json::json!({})), &[]).await.unwrap_err();
+            let (base, server) = super::super::http_client::test_support::spawn_response_server(
+                status,
+                format!(r#"{{"error":"{marker}"}}"#),
+            );
+            let error = run_batch(
+                &base,
+                &[1u8; FRAME_BYTES],
+                16000,
+                &test_config(serde_json::json!({})),
+                &[],
+            )
+            .await
+            .unwrap_err();
             server.join().unwrap();
-            assert!(error.starts_with(&format!("sayit_error:{code}:")), "{error}");
+            assert!(
+                error.starts_with(&format!("sayit_error:{code}:")),
+                "{error}"
+            );
             assert!(error.contains(&format!("http={status}")), "{error}");
             assert!(!error.contains(marker));
         }
@@ -2538,8 +2708,12 @@ mod tests {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         stream.set_nonblocking(false).unwrap();
-                        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                        let request = super::super::http_client::test_support::read_request(&mut stream).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let request =
+                            super::super::http_client::test_support::read_request(&mut stream)
+                                .unwrap();
                         let (status, body) = &responses[requests.len()];
                         let location = if *status == 307 {
                             "Location: http://127.0.0.1:1/redirect\r\n"
@@ -2571,7 +2745,13 @@ mod tests {
 
     fn request_query(request: &[u8]) -> Vec<(String, String)> {
         let request = String::from_utf8_lossy(request);
-        let target = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+        let target = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap();
         reqwest::Url::parse(&format!("http://fixture{}", target))
             .unwrap()
             .query_pairs()
@@ -2607,13 +2787,23 @@ mod tests {
         // Wording drift around the marker must not send an over-limit dictionary down
         // the generic 400 path.
         assert!(has_keyterm_limit_message(br#"{"err_msg":"Keyterm limit exceeded. The maximum number of tokens across all keyterms is 500. Please retry."}"#));
-        assert!(has_keyterm_limit_message(br#"{"err_msg":"KEYTERM LIMIT EXCEEDED"}"#));
+        assert!(has_keyterm_limit_message(
+            br#"{"err_msg":"KEYTERM LIMIT EXCEEDED"}"#
+        ));
         // Only `err_msg` counts, and other rejections must not trigger a retry.
         assert!(!has_keyterm_limit_message(br#"{"message":"Keyterm limit exceeded. The maximum number of tokens across all keyterms is 500."}"#));
-        assert!(!has_keyterm_limit_message(br#"{"err_msg":"Invalid keyterm parameter"}"#));
-        assert!(!has_keyterm_limit_message(br#"{"err_msg":"invalid request"}"#));
+        assert!(!has_keyterm_limit_message(
+            br#"{"err_msg":"Invalid keyterm parameter"}"#
+        ));
+        assert!(!has_keyterm_limit_message(
+            br#"{"err_msg":"invalid request"}"#
+        ));
 
-        let oversized = format!("{}{}", KEYTERM_LIMIT_BODY, " ".repeat(MAX_KEYTERM_ERROR_BODY_BYTES));
+        let oversized = format!(
+            "{}{}",
+            KEYTERM_LIMIT_BODY,
+            " ".repeat(MAX_KEYTERM_ERROR_BODY_BYTES)
+        );
         assert!(!has_keyterm_limit_message(oversized.as_bytes()));
     }
 
@@ -2640,8 +2830,15 @@ mod tests {
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(result.result.text, "retried transcript");
-        assert_eq!(result.warning, Some(super::super::types::AsrWarningCode::DeepgramKeytermLimit));
-        assert!(result.result.elapsed_ms >= 60, "elapsed_ms={}", result.result.elapsed_ms);
+        assert_eq!(
+            result.warning,
+            Some(super::super::types::AsrWarningCode::DeepgramKeytermLimit)
+        );
+        assert!(
+            result.result.elapsed_ms >= 60,
+            "elapsed_ms={}",
+            result.result.elapsed_ms
+        );
 
         let first_query = request_query(&requests[0]);
         assert_eq!(
@@ -2662,7 +2859,10 @@ mod tests {
         let first_target = first_line.lines().next().unwrap();
         assert!(first_target.contains("Ada+Lovelace"), "{first_target}");
         assert!(first_target.contains("C%2B%2B+%26+Rust"), "{first_target}");
-        assert!(first_target.contains("%E6%9D%B1%E4%BA%AC"), "{first_target}");
+        assert!(
+            first_target.contains("%E6%9D%B1%E4%BA%AC"),
+            "{first_target}"
+        );
         assert!(!first_target.contains("keyterm=&"), "{first_target}");
 
         let second_query = request_query(&requests[1]);
@@ -2685,8 +2885,16 @@ mod tests {
             let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
             assert!(headers.contains("authorization: token fixture-key"));
         }
-        let first_body_start = requests[0].windows(4).position(|part| part == b"\r\n\r\n").unwrap() + 4;
-        let second_body_start = requests[1].windows(4).position(|part| part == b"\r\n\r\n").unwrap() + 4;
+        let first_body_start = requests[0]
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let second_body_start = requests[1]
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap()
+            + 4;
         assert_eq!(
             &requests[0][first_body_start..],
             &requests[1][second_body_start..]
@@ -2729,13 +2937,9 @@ mod tests {
                 serde_json::json!({ "keyterms_enabled": false }),
                 vec!["term".to_string()],
             ),
-            (
-                serde_json::json!({ "keyterms_enabled": true }),
-                Vec::new(),
-            ),
+            (serde_json::json!({ "keyterms_enabled": true }), Vec::new()),
         ] {
-            let (base, server) =
-                spawn_sequence_server(vec![(400, KEYTERM_LIMIT_BODY.to_string())]);
+            let (base, server) = spawn_sequence_server(vec![(400, KEYTERM_LIMIT_BODY.to_string())]);
             let error = run_batch(
                 &base,
                 &[3u8; FRAME_BYTES],
@@ -2749,15 +2953,21 @@ mod tests {
 
             assert!(error.contains("http=400"), "{error}");
             assert_eq!(requests.len(), 1);
-            assert!(request_query(&requests[0])
-                .iter()
-                .all(|(key, _)| key != "keyterm"));
+            assert!(
+                request_query(&requests[0])
+                    .iter()
+                    .all(|(key, _)| key != "keyterm")
+            );
         }
     }
 
     #[tokio::test]
     async fn batch_does_not_retry_when_the_limit_marker_body_exceeds_the_read_cap() {
-        let body = format!("{}{}", KEYTERM_LIMIT_BODY, " ".repeat(MAX_KEYTERM_ERROR_BODY_BYTES));
+        let body = format!(
+            "{}{}",
+            KEYTERM_LIMIT_BODY,
+            " ".repeat(MAX_KEYTERM_ERROR_BODY_BYTES)
+        );
         let (base, server) = spawn_sequence_server(vec![(400, body)]);
         let error = run_batch(
             &base,
@@ -2791,12 +3001,19 @@ mod tests {
         .unwrap_err();
         let requests = server.join().unwrap();
 
-        assert!(error.starts_with("sayit_error:deepgram_keyterm_retry_failed:"), "{error}");
+        assert!(
+            error.starts_with("sayit_error:deepgram_keyterm_retry_failed:"),
+            "{error}"
+        );
         assert!(!error.contains("private provider details"));
         assert!(!error.contains("private term"));
         assert!(!error.contains("fixture-key"));
         assert_eq!(requests.len(), 2);
-        assert!(request_query(&requests[1]).iter().all(|(key, _)| key != "keyterm"));
+        assert!(
+            request_query(&requests[1])
+                .iter()
+                .all(|(key, _)| key != "keyterm")
+        );
     }
 
     async fn spawn_ws_handshake_sequence(
@@ -2814,14 +3031,30 @@ mod tests {
                 let mut buffer = [0u8; 1024];
                 while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
                     let count = stream.read(&mut buffer).await.unwrap();
-                    assert_ne!(count, 0, "WebSocket client closed before sending a handshake");
+                    assert_ne!(
+                        count, 0,
+                        "WebSocket client closed before sending a handshake"
+                    );
                     request.extend_from_slice(&buffer[..count]);
                 }
                 let request = String::from_utf8_lossy(&request);
-                uris.push(request.lines().next().unwrap().split_whitespace().nth(1).unwrap().to_string());
+                uris.push(
+                    request
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .to_string(),
+                );
 
                 if let Some((status, body)) = response {
-                    let reason = if status == 400 { "Bad Request" } else { "Unauthorized" };
+                    let reason = if status == 400 {
+                        "Bad Request"
+                    } else {
+                        "Unauthorized"
+                    };
                     let response = format!(
                         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         status,
@@ -2833,13 +3066,22 @@ mod tests {
                 } else {
                     // The handshake bytes were already read above; accepting a
                     // second handshake on this socket would wait forever.
-                    let key = request.lines().find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case("sec-websocket-key").then(|| value.trim())
-                    }).unwrap();
+                    let key = request
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("sec-websocket-key")
+                                .then(|| value.trim())
+                        })
+                        .unwrap();
                     let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
                     stream.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").as_bytes()).await.unwrap();
-                    let mut ws = tokio_tungstenite::WebSocketStream::from_raw_socket(stream, tungstenite::protocol::Role::Server, None).await;
+                    let mut ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                        stream,
+                        tungstenite::protocol::Role::Server,
+                        None,
+                    )
+                    .await;
                     let _ = ws.close(None).await;
                 }
             }
@@ -2850,30 +3092,29 @@ mod tests {
 
     #[tokio::test]
     async fn live_handshake_limit_retries_once_without_keyterms_before_audio() {
-        let (base, server) = spawn_ws_handshake_sequence(vec![
-            Some((400, KEYTERM_LIMIT_BODY.to_string())),
-            None,
-        ])
-        .await;
+        let (base, server) =
+            spawn_ws_handshake_sequence(vec![Some((400, KEYTERM_LIMIT_BODY.to_string())), None])
+                .await;
         let config = test_config(serde_json::json!({ "keyterms_enabled": true }));
         let keyterms = resolve_keyterms(&config, &["C++ & Rust".to_string()]);
 
-        let (mut ws, warning) = connect_for_stream(
-            &base,
-            "nova-3",
-            "multi",
-            16000,
-            &config,
-            &keyterms,
-        )
-        .await
-        .unwrap();
+        let (mut ws, warning) =
+            connect_for_stream(&base, "nova-3", "multi", 16000, &config, &keyterms)
+                .await
+                .unwrap();
         let _ = ws.close(None).await;
         let uris = server.await.unwrap();
 
-        assert_eq!(warning, Some(super::super::types::AsrWarningCode::DeepgramKeytermLimit));
+        assert_eq!(
+            warning,
+            Some(super::super::types::AsrWarningCode::DeepgramKeytermLimit)
+        );
         assert_eq!(uris.len(), 2);
-        assert!(uris[0].contains("keyterm=C%2B%2B%20%26%20Rust"), "{}", uris[0]);
+        assert!(
+            uris[0].contains("keyterm=C%2B%2B%20%26%20Rust"),
+            "{}",
+            uris[0]
+        );
         assert!(!uris[1].contains("keyterm="), "{}", uris[1]);
     }
 
@@ -2887,25 +3128,20 @@ mod tests {
         let config = test_config(serde_json::json!({ "keyterms_enabled": true }));
         let keyterms = resolve_keyterms(&config, &["private term".to_string()]);
 
-        let error = match connect_for_stream(
-            &base,
-            "nova-3",
-            "multi",
-            16000,
-            &config,
-            &keyterms,
-        )
-        .await
-        {
-            Ok((mut ws, _)) => {
-                let _ = ws.close(None).await;
-                panic!("second WebSocket handshake unexpectedly succeeded");
-            }
-            Err(error) => error,
-        };
+        let error =
+            match connect_for_stream(&base, "nova-3", "multi", 16000, &config, &keyterms).await {
+                Ok((mut ws, _)) => {
+                    let _ = ws.close(None).await;
+                    panic!("second WebSocket handshake unexpectedly succeeded");
+                }
+                Err(error) => error,
+            };
         let uris = server.await.unwrap();
 
-        assert!(error.starts_with("sayit_error:deepgram_keyterm_retry_failed:"), "{error}");
+        assert!(
+            error.starts_with("sayit_error:deepgram_keyterm_retry_failed:"),
+            "{error}"
+        );
         assert!(!error.contains("private provider details"));
         assert!(!error.contains("private term"));
         assert!(!error.contains("fixture-key"));
@@ -2919,26 +3155,20 @@ mod tests {
             (400, r#"{"err_msg":"invalid request"}"#),
             (401, KEYTERM_LIMIT_BODY),
         ] {
-            let (base, server) = spawn_ws_handshake_sequence(vec![Some((status, body.to_string()))]).await;
+            let (base, server) =
+                spawn_ws_handshake_sequence(vec![Some((status, body.to_string()))]).await;
             let config = test_config(serde_json::json!({ "keyterms_enabled": true }));
             let keyterms = resolve_keyterms(&config, &["private term".to_string()]);
 
-            let error = match connect_for_stream(
-                &base,
-                "nova-3",
-                "multi",
-                16000,
-                &config,
-                &keyterms,
-            )
-            .await
-            {
-                Ok((mut ws, _)) => {
-                    let _ = ws.close(None).await;
-                    panic!("HTTP {status} unexpectedly opened the WebSocket");
-                }
-                Err(error) => error,
-            };
+            let error =
+                match connect_for_stream(&base, "nova-3", "multi", 16000, &config, &keyterms).await
+                {
+                    Ok((mut ws, _)) => {
+                        let _ = ws.close(None).await;
+                        panic!("HTTP {status} unexpectedly opened the WebSocket");
+                    }
+                    Err(error) => error,
+                };
             let uris = server.await.unwrap();
 
             assert!(error.contains(&format!("HTTP {status}")), "{error}");
@@ -3000,14 +3230,24 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn deepgram_live_transcription_of_the_bundled_russian_sample() {
-        run_live("test_ru.wav", serde_json::json!({ "language": "ru" }), "распознавание").await;
+        run_live(
+            "test_ru.wav",
+            serde_json::json!({ "language": "ru" }),
+            "распознавание",
+        )
+        .await;
     }
 
     /// Ukrainian live check with the language pinned to `uk`.
     #[tokio::test]
     #[ignore]
     async fn deepgram_live_transcription_of_the_bundled_ukrainian_sample() {
-        run_live("test_uk.wav", serde_json::json!({ "language": "uk" }), "розпізнавання").await;
+        run_live(
+            "test_uk.wav",
+            serde_json::json!({ "language": "uk" }),
+            "розпізнавання",
+        )
+        .await;
     }
 
     /// Shared real-service helper: reads the key, posts the bundled clip through the
@@ -3015,8 +3255,8 @@ mod tests {
     /// language payload; an empty object leaves the default multilingual mode.
     /// `expected` must be lowercase — it is matched against a lowercased result.
     async fn run_live(wav_name: &str, extra: serde_json::Value, expected: &str) {
-        let key = std::env::var("DEEPGRAM_API_KEY")
-            .expect("set DEEPGRAM_API_KEY to run this live test");
+        let key =
+            std::env::var("DEEPGRAM_API_KEY").expect("set DEEPGRAM_API_KEY to run this live test");
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
             .join(wav_name);
@@ -3025,8 +3265,15 @@ mod tests {
         let mut config = test_config(extra);
         config.api_key = key;
 
-        let result = run_batch(BATCH_URL, &pcm, 16000, &config, &[]).await.unwrap();
-        println!("Deepgram batch {wav_name}: audio_ms={} request_ms={} chars={}", pcm.len() / 32, result.result.elapsed_ms, result.result.text.chars().count());
+        let result = run_batch(BATCH_URL, &pcm, 16000, &config, &[])
+            .await
+            .unwrap();
+        println!(
+            "Deepgram batch {wav_name}: audio_ms={} request_ms={} chars={}",
+            pcm.len() / 32,
+            result.result.elapsed_ms,
+            result.result.text.chars().count()
+        );
 
         assert!(
             result.result.text.to_lowercase().contains(expected),
@@ -3099,7 +3346,9 @@ mod tests {
         };
         assert_eq!(
             realtime_finish_result(&server_error),
-            Err(RealtimeFailure::Recognition("Invalid credentials.".to_string()))
+            Err(RealtimeFailure::Recognition(
+                "Invalid credentials.".to_string()
+            ))
         );
 
         let transport_error = RtState {
@@ -3116,43 +3365,99 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DEEPGRAM_API_KEY and calls the real service"]
     async fn deepgram_live_keyterms_batch_preserves_text_and_reports_limit_fallback() {
-        let mut config = test_config(serde_json::json!({ "language": "en", "keyterms_enabled": true }));
+        let mut config =
+            test_config(serde_json::json!({ "language": "en", "keyterms_enabled": true }));
         config.api_key = std::env::var("DEEPGRAM_API_KEY").expect("set DEEPGRAM_API_KEY");
-        let wav = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/test_en.wav")).unwrap();
+        let wav = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/test_en.wav"
+        ))
+        .unwrap();
         let pcm = pcm_from_wav(&wav).unwrap();
         let terms = vec!["SayIt".to_string(), "quick brown fox".to_string()];
-        let regular = run_batch(BATCH_URL, &pcm, 16000, &config, &terms).await.unwrap();
-        assert!(regular.result.text.to_lowercase().contains("quick brown fox"));
+        let regular = run_batch(BATCH_URL, &pcm, 16000, &config, &terms)
+            .await
+            .unwrap();
+        assert!(
+            regular
+                .result
+                .text
+                .to_lowercase()
+                .contains("quick brown fox")
+        );
         assert_eq!(regular.warning, None);
-        let excessive: Vec<String> = (0..140).map(|index| format!("lexicography vocabulary specification {index}")).collect();
+        let excessive: Vec<String> = (0..140)
+            .map(|index| format!("lexicography vocabulary specification {index}"))
+            .collect();
         let snapshot = config.extra.clone();
-        let recovered = run_batch(BATCH_URL, &pcm, 16000, &config, &excessive).await.unwrap();
-        assert!(recovered.result.text.to_lowercase().contains("quick brown fox"));
-        assert_eq!(recovered.warning, Some(AsrWarningCode::DeepgramKeytermLimit));
+        let recovered = run_batch(BATCH_URL, &pcm, 16000, &config, &excessive)
+            .await
+            .unwrap();
+        assert!(
+            recovered
+                .result
+                .text
+                .to_lowercase()
+                .contains("quick brown fox")
+        );
+        assert_eq!(
+            recovered.warning,
+            Some(AsrWarningCode::DeepgramKeytermLimit)
+        );
         assert_eq!(config.extra, snapshot);
-        println!("Deepgram keyterms batch: normal={}ms recovered={}ms warning={:?}", regular.result.elapsed_ms, recovered.result.elapsed_ms, recovered.warning);
+        println!(
+            "Deepgram keyterms batch: normal={}ms recovered={}ms warning={:?}",
+            regular.result.elapsed_ms, recovered.result.elapsed_ms, recovered.warning
+        );
     }
 
     #[tokio::test]
     #[ignore = "requires DEEPGRAM_API_KEY and calls the real service"]
     async fn deepgram_live_keyterms_handshake_retries_before_audio() {
-        let mut config = test_config(serde_json::json!({ "language": "en", "keyterms_enabled": true }));
+        let mut config =
+            test_config(serde_json::json!({ "language": "en", "keyterms_enabled": true }));
         config.api_key = std::env::var("DEEPGRAM_API_KEY").expect("set DEEPGRAM_API_KEY");
-        let excessive: Vec<String> = (0..140).map(|index| format!("lexicography vocabulary specification {index}")).collect();
-        let (mut ws, warning) = connect_for_stream(WS_BASE, "nova-3", "en", 16000, &config, &excessive).await.unwrap();
+        let excessive: Vec<String> = (0..140)
+            .map(|index| format!("lexicography vocabulary specification {index}"))
+            .collect();
+        let (mut ws, warning) =
+            connect_for_stream(WS_BASE, "nova-3", "en", 16000, &config, &excessive)
+                .await
+                .unwrap();
         assert_eq!(warning, Some(AsrWarningCode::DeepgramKeytermLimit));
-        let wav = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/test_en.wav")).unwrap();
+        let wav = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/test_en.wav"
+        ))
+        .unwrap();
         let pcm = pcm_from_wav(&wav).unwrap();
         for frame in pcm.chunks(FRAME_BYTES) {
-            ws.send(tungstenite::Message::Binary(frame.to_vec().into())).await.unwrap();
+            ws.send(tungstenite::Message::Binary(frame.to_vec().into()))
+                .await
+                .unwrap();
         }
         ws.send(close_stream_message()).await.unwrap();
         let mut transcript = Transcript::default();
-        let metadata = tokio::time::timeout(Duration::from_secs(25), collect_results(&mut ws, &mut transcript)).await.unwrap().unwrap();
+        let metadata = tokio::time::timeout(
+            Duration::from_secs(25),
+            collect_results(&mut ws, &mut transcript),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert!(metadata);
-        assert!(transcript.display().to_lowercase().contains("quick brown fox"));
+        assert!(
+            transcript
+                .display()
+                .to_lowercase()
+                .contains("quick brown fox")
+        );
         ws.close(None).await.unwrap();
-        println!("Deepgram keyterms socket recovered before audio, completed recognition: warning={:?} chars={}", warning, transcript.display().chars().count());
+        println!(
+            "Deepgram keyterms socket recovered before audio, completed recognition: warning={:?} chars={}",
+            warning,
+            transcript.display().chars().count()
+        );
     }
 
     #[tokio::test]
@@ -3163,10 +3468,22 @@ mod tests {
             let (_stream, _) = listener.accept().await.unwrap();
             std::future::pending::<()>().await;
         });
-        let outcome = tokio::time::timeout(Duration::from_secs(11), connect_for_stream(
-            &base, "nova-3", "en", 16000, &test_config(serde_json::json!({})), &[],
-        )).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(11),
+            connect_for_stream(
+                &base,
+                "nova-3",
+                "en",
+                16000,
+                &test_config(serde_json::json!({})),
+                &[],
+            ),
+        )
+        .await;
         server.abort();
-        assert!(matches!(outcome, Ok(Err(_))), "the provider must return a bounded connection error");
+        assert!(
+            matches!(outcome, Ok(Err(_))),
+            "the provider must return a bounded connection error"
+        );
     }
 }

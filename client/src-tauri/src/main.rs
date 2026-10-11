@@ -2,23 +2,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod context;
 mod error_protocol;
+mod inject;
+mod keyboard;
 mod locale;
+mod models;
+mod providers;
 mod storage;
 mod window;
-mod keyboard;
-mod context;
-mod inject;
-mod providers;
-mod models;
 
-use storage::Storage;
-use window::WindowState;
-use keyboard::KeyboardHookManager;
 use context::ContextDetector;
-use tauri::{Manager, Emitter};
-use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
+use keyboard::KeyboardHookManager;
 use std::thread;
+use storage::Storage;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
+use window::WindowState;
 
 /// Environment-level WebView2 flags must be identical for every webview that shares
 /// com.sayit.app/EBWebView. Keep them global; never copy them into a single window's
@@ -28,8 +28,7 @@ use std::thread;
 // 该参数会抢先自动处理权限请求，使 PermissionRequested 事件不触发，权限停留在 "prompt"，
 // 导致新版 WebView2 隐藏 enumerateDevices 的设备名/deviceId。麦克风授权改由下面的
 // PermissionRequested 处理器负责（显式 Allow → 变为持久 granted → 恢复设备枚举）。
-const WEBVIEW2_BROWSER_ARGS: &str =
-    "--ignore-certificate-errors \
+const WEBVIEW2_BROWSER_ARGS: &str = "--ignore-certificate-errors \
      --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
      --disable-background-timer-throttling";
 
@@ -175,7 +174,8 @@ fn main() {
         std::panic::set_hook(Box::new(move |panic_info| {
             let thread = thread::current();
             let thread_name = thread.name().unwrap_or("<unnamed>");
-            let location = panic_info.location()
+            let location = panic_info
+                .location()
                 .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
             let payload = panic_info.payload();
@@ -197,14 +197,21 @@ fn main() {
     log::info!(
         "SayIt starting version={} profile={} pid={}",
         env!("CARGO_PKG_VERSION"),
-        if cfg!(debug_assertions) { "debug" } else { "release" },
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         std::process::id(),
     );
-    log::info!("Log file: {:?}", dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.sayit.app")
-        .join("logs")
-        .join("sayit.log"));
+    log::info!(
+        "Log file: {:?}",
+        dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("com.sayit.app")
+            .join("logs")
+            .join("sayit.log")
+    );
 
     // Allow self-signed certificates and auto-grant microphone for backend connection (WebView2)
     // This must be set before any WebView2 instance is created.
@@ -213,13 +220,17 @@ fn main() {
     // or not focused. Without these flags, WebView2 throttles setInterval timers in the
     // background, delaying the heartbeat well past the server's idle timeout and causing
     // spurious "idle timeout" disconnects while the app is just sitting idle in the tray.
-    let (browser_args_source, browser_args) = match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
-        Ok(value) => ("inherited", value),
-        Err(_) => {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", WEBVIEW2_BROWSER_ARGS);
-            ("app-default", WEBVIEW2_BROWSER_ARGS.to_string())
-        }
-    };
+    let (browser_args_source, browser_args) =
+        match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+            Ok(value) => ("inherited", value),
+            Err(_) => {
+                std::env::set_var(
+                    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                    WEBVIEW2_BROWSER_ARGS,
+                );
+                ("app-default", WEBVIEW2_BROWSER_ARGS.to_string())
+            }
+        };
     log::info!(
         "WebView2 environment userDataDir={:?} argsSource={} argsLen={} argsFingerprint={}",
         dirs::data_local_dir()
@@ -252,18 +263,33 @@ fn main() {
     // Read PTT setting before moving storage into managed state
     let ptt_setting_val = storage.get("shortcutPTT", None);
     // 兜底键与 storage 种子、前端 defaults.ts 保持一致；绝不能是 Shift（会触发筛选键）
-    let ptt_str = ptt_setting_val.as_str().unwrap_or("ControlRight").to_string();
+    let ptt_str = ptt_setting_val
+        .as_str()
+        .unwrap_or("ControlRight")
+        .to_string();
     let hf_setting_val = storage.get("shortcutHandsFree", None);
     let hf_str = hf_setting_val.as_str().unwrap_or("AltRight").to_string();
     let ai_toggle_setting_val = storage.get("shortcutToggleAi", None);
     let ai_toggle_str = ai_toggle_setting_val.as_str().unwrap_or("").to_string();
-    log::info!("PTT setting from DB: raw={:?} parsed={:?}", ptt_setting_val, ptt_str);
-    log::info!("HF setting from DB: raw={:?} parsed={:?}", hf_setting_val, hf_str);
+    log::info!(
+        "PTT setting from DB: raw={:?} parsed={:?}",
+        ptt_setting_val,
+        ptt_str
+    );
+    log::info!(
+        "HF setting from DB: raw={:?} parsed={:?}",
+        hf_setting_val,
+        hf_str
+    );
 
     // 自定义模型存储目录：启动时读回并设为进程内生效路径（空串 = 用默认）。
     // 必须在任何取模型路径的调用之前设定，且要在 storage 被 move 进 manage 之前读。
     let models_dir_val = storage.get("localAsr.modelsDir", None);
-    if let Some(custom_dir) = models_dir_val.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(custom_dir) = models_dir_val
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         models::downloader::set_custom_models_dir(Some(std::path::PathBuf::from(custom_dir)));
         log::info!("Custom models dir from DB: {}", custom_dir);
     }
@@ -339,9 +365,10 @@ fn main() {
                 .windows
                 .iter()
                 .filter_map(|window| {
-                    window.additional_browser_args.as_ref().map(|args| {
-                        format!("{}(argsLen={})", window.label, args.len())
-                    })
+                    window
+                        .additional_browser_args
+                        .as_ref()
+                        .map(|args| format!("{}(argsLen={})", window.label, args.len()))
                 })
                 .collect::<Vec<_>>();
             if !unsafe_windows.is_empty() {
@@ -411,9 +438,9 @@ fn main() {
                                 ));
                                 let mut token = Default::default();
                                 match core.add_PermissionRequested(&handler, &mut token) {
-                                    Ok(_) => log::info!(
-                                        "WebView2 PermissionRequested handler attached"
-                                    ),
+                                    Ok(_) => {
+                                        log::info!("WebView2 PermissionRequested handler attached")
+                                    }
                                     Err(e) => log::error!(
                                         "failed to attach PermissionRequested handler: {e:?}"
                                     ),
@@ -476,7 +503,13 @@ fn main() {
                     .icon(icon)
                     .tooltip("SayIt")
                     .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click { button, button_state: MouseButtonState::Up, position, .. } = event {
+                        if let TrayIconEvent::Click {
+                            button,
+                            button_state: MouseButtonState::Up,
+                            position,
+                            ..
+                        } = event
+                        {
                             match button {
                                 MouseButton::Left => {
                                     commands::tray::hide_tray_menu(tray.app_handle().clone());

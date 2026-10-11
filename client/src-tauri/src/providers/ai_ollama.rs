@@ -3,7 +3,7 @@
 
 use super::diag;
 use super::line_stream::LineStep;
-use super::prompt::{wrap_user_text, DEFAULT_SYSTEM_PROMPT};
+use super::prompt::{DEFAULT_SYSTEM_PROMPT, wrap_user_text};
 use super::reasoning::strip_thinking;
 use super::types::{AiProviderConfig, AiResult, TestResult, TextContext};
 use std::time::Instant;
@@ -346,11 +346,7 @@ fn normalize_url(url: &str) -> String {
 pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<String>, String> {
     let url = tags_url(&config.api_url);
 
-    diag::log(
-        SCOPE,
-        "list_start",
-        &format!("provider=ollama url={}", url),
-    );
+    diag::log(SCOPE, "list_start", &format!("provider=ollama url={}", url));
 
     let start = Instant::now();
 
@@ -359,7 +355,13 @@ pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<String>, Strin
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| diag::fail(SCOPE, "list_http_send", format!("Ollama request failed: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "list_http_send",
+                format!("Ollama request failed: {}", e),
+            )
+        })?;
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -474,7 +476,10 @@ mod tests {
         }
 
         assert_eq!(stream.text, "Привет, мир");
-        assert_eq!(deltas, vec!["Привет, ".to_string(), "Привет, мир".to_string()]);
+        assert_eq!(
+            deltas,
+            vec!["Привет, ".to_string(), "Привет, мир".to_string()]
+        );
         assert!(stream.done);
     }
 
@@ -565,10 +570,8 @@ mod tests {
     #[tokio::test]
     async fn streamed_polish_falls_back_when_the_proxy_answers_with_one_json_object() {
         let response_body = format!(r#"{{"response":"{}","done":true}}"#, RESPONSE_MARKER);
-        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
-            200,
-            response_body,
-        );
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server(200, response_body);
         let mut delta_count = 0;
 
         let result = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {
@@ -662,9 +665,18 @@ mod tests {
 
     #[test]
     fn tags_url_variants_resolve_to_api_tags() {
-        assert_eq!(tags_url("http://127.0.0.1:11434"), "http://127.0.0.1:11434/api/tags");
-        assert_eq!(tags_url("http://127.0.0.1:11434/"), "http://127.0.0.1:11434/api/tags");
-        assert_eq!(tags_url("http://127.0.0.1:11434/api"), "http://127.0.0.1:11434/api/tags");
+        assert_eq!(
+            tags_url("http://127.0.0.1:11434"),
+            "http://127.0.0.1:11434/api/tags"
+        );
+        assert_eq!(
+            tags_url("http://127.0.0.1:11434/"),
+            "http://127.0.0.1:11434/api/tags"
+        );
+        assert_eq!(
+            tags_url("http://127.0.0.1:11434/api"),
+            "http://127.0.0.1:11434/api/tags"
+        );
         assert_eq!(
             tags_url("http://127.0.0.1:11434/api/generate"),
             "http://127.0.0.1:11434/api/tags"

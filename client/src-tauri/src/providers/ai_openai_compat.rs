@@ -3,7 +3,7 @@
 
 use super::diag;
 use super::line_stream::LineStep;
-use super::prompt::{wrap_user_text, DEFAULT_SYSTEM_PROMPT};
+use super::prompt::{DEFAULT_SYSTEM_PROMPT, wrap_user_text};
 use super::reasoning::strip_thinking;
 use super::types::{AiProviderConfig, AiResult, TestResult, TextContext};
 use std::time::Instant;
@@ -120,7 +120,10 @@ fn configure_request_tuning(body: &mut serde_json::Value, config: &AiProviderCon
         }
         if let Some(value) = config.extra.get(key).and_then(|value| value.as_str()) {
             if !value.trim().is_empty() {
-                object.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+                object.insert(
+                    key.to_string(),
+                    serde_json::Value::String(value.to_string()),
+                );
             }
         }
     }
@@ -718,7 +721,10 @@ mod tests {
         }
 
         assert_eq!(stream.text, "Привет, мир");
-        assert_eq!(deltas, vec!["Привет, ".to_string(), "Привет, мир".to_string()]);
+        assert_eq!(
+            deltas,
+            vec!["Привет, ".to_string(), "Привет, мир".to_string()]
+        );
         assert!(stream.done);
     }
 
@@ -832,10 +838,8 @@ mod tests {
             r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
             RESPONSE_MARKER
         );
-        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
-            200,
-            response_body,
-        );
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server(200, response_body);
         let mut delta_count = 0;
 
         let result = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {
@@ -892,8 +896,9 @@ mod tests {
                 .expect("a usable completion succeeds");
             assert_eq!(result.text, RESPONSE_MARKER);
 
-            let request = String::from_utf8_lossy(&server.join().expect("loopback server completed"))
-                .to_string();
+            let request =
+                String::from_utf8_lossy(&server.join().expect("loopback server completed"))
+                    .to_string();
             assert_eq!(
                 request.contains(r#""reasoning_effort":"low""#),
                 expect_reasoning,
@@ -918,8 +923,8 @@ mod tests {
         let result = test_connection(&tuning_config(&api_url, "openai")).await;
         assert!(result.ok, "connection test failed: {}", result.message);
 
-        let request = String::from_utf8_lossy(&server.join().expect("loopback server completed"))
-            .to_string();
+        let request =
+            String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
         assert!(
             request.contains(r#""service_tier":"fast""#),
             "service tier missing: {request}"
@@ -1084,7 +1089,9 @@ mod tests {
 
     #[test]
     fn detects_opencode_hosts() {
-        assert!(is_opencode_host("https://opencode.ai/zen/go/v1/chat/completions"));
+        assert!(is_opencode_host(
+            "https://opencode.ai/zen/go/v1/chat/completions"
+        ));
         assert!(is_opencode_host("https://api.opencode.ai/v1"));
         assert!(is_opencode_host("https://OPENCODE.AI/zen/v1"));
         assert!(!is_opencode_host("https://opencode.ai.evil.com/v1"));
@@ -1147,20 +1154,26 @@ mod tests {
     #[test]
     fn omits_session_header_for_other_providers_and_hosts() {
         let url = "https://api.deepseek.com/v1/chat/completions";
-        let request = apply_provider_headers(
-            http().post(url),
-            &opencode_header_config("deepseek"),
-            url,
-        )
-        .build()
-        .expect("request builds");
+        let request =
+            apply_provider_headers(http().post(url), &opencode_header_config("deepseek"), url)
+                .build()
+                .expect("request builds");
         assert!(!request.headers().contains_key(OPENCODE_SESSION_HEADER));
     }
 
     #[test]
     fn derives_go_endpoints_from_the_preset_url() {
-        assert_eq!(chat_completion_url("https://opencode.ai/zen/go/v1"), "https://opencode.ai/zen/go/v1/chat/completions");
-        assert_eq!(models_url("https://opencode.ai/zen/go/v1"), "https://opencode.ai/zen/go/v1/models");
-        assert_eq!(models_url("https://opencode.ai/zen/go/v1/chat/completions"), "https://opencode.ai/zen/go/v1/models");
+        assert_eq!(
+            chat_completion_url("https://opencode.ai/zen/go/v1"),
+            "https://opencode.ai/zen/go/v1/chat/completions"
+        );
+        assert_eq!(
+            models_url("https://opencode.ai/zen/go/v1"),
+            "https://opencode.ai/zen/go/v1/models"
+        );
+        assert_eq!(
+            models_url("https://opencode.ai/zen/go/v1/chat/completions"),
+            "https://opencode.ai/zen/go/v1/models"
+        );
     }
 }

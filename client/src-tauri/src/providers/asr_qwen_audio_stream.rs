@@ -29,16 +29,16 @@ use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, StreamExt};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite;
 use tungstenite::client::IntoClientRequest;
-use tungstenite::http::header::{AUTHORIZATION, USER_AGENT};
 use tungstenite::http::HeaderValue;
+use tungstenite::http::header::{AUTHORIZATION, USER_AGENT};
 
 const MODEL: &str = "qwen-audio-3.1-asr-flash-streaming";
 const SCOPE: &str = "qwen/audio31";
@@ -67,9 +67,8 @@ pub fn hotword_limit_for_docs() -> usize {
     HOTWORD_LIMIT
 }
 
-type WsStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type WsSink = SplitSink<WsStream, tungstenite::Message>;
 
 // ─────────────────────────── 协议编解码 ───────────────────────────
@@ -79,7 +78,10 @@ fn ws_url(workspace: &str) -> String {
     if workspace.is_empty() {
         format!("wss://{}{}", GENERIC_HOST, WS_PATH)
     } else {
-        format!("wss://{}.cn-beijing.maas.aliyuncs.com{}", workspace, WS_PATH)
+        format!(
+            "wss://{}.cn-beijing.maas.aliyuncs.com{}",
+            workspace, WS_PATH
+        )
     }
 }
 
@@ -307,7 +309,11 @@ async fn start_task(
             "status={} model={} host={} rate={}",
             response.status(),
             MODEL,
-            if workspace.is_empty() { GENERIC_HOST } else { "workspace" },
+            if workspace.is_empty() {
+                GENERIC_HOST
+            } else {
+                "workspace"
+            },
             sample_rate
         ),
     );
@@ -349,7 +355,7 @@ async fn start_task(
                                 SCOPE,
                                 "task_failed",
                                 format!("Server rejected the task: {}", task_failed_reason(&ev)),
-                            ))
+                            ));
                         }
                         _ => {}
                     }
@@ -415,16 +421,14 @@ pub async fn transcribe(
     config: &AsrProviderConfig,
     hotwords: &[String],
 ) -> Result<AsrResult, String> {
-    let pcm =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64).map_err(
-            |e| {
-                diag::fail(
-                    SCOPE,
-                    "decode_b64",
-                    format!("Failed to decode base64 audio: {}", e),
-                )
-            },
-        )?;
+    let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64)
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
     if pcm.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
         return Ok(AsrResult {
@@ -493,7 +497,7 @@ pub async fn transcribe(
                                     "Recognition failed: {}",
                                     transcript.error.clone().unwrap_or_default()
                                 ),
-                            ))
+                            ));
                         }
                         _ => {}
                     }
@@ -916,7 +920,10 @@ mod tests {
     #[test]
     fn empty_partials_are_ignored() {
         let mut t = Transcript::default();
-        assert!(matches!(t.apply(&result_event("", false)), Applied::Ignored));
+        assert!(matches!(
+            t.apply(&result_event("", false)),
+            Applied::Ignored
+        ));
         assert_eq!(t.partial_events, 0);
         assert_eq!(t.display(), "");
     }
@@ -948,10 +955,7 @@ mod tests {
         });
         assert!(matches!(t.apply(&failed), Applied::Failed));
         assert!(t.finished);
-        assert_eq!(
-            t.error.as_deref(),
-            Some("InvalidParameter: bad model")
-        );
+        assert_eq!(t.error.as_deref(), Some("InvalidParameter: bad model"));
     }
 
     /// task-started 之类的事件不该被当成文本更新。

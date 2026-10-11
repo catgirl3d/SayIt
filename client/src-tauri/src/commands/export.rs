@@ -41,7 +41,10 @@ pub fn save_text_export(payload: TextExportPayload) -> Result<Option<String>, St
     fs::write(&path, &payload.content).map_err(|e| e.to_string())?;
     let abs = fs::canonicalize(&path).unwrap_or(path);
     let abs_str = abs.to_string_lossy().to_string();
-    let clean = abs_str.strip_prefix(r"\\?\").unwrap_or(&abs_str).to_string();
+    let clean = abs_str
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&abs_str)
+        .to_string();
     Ok(Some(clean))
 }
 
@@ -54,18 +57,23 @@ pub fn save_export_bundle(payload: ExportBundlePayload) -> Result<Option<String>
 
     let file = fs::File::create(&path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     for item in &payload.files {
-        zip.start_file(&item.name, options).map_err(|e| e.to_string())?;
-        zip.write_all(item.content.as_bytes()).map_err(|e| e.to_string())?;
+        zip.start_file(&item.name, options)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(item.content.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
 
     zip.finish().map_err(|e| e.to_string())?;
     let abs = fs::canonicalize(&path).unwrap_or(path);
     let abs_str = abs.to_string_lossy().to_string();
-    let clean = abs_str.strip_prefix(r"\\?\").unwrap_or(&abs_str).to_string();
+    let clean = abs_str
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&abs_str)
+        .to_string();
     Ok(Some(clean))
 }
 
@@ -120,42 +128,60 @@ pub async fn save_full_export(
     tokio::task::spawn_blocking(move || {
         let file = fs::File::create(&out_path).map_err(|e| e.to_string())?;
         let mut zip = zip::ZipWriter::new(file);
-        let text_opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        let audio_opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored); // 音频不压缩，速度快
+        let text_opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let audio_opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored); // 音频不压缩，速度快
 
         let mut current = 0usize;
 
         // 写入 JSON 文件
         for item in &json_files {
             current += 1;
-            let _ = app_handle.emit("export-progress", ExportProgress {
-                current, total, filename: item.name.clone(),
-            });
-            zip.start_file(&item.name, text_opts).map_err(|e| e.to_string())?;
-            zip.write_all(item.content.as_bytes()).map_err(|e| e.to_string())?;
+            let _ = app_handle.emit(
+                "export-progress",
+                ExportProgress {
+                    current,
+                    total,
+                    filename: item.name.clone(),
+                },
+            );
+            zip.start_file(&item.name, text_opts)
+                .map_err(|e| e.to_string())?;
+            zip.write_all(item.content.as_bytes())
+                .map_err(|e| e.to_string())?;
         }
 
         // 写入音频文件
         for audio_path in &audio_files {
             current += 1;
-            let fname = audio_path.file_name()
+            let fname = audio_path
+                .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".into());
-            let _ = app_handle.emit("export-progress", ExportProgress {
-                current, total, filename: fname.clone(),
-            });
+            let _ = app_handle.emit(
+                "export-progress",
+                ExportProgress {
+                    current,
+                    total,
+                    filename: fname.clone(),
+                },
+            );
             let zip_name = format!("audio/{}", fname);
-            zip.start_file(&zip_name, audio_opts).map_err(|e| e.to_string())?;
-            let bytes = fs::read(audio_path).map_err(|e| format!("Failed to read audio file {}: {}", fname, e))?;
+            zip.start_file(&zip_name, audio_opts)
+                .map_err(|e| e.to_string())?;
+            let bytes = fs::read(audio_path)
+                .map_err(|e| format!("Failed to read audio file {}: {}", fname, e))?;
             zip.write_all(&bytes).map_err(|e| e.to_string())?;
         }
 
         zip.finish().map_err(|e| e.to_string())?;
         let abs = fs::canonicalize(&out_path).unwrap_or(out_path);
         let abs_str = abs.to_string_lossy().to_string();
-        let clean = abs_str.strip_prefix(r"\\?\").unwrap_or(&abs_str).to_string();
+        let clean = abs_str
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&abs_str)
+            .to_string();
         Ok(Some(clean))
     })
     .await

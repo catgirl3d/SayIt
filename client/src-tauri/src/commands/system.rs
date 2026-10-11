@@ -1,12 +1,12 @@
+use crate::storage::Storage;
+use base64::Engine;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
-use crate::storage::Storage;
 use std::io::Write;
-use std::sync::Mutex;
-use base64::Engine;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, State};
 
 /// Persistent log file writer — opened once, reused across calls.
 static LOG_FILE: std::sync::LazyLock<Mutex<Option<std::fs::File>>> =
@@ -78,7 +78,9 @@ pub fn write_log_line(line: &str) {
     // 用 unwrap_or_else 而非 unwrap()：即使这个 Mutex 曾在某次 panic 中被"污染"
     // （poisoned），日志功能也不能跟着永久失效——否则会形成"一次意外 panic 导致
     // 之后所有诊断日志都写不出来"的雪崩，恰恰是排查间歇性问题最怕遇到的情况。
-    let mut guard = LOG_FILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = LOG_FILE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Rotate check — reopen file if needed
     rotate_if_needed(&mut guard);
     if guard.is_none() {
@@ -222,7 +224,9 @@ pub fn get_client_runtime_info(storage: State<Storage>) -> Result<ClientRuntimeI
         os_version: get_os_version(),
         local_ip: get_local_ip(),
         system_locale: get_system_locale(),
-        cpu_cores: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        cpu_cores: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
         memory_mb: get_total_memory_mb(),
     })
 }
@@ -283,9 +287,10 @@ static SHA512_BASE64_PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::Laz
 });
 
 /// Exact numeric major.minor.patch; pre-release channels are out of scope.
-static NUMERIC_VERSION_PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"^\d+\.\d+\.\d+$").expect("valid version pattern")
-});
+static NUMERIC_VERSION_PATTERN: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\d+\.\d+\.\d+$").expect("valid version pattern")
+    });
 
 /// HTTPS hosts the installer download may be redirected to. GitHub serves release
 /// assets from these CDNs; anything else fails closed.
@@ -319,12 +324,11 @@ fn redirect_hop_allowed(previous_len: usize, url: &reqwest::Url) -> Result<(), &
 /// The redirect policy follows at most five HTTPS hops, each landing on an allowed
 /// host. The initial URL is validated separately, before the first request.
 fn update_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| match redirect_hop_allowed(
-        attempt.previous().len(),
-        attempt.url(),
-    ) {
-        Ok(()) => attempt.follow(),
-        Err(reason) => attempt.error(reason),
+    reqwest::redirect::Policy::custom(|attempt| {
+        match redirect_hop_allowed(attempt.previous().len(), attempt.url()) {
+            Ok(()) => attempt.follow(),
+            Err(reason) => attempt.error(reason),
+        }
     })
 }
 
@@ -364,13 +368,20 @@ fn validate_fork_release_url(url: &str, version: &str) -> Result<(), String> {
         return Err(format!("Insecure update URL scheme: {}", parsed.scheme()));
     }
     if parsed.host_str() != Some(FORK_RELEASE_HOST) {
-        return Err(format!("Update URL host is not {}: {}", FORK_RELEASE_HOST, parsed.host_str().unwrap_or("(none)")));
+        return Err(format!(
+            "Update URL host is not {}: {}",
+            FORK_RELEASE_HOST,
+            parsed.host_str().unwrap_or("(none)")
+        ));
     }
     // Exactly this URL, nothing that smuggles extra meaning: no port, no query,
     // no fragment, no userinfo. A query or fragment could silently change what the
     // URL identifies; a port or userinfo means it is not the canonical release asset.
     if parsed.port().is_some() {
-        return Err(format!("Update URL must not carry a non-default port: {}", url));
+        return Err(format!(
+            "Update URL must not carry a non-default port: {}",
+            url
+        ));
     }
     if parsed.query().is_some() {
         return Err(format!("Update URL must not carry a query string: {}", url));
@@ -388,7 +399,10 @@ fn validate_fork_release_url(url: &str, version: &str) -> Result<(), String> {
         installer_filename(version)
     );
     if parsed.path() != expected_path {
-        return Err(format!("Update URL does not point at the fork release asset: {}", url));
+        return Err(format!(
+            "Update URL does not point at the fork release asset: {}",
+            url
+        ));
     }
     Ok(())
 }
@@ -404,7 +418,10 @@ fn validate_sha512_base64(sha512: &str) -> Result<Vec<u8>, String> {
         .decode(sha512)
         .map_err(|e| format!("Invalid update SHA-512: {}", e))?;
     if bytes.len() != 64 {
-        return Err(format!("Invalid update SHA-512: {} bytes instead of 64", bytes.len()));
+        return Err(format!(
+            "Invalid update SHA-512: {} bytes instead of 64",
+            bytes.len()
+        ));
     }
     Ok(bytes)
 }
@@ -426,7 +443,8 @@ static VERIFIED_UPDATE: std::sync::LazyLock<std::sync::Mutex<Option<VerifiedUpda
 /// Concurrent downloads must not write the same `.part` file, and an install must
 /// not re-hash or spawn while a download could revoke or replace the authorized
 /// package between the authorization check and the spawn.
-static UPDATE_OP_IN_PROGRESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static UPDATE_OP_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Pure authorization decision for the install command: install only proceeds for a
 /// version/hash pair this process verified during download, never for a file that
@@ -446,7 +464,9 @@ fn authorize_install(
 /// A locked mutex guard helper shared with the poisoned-log pattern above: a panic in
 /// one thread must not permanently lock out every later update operation.
 fn lock_verified_update() -> std::sync::MutexGuard<'static, Option<VerifiedUpdate>> {
-    VERIFIED_UPDATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    VERIFIED_UPDATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// One-way startup migration away from the pre-fork update flow.
@@ -476,7 +496,11 @@ fn clear_update_temp_dir(dir: &std::path::Path) {
         let file_type = match entry.file_type() {
             Ok(t) => t,
             Err(e) => {
-                write_log_line(&format!("[update] legacy cleanup could not stat {}: {}", path.display(), e));
+                write_log_line(&format!(
+                    "[update] legacy cleanup could not stat {}: {}",
+                    path.display(),
+                    e
+                ));
                 continue;
             }
         };
@@ -523,9 +547,14 @@ enum PackageVerifyError {
     Unavailable(String),
 }
 
-fn verify_package_file(path: &std::path::Path, expected_base64: &str) -> Result<(), PackageVerifyError> {
+fn verify_package_file(
+    path: &std::path::Path,
+    expected_base64: &str,
+) -> Result<(), PackageVerifyError> {
     if !path.is_file() {
-        return Err(PackageVerifyError::Unavailable("The installer file does not exist".to_string()));
+        return Err(PackageVerifyError::Unavailable(
+            "The installer file does not exist".to_string(),
+        ));
     }
     match file_sha512_base64(path) {
         Ok(actual) if actual == expected_base64 => Ok(()),
@@ -545,7 +574,13 @@ struct UpdateDownloadProgress {
     error: Option<String>,
 }
 
-fn emit_update_progress(app: &AppHandle, downloaded: u64, total: u64, status: &str, error: Option<&str>) {
+fn emit_update_progress(
+    app: &AppHandle,
+    downloaded: u64,
+    total: u64,
+    status: &str,
+    error: Option<&str>,
+) {
     let percent = if total > 0 {
         (downloaded as f64 / total as f64 * 100.0).min(100.0)
     } else {
@@ -578,7 +613,8 @@ pub struct UpdateManifestFetch {
 /// latest-release manifest, byte-for-byte. Unlike the host-allowlist check used
 /// for redirects, the frontend-supplied URL itself must be exactly this string —
 /// the command must not become a generic fetch primitive into the release hosts.
-const FORK_MANIFEST_URL: &str = "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json";
+const FORK_MANIFEST_URL: &str =
+    "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json";
 
 /// A release manifest is a few hundred bytes; anything larger is not a manifest.
 /// The cap bounds memory before JSON parsing so an oversized or malicious asset
@@ -658,7 +694,10 @@ pub async fn check_update_manifest(url: String) -> Result<UpdateManifestFetch, S
 
     let body: Value = serde_json::from_slice(&bytes)
         .map_err(|e| format!("Manifest response is not valid JSON: {}", e))?;
-    Ok(UpdateManifestFetch { status, body: Some(body) })
+    Ok(UpdateManifestFetch {
+        status,
+        body: Some(body),
+    })
 }
 
 /// Download the fork release installer into the fixed temp directory, reporting real
@@ -671,7 +710,12 @@ pub async fn check_update_manifest(url: String) -> Result<UpdateManifestFetch, S
 /// GitHub's release-asset CDN redirects are allowed, bounded to five hops, and
 /// restricted to the allowed hosts — anything else fails closed.
 #[tauri::command]
-pub async fn download_update(app: AppHandle, url: String, version: String, sha512: String) -> Result<(), String> {
+pub async fn download_update(
+    app: AppHandle,
+    url: String,
+    version: String,
+    sha512: String,
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
 
     // Serialize against every other update operation.
@@ -736,7 +780,8 @@ async fn run_verified_download(
     // The final path is derived from the validated version — never from the URL,
     // never from frontend data.
     let temp_dir = update_temp_dir();
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temporary directory: {}", e))?;
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temporary directory: {}", e))?;
     let final_path = final_package_path(version);
     let part_path = part_package_path(&final_path);
 
@@ -868,7 +913,10 @@ fn prune_stale_packages(dir: &std::path::Path, keep: &str) {
         }
     }
     if removed > 0 {
-        write_log_line(&format!("[update] removed {} stale update package(s)", removed));
+        write_log_line(&format!(
+            "[update] removed {} stale update package(s)",
+            removed
+        ));
     }
 }
 
@@ -900,7 +948,10 @@ fn spawn_installer(installer_path: &str) -> Result<(), String> {
     let relaunch_line = {
         let current_exe = std::env::current_exe()
             .map_err(|e| format!("Failed to get the current executable path: {}", e))?;
-        format!("start \"\" \"{}\" --open-about\r\n", current_exe.to_string_lossy())
+        format!(
+            "start \"\" \"{}\" --open-about\r\n",
+            current_exe.to_string_lossy()
+        )
     };
 
     //   - ping buys ~1s so the old process has fully exited, avoiding the installer
@@ -934,7 +985,11 @@ fn spawn_installer(installer_path: &str) -> Result<(), String> {
 /// during its own validated download. The version/hash pair from the frontend must
 /// match it exactly; a file merely existing on disk authorizes nothing.
 #[tauri::command]
-pub fn install_downloaded_update(version: String, sha512: String, app: AppHandle) -> Result<(), String> {
+pub fn install_downloaded_update(
+    version: String,
+    sha512: String,
+    app: AppHandle,
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
 
     // One guard covers install AND download: once held, a concurrent download can
@@ -974,7 +1029,10 @@ pub fn install_downloaded_update(version: String, sha512: String, app: AppHandle
                 "[update] could not re-verify the package before spawn, installation refused: {}",
                 e
             ));
-            return Err(format!("The installer package could not be re-verified: {}", e));
+            return Err(format!(
+                "The installer package could not be re-verified: {}",
+                e
+            ));
         }
     }
 
@@ -992,7 +1050,9 @@ pub fn install_downloaded_update(version: String, sha512: String, app: AppHandle
     match spawn_installer(&final_path.to_string_lossy()) {
         Ok(()) => {
             *lock_verified_update() = None;
-            write_log_line("[update] installer launched after explicit user action (will relaunch)");
+            write_log_line(
+                "[update] installer launched after explicit user action (will relaunch)",
+            );
         }
         Err(e) => {
             // Keep the verified package authorized: the user can retry without
@@ -1039,8 +1099,14 @@ pub fn append_debug_log(payload: Value) -> Result<(), String> {
                 "session_end" => {
                     let sid = map.get("sessionId").and_then(|v| v.as_str()).unwrap_or("?");
                     let dur = map.get("durationMs").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let msgs = map.get("messageCount").and_then(|v| v.as_i64()).unwrap_or(0);
-                    format!("[SESSION] end id={} duration={}ms messages={}", sid, dur, msgs)
+                    let msgs = map
+                        .get("messageCount")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    format!(
+                        "[SESSION] end id={} duration={}ms messages={}",
+                        sid, dur, msgs
+                    )
                 }
                 "ws_message" => {
                     let dir = map.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
@@ -1052,14 +1118,10 @@ pub fn append_debug_log(payload: Value) -> Result<(), String> {
                         format!("[WS] {} {}", dir, typ)
                     }
                 }
-                _ => {
-                    serde_json::to_string(&payload).unwrap_or_else(|_| format!("{:?}", payload))
-                }
+                _ => serde_json::to_string(&payload).unwrap_or_else(|_| format!("{:?}", payload)),
             }
         }
-        _ => {
-            serde_json::to_string(&payload).unwrap_or_else(|_| format!("{:?}", payload))
-        }
+        _ => serde_json::to_string(&payload).unwrap_or_else(|_| format!("{:?}", payload)),
     };
 
     write_log_line(&line);
@@ -1148,7 +1210,8 @@ pub fn open_folder(folder_path: String) -> Result<(), String> {
 mod update_tests {
     use super::*;
 
-    const VALID_SHA512: &str = "z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==";
+    const VALID_SHA512: &str =
+        "z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==";
 
     fn unique_update_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("sayit-update-test-{}", uuid::Uuid::new_v4()))
@@ -1231,15 +1294,21 @@ mod update_tests {
     #[test]
     fn redirect_policy_rejects_non_github_and_non_https_targets() {
         let parse = reqwest::Url::parse;
-        assert!(redirect_target_allowed(&parse("https://github.com/x").unwrap()));
+        assert!(redirect_target_allowed(
+            &parse("https://github.com/x").unwrap()
+        ));
         assert!(redirect_target_allowed(
             &parse("https://release-assets.githubusercontent.com/x").unwrap()
         ));
         assert!(redirect_target_allowed(
             &parse("https://objects.githubusercontent.com/x").unwrap()
         ));
-        assert!(!redirect_target_allowed(&parse("https://evil.example.com/x").unwrap()));
-        assert!(!redirect_target_allowed(&parse("http://github.com/x").unwrap()));
+        assert!(!redirect_target_allowed(
+            &parse("https://evil.example.com/x").unwrap()
+        ));
+        assert!(!redirect_target_allowed(
+            &parse("http://github.com/x").unwrap()
+        ));
     }
 
     #[test]
@@ -1247,15 +1316,19 @@ mod update_tests {
         // The manifest fetch reuses the installer download's redirect/initial-host
         // validation: the pinned manifest URL is accepted, everything else fails closed.
         assert!(redirect_target_allowed(
-            &reqwest::Url::parse("https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json")
-                .unwrap()
+            &reqwest::Url::parse(
+                "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json"
+            )
+            .unwrap()
         ));
         assert!(!redirect_target_allowed(
             &reqwest::Url::parse("https://evil.example.com/latest-win32-x64.json").unwrap()
         ));
         assert!(!redirect_target_allowed(
-            &reqwest::Url::parse("http://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json")
-                .unwrap()
+            &reqwest::Url::parse(
+                "http://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json"
+            )
+            .unwrap()
         ));
     }
 
@@ -1264,8 +1337,13 @@ mod update_tests {
         // The command must serve exactly one purpose: the pinned fork manifest.
         // Any other URL — even a legitimate GitHub release asset — is refused,
         // so the command cannot become a generic fetch primitive.
-        assert_eq!(FORK_MANIFEST_URL, "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json");
-        assert!(redirect_target_allowed(&reqwest::Url::parse(FORK_MANIFEST_URL).unwrap()));
+        assert_eq!(
+            FORK_MANIFEST_URL,
+            "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json"
+        );
+        assert!(redirect_target_allowed(
+            &reqwest::Url::parse(FORK_MANIFEST_URL).unwrap()
+        ));
         assert!(redirect_target_allowed(&reqwest::Url::parse(
             "https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe"
         ).unwrap()) && FORK_MANIFEST_URL != "https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe");
@@ -1285,7 +1363,13 @@ mod update_tests {
             );
         }
         assert!(redirect_hop_allowed(6, &target).is_err());
-        assert!(redirect_hop_allowed(1, &reqwest::Url::parse("https://evil.example.com/x").unwrap()).is_err());
+        assert!(
+            redirect_hop_allowed(
+                1,
+                &reqwest::Url::parse("https://evil.example.com/x").unwrap()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1331,6 +1415,9 @@ mod update_tests {
         assert!(authorize_install(None, "0.2.1", VALID_SHA512).is_err());
         assert!(authorize_install(Some(&verified), "0.2.2", VALID_SHA512).is_err());
         assert!(authorize_install(Some(&verified), "0.2.1", "wrong-digest").is_err());
-        assert_eq!(authorize_install(Some(&verified), "0.2.1", VALID_SHA512).unwrap(), path);
+        assert_eq!(
+            authorize_install(Some(&verified), "0.2.1", VALID_SHA512).unwrap(),
+            path
+        );
     }
 }

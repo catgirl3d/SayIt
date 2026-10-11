@@ -12,12 +12,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::HWND;
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextW, GetWindowThreadProcessId,
-    GUITHREADINFO,
+    GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextW,
+    GetWindowThreadProcessId,
 };
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -139,9 +139,9 @@ impl ContextDetector {
         let cached_for_cb = cached.clone();
 
         thread::spawn(move || {
-            use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+            use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
             use windows::Win32::UI::WindowsAndMessaging::{
-                DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+                DispatchMessageW, GetMessageW, MSG, TranslateMessage,
             };
 
             // WinEvent constants
@@ -318,8 +318,8 @@ pub fn capture_foreground_monitor() -> Option<MonitorBounds> {
 #[cfg(windows)]
 unsafe fn populate_uia_fields(ctx: &mut AppContext, include_text_context: bool) {
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-        COINIT_APARTMENTTHREADED,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, UIA_AutomationIdPropertyId, UIA_ControlTypePropertyId,
@@ -444,11 +444,11 @@ unsafe fn capture_uia_text_context(
     uia: &windows::Win32::UI::Accessibility::IUIAutomation,
     focused: &windows::Win32::UI::Accessibility::IUIAutomationElement,
 ) -> Option<TextContext> {
-    use windows::core::Interface;
     use windows::Win32::UI::Accessibility::{
         IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationTextPattern2,
         IUIAutomationValuePattern, UIA_TextPattern2Id, UIA_TextPatternId, UIA_ValuePatternId,
     };
+    use windows::core::Interface;
 
     let mut element: IUIAutomationElement = focused.clone();
     let walker = uia.RawViewWalker().ok();
@@ -748,7 +748,7 @@ fn get_process_path(pid: u32) -> String {
 
 #[cfg(windows)]
 unsafe fn get_process_image_name(handle: windows::Win32::Foundation::HANDLE) -> String {
-    use windows::Win32::System::Threading::{QueryFullProcessImageNameW, PROCESS_NAME_FORMAT};
+    use windows::Win32::System::Threading::{PROCESS_NAME_FORMAT, QueryFullProcessImageNameW};
     let mut buf = [0u16; 1024];
     let mut size = buf.len() as u32;
     let ok = QueryFullProcessImageNameW(

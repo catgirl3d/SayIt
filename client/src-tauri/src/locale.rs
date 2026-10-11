@@ -11,7 +11,7 @@
 //! module uses `GetUserDefaultUILanguage` for the Windows display language. The two
 //! values can legitimately differ.
 
-    /// Supported interface languages. Values match the frontend `Locale` type.
+/// Supported interface languages. Values match the frontend `Locale` type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     Uk,

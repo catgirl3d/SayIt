@@ -1,19 +1,19 @@
 // 豆包流式 ASR 二进制 WebSocket 帧编解码
 
-use flate2::write::GzEncoder;
-use flate2::read::GzDecoder;
 use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use std::io::{Read, Write};
 
 // Protocol constants
 const PROTOCOL_VERSION: u8 = 0x10; // version 1, header size 1 (4 bytes)
-const MSG_FULL_CLIENT: u8 = 0x10;  // message type 1 (full client request)
-const MSG_AUDIO_ONLY: u8 = 0x20;   // message type 2 (audio only)
-const MSG_SERVER_RESP: u8 = 0x90;  // message type 9 (server response)
-const MSG_ERROR: u8 = 0xF0;        // message type F (error)
+const MSG_FULL_CLIENT: u8 = 0x10; // message type 1 (full client request)
+const MSG_AUDIO_ONLY: u8 = 0x20; // message type 2 (audio only)
+const MSG_SERVER_RESP: u8 = 0x90; // message type 9 (server response)
+const MSG_ERROR: u8 = 0xF0; // message type F (error)
 const FLAG_NONE: u8 = 0x00;
-const FLAG_LAST_AUDIO: u8 = 0x02;  // last audio packet
-const SERIAL_JSON: u8 = 0x10;      // JSON serialization
+const FLAG_LAST_AUDIO: u8 = 0x02; // last audio packet
+const SERIAL_JSON: u8 = 0x10; // JSON serialization
 const SERIAL_NONE: u8 = 0x00;
 const COMPRESS_GZIP: u8 = 0x01;
 #[allow(dead_code)]
@@ -28,7 +28,9 @@ fn gzip_compress(data: &[u8]) -> Vec<u8> {
 fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut decoder = GzDecoder::new(data);
     let mut result = Vec::new();
-    decoder.read_to_end(&mut result).map_err(|e| format!("Failed to decompress gzip payload: {}", e))?;
+    decoder
+        .read_to_end(&mut result)
+        .map_err(|e| format!("Failed to decompress gzip payload: {}", e))?;
     Ok(result)
 }
 
@@ -132,7 +134,11 @@ pub fn parse_server_response(data: &[u8]) -> Result<ServerResponse, String> {
     let payload_offset = payload_size_offset + 4;
 
     if data.len() < payload_offset + payload_size {
-        return Err(format!("Incomplete payload: expected {} bytes, received {}", payload_size, data.len() - payload_offset));
+        return Err(format!(
+            "Incomplete payload: expected {} bytes, received {}",
+            payload_size,
+            data.len() - payload_offset
+        ));
     }
 
     let raw_payload = &data[payload_offset..payload_offset + payload_size];
