@@ -708,6 +708,17 @@ async def ws_transcribe(ws: WebSocket):
 
     async def _process_stop():
         nonlocal session_id, web_demo_slot_acquired, pcm_total_bytes
+        try:
+            await _process_stop_inner()
+        finally:
+            if web_demo_slot_acquired:
+                _release_web_demo_slot(ws_ip_key)
+                web_demo_slot_acquired = False
+            _clear_session_context()
+            session_id = None
+
+    async def _process_stop_inner():
+        nonlocal session_id, pcm_total_bytes
         current_session_id = session_id
         ptt_hold_ms = last_usage_meta.get("ptt_hold_ms")
         all_pcm = b"".join(pcm_buffers)
@@ -728,11 +739,6 @@ async def ws_transcribe(ws: WebSocket):
             if telemetry:
                 telemetry.mark_terminal_status(current_session_id, cid, "empty_audio", "No PCM received")
             await ws.send_json({"type": "done"})
-            if web_demo_slot_acquired:
-                _release_web_demo_slot(client_ip_direct)
-                web_demo_slot_acquired = False
-            _clear_session_context()
-            session_id = None
             return
 
         if is_web_demo and audio_duration_ms > cfg.web_demo.max_duration_sec * 1000:
@@ -745,11 +751,6 @@ async def ws_transcribe(ws: WebSocket):
                 }
             )
             await ws.send_json({"type": "done"})
-            if web_demo_slot_acquired:
-                _release_web_demo_slot(client_ip_direct)
-                web_demo_slot_acquired = False
-            _clear_session_context()
-            session_id = None
             return
 
         audio = np.frombuffer(all_pcm, dtype=np.int16).astype(np.float32) / 32768.0
@@ -757,11 +758,6 @@ async def ws_transcribe(ws: WebSocket):
             if telemetry:
                 telemetry.mark_terminal_status(current_session_id, cid, "short_audio", "Audio shorter than 0.3s")
             await ws.send_json({"type": "done"})
-            if web_demo_slot_acquired:
-                _release_web_demo_slot(client_ip_direct)
-                web_demo_slot_acquired = False
-            _clear_session_context()
-            session_id = None
             return
 
         # Reject near-silent audio to prevent hotword hallucination.
@@ -776,11 +772,6 @@ async def ws_transcribe(ws: WebSocket):
             await ws.send_json({"type": "asr", "text": "", "asr_ms": 0, "duration_sec": round(len(audio) / 16000.0, 2), "asr_debug": {"silent": True}})
             await ws.send_json({"type": "final", "asr_text": "", "llm_text": "", "asr_ms": 0, "llm_ms": 0, "duration_sec": round(len(audio) / 16000.0, 2), "asr_debug": {"silent": True}, "llm_debug": {}})
             await ws.send_json({"type": "done"})
-            if web_demo_slot_acquired:
-                _release_web_demo_slot(client_ip_direct)
-                web_demo_slot_acquired = False
-            _clear_session_context()
-            session_id = None
             return
 
         try:
@@ -800,11 +791,6 @@ async def ws_transcribe(ws: WebSocket):
                 telemetry.mark_failure(current_session_id, cid, "pipeline_exception", str(exc))
             await ws.send_json({"type": "error", "message": str(exc)})
             await ws.send_json({"type": "done"})
-            if web_demo_slot_acquired:
-                _release_web_demo_slot(client_ip_direct)
-                web_demo_slot_acquired = False
-            _clear_session_context()
-            session_id = None
             return
 
         if error := result.get("error"):
@@ -812,11 +798,6 @@ async def ws_transcribe(ws: WebSocket):
                 telemetry.mark_failure(current_session_id, cid, "pipeline_error", str(error))
             await ws.send_json({"type": "error", "message": str(error)})
             await ws.send_json({"type": "done"})
-            if web_demo_slot_acquired:
-                _release_web_demo_slot(client_ip_direct)
-                web_demo_slot_acquired = False
-            _clear_session_context()
-            session_id = None
             return
 
         llm_debug = result.get("llm_debug", {}) if isinstance(result.get("llm_debug"), dict) else {}
@@ -887,11 +868,6 @@ async def ws_transcribe(ws: WebSocket):
             msg["compare_no_hotwords"] = cmp
         await ws.send_json(msg)
         await ws.send_json({"type": "done"})
-        if web_demo_slot_acquired:
-            _release_web_demo_slot(client_ip_direct)
-            web_demo_slot_acquired = False
-        _clear_session_context()
-        session_id = None
 
     try:
         # 在 try 内注册连接计数，保证任何异常（含 accept 后立即断开）都会经 finally 释放
