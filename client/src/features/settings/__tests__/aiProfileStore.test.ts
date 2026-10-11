@@ -1,18 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { saveAiProfiles } from '../aiProfileStore'
+import { setSetting } from '@/services/store'
 import type { AiProfile } from '../aiProviderCatalog'
 
 const storedSettings = vi.hoisted(() => new Map<string, unknown>())
+const writeLog = vi.hoisted(() => [] as string[])
+const writeGates = vi.hoisted(() => new Map<string, Promise<void>>())
 
 vi.mock('@/services/store', () => ({
   getSetting: vi.fn(async (key: string, fallback: unknown) => storedSettings.get(key) ?? fallback),
   setSetting: vi.fn(async (key: string, value: unknown) => {
+    writeLog.push(key)
+    const gate = writeGates.get(key)
+    if (gate) {
+      writeGates.delete(key)
+      await gate
+    }
     storedSettings.set(key, structuredClone(value))
   }),
 }))
 
 beforeEach(() => {
   storedSettings.clear()
+  writeLog.length = 0
+  writeGates.clear()
 })
 
 function profile(provider: string, over: Partial<AiProfile> = {}): AiProfile {
@@ -62,5 +73,60 @@ describe('runtime tuning mirror', () => {
 
     expect(storedSettings.get('cloudAi.reasoningEffort')).toBe('')
     expect(storedSettings.get('cloudAi.serviceTier')).toBe('')
+  })
+})
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+/** Wait for an observable event without depending on a fixed number of microtasks. */
+async function until(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('condition was not reached')
+}
+
+describe('profile save serialization', () => {
+  /**
+   * Regression: one save is a multi-key write. Two overlapping saves used to interleave,
+   * pairing the list of one with the active ID of the other and mirroring the wrong
+   * runtime profile.
+   */
+  it('does not start a second save while the first one is still writing', async () => {
+    const gate = deferred()
+    writeGates.set('cloudAi.profiles', gate.promise)
+    const first = profile('deepseek', { id: 'p-first' })
+    const second = profile('openai', { id: 'p-second' })
+
+    const firstSave = saveAiProfiles({ profiles: [first], activeId: first.id })
+    await until(() => writeLog.includes('cloudAi.profiles'))
+    const secondSave = saveAiProfiles({ profiles: [second], activeId: second.id })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(writeLog.filter((key) => key === 'cloudAi.profiles')).toHaveLength(1)
+    expect(writeLog.filter((key) => key === 'cloudAi.activeProfileId')).toHaveLength(1)
+
+    gate.resolve()
+    await Promise.all([firstSave, secondSave])
+
+    expect(writeLog.filter((key) => key === 'cloudAi.profiles')).toHaveLength(2)
+    expect(storedSettings.get('cloudAi.activeProfileId')).toBe(second.id)
+  })
+
+  it('keeps accepting saves after a failed write instead of wedging the queue', async () => {
+    const failing = profile('deepseek', { id: 'p-fail' })
+    const next = profile('openai', { id: 'p-next' })
+    vi.mocked(setSetting).mockRejectedValueOnce(new Error('disk full'))
+
+    await expect(saveAiProfiles({ profiles: [failing], activeId: failing.id })).rejects.toThrow('disk full')
+
+    await saveAiProfiles({ profiles: [next], activeId: next.id })
+
+    expect(storedSettings.get('cloudAi.activeProfileId')).toBe(next.id)
   })
 })

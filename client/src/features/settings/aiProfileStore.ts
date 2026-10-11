@@ -31,12 +31,30 @@ import {
 
 export const AI_PROFILES_KEY = 'cloudAi.profiles'
 export const AI_ACTIVE_PROFILE_KEY = 'cloudAi.activeProfileId'
-/** 老数据只迁一次。没有这个标记，用户删光列表后下次进页面又会被"救回来" */
+/** Legacy data is migrated once. Without this marker, an emptied list would be "rescued" on the next visit. */
 export const AI_PROFILES_MIGRATED_KEY = 'cloudAi.profilesMigrated'
 
 export interface AiProfileState {
   profiles: AiProfile[]
   activeId: string
+}
+
+// One profile save is a multi-key write (list, active ID, runtime mirror). Overlapping
+// saves — activation while a card test is finishing, an edit while a batch is committing —
+// can interleave and pair the list of one save with the active ID of another. The queue
+// gives every caller the same ordered view, the same pattern as asrProfileStore.
+let profileOperationQueue: Promise<void> = Promise.resolve()
+
+function enqueueProfileRead<T>(operation: () => Promise<T>): Promise<T> {
+  const result = profileOperationQueue.then(operation)
+  profileOperationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+function enqueueProfileSave<T>(operation: () => Promise<T>): Promise<T> {
+  const result = profileOperationQueue.then(operation, operation)
+  profileOperationQueue = result.then(() => undefined, () => undefined)
+  return result
 }
 
 /**
@@ -64,7 +82,7 @@ async function syncRuntimeActive(profile: AiProfile | null): Promise<void> {
   ])
 }
 
-/** 读出老的「每供应商一组配置」。键一律不删：降级回旧版本还能用 */
+/** Read the legacy per-provider config groups. Keys are never deleted so a downgrade still works. */
 async function readLegacyData(): Promise<LegacyProviderData[]> {
   return Promise.all(
     AI_PROVIDERS.map(async (provider): Promise<LegacyProviderData> => {
@@ -93,12 +111,14 @@ async function readLegacyData(): Promise<LegacyProviderData[]> {
 }
 
 /**
- * 加载服务列表。首次进入会把老的按供应商存的配置摊平成列表。
+ * Load the service list. On first visit, legacy per-provider configs are flattened into
+ * the list.
  *
- * 返回前会把 activeId 归一化（指向已不存在的 id 时回落到第一条），并在确实写过东西时
- * 顺手同步运行时配置——否则会出现"列表里高亮着 A，实际在用 B"。
+ * Before returning, activeId is normalized (falls back to the first entry when it points
+ * at a missing id), and the runtime settings are mirrored whenever something was actually
+ * written — otherwise the list would highlight A while B is the profile in use.
  */
-export async function loadAiProfiles(): Promise<AiProfileState> {
+async function loadAiProfilesUnlocked(): Promise<AiProfileState> {
   const [migrated, rawProfiles, storedActiveId] = await Promise.all([
     getSetting(AI_PROFILES_MIGRATED_KEY, false) as Promise<boolean>,
     getSetting(AI_PROFILES_KEY, [] as unknown[]) as Promise<unknown>,
@@ -110,7 +130,8 @@ export async function loadAiProfiles(): Promise<AiProfileState> {
   let needsWrite = false
 
   if (!migrated) {
-    // 老用户：把每家的候选模型摊平成一条条服务；新用户这里得到空列表，走空状态引导
+    // Existing users: flatten each provider's candidate models into individual services;
+    // new users get an empty list and the empty-state guide.
     if (profiles.length === 0) {
       const [legacy, legacyProvider, legacyModel] = await Promise.all([
         readLegacyData(),
@@ -136,15 +157,25 @@ export async function loadAiProfiles(): Promise<AiProfileState> {
   }
 
   if (needsWrite) {
-    await saveAiProfiles({ profiles, activeId })
+    await saveAiProfilesUnlocked({ profiles, activeId })
   }
 
   return { profiles, activeId }
 }
 
-/** 落盘列表 + 启用项，并把启用的那条同步进运行时配置。所有写路径都必须走这里 */
-export async function saveAiProfiles(state: AiProfileState): Promise<void> {
+/** Enqueued read: waits for any in-flight save, so callers never observe a half-written list. */
+export function loadAiProfiles(): Promise<AiProfileState> {
+  return enqueueProfileRead(loadAiProfilesUnlocked)
+}
+
+/** Persist the list + active entry and mirror the active one into the runtime settings. */
+async function saveAiProfilesUnlocked(state: AiProfileState): Promise<void> {
   const active = resolveActiveProfile(state.profiles, state.activeId)
   await Promise.all([setSetting(AI_PROFILES_KEY, state.profiles), setSetting(AI_ACTIVE_PROFILE_KEY, active?.id ?? '')])
   await syncRuntimeActive(active)
+}
+
+/** Every write path must go through here; the call is serialized with all other profile operations. */
+export function saveAiProfiles(state: AiProfileState): Promise<void> {
+  return enqueueProfileSave(() => saveAiProfilesUnlocked(state))
 }

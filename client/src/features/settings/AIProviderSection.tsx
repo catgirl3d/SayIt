@@ -354,11 +354,27 @@ export default function AIProviderSection() {
     }
   }
 
+  // Write first, commit the state second: a failed save must not leave the list
+  // showing a selection that was never persisted (same semantics as the ASR store).
   async function persist(nextProfiles: AiProfile[], nextActiveId: string) {
     const active = resolveActiveProfile(nextProfiles, nextActiveId)
+    try {
+      await saveAiProfiles({ profiles: nextProfiles, activeId: nextActiveId })
+    } catch (error) {
+      // saveAiProfiles writes the list and active keys before the runtime mirror, so a
+      // partial failure can leave storage ahead of the UI. Re-read what is actually
+      // stored before reporting the failure, so the list does not lie about it.
+      try {
+        const state = await loadAiProfiles()
+        setProfiles(state.profiles)
+        setActiveId(state.activeId)
+      } catch {
+        // Best-effort reconciliation: the save failure stays the error to report.
+      }
+      throw error
+    }
     setProfiles(nextProfiles)
     setActiveId(active?.id ?? '')
-    await saveAiProfiles({ profiles: nextProfiles, activeId: nextActiveId })
   }
 
   function openEditor(profile: AiProfile, isNew: boolean) {
@@ -458,10 +474,25 @@ export default function AIProviderSection() {
     }
   }
 
-  function handleActivate(id: string) {
-    if (id === activeId) return
+  async function handleActivate(id: string) {
+    // Serialize with every other write path: a second activation (or any state change
+    // while a save is in flight) would persist a list that is already out of date.
+    if (id === activeId || busy) return
     setNotice(null)
-    void persist(profiles, id)
+    setActivating(true)
+    try {
+      await persist(profiles, id)
+    } catch (err) {
+      const friendly = describeProviderError(err)
+      setNotice({
+        tone: 'error',
+        scope: 'list',
+        message: t('ai.msg.activationFailed', { message: friendly.message }),
+        detail: friendly.detail,
+      })
+    } finally {
+      setActivating(false)
+    }
   }
 
   async function handleDelete(id: string) {
@@ -469,7 +500,17 @@ export default function AIProviderSection() {
     setPendingDeleteId('')
     if (draft?.id === id) closeEditor()
     setNotice(null)
-    await persist(next, id === activeId ? '' : activeId)
+    try {
+      await persist(next, id === activeId ? '' : activeId)
+    } catch (err) {
+      const friendly = describeProviderError(err)
+      setNotice({
+        tone: 'error',
+        scope: 'list',
+        message: t('ai.msg.deleteFailed', { message: friendly.message }),
+        detail: friendly.detail,
+      })
+    }
   }
 
   function handleDraftProvider(value: string) {
@@ -693,27 +734,34 @@ export default function AIProviderSection() {
 
     setCheckingId(profile.id)
     setNotice(null)
-    const outcome = await runTest(profile)
-    await persist(
-      profiles.map((p) => (p.id === profile.id ? { ...p, check: outcomeToCheck(outcome) } : p)),
-      activeId,
-    )
-    if (outcome.ok) {
-      setNotice({
-        tone: latencyTone(outcome.elapsedMs),
-        scope,
-        message: successMessage(profile.model, outcome.elapsedMs),
-        detail: successDetail(profile, outcome),
-      })
-    } else {
-      setNotice({
-        tone: 'error',
-        scope,
-        message: t('ai.msg.modelFailed', { model: profile.model, message: outcome.message }),
-        detail: outcome.detail,
-      })
+    try {
+      const outcome = await runTest(profile)
+      await persist(
+        profiles.map((p) => (p.id === profile.id ? { ...p, check: outcomeToCheck(outcome) } : p)),
+        activeId,
+      )
+      if (outcome.ok) {
+        setNotice({
+          tone: latencyTone(outcome.elapsedMs),
+          scope,
+          message: successMessage(profile.model, outcome.elapsedMs),
+          detail: successDetail(profile, outcome),
+        })
+      } else {
+        setNotice({
+          tone: 'error',
+          scope,
+          message: t('ai.msg.modelFailed', { model: profile.model, message: outcome.message }),
+          detail: outcome.detail,
+        })
+      }
+    } catch (err) {
+      // runTest folds recognition failures into outcomes, so a throw here means the
+      // verdict could not be persisted. The card must not stay in the testing state.
+      setNotice({ tone: 'error', scope, message: t('ai.err.saveFailed'), detail: String(err) })
+    } finally {
+      setCheckingId('')
     }
-    setCheckingId('')
   }
 
   /**
