@@ -215,7 +215,7 @@ pub async fn transcribe(
 
     let model = resolve_model(config);
     let prompt = build_prompt(config, hotwords);
-    let wav = super::asr_groq::pcm_to_wav(&pcm, sample_rate);
+    let wav = super::wav::pcm_to_wav(&pcm, sample_rate);
     let wav_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav);
     let audio_seconds = pcm.len() as f64 / (sample_rate.max(1) as f64 * 2.0);
     diag::log(
@@ -312,7 +312,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     }
 
     let silence = vec![0u8; 16000];
-    let wav = super::asr_groq::pcm_to_wav(&silence, 16000);
+    let wav = super::wav::pcm_to_wav(&silence, 16000);
     let wav_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav);
     let prompt = build_prompt(config, &[]);
     let body = build_body(&prompt, wav_b64);

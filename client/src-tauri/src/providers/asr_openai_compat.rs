@@ -100,7 +100,7 @@ fn audio_wav(audio_pcm_b64: &str, sample_rate: u32) -> Result<(bool, Vec<u8>), S
             )
         })?;
     let is_empty = pcm.is_empty();
-    Ok((is_empty, super::asr_groq::pcm_to_wav(&pcm, sample_rate)))
+    Ok((is_empty, super::wav::pcm_to_wav(&pcm, sample_rate)))
 }
 
 fn transcribe_prompt(language: Option<&str>, hotwords: &[String]) -> String {

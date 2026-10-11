@@ -15,6 +15,7 @@
 
 use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
+use super::wav::pcm_to_wav;
 use std::time::Instant;
 
 const API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
@@ -57,28 +58,6 @@ const OPENAI_SCOPE: &str = "openai/asr";
 /// OpenAI receives this prompt only for explicit Chinese and only for models
 /// that support prompting. Auto-detected and non-Chinese requests omit it.
 const PUNCTUATION_PROMPT: &str = "以下是中文转写，使用全角标点，例如逗号、句号和问号。The following is an English transcript with half-width punctuation, such as commas, periods, and question marks.";
-
-/// Wrap the frontend's raw mono 16-bit PCM in the WAV container required by
-/// buffered transcription endpoints. This helper is shared only by providers
-/// that consume the same PCM format; MiMo retains its independent encoding.
-pub(super) fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
-    let ds = pcm.len() as u32;
-    let mut w = Vec::with_capacity(44 + pcm.len());
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&(36 + ds).to_le_bytes());
-    w.extend_from_slice(b"WAVEfmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&sr.to_le_bytes());
-    w.extend_from_slice(&(sr * 2).to_le_bytes());
-    w.extend_from_slice(&2u16.to_le_bytes());
-    w.extend_from_slice(&16u16.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&ds.to_le_bytes());
-    w.extend_from_slice(pcm);
-    w
-}
 
 /// Resolve the configured `auto|zh|en` language hint. Whisper accepts ISO-639-1.
 ///
@@ -723,7 +702,8 @@ mod tests {
 
     /// The WAV header must be 44 bytes and its size fields must match the audio
     /// payload; otherwise the provider returns an ambiguous 400 that is hard to
-    /// trace back to this encoder.
+    /// trace back to this encoder. The canonical test lives in wav.rs; this one
+    /// only confirms the shared encoder is wired in here.
     #[test]
     fn wav_header_is_well_formed() {
         let pcm = vec![0u8; 320];

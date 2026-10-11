@@ -76,24 +76,8 @@ fn strip_hotword_echo(text: String, hotwords: &[&str]) -> String {
     text
 }
 
-fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
-    let ds = pcm.len() as u32;
-    let mut w = Vec::with_capacity(44 + pcm.len());
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&(36 + ds).to_le_bytes());
-    w.extend_from_slice(b"WAVEfmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&sr.to_le_bytes());
-    w.extend_from_slice(&(sr * 2).to_le_bytes());
-    w.extend_from_slice(&2u16.to_le_bytes());
-    w.extend_from_slice(&16u16.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&ds.to_le_bytes());
-    w.extend_from_slice(pcm);
-    w
-}
+// WAV 封装（DashScope 多模态接口只接受 wav/mp3，不接受裸 PCM）。公共实现在 wav.rs。
+use super::wav::pcm_to_wav;
 
 pub async fn transcribe(
     audio_pcm_b64: &str,

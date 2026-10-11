@@ -10,25 +10,8 @@ use std::time::Instant;
 const API_URL: &str = "https://api.xiaomimimo.com/v1/chat/completions";
 const SCOPE: &str = "mimo/asr";
 
-/// 将 16kHz 单声道 16-bit PCM 封装为 WAV 容器（MiMo 只接受 wav/mp3，不接受裸 PCM）。
-fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
-    let ds = pcm.len() as u32;
-    let mut w = Vec::with_capacity(44 + pcm.len());
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&(36 + ds).to_le_bytes());
-    w.extend_from_slice(b"WAVEfmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&sr.to_le_bytes());
-    w.extend_from_slice(&(sr * 2).to_le_bytes());
-    w.extend_from_slice(&2u16.to_le_bytes());
-    w.extend_from_slice(&16u16.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&ds.to_le_bytes());
-    w.extend_from_slice(pcm);
-    w
-}
+/// 将 PCM 封装为 WAV 容器（MiMo 只接受 wav/mp3，不接受裸 PCM）。公共实现在 wav.rs。
+use super::wav::pcm_to_wav;
 
 /// 从供应商额外配置读取识别语言（auto|zh|en），默认 auto。
 fn resolve_language(config: &AsrProviderConfig) -> String {

@@ -173,7 +173,7 @@ async fn transcribe_to_endpoint(
 
     let model = resolve_model(config);
     let language = resolve_language(config);
-    let wav = super::asr_groq::pcm_to_wav(&pcm, sample_rate);
+    let wav = super::wav::pcm_to_wav(&pcm, sample_rate);
     let wav_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav);
     let body = build_body(&model, wav_b64, language.as_deref());
     let audio_seconds = pcm.len() as f64 / (sample_rate.max(1) as f64 * 2.0);
@@ -269,7 +269,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     }
 
     let silence = vec![0u8; 16000];
-    let wav = super::asr_groq::pcm_to_wav(&silence, 16000);
+    let wav = super::wav::pcm_to_wav(&silence, 16000);
     let wav_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav);
     let body = build_body(&model, wav_b64, resolve_language(config).as_deref());
     if build_request(&config.api_key, &body).is_err() {

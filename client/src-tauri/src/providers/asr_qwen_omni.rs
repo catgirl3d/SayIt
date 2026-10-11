@@ -20,26 +20,6 @@ fn ws_url(model: &str) -> String {
     )
 }
 
-#[allow(dead_code)]
-fn pcm_to_wav(pcm: &[u8], sr: u32) -> Vec<u8> {
-    let ds = pcm.len() as u32;
-    let mut w = Vec::with_capacity(44 + pcm.len());
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&(36 + ds).to_le_bytes());
-    w.extend_from_slice(b"WAVEfmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    w.extend_from_slice(&1u16.to_le_bytes()); // mono
-    w.extend_from_slice(&sr.to_le_bytes());
-    w.extend_from_slice(&(sr * 2).to_le_bytes());
-    w.extend_from_slice(&2u16.to_le_bytes());
-    w.extend_from_slice(&16u16.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&ds.to_le_bytes());
-    w.extend_from_slice(pcm);
-    w
-}
-
 /// 获取模型 ID（从 extra 字段或使用默认值）
 fn get_model(config: &AsrProviderConfig) -> String {
     config
