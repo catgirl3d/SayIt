@@ -6,6 +6,8 @@ pub mod reasoning;
 pub mod diag;
 pub mod http_client;
 pub mod wav;
+pub mod connection;
+pub mod line_stream;
 pub mod ai_openai_compat;
 pub mod ai_ollama;
 pub mod asr_doubao;

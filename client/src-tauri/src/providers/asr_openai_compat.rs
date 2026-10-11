@@ -352,8 +352,10 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
             }
         }
     };
-    let audio_b64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0u8; 16000]);
+    let audio_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        super::connection::silence_pcm(),
+    );
     let start = Instant::now();
     match transcribe_with_settings(&audio_b64, 16000, config, &[], settings).await {
         Ok(result) => TestResult {

@@ -336,7 +336,7 @@ fn missing_key_error() -> String {
         SCOPE,
         "credentials",
         "provider_bad_key",
-        "Deepgram ASR is missing the API Key; complete it in Settings".to_string(),
+        super::connection::missing_key_message("Deepgram ASR"),
     )
 }
 
@@ -700,12 +700,7 @@ pub async fn transcribe(
 /// through CloseStream so the check covers auth, model, and language in one go.
 pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     if missing_api_key(config) {
-        return TestResult {
-            ok: false,
-            message: "Deepgram ASR is missing the API Key".to_string(),
-            elapsed_ms: 0,
-            detail: String::new(),
-        };
+        return super::connection::missing_api_key(SCOPE, "Deepgram ASR", String::new());
     }
 
     let start = Instant::now();
@@ -741,12 +736,12 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     match outcome {
-        Ok(Ok(true)) => TestResult {
-            ok: true,
-            message: format!("Connection successful ({}ms)", elapsed_ms),
-            elapsed_ms,
-            detail: format!("Model: {}, language: {}", model, language),
-        },
+        Ok(Ok(true)) => {
+            super::connection::success_result(
+                elapsed_ms,
+                format!("Model: {}, language: {}", model, language),
+            )
+        }
         Ok(Ok(false)) => TestResult {
             ok: false,
             message: "Deepgram closed the stream before completing the probe".to_string(),

@@ -299,13 +299,8 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
         Ok((mut ws, resource_id)) => {
             let _ = ws.close(None).await;
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            TestResult {
-                ok: true,
-                message: format!("Connection successful ({}ms)", elapsed_ms),
-                elapsed_ms,
-                // 资源 ID 决定计费方式（小时版/并发版），测通了顺手告诉用户命中的是哪个
-                detail: format!("Resource: {}", resource_id),
-            }
+            // The resource ID decides billing (duration vs concurrency); report which one matched.
+            super::connection::success_result(elapsed_ms, format!("Resource: {}", resource_id))
         }
         Err(e) => {
             let elapsed_ms = start.elapsed().as_millis() as u64;

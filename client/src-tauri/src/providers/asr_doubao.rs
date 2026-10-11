@@ -144,22 +144,7 @@ pub async fn transcribe(
         ));
     }
 
-    let body_text = resp
-        .text()
-        .await
-        .map_err(|e| diag::fail(SCOPE, "read_body", format!("Failed to read response: {}", e)))?;
-    let data: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
-        diag::fail(
-            SCOPE,
-            "parse_json",
-            format!(
-                "Failed to parse response: {} [{}] response excerpt: {}",
-                e,
-                http_summary,
-                diag::truncate(&body_text, 200)
-            ),
-        )
-    })?;
+    let (body_text, data) = super::connection::read_json_body(resp, SCOPE, &http_summary).await?;
 
     // 检查 API 状态码。
     // 之前的写法是 `status_code != "20000000" && !status_code.is_empty()` —— 状态头缺失时
@@ -225,8 +210,8 @@ pub async fn transcribe(
 
 /// 测试豆包 ASR 连接（发送一段极短的静音音频）
 pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
-    // 生成 0.5 秒静音 PCM（16kHz, 16bit）
-    let silence = vec![0u8; 16000]; // 0.5s * 16000 * 2 bytes = 16000 bytes
+    // Half a second of silent PCM (16 kHz, 16-bit).
+    let silence = super::connection::silence_pcm();
     let wav = pcm_to_wav(&silence, 16000);
     let wav_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav);
 
@@ -261,7 +246,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
 
     let result = req
         .json(&body)
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(super::connection::TEST_TIMEOUT)
         .send()
         .await;
 
@@ -281,13 +266,8 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
                 .to_string();
 
             if status_code == "20000000" || status_code == "20000003" {
-                // 20000003 = 静音音频，也算连接成功
-                TestResult {
-                    ok: true,
-                    message: format!("Connection successful ({}ms)", elapsed_ms),
-                    elapsed_ms,
-                    detail: String::new(),
-                }
+                // 20000003 = silent audio, which still counts as a successful connection.
+                super::connection::success_result(elapsed_ms, String::new())
             } else if resp.status().is_success() {
                 TestResult {
                     ok: true,

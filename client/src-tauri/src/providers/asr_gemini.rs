@@ -193,7 +193,7 @@ pub async fn transcribe(
             SCOPE,
             "credentials",
             "provider_bad_key",
-            "Gemini transcription is missing the API Key; complete it in Settings".to_string(),
+            super::connection::missing_key_message("Gemini transcription"),
         ));
     }
 
@@ -298,20 +298,14 @@ pub async fn transcribe(
 pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     let model = resolve_model(config);
     if config.api_key.trim().is_empty() {
-        return TestResult {
-            ok: false,
-            message: diag::fail_code(
-                "gemini/asr-test",
-                "credentials",
-                "provider_bad_key",
-                "Gemini transcription is missing the API Key; complete it in Settings".to_string(),
-            ),
-            elapsed_ms: 0,
-            detail: format!("Model: {}", model),
-        };
+        return super::connection::missing_api_key(
+            "gemini/asr-test",
+            "Gemini transcription",
+            format!("Model: {}", model),
+        );
     }
 
-    let silence = vec![0u8; 16000];
+    let silence = super::connection::silence_pcm();
     let wav = super::wav::pcm_to_wav(&silence, 16000);
     let wav_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav);
     let prompt = build_prompt(config, &[]);
@@ -346,12 +340,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     .await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
     match result {
-        Ok(()) => TestResult {
-            ok: true,
-            message: format!("Connection successful ({}ms)", elapsed_ms),
-            elapsed_ms,
-            detail: format!("Model: {}", model),
-        },
+        Ok(()) => super::connection::success_result(elapsed_ms, format!("Model: {}", model)),
         Err(message) => TestResult {
             ok: false,
             message: diag::fail("gemini/asr-test", "probe", message),

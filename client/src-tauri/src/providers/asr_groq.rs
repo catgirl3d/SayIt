@@ -293,7 +293,7 @@ pub async fn transcribe(
             scope,
             "credentials",
             "provider_bad_key",
-            "OpenAI transcription is missing the API Key; complete it in Settings".to_string(),
+            super::connection::missing_key_message("OpenAI transcription"),
         ));
     }
 
@@ -458,12 +458,7 @@ fn openai_connection_result(
 ) -> TestResult {
     let result = parse_transcription_response(status, headers, body, OPENAI_SCOPE);
     match result {
-        Ok(_) => TestResult {
-            ok: true,
-            message: format!("Connection successful ({}ms)", elapsed_ms),
-            elapsed_ms,
-            detail: format!("Model: {}", model),
-        },
+        Ok(_) => super::connection::success_result(elapsed_ms, format!("Model: {}", model)),
         Err(message) => TestResult {
             ok: false,
             message,
@@ -477,20 +472,14 @@ async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
     let scope = "openai/asr-test";
     let model = resolve_openai_model(config);
     if config.api_key.trim().is_empty() {
-        return TestResult {
-            ok: false,
-            message: diag::fail_code(
-                scope,
-                "credentials",
-                "provider_bad_key",
-                "OpenAI transcription is missing the API Key; complete it in Settings".to_string(),
-            ),
-            elapsed_ms: 0,
-            detail: format!("Model: {}", model),
-        };
+        return super::connection::missing_api_key(
+            scope,
+            "OpenAI transcription",
+            format!("Model: {}", model),
+        );
     }
 
-    let silence = vec![0u8; 16000];
+    let silence = super::connection::silence_pcm();
     let wav = pcm_to_wav(&silence, 16000);
     let form = match build_form(
         wav,
@@ -532,7 +521,7 @@ async fn test_openai_connection(config: &AsrProviderConfig) -> TestResult {
         OPENAI_API_URL,
         config.api_key.trim(),
         form,
-        std::time::Duration::from_secs(15),
+        super::connection::TEST_TIMEOUT,
     )
     .send()
     .await;
@@ -576,7 +565,7 @@ async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResu
     // Half a second of silence yields HTTP 200 with an empty transcript and is
     // sufficient to verify credentials and connectivity. Shorter audio may be
     // rejected as "too short", which would conflate audio and key failures.
-    let silence = vec![0u8; 16000];
+    let silence = super::connection::silence_pcm();
     let wav = pcm_to_wav(&silence, 16000);
 
     let (_model, form, _) = match build_groq_form(wav, config, None, SCOPE) {
@@ -599,7 +588,7 @@ async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResu
         url,
         &config.api_key,
         form,
-        std::time::Duration::from_secs(15),
+        super::connection::TEST_TIMEOUT,
     )
     .send()
     .await;
@@ -607,12 +596,9 @@ async fn test_groq_connection(config: &AsrProviderConfig, url: &str) -> TestResu
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     match result {
-        Ok(resp) if resp.status().is_success() => TestResult {
-            ok: true,
-            message: format!("Connection successful ({}ms)", elapsed_ms),
-            elapsed_ms,
-            detail: String::new(),
-        },
+        Ok(resp) if resp.status().is_success() => {
+            super::connection::success_result(elapsed_ms, String::new())
+        }
         Ok(resp) => {
             let status = resp.status();
             let summary = diag::http_summary(status, resp.headers());

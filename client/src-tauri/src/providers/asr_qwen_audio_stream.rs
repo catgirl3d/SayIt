@@ -253,7 +253,7 @@ async fn start_task(
             SCOPE,
             "credentials",
             "provider_bad_key",
-            "Qwen ASR is missing the API Key; complete it in Settings".to_string(),
+            super::connection::missing_key_message("Qwen ASR"),
         ));
     }
 
@@ -571,12 +571,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
     match result {
-        Ok(()) => TestResult {
-            ok: true,
-            message: format!("Connection successful ({}ms)", elapsed_ms),
-            elapsed_ms,
-            detail: format!("model: {}", MODEL),
-        },
+        Ok(()) => super::connection::success_result(elapsed_ms, format!("model: {}", MODEL)),
         Err(message) => TestResult {
             ok: false,
             message,
