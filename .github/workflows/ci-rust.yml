@@ -1,0 +1,86 @@
+name: Rust checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/src-tauri/**'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - '.github/actions/install-vulkan-sdk/**'
+      - '.github/workflows/ci-rust.yml'
+  pull_request:
+    paths:
+      - 'client/src-tauri/**'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - '.github/actions/install-vulkan-sdk/**'
+      - '.github/workflows/ci-rust.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CL: /utf-8
+  # transcribe-cpp-sys starts several glslc processes per shader task;
+  # limiting Cargo's outer CMake build avoids excessive nested MSBuild
+  # parallelism exhausting the Windows runner's process resources
+  # (same rationale as the release workflow).
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  rust:
+    name: Format, clippy baseline, tests
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        working-directory: client/src-tauri
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust-windows-2022
+          workspaces: client/src-tauri -> target
+          cache-on-failure: false
+
+      - name: Install Vulkan SDK
+        uses: ./.github/actions/install-vulkan-sdk
+
+      - name: Verify native build toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustc --version
+          cargo --version
+          cmake --version
+
+      # Advisory baseline: the crate inherits substantial upstream code and this
+      # step exists to measure clippy findings, not to block merges yet. Replace
+      # continue-on-error with a hard gate only after a baseline decision.
+      - name: Clippy baseline (advisory)
+        continue-on-error: true
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked

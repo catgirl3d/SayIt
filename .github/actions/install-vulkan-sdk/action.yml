@@ -1,0 +1,59 @@
+name: Install Vulkan SDK
+description: >-
+  Windows-only. Downloads and installs the pinned Vulkan SDK, exports VULKAN_SDK
+  and the SDK's Bin directory, and verifies the build files transcribe-cpp needs.
+  The SDK version lives here only: bump it in this file so every workflow that
+  builds the native stack validates the same version.
+
+inputs:
+  version:
+    description: Vulkan SDK version to install. Bump here only.
+    required: false
+    default: '1.4.357.0'
+
+runs:
+  using: composite
+  steps:
+    - name: Download and install Vulkan SDK
+      shell: pwsh
+      env:
+        VULKAN_SDK_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $sdkRoot = Join-Path $env:RUNNER_TEMP "vulkan-sdk\$env:VULKAN_SDK_VERSION"
+        $installer = Join-Path $env:RUNNER_TEMP "vulkan-sdk-$env:VULKAN_SDK_VERSION.exe"
+        New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
+
+        curl.exe --fail --location --retry 3 `
+          --output $installer `
+          "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/vulkan_sdk.exe?Human=true"
+        if ($LASTEXITCODE -ne 0) {
+          throw "Could not download Vulkan SDK $env:VULKAN_SDK_VERSION"
+        }
+
+        & $installer --root $sdkRoot --accept-licenses --default-answer --confirm-command install
+        if ($LASTEXITCODE -ne 0) {
+          throw "Could not install Vulkan SDK $env:VULKAN_SDK_VERSION"
+        }
+
+        Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$sdkRoot"
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $sdkRoot 'Bin')
+
+    - name: Verify the installed SDK
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (-not $env:VULKAN_SDK) {
+          throw 'VULKAN_SDK was not configured'
+        }
+        $requiredFiles = @(
+          (Join-Path $env:VULKAN_SDK 'Include\vulkan\vulkan.h'),
+          (Join-Path $env:VULKAN_SDK 'Lib\vulkan-1.lib'),
+          (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe')
+        )
+        foreach ($file in $requiredFiles) {
+          if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            throw "Vulkan SDK file is missing: $file"
+          }
+        }
+        glslc --version
