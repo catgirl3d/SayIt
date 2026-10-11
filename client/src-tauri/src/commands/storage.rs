@@ -95,6 +95,25 @@ pub fn history_set_favorite(
         .map_err(|e| e.to_string())
 }
 
+/// Deletes the whole history (records, usage-stat contribution, and the audio
+/// recordings on disk). Audio deletion is best-effort: the records are already
+/// gone, so a locked file must not turn a successful clear into an error — it
+/// is logged and the orphaned file is left behind.
+#[tauri::command]
+pub fn history_clear(storage: State<Storage>) -> Result<(), String> {
+    let summary = storage.history_clear().map_err(|e| e.to_string())?;
+    for path in summary.audio_file_paths {
+        if let Err(error) = crate::commands::audio::delete_audio_file(path.clone()) {
+            log::warn!(
+                "history_clear: failed to delete audio file {}: {}",
+                path,
+                error
+            );
+        }
+    }
+    Ok(())
+}
+
 fn parse_history_query(query: &Option<Value>) -> (Option<String>, bool, Option<i64>, Option<i64>) {
     match query {
         Some(v) => {

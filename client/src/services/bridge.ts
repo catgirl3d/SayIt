@@ -242,6 +242,10 @@ export function historySetFavorite(id: string, favorite: boolean) {
   return invoke('history_set_favorite', { id, favorite })
 }
 
+export function historyClear() {
+  return invoke('history_clear')
+}
+
 // ─── Export ───
 
 export function saveTextExport(payload: {
