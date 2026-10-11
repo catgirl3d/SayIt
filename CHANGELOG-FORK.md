@@ -63,6 +63,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Redesigned the local model catalog cards with consistent micro-chips for disk, memory, quantization, and languages, eliminating layout shift and uneven button alignment.
 - Added model catalog filtering with "All" and "Downloaded" tabs and a quick search bar with instant cross-lingual search across localized model titles, descriptions, quantization tiers, and language names (Ukrainian, Russian, English).
 - Made downloaded model cards selectable by clicking anywhere on the card body (with keyboard navigation via Enter and Space), removed redundant explicit select buttons, and highlighted the model delete action with a clear soft-destructive style.
+- Saving or deleting a speech-recognition card now reports a failed write instead of leaving the confirmation dialog open and doing nothing: the deletion stays unconfirmed, and the error appears on the page or inside the editor with the draft intact. A test whose result could not be saved (single card or batch) now reports the save failure instead of claiming the test never ran.
 
 ### AI Prompts and Localization
 

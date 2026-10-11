@@ -245,7 +245,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     setLoaded(true)
   }
 
-  /** 同平台最近一份配置，用来在新建时沿用密钥 */
+  /** The most recent profile on the same platform, used to inherit the key on create */
   function lastProfileOfPlatform(providerId: string, excludeId?: string): AsrProfile | undefined {
     const platform = findAsrProvider(providerId)?.platform
     if (!platform) return undefined
@@ -313,8 +313,26 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
     setTestingId(profile.id)
     setNotice(null)
     try {
-      const outcome = await runAsrTest(profile, await prepareTestPcm(speechLanguage), speechLanguage)
-      await persistChecks([{ profile, check: outcome.check }])
+      let outcome: AsrTestOutcome
+      try {
+        outcome = await runAsrTest(profile, await prepareTestPcm(speechLanguage), speechLanguage)
+      } catch (err) {
+        // Only the test-clip preparation reaches here; recognition failures are folded into outcomes by runAsrTest
+        const friendly = describeProviderError(err)
+        setNotice({ tone: 'error', message: t('asr.msg.testCrashed', { label: entry.label, message: friendly.message }), detail: friendly.detail })
+        return
+      }
+
+      try {
+        await persistChecks([{ profile, check: outcome.check }])
+      } catch (err) {
+        // The recognition ran and was billed; only its verdict could not be stored. Reporting it
+        // as "the test didn't run" would invite a second paid run.
+        const friendly = describeProviderError(err)
+        setNotice({ tone: 'error', message: t('asr.msg.testSaveFailed', { message: friendly.message }), detail: friendly.detail })
+        return
+      }
+
       if (!outcome.ok) {
         setNotice({ tone: 'error', message: `${entry.label} ${outcome.message}`, detail: outcome.detail })
         return
@@ -325,10 +343,6 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
         message: t('asr.msg.testOk', { label: entry.label, sec: outcome.audioSec.toFixed(1), latency: formatLatency(outcome.latencyMs), grade: grade.label }),
         detail: t('asr.msg.testDetail', { text: outcome.text }),
       })
-    } catch (err) {
-      // Only the test-audio preparation step reaches here; recognition failures are folded into outcomes by runAsrTest
-      const friendly = describeProviderError(err)
-      setNotice({ tone: 'error', message: t('asr.msg.testCrashed', { label: entry.label, message: friendly.message }), detail: friendly.detail })
     } finally {
       setTestingId('')
     }
@@ -511,6 +525,16 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
       setNotice(missing
         ? { tone: 'warning', message: t('asr.msg.savedWithMissing', { missing }) }
         : { tone: 'success', message: t('asr.msg.saved') })
+    } catch (err) {
+      // The editor stays open with the user's input intact; the error is shown inside
+      // the modal because the page-level notice is behind the overlay.
+      const friendly = describeProviderError(err)
+      setNotice({
+        tone: 'error',
+        scope: 'editor',
+        message: t('asr.msg.saveFailed', { message: friendly.message }),
+        detail: friendly.detail,
+      })
     } finally {
       setSaving(false)
     }
@@ -518,13 +542,22 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
 
   async function handleDelete(id: string) {
     const next = profiles.filter((p) => p.id !== id)
-    // 删掉的正好是启用中的那份时，让 resolveActiveAsrProfile 回落到第一条
-    await persist(next, id === activeId ? (next[0]?.id ?? '') : activeId)
     setPendingDeleteId('')
     setNotice(null)
+    try {
+      // When the deleted profile was the active one, let resolveActiveAsrProfile fall back to the first entry
+      await persist(next, id === activeId ? (next[0]?.id ?? '') : activeId)
+    } catch (err) {
+      const friendly = describeProviderError(err)
+      setNotice({
+        tone: 'error',
+        message: t('asr.msg.deleteFailed', { message: friendly.message }),
+        detail: friendly.detail,
+      })
+    }
   }
 
-  // ─────────────────────── 卡片 ───────────────────────
+  // ───────────────────────── Cards ─────────────────────────
 
   interface CardStatus {
     label: string
@@ -882,6 +915,10 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
             </div>
           )}
 
+          {notice?.scope === 'editor' && (
+            <Feedback tone={notice.tone} message={notice.message} detail={notice.detail} />
+          )}
+
           <div className="flex items-center justify-end gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={closeEditor} disabled={saving}>{t('common.cancel')}</Button>
             <Button size="sm" onClick={() => void handleSaveDraft()} disabled={saving || !draftDirty}>
@@ -950,7 +987,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
           </div>
         )}
 
-        {notice && (
+        {notice && notice.scope !== 'editor' && (
           <Feedback className="mt-3" tone={notice.tone} message={notice.message} detail={notice.detail} />
         )}
         {activeProvider && supportedLanguages && speechLanguage !== 'auto' && !supportedLanguages.includes(speechLanguage) && (
