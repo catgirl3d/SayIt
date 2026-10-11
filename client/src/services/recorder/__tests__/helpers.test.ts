@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   summarizeAppContext,
   buildStatsAppId,
@@ -6,59 +6,64 @@ import {
   computeProcessingTimeoutMs,
   classifyMicLevel,
   judgeOsMicMute,
+  createHistoryRecordId,
   MIC_NO_SIGNAL_PEAK_THRESHOLD,
   MIC_LOW_RMS_THRESHOLD,
   OS_MIC_MUTE_CONFIRM_SAMPLES,
 } from '../helpers'
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('judgeOsMicMute', () => {
-  // 回归：Plantronics Blackwire 5220 停在 GetMute=true 但音频照常流动，
-  // 直接采信系统标志会导致每次按热键都先误报一次「麦克风已被静音」。
-  it('音频在流动时立刻丢弃系统的静音标志', () => {
+  // Regression: the Plantronics Blackwire 5220 stays at GetMute=true while audio flows normally;
+  // trusting the system flag would falsely report "microphone muted" on every hotkey press.
+  it('drops the system mute flag immediately while audio is flowing', () => {
     expect(judgeOsMicMute(0, 'voiced', 1600)).toEqual({ verdict: 'dismissed' })
     expect(judgeOsMicMute(0, 'low', 1600)).toEqual({ verdict: 'dismissed' })
   })
 
-  it('已攒到快要确认时，一帧非零信号也能推翻它', () => {
+  it('lets one non-zero frame override the flag even just below the confirmation threshold', () => {
     expect(judgeOsMicMute(OS_MIC_MUTE_CONFIRM_SAMPLES - 1, 'low', 1600))
       .toEqual({ verdict: 'dismissed' })
   })
 
-  it('全 0 采样未达阈值时继续攒证据，不弹警告', () => {
+  it('keeps accumulating all-zero samples below the threshold without alerting', () => {
     expect(judgeOsMicMute(0, 'muted', 1600)).toEqual({ verdict: 'wait', silentSamples: 1600 })
     expect(judgeOsMicMute(1600, 'muted', 1600)).toEqual({ verdict: 'wait', silentSamples: 3200 })
   })
 
-  it('全 0 采样累计到阈值才确认真被静音', () => {
+  it('confirms a real mute only once all-zero samples reach the threshold', () => {
     expect(judgeOsMicMute(OS_MIC_MUTE_CONFIRM_SAMPLES - 1600, 'muted', 1600))
       .toEqual({ verdict: 'confirmed' })
   })
 })
 
 describe('classifyMicLevel', () => {
-  it('只有 PCM 峰值严格为 0 才判为 muted', () => {
+  it('classifies muted only when the PCM peak is strictly zero', () => {
     expect(classifyMicLevel(0, 0)).toBe('muted')
     expect(classifyMicLevel(0.05, MIC_NO_SIGNAL_PEAK_THRESHOLD)).toBe('muted')
   })
 
-  it('任何非零输入即使极小也判为 low', () => {
+  it('classifies any non-zero input as low however small', () => {
     expect(classifyMicLevel(Number.MIN_VALUE, Number.MIN_VALUE)).toBe('low')
     expect(classifyMicLevel(0.004, 0.05)).toBe('low')
     expect(classifyMicLevel(MIC_LOW_RMS_THRESHOLD - 0.0001, 1 / 32768)).toBe('low')
   })
 
-  it('RMS 达到正常水平 判为 voiced', () => {
+  it('classifies a normal RMS level as voiced', () => {
     expect(classifyMicLevel(0.03, 0.2)).toBe('voiced')
     expect(classifyMicLevel(MIC_LOW_RMS_THRESHOLD, 0.1)).toBe('voiced')
   })
 })
 
 describe('summarizeAppContext', () => {
-  it('null 返回 null', () => {
+  it('returns null for null', () => {
     expect(summarizeAppContext(null)).toBeNull()
   })
 
-  it('提取关键字段', () => {
+  it('extracts the key fields', () => {
     const result = summarizeAppContext({
       processName: 'code.exe',
       exePath: 'C:\\Program Files\\Code\\code.exe',
@@ -73,25 +78,25 @@ describe('summarizeAppContext', () => {
 })
 
 describe('buildStatsAppId', () => {
-  it('优先使用 processName', () => {
+  it('prefers processName', () => {
     expect(buildStatsAppId({ processName: 'code.exe' })).toBe('code.exe')
   })
 
-  it('processName 为空时用 exePath 最后一段', () => {
+  it('falls back to the last exePath segment when processName is empty', () => {
     expect(buildStatsAppId({ exePath: 'C:\\Apps\\notepad.exe' })).toBe('notepad.exe')
   })
 
-  it('都为空时用 promptAppId', () => {
+  it('falls back to promptAppId when both are empty', () => {
     expect(buildStatsAppId(null, 'my-app')).toBe('my-app')
   })
 
-  it('全部为空返回 unknown', () => {
+  it('returns unknown when everything is empty', () => {
     expect(buildStatsAppId(null)).toBe('unknown')
   })
 })
 
 describe('isModifierPTTSetting', () => {
-  it('识别单个修饰键和组合中的任意修饰键', () => {
+  it('accepts a lone modifier and any modifier inside a combo', () => {
     expect(isModifierPTTSetting('AltLeft')).toBe(true)
     expect(isModifierPTTSetting('ControlRight')).toBe(true)
     expect(isModifierPTTSetting('ShiftLeft')).toBe(true)
@@ -99,7 +104,7 @@ describe('isModifierPTTSetting', () => {
     expect(isModifierPTTSetting('ControlLeft+MetaLeft')).toBe(true)
   })
 
-  it('非修饰键返回 false', () => {
+  it('returns false for non-modifier keys', () => {
     expect(isModifierPTTSetting('Space')).toBe(false)
     expect(isModifierPTTSetting('F1')).toBe(false)
     expect(isModifierPTTSetting('KeyK')).toBe(false)
@@ -108,30 +113,39 @@ describe('isModifierPTTSetting', () => {
 })
 
 describe('computeProcessingTimeoutMs', () => {
-  it('server 模式基础超时', () => {
+  it('server mode: base timeout', () => {
     const ms = computeProcessingTimeoutMs(5, 'server')
     expect(ms).toBeGreaterThanOrEqual(15000)
     expect(ms).toBeLessThan(20000)
   })
 
-  it('cloud_api 模式至少 30s', () => {
+  it('cloud_api mode: at least 30s', () => {
     const ms = computeProcessingTimeoutMs(1, 'cloud_api')
     expect(ms).toBeGreaterThanOrEqual(30000)
   })
 
-  it('local 模式至少 30s', () => {
+  it('local mode: at least 30s', () => {
     const ms = computeProcessingTimeoutMs(1, 'local')
     expect(ms).toBeGreaterThanOrEqual(30000)
   })
 
-  it('长音频超时更长', () => {
+  it('gives longer audio a longer timeout', () => {
     const short = computeProcessingTimeoutMs(5, 'server')
     const long = computeProcessingTimeoutMs(60, 'server')
     expect(long).toBeGreaterThan(short)
   })
 
-  it('cloud_api 上限 90s', () => {
+  it('cloud_api mode: capped at 90s', () => {
     const ms = computeProcessingTimeoutMs(600, 'cloud_api')
     expect(ms).toBeLessThanOrEqual(90000)
+  })
+})
+
+describe('createHistoryRecordId', () => {
+  it('creates distinct ids within the same millisecond', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    vi.spyOn(Math, 'random').mockReturnValueOnce(0.123456).mockReturnValueOnce(0.654321)
+
+    expect(createHistoryRecordId()).not.toBe(createHistoryRecordId())
   })
 })

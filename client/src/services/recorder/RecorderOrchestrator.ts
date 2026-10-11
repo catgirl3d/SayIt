@@ -55,6 +55,7 @@ import {
   computeProcessingTimeoutMs as _computeProcessingTimeoutMs,
   classifyMicLevel,
   judgeOsMicMute,
+  createHistoryRecordId,
   type MicLevel,
 } from './helpers'
 import { t } from '@/i18n'
@@ -885,6 +886,22 @@ export class RecorderOrchestrator {
     })
   }
 
+  /** Save one recording's audio chunks for a history entry; returns the stored path.
+   *  A rejected save is logged with the caller's message and treated as "no audio file". */
+  private async saveHistoryAudio(
+    recordId: string,
+    chunks: ArrayBuffer[],
+    failureLog: string,
+  ): Promise<string | undefined> {
+    try {
+      const savedPath = await saveRecordingAudio(recordId, chunks)
+      return savedPath ?? undefined
+    } catch (error) {
+      addRuntimeEvent('warn', 'recorder', failureLog, { error: String(error) })
+      return undefined
+    }
+  }
+
   private async persistFailureHistory(options: {
     runId: number
     audioDurationSec: number
@@ -900,15 +917,15 @@ export class RecorderOrchestrator {
     try {
       if (!(await getSetting('historyEnabled', true))) return false
 
-      const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+      const recordId = createHistoryRecordId()
       historyArtifact = { runId: options.runId, recordId }
       if (await getSetting('audioRetentionEnabled', true)) {
-        try {
-          const savedPath = await saveRecordingAudio(recordId, options.audioChunks)
-          if (savedPath) historyArtifact.audioFilePath = savedPath
-        } catch (error) {
-          addRuntimeEvent('warn', 'recorder', 'Failed to save audio for recognition failure', { error: String(error) })
-        }
+        const savedPath = await this.saveHistoryAudio(
+          recordId,
+          options.audioChunks,
+          'Failed to save audio for recognition failure',
+        )
+        if (savedPath) historyArtifact.audioFilePath = savedPath
       }
 
       await addHistory({
@@ -1091,19 +1108,16 @@ export class RecorderOrchestrator {
             const historyEnabled = await getSetting('historyEnabled', true)
             if (!this.isRunCurrent(runId)) return
             if (historyEnabled) {
-              const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+              const recordId = createHistoryRecordId()
               historyArtifact = { runId, recordId }
               this.pendingHistoryArtifact = historyArtifact
               const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
               if (!this.isRunCurrent(runId)) return
               if (saveAudioEnabled && audioChunks.length > 0) {
-                try {
-                  const savedPath = await saveRecordingAudio(recordId, audioChunks)
-                  if (savedPath) historyArtifact.audioFilePath = savedPath
-                } catch (err) {
-                  addRuntimeEvent('warn', 'recorder', 'Failed to save audio for empty result', { error: String(err) })
-                }
-                // 保存文件后必须重新验代；失效时同时清文件和可能已存在的记录。
+                const savedPath = await this.saveHistoryAudio(recordId, audioChunks, 'Failed to save audio for empty result')
+                if (savedPath) historyArtifact.audioFilePath = savedPath
+                // Re-check the run after saving the file; once stale, both the file and any
+                // record that already exists must be removed.
                 if (!this.isRunCurrent(runId)) {
                   await this.discardCanceledHistory(historyArtifact)
                   return
@@ -2143,15 +2157,10 @@ export class RecorderOrchestrator {
             }
 
             let audioFilePath: string | undefined
-            const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+            const recordId = createHistoryRecordId()
             const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
             if (saveAudioEnabled && audioChunks.length > 0) {
-              try {
-                const savedPath = await saveRecordingAudio(recordId, audioChunks)
-                if (savedPath) audioFilePath = savedPath
-              } catch (err) {
-                addRuntimeEvent('warn', 'recorder', 'Failed to save audio for timeout recovery', { error: String(err) })
-              }
+              audioFilePath = await this.saveHistoryAudio(recordId, audioChunks, 'Failed to save audio for timeout recovery')
             }
             historyArtifact = { recordId, audioFilePath }
 
@@ -2506,17 +2515,13 @@ export class RecorderOrchestrator {
       const historyEnabled = await getSetting('historyEnabled', true)
       if (!this.isRunCurrent(runId)) return
       if (historyEnabled) {
-        const recordId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+        const recordId = createHistoryRecordId()
         historyArtifact = { runId, recordId }
         const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
         if (!this.isRunCurrent(runId)) return
         if (saveAudioEnabled && context.audioChunks.length > 0) {
-          try {
-            const savedPath = await saveRecordingAudio(recordId, context.audioChunks)
-            if (savedPath) historyArtifact.audioFilePath = savedPath
-          } catch (err) {
-            addRuntimeEvent('warn', 'recorder', 'Failed to save audio file', { error: String(err) })
-          }
+          const savedPath = await this.saveHistoryAudio(recordId, context.audioChunks, 'Failed to save audio file')
+          if (savedPath) historyArtifact.audioFilePath = savedPath
         }
 
         if (!this.isRunCurrent(runId)) {

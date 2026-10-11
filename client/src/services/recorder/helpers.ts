@@ -1,11 +1,18 @@
 /**
- * RecorderOrchestrator 纯辅助函数
- * 不依赖 this 状态，可独立测试
+ * Pure helper functions for RecorderOrchestrator.
+ * They do not depend on `this` state and are independently testable.
  */
 
 import type { ActiveAppContext } from '@/types/appContext'
 
-/** 简化 AppContext 用于日志输出 */
+/** Generate the id of one history record: a base36 timestamp plus a short random suffix.
+ *  The suffix keeps ids distinct when two records are created within the same millisecond,
+ *  because the id doubles as the record key and as the saved audio file name. */
+export function createHistoryRecordId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+}
+
+/** Compact AppContext for log output. */
 export function summarizeAppContext(context: ActiveAppContext | null) {
   if (!context) return null
   return {
@@ -19,7 +26,7 @@ export function summarizeAppContext(context: ActiveAppContext | null) {
   }
 }
 
-/** 从 AppContext 中提取用于统计的 appId */
+/** Extract the appId used for stats from an AppContext. */
 export function buildStatsAppId(
   appContext: ActiveAppContext | null,
   promptAppId?: string,
@@ -37,21 +44,23 @@ export function buildStatsAppId(
   return String(promptAppId || '').trim() || 'unknown'
 }
 
-/** 录音时的麦克风音量分级 */
+/** Microphone level classification during recording. */
 export type MicLevel = 'muted' | 'low' | 'voiced'
 
-/** 只有峰值严格为 0（PCM 整帧全 0）才算「没有信号」。
- * 再小的非零采样也是真实存在的输入，只能归为声音偏低，不能提示「未检测到声音」。 */
+/** Only a strictly zero peak (an entire PCM frame of zeros) counts as "no signal".
+ *  Any non-zero sample, however small, is real input: it can only be classified as quiet,
+ *  never reported as "no sound detected". */
 export const MIC_NO_SIGNAL_PEAK_THRESHOLD = 0
-/** 有非零信号但 RMS（0..1）低于此值时，视为「声音偏低」（离得远 / 说太小声）。 */
+/** With a non-zero signal but RMS (0..1) below this value the input counts as
+ *  "too quiet" (far from the microphone / speaking softly). */
 export const MIC_LOW_RMS_THRESHOLD = 0.008
 
 /**
- * 按本帧的 RMS 与峰值分级：
- *  - muted ：整帧 PCM 全 0（极可能麦克风被静音 / 选错设备 / 未授权）
- *  - low   ：有波动但整体偏低（距离远 / 声音小）
- *  - voiced：正常音量
- * 两个入参都应归一化到 0..1（原始 int16 除以 32768）。
+ * Classify one frame by its RMS and peak:
+ *  - muted : the entire PCM frame is zeros (very likely a muted mic, a wrong device, or no permission)
+ *  - low   : signal is present but overall quiet (far from the microphone / speaking softly)
+ *  - voiced: normal level
+ * Both inputs must be normalized to 0..1 (raw int16 divided by 32768).
  */
 export function classifyMicLevel(rms: number, framePeak: number): MicLevel {
   if (framePeak <= MIC_NO_SIGNAL_PEAK_THRESHOLD) return 'muted'
@@ -59,29 +68,35 @@ export function classifyMicLevel(rms: number, framePeak: number): MicLevel {
   return 'voiced'
 }
 
-/** 系统报端点静音后，需要累计这么多个全 0 采样（~300ms @16kHz）才确认麦克风真的没在收音。
- *  取 300ms：快到仍像「即时反馈」，又足以跨过采集刚打开时可能出现的空帧。 */
+/** After the system reports a muted endpoint, this many all-zero samples (~300 ms @ 16 kHz)
+ *  must accumulate before the microphone is confirmed to be really silent.
+ *  300 ms is fast enough to still feel like instant feedback, yet long enough to ride out
+ *  the empty frames that can appear right after capture opens. */
 export const OS_MIC_MUTE_CONFIRM_SAMPLES = 4800
 
-/** 对「系统报麦克风被静音」这条线索的裁决结果。
- *  - wait     ：还在攒证据，silentSamples 是更新后的累计值
- *  - confirmed：系统标志与音频信号一致，可以报「麦克风已被静音」
- *  - dismissed：音频在正常流动，系统标志不作数，本次录音丢弃这条线索 */
+/** Verdict on the "the system says the microphone is muted" clue.
+ *  - wait     : still accumulating evidence; silentSamples is the updated total
+ *  - confirmed: the system flag and the audio signal agree; "microphone muted" may be shown
+ *  - dismissed: audio is flowing normally, the system flag does not apply; drop the clue for this recording */
 export type OsMicMuteDecision =
   | { verdict: 'wait'; silentSamples: number }
   | { verdict: 'confirmed' }
   | { verdict: 'dismissed' }
 
 /**
- * 用真实音频信号裁决系统的麦克风静音标志。
+ * Arbitrate the system microphone-mute flag against the real audio signal.
  *
- * 为什么需要裁决而不能直接采信系统：`IAudioEndpointVolume::GetMute` 反映的是端点上的静音
- * **设置**，不等于采集流真被切断。实测 Plantronics Blackwire 5220 USB 耳麦会停在
- * GetMute=true，而 getUserMedia 照常收到正常音量的音频——直接采信就会每次按热键都先弹一次
- * 红色高警「麦克风已被静音」，说话 0.5s 后又自己消失。
+ * Why arbitration is required instead of trusting the system: `IAudioEndpointVolume::GetMute`
+ * reflects the mute **setting** on the endpoint, not whether the capture stream is actually cut.
+ * In practice a Plantronics Blackwire 5220 USB headset stays at GetMute=true while getUserMedia
+ * keeps receiving audio at a normal level — trusting the flag would pop the red "microphone is
+ * muted" high-alert on every hotkey press, only for it to clear by itself ~0.5 s later once the
+ * user speaks.
  *
- * 于是：只有全 0 的 PCM 累计到阈值（两个证据一致）才确认；一旦出现**任何**非零采样，就说明
- * 这块设备的 mute 标志不作数，立刻永久丢弃线索——不是清零重来，否则说话的自然停顿会把它攒回来。
+ * Therefore: only all-zero PCM accumulated to the threshold (both pieces of evidence agree)
+ * confirms the mute; as soon as **any** non-zero sample appears, this device's mute flag does not
+ * apply and the clue is dropped permanently — not reset to zero, otherwise natural pauses in
+ * speech would accumulate it again.
  */
 export function judgeOsMicMute(
   silentSamples: number,
@@ -94,7 +109,8 @@ export function judgeOsMicMute(
   return { verdict: 'wait', silentSamples: total }
 }
 
-/** 判断 PTT 设置中是否包含修饰键（旧单键与物理组合格式都支持） */
+/** Whether the PTT setting contains a modifier key (both the legacy single-key
+ *  and the physical-combo formats are supported). */
 export function isModifierPTTSetting(pttSetting?: string): boolean {
   if (!pttSetting) return false
   return pttSetting.split('+').some((code) => (
@@ -109,7 +125,7 @@ const PROCESSING_TIMEOUT_BASE_MS = 15_000
 const PROCESSING_TIMEOUT_PER_AUDIO_SEC_MS = 500
 const PROCESSING_TIMEOUT_MAX_EXTRA_MS = 30_000
 
-/** 根据音频时长和工作模式计算处理超时时间 */
+/** Compute the processing timeout from the audio duration and the work mode. */
 export function computeProcessingTimeoutMs(
   audioDurationSec: number,
   providerMode: string,

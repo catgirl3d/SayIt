@@ -47,9 +47,9 @@ export class OverlayService {
   /** Persistent warning text — included in every overlay update until cleared */
   private activeWarning = ''
   private timeoutWarningHideId: ReturnType<typeof setTimeout> | null = null
-  /** 流式实时识别文本 — 录音期间随中间结果更新，会被并入每次 listening 更新一起下发 */
+  /** Streaming live-recognition text — updated with intermediate results during recording and merged into every listening update. */
   private streamingText = ''
-  /** 本次录音是否开启流式实时显示：为真则从录音一开始就显示气泡（占位），中途不再缩放窗口 */
+  /** Whether streaming live display is on for this recording: when true the bubble is shown from the very start (placeholder) and the window is never resized mid-recording. */
   private streamingActive = false
   private currentState: OverlayVisualState = 'waiting'
   private activeMicSourceHint: MicSourceHint | null = null
@@ -77,9 +77,11 @@ export class OverlayService {
         this.readySoundCtx = new AudioContext()
       }
       const ctx = this.readySoundCtx
-      // AudioContext 新建或长时间无操作后常处于 suspended 状态（浏览器自动播放/省电策略）。
-      // resume() 是异步的，若不等它完成就 start()，振荡器可能被静默丢弃或延迟——
-      // 这正是「第一次按免提键听不到提示音，过一会又听不到」的根因。
+      // A fresh AudioContext, or one left idle for a long time, is often in the suspended
+      // state (browser autoplay/save-power policies). resume() is asynchronous: calling
+      // start() without waiting for it can silently drop or delay the oscillator —
+      // this is the root cause of "no ready tone on the first hands-free press, and none
+      // on a later one either".
       if (ctx.state === 'suspended') {
         ctx.resume().then(() => this.emitReadyTone(ctx)).catch(() => { /* ignore */ })
       } else {
@@ -110,7 +112,8 @@ export class OverlayService {
       showDuration: this.showDuration,
       baseWidth: cfg.windowWidth,
       barCount: cfg.barCount,
-      // 每次都带上：悬浮窗可能在语言切换之后才第一次创建，没有"只发一次"的时机。
+      // Sent on every call: the overlay window may be created for the first time after a
+      // locale switch, so there is no "send once" moment.
       locale: getLocale(),
     }
   }
@@ -132,7 +135,7 @@ export class OverlayService {
   }
 
   private setEscapeMode(mode: bridge.EscapeActionMode, token = 0) {
-    void bridge.setEscapeActionMode(mode, token).catch(() => { /* 原生钩子不可用时不影响悬浮窗 */ })
+    void bridge.setEscapeActionMode(mode, token).catch(() => { /* A missing native hook does not affect the overlay */ })
   }
 
   private getMicSourceHintPayload() {
@@ -172,37 +175,21 @@ export class OverlayService {
     this.activeMicSourceHint = hint
     const generation = this.micSourceHintGeneration
 
-    void bridge.updateOverlay({
-      state: this.currentState,
-      elapsedSec: clampSec(this.getElapsedSec()),
-      ...(this.activeWarning ? { warning: this.activeWarning } : {}),
-      ...(this.streamingActive ? { streaming: true } : {}),
-      ...(this.streamingText ? { streamingText: this.streamingText } : {}),
-      ...this.getMicSourceHintPayload(),
-      ...this.getCommonPayload(),
-    })
+    this.publishLiveListening({}, this.currentState)
 
     this.micSourceHintHideId = setTimeout(() => {
       if (generation !== this.micSourceHintGeneration) return
       this.micSourceHintHideId = null
       this.activeMicSourceHint = null
-      void bridge.updateOverlay({
-        state: this.currentState,
-        elapsedSec: clampSec(this.getElapsedSec()),
-        ...(this.activeWarning ? { warning: this.activeWarning } : {}),
-        ...(this.streamingActive ? { streaming: true } : {}),
-        ...(this.streamingText ? { streamingText: this.streamingText } : {}),
-        ...this.getMicSourceHintPayload(),
-        ...this.getCommonPayload(),
-      })
+      this.publishLiveListening({}, this.currentState)
     }, MIC_SOURCE_HINT_DURATION_MS)
   }
 
-  /** 文本即将进入不可逆的系统粘贴阶段；先关闭全局 Esc 取消，避免“已取消”后仍完成粘贴。 */
+  /** Text is about to enter the irreversible system-paste stage; turn off the global Esc cancel first so a "canceled" notice cannot be followed by a completed paste. */
   async disableEscapeAction(): Promise<void> {
     try {
       await bridge.setEscapeActionMode('off', 0)
-    } catch { /* 原生钩子不可用时不影响文本插入 */ }
+    } catch { /* A missing native hook does not affect text insertion */ }
   }
 
   showWaiting() {
@@ -220,37 +207,30 @@ export class OverlayService {
   startListeningTicker(token = 0) {
     this.currentState = 'listening'
     this.stopListeningTicker()
-    // 真实录音代次才开启全局 Esc；PTT Lab 等 token=0 的预览绝不吞系统按键。
+    // Only a real recording run enables the global Esc; token=0 previews such as PTT Lab must never swallow system keys.
     this.setEscapeMode(token > 0 ? 'cancel_recording' : 'off', token)
     this.playReadySound()
-    // 采集链路已经成功启动时立刻发布 listening；不要再为 ticker 的首个 33ms
-    // 人为保留 waiting。PCM 随后仍通过 pushListeningBars 驱动真实波形。
+    // Publish listening immediately once capture has started successfully; do not keep
+    // waiting artificially for the ticker's first 33 ms. PCM still drives the real
+    // waveform through pushListeningBars afterwards.
     this.pushListeningBars(undefined, true)
     this.tickerId = setInterval(() => {
-      void bridge.updateOverlay({
-        state: 'listening',
-        elapsedSec: clampSec(this.getElapsedSec()),
-        ...(this.activeWarning ? { warning: this.activeWarning } : {}),
-        ...(this.streamingActive ? { streaming: true } : {}),
-        ...(this.streamingText ? { streamingText: this.streamingText } : {}),
-        ...this.getMicSourceHintPayload(),
-        ...this.getCommonPayload(),
-      })
+      this.publishLiveListening()
     }, 33)
   }
 
-  /** 设置本次录音是否开启流式实时显示（录音开始时调用）。开启后气泡从一开始就显示占位。 */
+  /** Set whether streaming live display is on for this recording (called at recording start). When on, the bubble shows a placeholder from the very beginning. */
   setStreamingActive(on: boolean) {
     this.streamingActive = on
   }
 
-  /** 更新流式实时识别文本。下一次 listening 心跳（33ms）会把它带给悬浮窗一起渲染。
-   *  传空字符串可清除气泡。 */
+  /** Update the streaming live-recognition text. The next listening heartbeat (33 ms) carries
+   *  it to the overlay for rendering. An empty string clears the bubble. */
   setStreamingText(text: string) {
     this.streamingText = text || ''
   }
 
-  /** 清除流式实时文本与激活标志（录音停止 / 重置时调用）。 */
+  /** Clear the streaming text and the active flag (called on recording stop/reset). */
   resetStreamingText() {
     this.streamingText = ''
     this.streamingActive = false
@@ -267,9 +247,15 @@ export class OverlayService {
     const now = Date.now()
     if (!force && now - this.lastFrameAt < 33) return
     this.lastFrameAt = now
+    this.publishLiveListening({ bars })
+  }
+
+  /** Publish one incremental listening update with the current warnings, streaming text
+   *  and mic-source hint attached. `extra` carries per-call fields such as PCM `bars`. */
+  private publishLiveListening(extra: Record<string, unknown> = {}, state: OverlayVisualState = 'listening') {
     void bridge.updateOverlay({
-      state: 'listening',
-      bars,
+      state,
+      ...extra,
       elapsedSec: clampSec(this.getElapsedSec()),
       ...(this.activeWarning ? { warning: this.activeWarning } : {}),
       ...(this.streamingActive ? { streaming: true } : {}),
@@ -279,9 +265,22 @@ export class OverlayService {
     })
   }
 
+  /** Publish a transient listening warning line (text plus its tone) without touching
+   *  the persistent warning state. */
+  private publishListeningWarning(text: string, tone: 'warn' | 'error') {
+    void bridge.updateOverlay({
+      state: 'listening',
+      warning: text,
+      warningTone: tone,
+      elapsedSec: clampSec(this.getElapsedSec()),
+      ...this.getMicSourceHintPayload(),
+      ...this.getCommonPayload(),
+    })
+  }
+
   showThinking(elapsedSec: number, token = 0) {
     this.currentState = 'thinking'
-    // PTT Lab 也复用 thinking 动画，但没有真实录音代次；token=0 时只显示，绝不吞全局 Esc。
+    // PTT Lab reuses the thinking animation but has no real recording run; token=0 only displays and never swallows the global Esc.
     this.setEscapeMode(token > 0 ? 'cancel_processing' : 'off', token)
     void bridge.updateOverlay({
       state: 'thinking',
@@ -292,95 +291,57 @@ export class OverlayService {
   }
 
   /**
-   * 即将到达单次上限的提示。**一闪即走**，之后由计时区的倒计时持续告知剩余时间。
+   * Notice that the single-recording limit is coming up. **It flashes once and goes away**;
+   * afterwards the countdown in the timer area keeps telling how much time is left.
    *
-   * 以前这条是常驻到录音结束的，加上 Overlay 里"有警告就不显示计时"的条件，
-   * 导致最后一整分钟只剩一句「单次记录最长300s」，既不知道已录多久、也不知道还剩多久。
+   * This line used to stay visible until the end of the recording, and combined with the
+   * Overlay rule "a warning hides the timer" it left the final minute showing only
+   * "single recording max 300 s" — neither how long the user had been recording nor how
+   * much time remained.
    */
   showTimeoutWarning() {
     const text = t('overlay.warnMaxDuration', { limit: formatRecordingLimit() })
     this.activeWarning = text
-    void bridge.updateOverlay({
-      state: 'listening',
-      warning: text,
-      warningTone: 'warn',
-      elapsedSec: clampSec(this.getElapsedSec()),
-      ...this.getMicSourceHintPayload(),
-      ...this.getCommonPayload(),
-    })
+    this.publishListeningWarning(text, 'warn')
 
     if (this.timeoutWarningHideId) clearTimeout(this.timeoutWarningHideId)
     this.timeoutWarningHideId = setTimeout(() => {
       this.timeoutWarningHideId = null
-      // 期间若被更高优先级的警告（如麦克风被静音）取代，就不要抢回来
+      // If a higher-priority warning (e.g. muted microphone) replaced it meanwhile, do not reclaim it.
       if (this.activeWarning !== text) return
       this.activeWarning = ''
-      void bridge.updateOverlay({
-        state: 'listening',
-        warning: '',
-        warningTone: 'warn',
-        elapsedSec: clampSec(this.getElapsedSec()),
-        ...this.getMicSourceHintPayload(),
-        ...this.getCommonPayload(),
-      })
+      this.publishListeningWarning('', 'warn')
     }, 4000)
   }
 
-  /** Show low volume warning on the overlay（有声音但偏低：请靠近麦克风，琥珀色） */
+  /** Show the low-volume warning on the overlay (sound present but quiet: "move closer to the mic", amber). */
   showLowVolumeWarning() {
     if (this.activeWarning) return
-    void bridge.updateOverlay({
-      state: 'listening',
-      warning: t('overlay.warnLowVolume'),
-      warningTone: 'warn',
-      elapsedSec: clampSec(this.getElapsedSec()),
-      ...this.getMicSourceHintPayload(),
-      ...this.getCommonPayload(),
-    })
+    this.publishListeningWarning(t('overlay.warnLowVolume'), 'warn')
   }
 
-  /** Show "no signal detected" warning（持续无输入意味着设备不可用，使用红色高警） */
+  /** Show the "no signal detected" warning (a persistent lack of input means the device is unusable; red high-alert). */
   showNoSignalWarning() {
     if (this.activeWarning) return
-    void bridge.updateOverlay({
-      state: 'listening',
-      warning: t('overlay.warnNoSignal'),
-      warningTone: 'error',
-      elapsedSec: clampSec(this.getElapsedSec()),
-      ...this.getMicSourceHintPayload(),
-      ...this.getCommonPayload(),
-    })
+    this.publishListeningWarning(t('overlay.warnNoSignal'), 'error')
   }
 
-  /** Show "mic is muted" high-alert（系统层面确认被静音：红色高警） */
+  /** Show the "mic is muted" high-alert (confirmed mute at the system level: red high-alert). */
   showMicMutedAlert() {
     if (this.activeWarning) return
-    void bridge.updateOverlay({
-      state: 'listening',
-      warning: t('overlay.warnMicMuted'),
-      warningTone: 'error',
-      elapsedSec: clampSec(this.getElapsedSec()),
-      ...this.getMicSourceHintPayload(),
-      ...this.getCommonPayload(),
-    })
+    this.publishListeningWarning(t('overlay.warnMicMuted'), 'error')
   }
 
   /** Clear transient warnings (low volume etc.) — does NOT clear timeout warning */
   clearWarning() {
     if (this.activeWarning) return
-    void bridge.updateOverlay({
-      state: 'listening',
-      warning: '',
-      warningTone: 'warn',
-      elapsedSec: clampSec(this.getElapsedSec()),
-      ...this.getMicSourceHintPayload(),
-      ...this.getCommonPayload(),
-    })
+    this.publishListeningWarning('', 'warn')
   }
 
   /**
-   * 是否有常驻（sticky）警告正在挡住临时警告的显示/清除。
-   * 排查"低音量提示不消失/不出现"这类问题时很有用：那类症状多半就是被它挡着。
+   * Whether a persistent (sticky) warning is currently blocking transient warnings
+   * from showing or clearing. Useful when investigating "the low-volume hint never
+   * disappears / never appears" symptoms: they are usually being blocked by it.
    */
   hasStickyWarning() {
     return !!this.activeWarning
@@ -468,34 +429,30 @@ export class OverlayService {
     return bridge.hideOverlay()
   }
 
-  /** Briefly show the current text-polishing mode after its shortcut is pressed, then hide the overlay after about 1.6 seconds. */
-  showPresetSwitched(name: string) {
+  /** Present a short-lived toast card and auto-hide it after `durationMs`.
+   *  Only the presentation that scheduled the timer may hide the overlay. */
+  private showToast(text: string, tone: 'info' | 'warn', durationMs: number) {
     const generation = this.beginPresentation('toast')
     this.setEscapeMode('off', 0)
     void bridge.presentOverlay({
       state: 'toast',
-      toastText: t('overlay.toastPresetSwitched', { name }),
-      toastTone: 'info',
+      toastText: text,
+      toastTone: tone,
       ...this.getCommonPayload(),
     })
     this.fallbackHideId = setTimeout(() => {
       if (generation === this.overlayGeneration) this.hide()
-    }, 1600)
+    }, durationMs)
+  }
+
+  /** Briefly show the current text-polishing mode after its shortcut is pressed, then hide the overlay after about 1.6 seconds. */
+  showPresetSwitched(name: string) {
+    this.showToast(t('overlay.toastPresetSwitched', { name }), 'info', 1600)
   }
 
   /** Lightweight confirmation for the global AI-cleanup shortcut; it does not interrupt active recording. */
   showAiCleanupToggled(enabled: boolean) {
-    const generation = this.beginPresentation('toast')
-    this.setEscapeMode('off', 0)
-    void bridge.presentOverlay({
-      state: 'toast',
-      toastText: t(enabled ? 'overlay.toastAiCleanupOn' : 'overlay.toastAiCleanupOff'),
-      toastTone: 'info',
-      ...this.getCommonPayload(),
-    })
-    this.fallbackHideId = setTimeout(() => {
-      if (generation === this.overlayGeneration) this.hide()
-    }, 1400)
+    this.showToast(t(enabled ? 'overlay.toastAiCleanupOn' : 'overlay.toastAiCleanupOff'), 'info', 1400)
   }
 
   /**
@@ -512,49 +469,19 @@ export class OverlayService {
    * dictionary was dropped); the toast is single-line, so both facts must stay short.
    */
   showNoSpeech(diagnostic?: Record<string, unknown>, warningLabel?: string) {
-    const generation = this.beginPresentation('toast')
     addRuntimeEvent('warn', 'recorder', 'Showing no-speech warning', diagnostic ?? {})
-    this.setEscapeMode('off', 0)
     const baseLabel = t('overlay.toastNoSpeech')
-    void bridge.presentOverlay({
-      state: 'toast',
-      toastText: warningLabel ? `${baseLabel} · ${warningLabel}` : baseLabel,
-      toastTone: 'warn',
-      ...this.getCommonPayload(),
-    })
-    this.fallbackHideId = setTimeout(() => {
-      if (generation === this.overlayGeneration) this.hide()
-    }, 1500)
+    this.showToast(warningLabel ? `${baseLabel} · ${warningLabel}` : baseLabel, 'warn', 1500)
   }
 
   /** Keep the native 56px toast short; recovery cards and History carry the full notice. */
   showAsrWarning() {
-    const generation = this.beginPresentation('toast')
-    this.setEscapeMode('off', 0)
-    void bridge.presentOverlay({
-      state: 'toast',
-      toastText: t('asr.deepgramKeytermLimitToast'),
-      toastTone: 'warn',
-      ...this.getCommonPayload(),
-    })
-    this.fallbackHideId = setTimeout(() => {
-      if (generation === this.overlayGeneration) this.hide()
-    }, 5000)
+    this.showToast(t('asr.deepgramKeytermLimitToast'), 'warn', 5000)
   }
 
   /** Brief confirmation after the user cancels processing. */
   showCanceled() {
-    const generation = this.beginPresentation('toast')
-    this.setEscapeMode('off', 0)
-    void bridge.presentOverlay({
-      state: 'toast',
-      toastText: t('overlay.toastCanceled'),
-      toastTone: 'info',
-      ...this.getCommonPayload(),
-    })
-    this.fallbackHideId = setTimeout(() => {
-      if (generation === this.overlayGeneration) this.hide()
-    }, 900)
+    this.showToast(t('overlay.toastCanceled'), 'info', 900)
   }
 
   /** Show an error message and hide it after a few seconds. */
