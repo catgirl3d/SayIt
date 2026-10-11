@@ -19,7 +19,15 @@ const SCOPE: &str = "doubao/nostream";
 async fn connect(
     auth: &DoubaoAuth<'_>,
     scope: &str,
-) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, &'static str), String> {
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        &'static str,
+    ),
+    String,
+> {
     let mut last_err = String::from("Unknown error");
     for resource_id in doubao_auth::SAUC_RESOURCE_CANDIDATES {
         let mut builder = tungstenite::http::Request::builder()
@@ -37,14 +45,23 @@ async fn connect(
         for (name, value) in auth.headers() {
             builder = builder.header(name, value);
         }
-        let request = builder
-            .body(())
-            .map_err(|e| diag::fail(scope, "build_request", format!("Failed to build request: {}", e)))?;
+        let request = builder.body(()).map_err(|e| {
+            diag::fail(
+                scope,
+                "build_request",
+                format!("Failed to build request: {}", e),
+            )
+        })?;
 
         match tokio_tungstenite::connect_async(request).await {
             Ok((ws, response)) => {
                 doubao_auth::log_ws_logid(
-                    &format!("{} resourceId={} auth={}", scope, resource_id, auth.mode_name()),
+                    &format!(
+                        "{} resourceId={} auth={}",
+                        scope,
+                        resource_id,
+                        auth.mode_name()
+                    ),
                     &response,
                 );
                 return Ok((ws, resource_id));
@@ -79,15 +96,23 @@ pub async fn transcribe(
     config: &AsrProviderConfig,
     hotwords: &[String],
 ) -> Result<AsrResult, String> {
-    let pcm_data = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        audio_pcm_b64,
-    )
-    .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+    let pcm_data =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64).map_err(
+            |e| {
+                diag::fail(
+                    SCOPE,
+                    "decode_b64",
+                    format!("Failed to decode base64 audio: {}", e),
+                )
+            },
+        )?;
 
     if pcm_data.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
-        return Ok(AsrResult { text: String::new(), elapsed_ms: 0 });
+        return Ok(AsrResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
     }
 
     let auth = DoubaoAuth::from_config(config);
@@ -150,12 +175,23 @@ pub async fn transcribe(
     );
     ws.send(tungstenite::Message::Binary(request_frame.into()))
         .await
-        .map_err(|e| diag::fail(SCOPE, "send_request", format!("Failed to send request: {}", e)))?;
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "send_request",
+                format!("Failed to send request: {}", e),
+            )
+        })?;
 
     // 等待服务端确认
     if let Some(msg) = ws.next().await {
-        let msg =
-            msg.map_err(|e| diag::fail(SCOPE, "recv_ack", format!("Failed to receive acknowledgement: {}", e)))?;
+        let msg = msg.map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "recv_ack",
+                format!("Failed to receive acknowledgement: {}", e),
+            )
+        })?;
         if let tungstenite::Message::Binary(data) = msg {
             let resp = doubao_protocol::parse_server_response(&data)
                 .map_err(|e| diag::fail(SCOPE, "parse_ack", e))?;
@@ -192,7 +228,8 @@ pub async fn transcribe(
     let mut last_payload_desc = String::from("(no result packet received)");
 
     while let Some(msg) = ws.next().await {
-        let msg = msg.map_err(|e| diag::fail(SCOPE, "recv", format!("Failed to receive result: {}", e)))?;
+        let msg =
+            msg.map_err(|e| diag::fail(SCOPE, "recv", format!("Failed to receive result: {}", e)))?;
         match msg {
             tungstenite::Message::Binary(data) => {
                 let resp = doubao_protocol::parse_server_response(&data)
@@ -213,7 +250,11 @@ pub async fn transcribe(
 
                 // 解析 JSON 结果，持续更新 final_text
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp.payload) {
-                    if let Some(text) = json.get("result").and_then(|r| r.get("text")).and_then(|t| t.as_str()) {
+                    if let Some(text) = json
+                        .get("result")
+                        .and_then(|r| r.get("text"))
+                        .and_then(|t| t.as_str())
+                    {
                         if !text.is_empty() {
                             final_text = text.to_string();
                         }
@@ -236,7 +277,10 @@ pub async fn transcribe(
                     return Err(diag::fail(
                         SCOPE,
                         "closed_before_result",
-                        format!("Doubao closed the connection before recognition completed ({})", reason),
+                        format!(
+                            "Doubao closed the connection before recognition completed ({})",
+                            reason
+                        ),
                     ));
                 }
                 diag::log(SCOPE, "close", &reason);

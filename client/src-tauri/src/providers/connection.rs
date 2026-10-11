@@ -63,7 +63,11 @@ pub async fn read_json_body(
     http_summary: &str,
 ) -> Result<(String, serde_json::Value), String> {
     let body_text = resp.text().await.map_err(|e| {
-        diag::fail(scope, "read_body", format!("Failed to read response: {}", e))
+        diag::fail(
+            scope,
+            "read_body",
+            format!("Failed to read response: {}", e),
+        )
     })?;
     let data = serde_json::from_str(&body_text).map_err(|e| {
         diag::fail(
@@ -86,15 +90,21 @@ mod tests {
 
     #[test]
     fn missing_api_key_uses_the_standard_bad_key_envelope() {
-        let result = missing_api_key("fixture/scope", "Fixture transcription", "Model: m".to_string());
+        let result = missing_api_key(
+            "fixture/scope",
+            "Fixture transcription",
+            "Model: m".to_string(),
+        );
 
         assert!(!result.ok);
         assert_eq!(result.elapsed_ms, 0);
         assert_eq!(result.detail, "Model: m");
         assert!(result.message.starts_with("sayit_error:provider_bad_key:"));
-        assert!(result
-            .message
-            .contains("Fixture transcription is missing the API Key; complete it in Settings"));
+        assert!(
+            result
+                .message
+                .contains("Fixture transcription is missing the API Key; complete it in Settings")
+        );
     }
 
     #[test]

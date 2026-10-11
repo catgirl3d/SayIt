@@ -521,7 +521,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
           await this.closeLiveOwner(owner)
         } catch (cleanupError) {
           const openError = owner.nativeOpenError ?? error
-          throw new Error(`Live ASR open failed: ${String(openError)}; cleanup failed: ${String(cleanupError)}`)
+          throw new Error(
+            `Live ASR open failed: ${String(openError)}; cleanup failed: ${String(cleanupError)}`,
+            { cause: cleanupError },
+          )
         }
         throw owner.nativeOpenError ?? error
       }

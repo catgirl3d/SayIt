@@ -77,15 +77,21 @@ pub async fn transcribe(
         );
     }
 
-    let pcm = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        audio_pcm_b64,
-    )
-    .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+    let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64)
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
 
     if pcm.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
-        return Ok(AsrResult { text: String::new(), elapsed_ms: 0 });
+        return Ok(AsrResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
     }
 
     let wav = pcm_to_wav(&pcm, sample_rate);
@@ -207,7 +213,11 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
         }
         Err(e) => TestResult {
             ok: false,
-            message: diag::fail("mimo/asr-test", "http_send", format!("Connection failed: {}", e)),
+            message: diag::fail(
+                "mimo/asr-test",
+                "http_send",
+                format!("Connection failed: {}", e),
+            ),
             elapsed_ms,
             detail: String::new(),
         },

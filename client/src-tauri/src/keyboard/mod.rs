@@ -77,9 +77,16 @@ pub fn set_escape_action_mode(mode: &str, token: u64) -> Result<(), String> {
     // 先关闭模式，再按 token/deadline/final mode 的顺序发布一组一致快照。
     // 钩子只有看到最终非 off 模式后才会读取对应 token。
     ESCAPE_ACTION_MODE.store(ESCAPE_MODE_OFF, Ordering::SeqCst);
-    ESCAPE_ACTION_TOKEN.store(if value == ESCAPE_MODE_OFF { 0 } else { token }, Ordering::SeqCst);
+    ESCAPE_ACTION_TOKEN.store(
+        if value == ESCAPE_MODE_OFF { 0 } else { token },
+        Ordering::SeqCst,
+    );
     ESCAPE_ACTION_DEADLINE_MS.store(
-        if value == ESCAPE_MODE_OFF { 0 } else { now_ms() + ttl_ms },
+        if value == ESCAPE_MODE_OFF {
+            0
+        } else {
+            now_ms() + ttl_ms
+        },
         Ordering::SeqCst,
     );
     ESCAPE_ACTION_MODE.store(value, Ordering::SeqCst);
@@ -127,12 +134,10 @@ fn now_ms() -> i64 {
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    GetMessageW, TranslateMessage, DispatchMessageW,
-    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_QUIT,
-    MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_XBUTTONDOWN, WM_XBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
+    PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 /// 单键热键表 —— 单一数据源。
@@ -161,13 +166,31 @@ const SINGLE_KEY_TABLE: &[(&str, u32)] = &[
     // 浏览器后退/前进键：罗技等改键鼠标常把侧键映射成这个（走键盘钩子）。
     ("BrowserBack", VK_BROWSER_BACK),
     ("BrowserForward", VK_BROWSER_FORWARD),
-    ("F1", 0x70), ("F2", 0x71), ("F3", 0x72), ("F4", 0x73),
-    ("F5", 0x74), ("F6", 0x75), ("F7", 0x76), ("F8", 0x77),
-    ("F9", 0x78), ("F10", 0x79), ("F11", 0x7A), ("F12", 0x7B),
+    ("F1", 0x70),
+    ("F2", 0x71),
+    ("F3", 0x72),
+    ("F4", 0x73),
+    ("F5", 0x74),
+    ("F6", 0x75),
+    ("F7", 0x76),
+    ("F8", 0x77),
+    ("F9", 0x78),
+    ("F10", 0x79),
+    ("F11", 0x7A),
+    ("F12", 0x7B),
     // F13-F24 are virtual function keys commonly produced by remappers.
-    ("F13", 0x7C), ("F14", 0x7D), ("F15", 0x7E), ("F16", 0x7F),
-    ("F17", 0x80), ("F18", 0x81), ("F19", 0x82), ("F20", 0x83),
-    ("F21", 0x84), ("F22", 0x85), ("F23", 0x86), ("F24", 0x87),
+    ("F13", 0x7C),
+    ("F14", 0x7D),
+    ("F15", 0x7E),
+    ("F16", 0x7F),
+    ("F17", 0x80),
+    ("F18", 0x81),
+    ("F19", 0x82),
+    ("F20", 0x83),
+    ("F21", 0x84),
+    ("F22", 0x85),
+    ("F23", 0x86),
+    ("F24", 0x87),
 ];
 
 fn ptt_modifier_family(code: &str) -> Option<&'static str> {
@@ -185,7 +208,10 @@ fn ptt_modifier_family(code: &str) -> Option<&'static str> {
 }
 
 fn vk_for_ptt_code(code: &str) -> Option<u32> {
-    if let Some((_, vk)) = SINGLE_KEY_TABLE.iter().find(|(setting, _)| *setting == code) {
+    if let Some((_, vk)) = SINGLE_KEY_TABLE
+        .iter()
+        .find(|(setting, _)| *setting == code)
+    {
         return Some(*vk);
     }
 
@@ -301,7 +327,9 @@ fn ptt_key_config(setting: &str) -> PttKeyConfig {
         .any(|code| matches!(*code, "XButton1" | "XButton2" | "MButton"));
     let main_key_count = codes.len() - modifier_mask.count_ones() as usize;
     let valid_shape = if codes.len() == 1 {
-        SINGLE_KEY_TABLE.iter().any(|(single, _)| single == &codes[0])
+        SINGLE_KEY_TABLE
+            .iter()
+            .any(|(single, _)| single == &codes[0])
     } else {
         !mouse_member
             && main_key_count <= 1
@@ -326,7 +354,9 @@ fn vk_codes_for_setting(setting: &str) -> Vec<u32> {
 
 /// Check if a shortcut setting is a single key (handled by hook) vs combo (handled by global_shortcut).
 pub fn is_single_key_setting(setting: &str) -> bool {
-    SINGLE_KEY_TABLE.iter().any(|(single, _)| *single == setting)
+    SINGLE_KEY_TABLE
+        .iter()
+        .any(|(single, _)| *single == setting)
 }
 
 /// 该设置是否为鼠标侧键（由低级鼠标钩子处理，而非键盘钩子）。
@@ -454,15 +484,36 @@ struct HookSharedState {
 #[cfg(windows)]
 #[allow(dead_code)]
 enum HookAction {
-    PttDown { vk: u32, gen: u64 },
-    PttUp { vk: u32, gen: u64, reason: &'static str },
-    HfToggle { vk: u32 },
-    AiToggle { vk: u32 },
-    Escape { mode: u32, token: u64 },
-    Diag { vk: u32, msg_name: &'static str, flags: u32, scan_code: u32 },
+    PttDown {
+        vk: u32,
+        gen: u64,
+    },
+    PttUp {
+        vk: u32,
+        gen: u64,
+        reason: &'static str,
+    },
+    HfToggle {
+        vk: u32,
+    },
+    AiToggle {
+        vk: u32,
+    },
+    Escape {
+        mode: u32,
+        token: u64,
+    },
+    Diag {
+        vk: u32,
+        msg_name: &'static str,
+        flags: u32,
+        scan_code: u32,
+    },
     Shutdown,
     /// 快捷键录制期间捕获到的鼠标侧键（vk=0x05/0x06），用于让设置页绑定侧键。
-    MouseCaptured { vk: u32 },
+    MouseCaptured {
+        vk: u32,
+    },
 }
 
 const PTT_RELEASING_BIT: u64 = 1 << 63;
@@ -474,15 +525,9 @@ fn begin_ptt_press(active_generation: &AtomicU64, generation: &AtomicU64) -> Opt
         return None;
     }
 
-    let mut gen = generation
-        .fetch_add(1, Ordering::SeqCst)
-        .wrapping_add(1)
-        & !PTT_RELEASING_BIT;
+    let mut gen = generation.fetch_add(1, Ordering::SeqCst).wrapping_add(1) & !PTT_RELEASING_BIT;
     if gen == 0 {
-        gen = generation
-            .fetch_add(1, Ordering::SeqCst)
-            .wrapping_add(1)
-            & !PTT_RELEASING_BIT;
+        gen = generation.fetch_add(1, Ordering::SeqCst).wrapping_add(1) & !PTT_RELEASING_BIT;
     }
 
     active_generation
@@ -622,8 +667,7 @@ pub fn ptt_physical_key_states(codes: &[String]) -> Vec<bool> {
         return codes
             .iter()
             .map(|code| {
-                vk_for_ptt_code(code)
-                    .is_some_and(|vk| unsafe { is_ptt_member_physically_down(vk) })
+                vk_for_ptt_code(code).is_some_and(|vk| unsafe { is_ptt_member_physically_down(vk) })
             })
             .collect();
     }
@@ -637,10 +681,7 @@ pub fn ptt_physical_key_states(codes: &[String]) -> Vec<bool> {
 /// 新成员 down 到来前，先清掉其它成员中物理上已经松开的残位。
 /// 这既覆盖录音结束后的漏 up，也避免在 1.5 秒后台看门狗窗口内误拼出完整组合。
 #[cfg(windows)]
-unsafe fn reconcile_stale_ptt_members_before_down(
-    state: &HookSharedState,
-    current_index: usize,
-) {
+unsafe fn reconcile_stale_ptt_members_before_down(state: &HookSharedState, current_index: usize) {
     let pressed = state.ptt_pressed_mask.load(Ordering::SeqCst);
     for (index, &member_vk) in state.ptt_vk_codes.iter().enumerate() {
         if index == current_index {
@@ -1070,7 +1111,13 @@ impl KeyboardHookManager {
     }
 
     /// Start the keyboard hook with PTT, hands-free, and AI-cleanup single-key settings.
-    pub fn start(&self, app: &AppHandle, ptt_setting: &str, hf_setting: &str, ai_toggle_setting: &str) {
+    pub fn start(
+        &self,
+        app: &AppHandle,
+        ptt_setting: &str,
+        hf_setting: &str,
+        ai_toggle_setting: &str,
+    ) {
         crate::commands::system::write_log_line(&format!(
             "[ptt-lifecycle] start() called ptt_setting={} hf_setting={} ai_toggle_setting={}",
             ptt_setting, hf_setting, ai_toggle_setting,
@@ -1138,12 +1185,13 @@ impl KeyboardHookManager {
             HOOK_RUNNING.store(true, Ordering::SeqCst);
             log::info!("Keyboard hook started, thread_id={}", thread_id);
             crate::commands::system::write_log_line(&format!(
-                "[ptt-lifecycle] hook started OK thread_id={}", thread_id,
+                "[ptt-lifecycle] hook started OK thread_id={}",
+                thread_id,
             ));
         } else {
             log::error!("Keyboard hook thread failed to start");
             crate::commands::system::write_log_line(
-                "[ptt-lifecycle] hook FAILED to start (rx.recv_timeout expired after 5s)"
+                "[ptt-lifecycle] hook FAILED to start (rx.recv_timeout expired after 5s)",
             );
             self.running.store(false, Ordering::SeqCst);
             HOOK_RUNNING.store(false, Ordering::SeqCst);
@@ -1214,7 +1262,13 @@ impl KeyboardHookManager {
     }
 
     /// Reconfigure with new PTT, hands-free, and AI-cleanup settings.
-    pub fn reconfigure(&self, app: &AppHandle, ptt_setting: &str, hf_setting: &str, ai_toggle_setting: &str) {
+    pub fn reconfigure(
+        &self,
+        app: &AppHandle,
+        ptt_setting: &str,
+        hf_setting: &str,
+        ai_toggle_setting: &str,
+    ) {
         let count = RECONFIGURE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         crate::commands::system::write_log_line(&format!(
             "[ptt-lifecycle] reconfigure() #{} ptt_setting={} hf_setting={} ai_toggle_setting={} — waiting for old hook shutdown",
@@ -1243,7 +1297,8 @@ impl KeyboardHookManager {
 
         log::info!(
             "keyboard hook thread starting, ptt_setting={} vk_codes={:?}",
-            state.ptt_setting, state.ptt_vk_codes
+            state.ptt_setting,
+            state.ptt_vk_codes
         );
 
         // 无界 mpsc::Sender::send 不会等待消费者，可安全用于低级 hook 回调；相比原来的
@@ -1257,100 +1312,123 @@ impl KeyboardHookManager {
         let dispatcher_thread = thread::Builder::new()
             .name("ptt-dispatcher".to_string())
             .spawn(move || {
-            // Guard 存活期 = 本线程存活期；线程正常退出或 panic 展开都会触发 Drop，
-            // 从而让看门狗快照立刻看到 dispatcher_alive=false。
-            let _alive_guard = DispatcherAliveGuard::new();
-            crate::commands::system::write_log_line("[ptt-dispatcher] thread started");
-            while let Ok(action) = action_rx.recv() {
-                match action {
-                    HookAction::Shutdown => break,
-                    HookAction::Diag { vk, msg_name, flags, scan_code } => {
-                        crate::commands::system::write_log_line(
-                            &format!("[RUST] [hook-diag] vk={} msg={} flags=0x{:X} scanCode=0x{:X}", vk, msg_name, flags, scan_code)
-                        );
-                    }
-                    HookAction::PttDown { vk, gen } => {
-                        let setting = &dispatch_state.ptt_setting;
-                        crate::commands::system::write_log_line(
-                            &format!("[RUST] [ptt] keydown vk={} setting={} gen={}", vk, setting, gen)
-                        );
-                        let (alt_key, ctrl_key, shift_key, meta_key) =
-                            ptt_modifier_flags(setting);
-                        let event = PTTEvent {
-                            source: "rust_hook".to_string(),
-                            reason: "keydown".to_string(),
+                // Guard 存活期 = 本线程存活期；线程正常退出或 panic 展开都会触发 Drop，
+                // 从而让看门狗快照立刻看到 dispatcher_alive=false。
+                let _alive_guard = DispatcherAliveGuard::new();
+                crate::commands::system::write_log_line("[ptt-dispatcher] thread started");
+                while let Ok(action) = action_rx.recv() {
+                    match action {
+                        HookAction::Shutdown => break,
+                        HookAction::Diag {
                             vk,
-                            ptt_setting: setting.clone(),
-                            timestamp: chrono::Utc::now().timestamp_millis(),
-                            alt_key,
-                            ctrl_key,
-                            shift_key,
-                            meta_key,
-                        };
-                        let _ = dispatch_state.app_handle.emit("ptt-down", &event);
-                        spawn_ptt_release_watchdog(
-                            dispatch_state.clone(),
-                            watchdog_action_tx.clone(),
-                            vk,
-                            gen,
-                        );
-                    }
-                    HookAction::PttUp { vk, gen, reason } => {
-                        emit_ptt_release(&dispatch_state, vk, gen, reason);
-                    }
-                    HookAction::HfToggle { vk } => {
-                        crate::commands::system::write_log_line(
-                            &format!("[RUST] [hf] toggle vk={} setting={}", vk, dispatch_state.hf_setting)
-                        );
-                        let _ = dispatch_state.app_handle.emit("toggle-hands-free", serde_json::json!({
-                            "source": "rust_hook",
-                            "vk": vk,
-                        }));
-                    }
-                    HookAction::AiToggle { vk } => {
-                        crate::commands::system::write_log_line(
-                            &format!("[RUST] [ai-toggle] vk={} setting={}", vk, dispatch_state.ai_toggle_setting)
-                        );
-                        let _ = dispatch_state.app_handle.emit("toggle-ai-cleanup", serde_json::json!({
-                            "source": "rust_hook",
-                            "vk": vk,
-                        }));
-                    }
-                    HookAction::Escape { mode, token } => {
-                        let mode_name = escape_action_mode_name(mode);
-                        crate::commands::system::write_log_line(
-                            &format!("[RUST] [escape] action mode={mode_name} token={token}")
-                        );
-                        let _ = dispatch_state.app_handle.emit("escape-action", serde_json::json!({
-                            "mode": mode_name,
-                            "token": token,
-                        }));
-                    }
-                    HookAction::MouseCaptured { vk } => {
-                        let setting = match vk {
-                            0x04 => "MButton",
-                            0x05 => "XButton1",
-                            0x06 => "XButton2",
-                            VK_BROWSER_BACK => "BrowserBack",
-                            VK_BROWSER_FORWARD => "BrowserForward",
-                            _ => "",
-                        };
-                        crate::commands::system::write_log_line(
-                            &format!("[RUST] [shortcut-capture] mouse side button vk={} setting={}", vk, setting)
-                        );
-                        let _ = dispatch_state.app_handle.emit("mouse-shortcut-captured", serde_json::json!({
-                            "setting": setting,
-                            "vk": vk,
-                        }));
+                            msg_name,
+                            flags,
+                            scan_code,
+                        } => {
+                            crate::commands::system::write_log_line(&format!(
+                                "[RUST] [hook-diag] vk={} msg={} flags=0x{:X} scanCode=0x{:X}",
+                                vk, msg_name, flags, scan_code
+                            ));
+                        }
+                        HookAction::PttDown { vk, gen } => {
+                            let setting = &dispatch_state.ptt_setting;
+                            crate::commands::system::write_log_line(&format!(
+                                "[RUST] [ptt] keydown vk={} setting={} gen={}",
+                                vk, setting, gen
+                            ));
+                            let (alt_key, ctrl_key, shift_key, meta_key) =
+                                ptt_modifier_flags(setting);
+                            let event = PTTEvent {
+                                source: "rust_hook".to_string(),
+                                reason: "keydown".to_string(),
+                                vk,
+                                ptt_setting: setting.clone(),
+                                timestamp: chrono::Utc::now().timestamp_millis(),
+                                alt_key,
+                                ctrl_key,
+                                shift_key,
+                                meta_key,
+                            };
+                            let _ = dispatch_state.app_handle.emit("ptt-down", &event);
+                            spawn_ptt_release_watchdog(
+                                dispatch_state.clone(),
+                                watchdog_action_tx.clone(),
+                                vk,
+                                gen,
+                            );
+                        }
+                        HookAction::PttUp { vk, gen, reason } => {
+                            emit_ptt_release(&dispatch_state, vk, gen, reason);
+                        }
+                        HookAction::HfToggle { vk } => {
+                            crate::commands::system::write_log_line(&format!(
+                                "[RUST] [hf] toggle vk={} setting={}",
+                                vk, dispatch_state.hf_setting
+                            ));
+                            let _ = dispatch_state.app_handle.emit(
+                                "toggle-hands-free",
+                                serde_json::json!({
+                                    "source": "rust_hook",
+                                    "vk": vk,
+                                }),
+                            );
+                        }
+                        HookAction::AiToggle { vk } => {
+                            crate::commands::system::write_log_line(&format!(
+                                "[RUST] [ai-toggle] vk={} setting={}",
+                                vk, dispatch_state.ai_toggle_setting
+                            ));
+                            let _ = dispatch_state.app_handle.emit(
+                                "toggle-ai-cleanup",
+                                serde_json::json!({
+                                    "source": "rust_hook",
+                                    "vk": vk,
+                                }),
+                            );
+                        }
+                        HookAction::Escape { mode, token } => {
+                            let mode_name = escape_action_mode_name(mode);
+                            crate::commands::system::write_log_line(&format!(
+                                "[RUST] [escape] action mode={mode_name} token={token}"
+                            ));
+                            let _ = dispatch_state.app_handle.emit(
+                                "escape-action",
+                                serde_json::json!({
+                                    "mode": mode_name,
+                                    "token": token,
+                                }),
+                            );
+                        }
+                        HookAction::MouseCaptured { vk } => {
+                            let setting = match vk {
+                                0x04 => "MButton",
+                                0x05 => "XButton1",
+                                0x06 => "XButton2",
+                                VK_BROWSER_BACK => "BrowserBack",
+                                VK_BROWSER_FORWARD => "BrowserForward",
+                                _ => "",
+                            };
+                            crate::commands::system::write_log_line(&format!(
+                                "[RUST] [shortcut-capture] mouse side button vk={} setting={}",
+                                vk, setting
+                            ));
+                            let _ = dispatch_state.app_handle.emit(
+                                "mouse-shortcut-captured",
+                                serde_json::json!({
+                                    "setting": setting,
+                                    "vk": vk,
+                                }),
+                            );
+                        }
                     }
                 }
-            }
-            log::info!("[ptt] dispatcher thread exited");
-            crate::commands::system::write_log_line(
-                "[ptt-dispatcher] thread exited (shutdown or all senders dropped)"
-            );
-            // _alive_guard drops here, flips DISPATCHER_ALIVE back to false.
-        }).expect("failed to spawn ptt-dispatcher thread");
+                log::info!("[ptt] dispatcher thread exited");
+                crate::commands::system::write_log_line(
+                    "[ptt-dispatcher] thread exited (shutdown or all senders dropped)",
+                );
+                // _alive_guard drops here, flips DISPATCHER_ALIVE back to false.
+            })
+            .expect("failed to spawn ptt-dispatcher thread");
 
         // Set thread-local state for the callback
         HOOK_STATE.with(|s| {
@@ -1362,12 +1440,7 @@ impl KeyboardHookManager {
 
         unsafe {
             let install_hook = || -> Option<windows::Win32::UI::WindowsAndMessaging::HHOOK> {
-                match SetWindowsHookExW(
-                    WH_KEYBOARD_LL,
-                    Some(low_level_keyboard_proc),
-                    None,
-                    0,
-                ) {
+                match SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0) {
                     Ok(h) => {
                         log::info!("SetWindowsHookExW succeeded: {:?}", h.0);
                         Some(h)
@@ -1415,7 +1488,8 @@ impl KeyboardHookManager {
                     Err(e) => {
                         log::error!("SetWindowsHookExW(WH_MOUSE_LL) failed: {}", e);
                         crate::commands::system::write_log_line(&format!(
-                            "[ptt-lifecycle] mouse hook FAILED to install: {}", e,
+                            "[ptt-lifecycle] mouse hook FAILED to install: {}",
+                            e,
                         ));
                         None
                     }
@@ -1423,7 +1497,10 @@ impl KeyboardHookManager {
 
             let thread_id = GetCurrentThreadId();
             let _ = tx.send(thread_id);
-            log::info!("keyboard hook message loop starting on thread {}", thread_id);
+            log::info!(
+                "keyboard hook message loop starting on thread {}",
+                thread_id
+            );
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -1556,9 +1633,8 @@ unsafe extern "system" fn low_level_mouse_proc(
         if let Some(state) = s.borrow().as_ref() {
             let ptt_member = ptt_member_index(&state.ptt_vk_codes, vk);
             let is_ptt_key = ptt_member.is_some();
-            let is_hf_key = !state.hf_vk_codes.is_empty()
-                && state.hf_vk_codes.contains(&vk)
-                && !is_ptt_key; // 同一键时 PTT 优先
+            let is_hf_key =
+                !state.hf_vk_codes.is_empty() && state.hf_vk_codes.contains(&vk) && !is_ptt_key; // 同一键时 PTT 优先
             let is_ai_toggle_key = !state.ai_toggle_vk_codes.is_empty()
                 && state.ai_toggle_vk_codes.contains(&vk)
                 && !is_ptt_key
@@ -1576,10 +1652,9 @@ unsafe extern "system" fn low_level_mouse_proc(
                         state.ptt_full_mask,
                     );
                     if became_complete && !state.hands_free_active.load(Ordering::SeqCst) {
-                        if let Some(gen) = begin_ptt_press(
-                            &state.ptt_active_generation,
-                            &state.ptt_generation,
-                        ) {
+                        if let Some(gen) =
+                            begin_ptt_press(&state.ptt_active_generation, &state.ptt_generation)
+                        {
                             HOOK_ACTION_TX.with(|tx| {
                                 if let Some(sender) = tx.borrow().as_ref() {
                                     if sender.send(HookAction::PttDown { vk, gen }).is_err() {
@@ -1828,9 +1903,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
             if let Some(state) = s.borrow().as_ref() {
                 let ptt_member = ptt_member_index(&state.ptt_vk_codes, vk);
                 let is_ptt_key = ptt_member.is_some();
-                let is_hf_key = !state.hf_vk_codes.is_empty()
-                    && state.hf_vk_codes.contains(&vk)
-                    && !is_ptt_key; // PTT takes priority if same key
+                let is_hf_key =
+                    !state.hf_vk_codes.is_empty() && state.hf_vk_codes.contains(&vk) && !is_ptt_key; // PTT takes priority if same key
                 let is_ai_toggle_key = !state.ai_toggle_vk_codes.is_empty()
                     && state.ai_toggle_vk_codes.contains(&vk)
                     && !is_ptt_key
@@ -1865,9 +1939,15 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 if should_log_hotkey_down {
                     HOOK_ACTION_TX.with(|tx| {
                         if let Some(sender) = tx.borrow().as_ref() {
-                            if sender.send(HookAction::Diag {
-                                vk, msg_name: "hotkey-down", flags: kb_flags, scan_code: kb_scan_code,
-                            }).is_err() {
+                            if sender
+                                .send(HookAction::Diag {
+                                    vk,
+                                    msg_name: "hotkey-down",
+                                    flags: kb_flags,
+                                    scan_code: kb_scan_code,
+                                })
+                                .is_err()
+                            {
                                 TRY_SEND_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
                             }
                         }
@@ -1880,8 +1960,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     }
                     let member_bit = 1_u64 << member_index;
                     let is_combo = state.ptt_vk_codes.len() > 1;
-                    let is_pure_modifier_combo = is_combo
-                        && state.ptt_modifier_mask == state.ptt_full_mask;
+                    let is_pure_modifier_combo =
+                        is_combo && state.ptt_modifier_mask == state.ptt_full_mask;
                     let is_main_key = state.ptt_modifier_mask & member_bit == 0;
 
                     // 旧单键维持原消费策略。普通组合仅当主键首次按下时所需修饰键
@@ -1893,8 +1973,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         }
                     } else if !is_pure_modifier_combo && is_main_key {
                         if is_kdown {
-                            let pressed_before =
-                                state.ptt_pressed_mask.load(Ordering::SeqCst);
+                            let pressed_before = state.ptt_pressed_mask.load(Ordering::SeqCst);
                             let consume_this_press = should_consume_combo_main_down(
                                 pressed_before,
                                 state.ptt_consumed_down_mask.load(Ordering::SeqCst),
@@ -1927,10 +2006,9 @@ unsafe extern "system" fn low_level_keyboard_proc(
                             state.ptt_full_mask,
                         );
                         if became_complete && !state.hands_free_active.load(Ordering::SeqCst) {
-                            if let Some(gen) = begin_ptt_press(
-                                &state.ptt_active_generation,
-                                &state.ptt_generation,
-                            ) {
+                            if let Some(gen) =
+                                begin_ptt_press(&state.ptt_active_generation, &state.ptt_generation)
+                            {
                                 HOOK_ACTION_TX.with(|tx| {
                                     if let Some(sender) = tx.borrow().as_ref() {
                                         if sender.send(HookAction::PttDown { vk, gen }).is_err() {
@@ -2026,15 +2104,15 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::queue_ptt_release;
     use super::{
+        DEFAULT_PTT_SETTING, DEFAULT_PTT_VK, LLKHF_ALTDOWN, MODIFIER_VK_CODES, SINGLE_KEY_TABLE,
         begin_hf_press, begin_ptt_press, claim_ptt_release, complete_ptt_release, end_hf_press,
         is_injection_exempt_vk, is_mouse_button_setting, is_mouse_vk, press_ptt_member,
         ptt_key_config, release_ptt_member, should_consume_combo_main_down,
-        single_key_blocked_by_modifiers, DEFAULT_PTT_SETTING, DEFAULT_PTT_VK, LLKHF_ALTDOWN,
-        MODIFIER_VK_CODES, SINGLE_KEY_TABLE,
+        single_key_blocked_by_modifiers,
     };
-    #[cfg(windows)]
-    use super::queue_ptt_release;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     #[test]
@@ -2042,7 +2120,10 @@ mod tests {
         let key_down = AtomicBool::new(false);
 
         assert!(begin_hf_press(&key_down));
-        assert!(!begin_hf_press(&key_down), "repeat down must not toggle again");
+        assert!(
+            !begin_hf_press(&key_down),
+            "repeat down must not toggle again"
+        );
         assert!(end_hf_press(&key_down));
         assert!(!end_hf_press(&key_down), "orphan up is ignored");
         assert!(begin_hf_press(&key_down), "next physical press is re-armed");
@@ -2053,7 +2134,8 @@ mod tests {
         let active_generation = AtomicU64::new(0);
         let generation = AtomicU64::new(0);
 
-        let gen = begin_ptt_press(&active_generation, &generation).expect("first down starts a run");
+        let gen =
+            begin_ptt_press(&active_generation, &generation).expect("first down starts a run");
         assert_eq!(gen, 1);
         assert!(begin_ptt_press(&active_generation, &generation).is_none());
         assert_eq!(claim_ptt_release(&active_generation, None), Some(gen));
@@ -2150,7 +2232,10 @@ mod tests {
             assert_eq!(*vk, expected_vk, "{code} must map to its contiguous VK");
 
             let config = ptt_key_config(&code);
-            assert_eq!(config.setting, code, "{code} must not fall back to the default");
+            assert_eq!(
+                config.setting, code,
+                "{code} must not fall back to the default"
+            );
             assert_eq!(config.vk_codes, vec![expected_vk]);
         }
     }
@@ -2228,7 +2313,10 @@ mod tests {
         assert_ne!(DEFAULT_PTT_VK, 0xA0);
         assert_ne!(DEFAULT_PTT_VK, 0xA1);
         // 默认键必须自身可解析，否则 fallback 会陷入"回退到一个非法值"
-        assert_eq!(ptt_key_config(DEFAULT_PTT_SETTING).setting, DEFAULT_PTT_SETTING);
+        assert_eq!(
+            ptt_key_config(DEFAULT_PTT_SETTING).setting,
+            DEFAULT_PTT_SETTING
+        );
     }
 
     /// 老用户存的 ShiftRight 必须继续被解析、继续生效。
@@ -2246,7 +2334,10 @@ mod tests {
         let generation = AtomicU64::new(0);
 
         let old_gen = begin_ptt_press(&active_generation, &generation).expect("old run starts");
-        assert_eq!(claim_ptt_release(&active_generation, Some(old_gen)), Some(old_gen));
+        assert_eq!(
+            claim_ptt_release(&active_generation, Some(old_gen)),
+            Some(old_gen)
+        );
         assert!(begin_ptt_press(&active_generation, &generation).is_none());
         assert!(complete_ptt_release(&active_generation, old_gen));
 
@@ -2254,7 +2345,10 @@ mod tests {
         assert_ne!(new_gen, old_gen);
         assert!(claim_ptt_release(&active_generation, Some(old_gen)).is_none());
         assert_eq!(active_generation.load(Ordering::SeqCst), new_gen);
-        assert_eq!(claim_ptt_release(&active_generation, Some(new_gen)), Some(new_gen));
+        assert_eq!(
+            claim_ptt_release(&active_generation, Some(new_gen)),
+            Some(new_gen)
+        );
         assert!(complete_ptt_release(&active_generation, new_gen));
     }
 
@@ -2263,8 +2357,7 @@ mod tests {
     fn disconnected_dispatcher_releases_native_ptt_state() {
         let active_generation = AtomicU64::new(0);
         let generation = AtomicU64::new(20);
-        let active_gen =
-            begin_ptt_press(&active_generation, &generation).expect("run starts");
+        let active_gen = begin_ptt_press(&active_generation, &generation).expect("run starts");
         let (sender, receiver) = std::sync::mpsc::channel();
         drop(receiver);
 
@@ -2283,11 +2376,13 @@ mod tests {
         let active_generation = AtomicU64::new(0);
         let generation = AtomicU64::new(40);
 
-        let active_gen =
-            begin_ptt_press(&active_generation, &generation).expect("run starts");
+        let active_gen = begin_ptt_press(&active_generation, &generation).expect("run starts");
         assert!(claim_ptt_release(&active_generation, Some(active_gen + 2)).is_none());
         assert_eq!(active_generation.load(Ordering::SeqCst), active_gen);
-        assert_eq!(claim_ptt_release(&active_generation, Some(active_gen)), Some(active_gen));
+        assert_eq!(
+            claim_ptt_release(&active_generation, Some(active_gen)),
+            Some(active_gen)
+        );
         assert!(complete_ptt_release(&active_generation, active_gen));
     }
 

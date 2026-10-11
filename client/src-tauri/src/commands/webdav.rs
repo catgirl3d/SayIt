@@ -15,14 +15,14 @@
 
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::io::ReaderStream;
 
-use crate::commands::backup::{apply_full_backup, write_backup_archive, BackupScope};
+use crate::commands::backup::{BackupScope, apply_full_backup, write_backup_archive};
 use crate::providers::{diag, http_client};
 use crate::storage::Storage;
 
@@ -173,7 +173,10 @@ fn request(target: &Target, verb: &'static str, url: &str) -> reqwest::RequestBu
 /// 401/403 单独给码：坚果云上这两个几乎都是「用了登录密码而不是应用密码」，
 /// 前端要能给出针对性提示。其余带上状态码和一小段响应体 —— 用 `diag::truncate`
 /// 按字符截断，直接切字节会在中文错误体上 panic（见 pitfalls 第 14 条）。
-async fn check_status(response: reqwest::Response, stage: &str) -> Result<reqwest::Response, String> {
+async fn check_status(
+    response: reqwest::Response,
+    stage: &str,
+) -> Result<reqwest::Response, String> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -190,10 +193,20 @@ async fn check_status(response: reqwest::Response, stage: &str) -> Result<reqwes
         status.as_u16(),
         detail
     );
-    Err(format!("{} failed (HTTP {}) {}", stage, status.as_u16(), detail))
+    Err(format!(
+        "{} failed (HTTP {}) {}",
+        stage,
+        status.as_u16(),
+        detail
+    ))
 }
 
-async fn send(target: &Target, verb: &'static str, url: &str, stage: &str) -> Result<reqwest::Response, String> {
+async fn send(
+    target: &Target,
+    verb: &'static str,
+    url: &str,
+    stage: &str,
+) -> Result<reqwest::Response, String> {
     let response = request(target, verb, url)
         .timeout(META_TIMEOUT)
         .send()
@@ -244,7 +257,9 @@ async fn mkcol(target: &Target, url: &str) -> Result<MkcolOutcome, String> {
     if status == reqwest::StatusCode::CONFLICT {
         return Ok(MkcolOutcome::ParentMissing);
     }
-    check_status(response, "MKCOL").await.map(|_| MkcolOutcome::Done)
+    check_status(response, "MKCOL")
+        .await
+        .map(|_| MkcolOutcome::Done)
 }
 
 /// 把路径的各级祖先收集出来（从深到浅），到 `https://host` 就停。
@@ -448,10 +463,7 @@ pub async fn webdav_test(config: WebDavConfig) -> Result<u64, String> {
     ensure_collection(&target, &target.dir_url).await?;
     let xml = propfind_dir(&target, &target.dir_url).await?;
     let count = parse_backup_entries(&xml).len() as u64;
-    log::info!(
-        "[webdav] connection test ok, existing backups={}",
-        count
-    );
+    log::info!("[webdav] connection test ok, existing backups={}", count);
     Ok(count)
 }
 
@@ -534,7 +546,11 @@ pub async fn webdav_backup_now(
                     "error": diag::truncate(error, 300),
                 }),
             );
-            log::warn!("[webdav] backup failed name={} error={}", file_name, diag::truncate(error, 300));
+            log::warn!(
+                "[webdav] backup failed name={} error={}",
+                file_name,
+                diag::truncate(error, 300)
+            );
             emit_progress(
                 &app,
                 WebDavProgress {
@@ -734,7 +750,11 @@ async fn prune_old_backups(
                 log::info!("[webdav] pruned old backup {}", name);
             }
             Err(error) => {
-                log::warn!("[webdav] failed to prune {}: {}", name, diag::truncate(&error, 200));
+                log::warn!(
+                    "[webdav] failed to prune {}: {}",
+                    name,
+                    diag::truncate(&error, 200)
+                );
             }
         }
     }
@@ -778,7 +798,11 @@ pub async fn webdav_restore(name: String, storage: State<'_, Storage>) -> Result
     let _ = std::fs::remove_file(&temp_path);
     match &result {
         Ok(()) => log::info!("[webdav] restored from {} ({} bytes)", name, written),
-        Err(error) => log::warn!("[webdav] restore failed {}: {}", name, diag::truncate(error, 300)),
+        Err(error) => log::warn!(
+            "[webdav] restore failed {}: {}",
+            name,
+            diag::truncate(error, 300)
+        ),
     }
     result
 }
@@ -802,11 +826,12 @@ async fn download_to_file(
     let mut file = std::fs::File::create(dest)
         .map_err(|e| format!("Failed to write the downloaded backup: {}", e))?;
     let mut written = 0u64;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("Download interrupted: {}", diag::truncate(&e.to_string(), 200)))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        format!(
+            "Download interrupted: {}",
+            diag::truncate(&e.to_string(), 200)
+        )
+    })? {
         file.write_all(&chunk)
             .map_err(|e| format!("Failed to write the downloaded backup: {}", e))?;
         written += chunk.len() as u64;
@@ -843,7 +868,10 @@ mod tests {
             "WEBDAV_URL_SCHEME"
         );
         assert_eq!(normalize_dir_url("   ").unwrap_err(), "WEBDAV_URL_EMPTY");
-        assert_eq!(normalize_dir_url("https://").unwrap_err(), "WEBDAV_URL_EMPTY");
+        assert_eq!(
+            normalize_dir_url("https://").unwrap_err(),
+            "WEBDAV_URL_EMPTY"
+        );
     }
 
     #[test]

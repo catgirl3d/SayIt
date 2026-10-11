@@ -8,8 +8,7 @@ use super::doubao_protocol;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
 use std::time::Instant;
 
-const RECOGNIZE_URL: &str =
-    "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
+const RECOGNIZE_URL: &str = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
 const RESOURCE_ID: &str = "volc.bigasr.auc_turbo";
 const SCOPE: &str = "doubao/flash";
 
@@ -24,11 +23,16 @@ pub async fn transcribe(
     hotwords: &[String],
 ) -> Result<AsrResult, String> {
     // 解码 base64 PCM 数据
-    let pcm_data = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        audio_pcm_b64,
-    )
-    .map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+    let pcm_data =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64).map_err(
+            |e| {
+                diag::fail(
+                    SCOPE,
+                    "decode_b64",
+                    format!("Failed to decode base64 audio: {}", e),
+                )
+            },
+        )?;
 
     if pcm_data.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
@@ -107,10 +111,7 @@ pub async fn transcribe(
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let http_summary = diag::http_summary(resp.status(), resp.headers());
-    doubao_auth::log_http_logid(
-        &format!("flash auth={}", auth.mode_name()),
-        resp.headers(),
-    );
+    doubao_auth::log_http_logid(&format!("flash auth={}", auth.mode_name()), resp.headers());
 
     // 检查响应头中的状态码
     let status_code = resp
@@ -137,8 +138,16 @@ pub async fn transcribe(
                 "Doubao ASR request failed with HTTP {} [{} status={} msg={}]: {}",
                 status,
                 http_summary,
-                if status_code.is_empty() { "-" } else { &status_code },
-                if api_message.is_empty() { "-" } else { &api_message },
+                if status_code.is_empty() {
+                    "-"
+                } else {
+                    &status_code
+                },
+                if api_message.is_empty() {
+                    "-"
+                } else {
+                    &api_message
+                },
                 diag::truncate(&body_text, 200)
             ),
         ));
@@ -177,7 +186,11 @@ pub async fn transcribe(
             format!(
                 "Doubao response contained no recognition result [{} status={}] {}",
                 http_summary,
-                if status_code.is_empty() { "-" } else { &status_code },
+                if status_code.is_empty() {
+                    "-"
+                } else {
+                    &status_code
+                },
                 diag::describe_json(&body_text)
             ),
         ));
@@ -197,8 +210,16 @@ pub async fn transcribe(
                 audio_sec,
                 elapsed_ms,
                 http_summary,
-                if status_code.is_empty() { "-" } else { &status_code },
-                if api_message.is_empty() { "-" } else { &api_message }
+                if status_code.is_empty() {
+                    "-"
+                } else {
+                    &status_code
+                },
+                if api_message.is_empty() {
+                    "-"
+                } else {
+                    &api_message
+                }
             ),
         );
     } else {
@@ -271,7 +292,10 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
             } else if resp.status().is_success() {
                 TestResult {
                     ok: true,
-                    message: format!("Connection successful ({}ms), status code: {}", elapsed_ms, status_code),
+                    message: format!(
+                        "Connection successful ({}ms), status code: {}",
+                        elapsed_ms, status_code
+                    ),
                     elapsed_ms,
                     detail: String::new(),
                 }

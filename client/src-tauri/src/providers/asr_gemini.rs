@@ -469,16 +469,20 @@ mod tests {
         let unknown = serde_json::json!({
             "candidates": [{ "finishReason": "STOP", "content": { "parts": [{ "unexpected": "shape" }] } }]
         });
-        assert!(parse_response(&unknown)
-            .unwrap_err()
-            .contains("no recognized transcript field"));
+        assert!(
+            parse_response(&unknown)
+                .unwrap_err()
+                .contains("no recognized transcript field")
+        );
         assert!(parse_response(&serde_json::json!({})).is_err());
         let truncated = serde_json::json!({
             "candidates": [{ "finishReason": "MAX_TOKENS", "content": { "parts": [{ "text": "partial" }] } }]
         });
-        assert!(parse_response(&truncated)
-            .unwrap_err()
-            .contains("MAX_TOKENS"));
+        assert!(
+            parse_response(&truncated)
+                .unwrap_err()
+                .contains("MAX_TOKENS")
+        );
     }
 
     #[test]

@@ -7,8 +7,8 @@
 use crate::storage::Storage;
 use serde_json::json;
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, State,
-    WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, State, WebviewUrl,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 pub const TRAY_MENU_LABEL: &str = "tray-menu";
@@ -158,10 +158,7 @@ pub fn get_tray_ai_enabled(storage: State<'_, Storage>) -> bool {
 }
 
 #[tauri::command]
-pub fn toggle_tray_ai_enabled(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-) -> Result<bool, String> {
+pub fn toggle_tray_ai_enabled(app: AppHandle, storage: State<'_, Storage>) -> Result<bool, String> {
     let next = !current_ai_enabled(storage.inner());
     storage
         .set("aiEnabled", &json!(next))
@@ -169,11 +166,7 @@ pub fn toggle_tray_ai_enabled(
 
     // The main store synchronizes in-memory and recorder cache; the tray window also immediately refreshes its own UI.
     let _ = app.emit("ai-cleanup-changed", json!({ "enabled": next }));
-    let _ = app.emit_to(
-        TRAY_MENU_LABEL,
-        "tray-ai-state",
-        json!({ "enabled": next }),
-    );
+    let _ = app.emit_to(TRAY_MENU_LABEL, "tray-ai-state", json!({ "enabled": next }));
     log::info!("[tray-menu] AI cleanup toggled to {next}");
     Ok(next)
 }

@@ -84,7 +84,11 @@ pub fn fail_code(scope: &str, stage: &str, code: &str, user_msg: String) -> Stri
 fn contains_http_status(message: &str, expected: &[u16]) -> bool {
     message
         .split(|ch: char| !ch.is_ascii_digit())
-        .filter_map(|part| (part.len() == 3).then(|| part.parse::<u16>().ok()).flatten())
+        .filter_map(|part| {
+            (part.len() == 3)
+                .then(|| part.parse::<u16>().ok())
+                .flatten()
+        })
         .any(|status| expected.contains(&status))
 }
 
@@ -223,17 +227,14 @@ pub fn describe_json(raw: &str) -> String {
 
 /// 供应商常用的服务端追踪 ID 头。用户报问题时带着它才能找供应商定位，没有就只能猜。
 const TRACE_HEADERS: &[&str] = &[
-    "X-Tt-Logid",      // 火山引擎（豆包）
-    "x-request-id",    // 阿里云 DashScope / OpenAI 兼容服务通用
-    "x-ds-trace-id",   // DeepSeek
+    "X-Tt-Logid",    // 火山引擎（豆包）
+    "x-request-id",  // 阿里云 DashScope / OpenAI 兼容服务通用
+    "x-ds-trace-id", // DeepSeek
     "req-id",
 ];
 
 /// HTTP 响应里对排查有用的那部分：状态码 + 追踪 ID。
-pub fn http_summary(
-    status: reqwest::StatusCode,
-    headers: &reqwest::header::HeaderMap,
-) -> String {
+pub fn http_summary(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> String {
     let mut parts = vec![format!("http={}", status.as_u16())];
     for name in TRACE_HEADERS {
         if let Some(v) = headers.get(*name).and_then(|v| v.to_str().ok()) {
@@ -249,10 +250,22 @@ mod tests {
 
     #[test]
     fn classifies_provider_failures_before_the_detail_is_translated() {
-        assert_eq!(classify_failure("http_status", "HTTP 401 Unauthorized"), "provider_bad_key");
-        assert_eq!(classify_failure("http_status", "HTTP 429 Too Many Requests"), "provider_rate_limit");
-        assert_eq!(classify_failure("http_send", "request timed out"), "provider_timeout");
-        assert_eq!(classify_failure("connect", "socket closed"), "provider_unreachable");
+        assert_eq!(
+            classify_failure("http_status", "HTTP 401 Unauthorized"),
+            "provider_bad_key"
+        );
+        assert_eq!(
+            classify_failure("http_status", "HTTP 429 Too Many Requests"),
+            "provider_rate_limit"
+        );
+        assert_eq!(
+            classify_failure("http_send", "request timed out"),
+            "provider_timeout"
+        );
+        assert_eq!(
+            classify_failure("connect", "socket closed"),
+            "provider_unreachable"
+        );
     }
 
     /// 关键回归：403 不许再报成「密钥被拒绝」。

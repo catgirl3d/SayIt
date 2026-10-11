@@ -73,7 +73,7 @@ fn resolve_settings(config: &AsrProviderConfig) -> Result<Settings, String> {
         "auto" => {
             return Err(config_error(
                 "Auto protocol selection is coordinated by the client; choose one explicit protocol for this request",
-            ))
+            ));
         }
         _ => return Err(config_error("Unknown OpenAI-compatible ASR protocol")),
     };
@@ -349,7 +349,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
                 message,
                 elapsed_ms: 0,
                 detail: String::new(),
-            }
+            };
         }
     };
     let audio_b64 = base64::Engine::encode(
@@ -446,14 +446,18 @@ mod tests {
         let body = build_chat_body("audio-chat-model", b"wav-marker", Some("uk"), &hotwords);
         assert_eq!(body["model"], "audio-chat-model");
         assert_eq!(body["messages"][0]["content"][0]["type"], "text");
-        assert!(body["messages"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("uk"));
-        assert!(body["messages"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("SayIt"));
+        assert!(
+            body["messages"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("uk")
+        );
+        assert!(
+            body["messages"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("SayIt")
+        );
         assert_eq!(body["messages"][0]["content"][1]["type"], "input_audio");
         assert_eq!(
             body["messages"][0]["content"][1]["input_audio"]["format"],
@@ -603,10 +607,12 @@ mod tests {
         assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
         assert!(request.contains("Bearer chat-key"));
         assert_eq!(body["model"], "chat-model");
-        assert!(body["messages"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("SayIt"));
+        assert!(
+            body["messages"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("SayIt")
+        );
         assert_eq!(body["messages"][0]["content"][1]["type"], "input_audio");
         assert_eq!(
             body["messages"][0]["content"][1]["input_audio"]["format"],

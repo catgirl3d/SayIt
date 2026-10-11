@@ -25,6 +25,9 @@ export default [
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
       'no-console': 'off',
+      // The codebase intentionally declares a binding, assigns it once later, and
+      // reads it from deferred closures in between (e.g. live system-audio tests).
+      'prefer-const': ['error', { ignoreReadBeforeAssign: true }],
     },
   },
   eslintConfigPrettier,

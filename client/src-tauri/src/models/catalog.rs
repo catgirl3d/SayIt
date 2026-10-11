@@ -71,20 +71,18 @@ pub struct LocalModelInfo {
 // and upstream compatibility tests synchronized.
 
 pub const WHISPER_LANGUAGES: &[&str] = &[
-    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar",
-    "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu",
-    "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa",
-    "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne", "mn",
-    "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc",
-    "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn",
-    "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw",
-    "su", "yue",
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it",
+    "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur",
+    "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+    "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si",
+    "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+    "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln",
+    "ha", "ba", "jw", "su", "yue",
 ];
 
 pub const QWEN3_LANGUAGES: &[&str] = &[
-    "zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi",
-    "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs", "fil", "fa", "el", "hu",
-    "mk", "ro",
+    "zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi", "ja",
+    "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs", "fil", "fa", "el", "hu", "mk", "ro",
 ];
 
 pub const NEMOTRON_LANGUAGES: &[&str] = &[
@@ -97,14 +95,13 @@ pub const NEMOTRON_LANGUAGES: &[&str] = &[
 ];
 
 pub const PARAKEET_V3_LANGUAGES: &[&str] = &[
-    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv",
-    "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk",
+    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt",
+    "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk",
 ];
 
 pub const FUNASR_MLT_LANGUAGES: &[&str] = &[
-    "zh", "en", "yue", "ja", "ko", "vi", "id", "th", "ms", "tl", "ar", "hi", "bg", "hr",
-    "cs", "da", "nl", "et", "fi", "el", "hu", "ga", "lv", "lt", "mt", "pl", "pt", "ro",
-    "sk", "sl", "sv",
+    "zh", "en", "yue", "ja", "ko", "vi", "id", "th", "ms", "tl", "ar", "hi", "bg", "hr", "cs",
+    "da", "nl", "et", "fi", "el", "hu", "ga", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "sv",
 ];
 
 #[inline]
@@ -589,14 +586,22 @@ mod tests {
         for m in &models {
             assert!(ids.insert(m.id.clone()), "Duplicate model id: {}", m.id);
             // Display names must remain distinct (e.g. Qwen3 1.7B variants distinguished by High Precision).
-            assert!(names.insert(m.name.clone()), "Duplicate display name: {}", m.name);
+            assert!(
+                names.insert(m.name.clone()),
+                "Duplicate display name: {}",
+                m.name
+            );
             // Model ID determines local directory name; must end with -gguf.
             assert!(m.id.ends_with("-gguf"), "{} id should end with -gguf", m.id);
             assert!(!m.sources.is_empty(), "{} has no download sources", m.id);
 
             // Parameter triplet: omitting any causes gaps in the UI parameter row.
             assert!(m.memory_mb > 0, "{} missing memory_mb", m.id);
-            assert!(!m.languages_label.is_empty(), "{} missing languages_label", m.id);
+            assert!(
+                !m.languages_label.is_empty(),
+                "{} missing languages_label",
+                m.id
+            );
             assert!(!m.quant.is_empty(), "{} missing quant", m.id);
 
             // Display names must not contain quantization suffixes (those belong in `quant`).
@@ -625,7 +630,13 @@ mod tests {
                         f.url
                     );
                     let sha = f.sha256.as_deref().unwrap_or("");
-                    assert_eq!(sha.len(), 64, "{} file {} missing or invalid sha256", m.id, f.name);
+                    assert_eq!(
+                        sha.len(),
+                        64,
+                        "{} file {} missing or invalid sha256",
+                        m.id,
+                        f.name
+                    );
                 }
             }
         }
@@ -659,7 +670,11 @@ mod tests {
             .collect();
         for m in &models {
             let got: Vec<&str> = m.sources.iter().map(|s| s.source.as_str()).collect();
-            assert_eq!(got, expected, "{} download sources differ from first model", m.id);
+            assert_eq!(
+                got, expected,
+                "{} download sources differ from first model",
+                m.id
+            );
         }
         assert!(expected.contains(&"HuggingFace Mirror"));
     }
@@ -750,7 +765,11 @@ mod tests {
             "sk", "sl", "sv",
         ];
 
-        assert_eq!(whisper_100.len(), 100, "canonical Whisper list must hold 100 codes");
+        assert_eq!(
+            whisper_100.len(),
+            100,
+            "canonical Whisper list must hold 100 codes"
+        );
         assert_eq!(qwen3_30.len(), 30);
         assert_eq!(nemotron_36.len(), 36);
         assert_eq!(parakeet_v3_25.len(), 25);
@@ -776,7 +795,11 @@ mod tests {
 
         for (id, wanted) in expected {
             let got = languages(id);
-            assert_eq!(got, wanted, "{} language list differs from upstream expectation", id);
+            assert_eq!(
+                got, wanted,
+                "{} language list differs from upstream expectation",
+                id
+            );
         }
     }
 

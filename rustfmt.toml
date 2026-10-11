@@ -1,0 +1,5 @@
+# Style edition 2024 (while the crate keeps syntax edition 2021).
+# It fixes known rustfmt quirk classes of style edition 2021, e.g. an unrelated
+# comment being aligned to a preceding trailing comment, and is the current
+# recommended style. Bump deliberately: changing it reformats the codebase.
+style_edition = "2024"

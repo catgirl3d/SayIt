@@ -1,7 +1,7 @@
-use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
 use crate::keyboard::KeyboardHookManager;
 use crate::storage::Storage;
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 pub fn set_escape_action_mode(mode: String, token: u64) -> Result<(), String> {
@@ -66,10 +66,17 @@ pub fn register_all_global_shortcuts(app: &AppHandle, storage: &Storage) {
         let ai_toggle_for_log = ai_toggle_key.clone();
         if let Err(e) = gs.on_shortcut(ai_toggle_key.as_str(), move |app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = app.emit("toggle-ai-cleanup", serde_json::json!({ "source": "globalShortcut" }));
+                let _ = app.emit(
+                    "toggle-ai-cleanup",
+                    serde_json::json!({ "source": "globalShortcut" }),
+                );
             }
         }) {
-            log::warn!("Failed to register AI cleanup shortcut '{}': {}", ai_toggle_for_log, e);
+            log::warn!(
+                "Failed to register AI cleanup shortcut '{}': {}",
+                ai_toggle_for_log,
+                e
+            );
         } else {
             log::info!("Registered AI cleanup shortcut: {}", ai_toggle_for_log);
         }
@@ -96,7 +103,9 @@ pub fn register_all_global_shortcuts(app: &AppHandle, storage: &Storage) {
             }) {
                 log::warn!(
                     "Failed to register preset shortcut '{}' for '{}': {}",
-                    accel_for_log, preset_id, e
+                    accel_for_log,
+                    preset_id,
+                    e
                 );
             }
         }
@@ -140,7 +149,11 @@ pub fn test_shortcut(
             true
         }
         Err(e) => {
-            log::info!("[shortcut] Failed to register '{}'; another app may already use it: {}", accelerator, e);
+            log::info!(
+                "[shortcut] Failed to register '{}'; another app may already use it: {}",
+                accelerator,
+                e
+            );
             false
         }
     };
@@ -175,13 +188,20 @@ pub fn end_shortcut_capture(app: AppHandle, storage: State<Storage>) {
 /// Completely independent from the main PTT hook — does not interfere with recording.
 #[tauri::command]
 pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
-    let enabled = data.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-    log::info!("[ptt-lab] set_ptt_lab_config called, enabled={}, data={}", enabled, data);
+    let enabled = data
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    log::info!(
+        "[ptt-lab] set_ptt_lab_config called, enabled={}, data={}",
+        enabled,
+        data
+    );
 
     #[cfg(windows)]
     {
-        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
         use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
         use std::thread;
 
         // Static state for the lab hook thread
@@ -194,8 +214,8 @@ pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
             let tid = LAB_THREAD_ID.load(Ordering::SeqCst);
             if tid != 0 {
                 unsafe {
+                    use windows::Win32::Foundation::{LPARAM, WPARAM};
                     use windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-                    use windows::Win32::Foundation::{WPARAM, LPARAM};
                     const WM_QUIT: u32 = 0x0012;
                     let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
                 }
@@ -213,7 +233,8 @@ pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
         }
 
         // Parse the VK code — default to right Ctrl (0xA3)
-        let vk_code: u32 = data.get("vkCode")
+        let vk_code: u32 = data
+            .get("vkCode")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or(0xA3); // VK_RCONTROL
@@ -222,14 +243,13 @@ pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
         LAB_RUNNING.store(true, Ordering::SeqCst);
 
         thread::spawn(move || {
+            use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+            use windows::Win32::System::Threading::GetCurrentThreadId;
             use windows::Win32::UI::WindowsAndMessaging::{
-                SetWindowsHookExW, UnhookWindowsHookEx, GetMessageW,
-                TranslateMessage, DispatchMessageW, CallNextHookEx,
-                KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
+                CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, MSG,
+                SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
                 WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
             };
-            use windows::Win32::Foundation::{WPARAM, LPARAM, LRESULT};
-            use windows::Win32::System::Threading::GetCurrentThreadId;
 
             // Thread-local state
             thread_local! {
@@ -257,11 +277,14 @@ pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
                         if is_down && !LAB_KEY_DOWN.with(|v| v.get()) {
                             LAB_KEY_DOWN.with(|v| v.set(true));
                             if let Some(app) = LAB_APP.lock().ok().and_then(|g| g.clone()) {
-                                let _ = app.emit("ptt-lab-event", serde_json::json!({
-                                    "phase": "down",
-                                    "vk": vk,
-                                    "timestamp": chrono::Utc::now().timestamp_millis(),
-                                }));
+                                let _ = app.emit(
+                                    "ptt-lab-event",
+                                    serde_json::json!({
+                                        "phase": "down",
+                                        "vk": vk,
+                                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                                    }),
+                                );
                             }
                             return LRESULT(1); // consume
                         }
@@ -269,11 +292,14 @@ pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
                         if is_up && LAB_KEY_DOWN.with(|v| v.get()) {
                             LAB_KEY_DOWN.with(|v| v.set(false));
                             if let Some(app) = LAB_APP.lock().ok().and_then(|g| g.clone()) {
-                                let _ = app.emit("ptt-lab-event", serde_json::json!({
-                                    "phase": "up",
-                                    "vk": vk,
-                                    "timestamp": chrono::Utc::now().timestamp_millis(),
-                                }));
+                                let _ = app.emit(
+                                    "ptt-lab-event",
+                                    serde_json::json!({
+                                        "phase": "up",
+                                        "vk": vk,
+                                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                                    }),
+                                );
                             }
                             return LRESULT(1); // consume
                         }
@@ -290,7 +316,11 @@ pub fn set_ptt_lab_config(data: Value, app: AppHandle) -> Result<(), String> {
             unsafe {
                 let tid = GetCurrentThreadId();
                 LAB_THREAD_ID.store(tid, Ordering::SeqCst);
-                log::info!("[ptt-lab] hook thread started, tid={}, vk=0x{:X}", tid, vk_code);
+                log::info!(
+                    "[ptt-lab] hook thread started, tid={}, vk=0x{:X}",
+                    tid,
+                    vk_code
+                );
 
                 let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(lab_keyboard_proc), None, 0);
                 let hook = match hook {

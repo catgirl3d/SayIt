@@ -13,7 +13,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CL: /utf-8
-  VULKAN_VERSION: 1.4.357.0
 
 jobs:
   publish:
@@ -36,7 +35,7 @@ jobs:
           cache-dependency-path: client/package-lock.json
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: x86_64-pc-windows-msvc
 
@@ -48,27 +47,7 @@ jobs:
           cache-on-failure: false
 
       - name: Install Vulkan SDK
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sdkRoot = Join-Path $env:RUNNER_TEMP "vulkan-sdk\$env:VULKAN_VERSION"
-          $installer = Join-Path $env:RUNNER_TEMP "vulkan-sdk-$env:VULKAN_VERSION.exe"
-          New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
-
-          curl.exe --fail --location --retry 3 `
-            --output $installer `
-            "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe?Human=true"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not download Vulkan SDK $env:VULKAN_VERSION"
-          }
-
-          & $installer --root $sdkRoot --accept-licenses --default-answer --confirm-command install
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not install Vulkan SDK $env:VULKAN_VERSION"
-          }
-
-          Add-Content -Path $env:GITHUB_ENV -Value "VULKAN_SDK=$sdkRoot"
-          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $sdkRoot 'Bin')
+        uses: ./.github/actions/install-vulkan-sdk
 
       - name: Verify native build toolchain
         shell: pwsh
@@ -78,20 +57,6 @@ jobs:
           rustc --version
           cargo --version
           cmake --version
-          if (-not $env:VULKAN_SDK) {
-            throw 'VULKAN_SDK was not configured'
-          }
-          $requiredFiles = @(
-            (Join-Path $env:VULKAN_SDK 'Include\vulkan\vulkan.h'),
-            (Join-Path $env:VULKAN_SDK 'Lib\vulkan-1.lib'),
-            (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe')
-          )
-          foreach ($file in $requiredFiles) {
-            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-              throw "Vulkan SDK file is missing: $file"
-            }
-          }
-          glslc --version
 
       - name: Install frontend dependencies
         working-directory: client

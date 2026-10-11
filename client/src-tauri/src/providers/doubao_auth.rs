@@ -36,7 +36,10 @@ pub enum DoubaoAuth<'a> {
     /// 新版控制台：只发 X-Api-Key。
     ApiKey { api_key: &'a str },
     /// 旧版控制台：App ID + Access Token。
-    AppIdAccessKey { app_id: &'a str, access_key: &'a str },
+    AppIdAccessKey {
+        app_id: &'a str,
+        access_key: &'a str,
+    },
 }
 
 impl<'a> DoubaoAuth<'a> {
@@ -44,7 +47,9 @@ impl<'a> DoubaoAuth<'a> {
     pub fn from_config(config: &'a AsrProviderConfig) -> Self {
         let app_id = config.app_id.trim();
         if app_id.is_empty() {
-            DoubaoAuth::ApiKey { api_key: config.api_key.trim() }
+            DoubaoAuth::ApiKey {
+                api_key: config.api_key.trim(),
+            }
         } else {
             DoubaoAuth::AppIdAccessKey {
                 app_id,
@@ -85,10 +90,9 @@ impl<'a> DoubaoAuth<'a> {
     pub fn headers(&self) -> Vec<(&'static str, &'a str)> {
         match self {
             DoubaoAuth::ApiKey { api_key } => vec![("X-Api-Key", api_key)],
-            DoubaoAuth::AppIdAccessKey { app_id, access_key } => vec![
-                ("X-Api-App-Key", app_id),
-                ("X-Api-Access-Key", access_key),
-            ],
+            DoubaoAuth::AppIdAccessKey { app_id, access_key } => {
+                vec![("X-Api-App-Key", app_id), ("X-Api-Access-Key", access_key)]
+            }
         }
     }
 }
@@ -104,10 +108,14 @@ impl<'a> DoubaoAuth<'a> {
 pub fn explain_status_code(code: &str) -> Option<&'static str> {
     match code {
         "20000003" => Some("The audio was classified as silence; no speech was detected"),
-        "45000030" => Some("This account has not enabled the requested resource or has exhausted its quota; check the Volcengine console"),
+        "45000030" => Some(
+            "This account has not enabled the requested resource or has exhausted its quota; check the Volcengine console",
+        ),
         _ => {
             if code.starts_with("45") {
-                Some("The request was rejected; check parameters, audio format, and quota in the Volcengine console")
+                Some(
+                    "The request was rejected; check parameters, audio format, and quota in the Volcengine console",
+                )
             } else if code.starts_with("55") {
                 Some("Volcengine failed to process the request; try again later")
             } else {
@@ -141,7 +149,10 @@ pub fn explain_payload(payload: &str) -> String {
 ///
 /// 火山文档明确「强烈建议记录 logid 作为排错线索」：这是服务端给的唯一追踪 ID，
 /// 用户报「豆包连不上」时带着它才能找火山定位，没有就只能猜。
-pub fn log_ws_logid(scope: &str, response: &tokio_tungstenite::tungstenite::handshake::client::Response) {
+pub fn log_ws_logid(
+    scope: &str,
+    response: &tokio_tungstenite::tungstenite::handshake::client::Response,
+) {
     let logid = response
         .headers()
         .get("X-Tt-Logid")
@@ -220,13 +231,19 @@ mod tests {
     /// 两种模式各自缺料时要能报出缺的是什么。
     #[test]
     fn reports_the_missing_credential() {
-        assert_eq!(DoubaoAuth::from_config(&cfg("", "")).missing_field(), Some("API Key"));
+        assert_eq!(
+            DoubaoAuth::from_config(&cfg("", "")).missing_field(),
+            Some("API Key")
+        );
         assert_eq!(
             DoubaoAuth::from_config(&cfg("", "123")).missing_field(),
             Some("Access Token")
         );
         assert_eq!(DoubaoAuth::from_config(&cfg("k", "")).missing_field(), None);
-        assert_eq!(DoubaoAuth::from_config(&cfg("k", "123")).missing_field(), None);
+        assert_eq!(
+            DoubaoAuth::from_config(&cfg("k", "123")).missing_field(),
+            None
+        );
     }
 
     /// 有实据的两个码要给出具体说明。
@@ -239,8 +256,16 @@ mod tests {
     /// 没实据的码按前缀给方向，不编造具体含义。
     #[test]
     fn falls_back_to_code_family() {
-        assert!(explain_status_code("45000001").unwrap().contains("rejected"));
-        assert!(explain_status_code("55000031").unwrap().contains("Volcengine"));
+        assert!(
+            explain_status_code("45000001")
+                .unwrap()
+                .contains("rejected")
+        );
+        assert!(
+            explain_status_code("55000031")
+                .unwrap()
+                .contains("Volcengine")
+        );
     }
 
     /// 成功码和无法识别的码不该产生任何提示。

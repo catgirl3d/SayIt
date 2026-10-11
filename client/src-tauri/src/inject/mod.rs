@@ -29,7 +29,12 @@ struct ClipboardRestoreGuard {
 
 #[cfg(windows)]
 impl ClipboardRestoreGuard {
-    fn new(enabled: bool, previous_text: Option<String>, injected_text: &str, paste_id: u64) -> Self {
+    fn new(
+        enabled: bool,
+        previous_text: Option<String>,
+        injected_text: &str,
+        paste_id: u64,
+    ) -> Self {
         Self {
             enabled,
             previous_text,
@@ -71,7 +76,10 @@ impl Drop for ClipboardRestoreGuard {
                     crate::commands::system::write_log_line(&format!(
                         "[RUST] [inject] clipboard restore skipped pasteId={} reason=clipboard_changed currentUtf16Len={} elapsedMs={}",
                         paste_id,
-                        current_text.as_deref().map(|value| value.encode_utf16().count()).unwrap_or(0),
+                        current_text
+                            .as_deref()
+                            .map(|value| value.encode_utf16().count())
+                            .unwrap_or(0),
                         elapsed_ms
                     ));
                     return;
@@ -85,7 +93,10 @@ impl Drop for ClipboardRestoreGuard {
                     "[RUST] [inject] clipboard restore finished pasteId={} restored={} previousUtf16Len={} elapsedMs={}",
                     paste_id,
                     restored,
-                    previous_text.as_deref().map(|value| value.encode_utf16().count()).unwrap_or(0),
+                    previous_text
+                        .as_deref()
+                        .map(|value| value.encode_utf16().count())
+                        .unwrap_or(0),
                     elapsed_ms
                 ));
             }
@@ -94,28 +105,27 @@ impl Drop for ClipboardRestoreGuard {
 }
 
 #[cfg(windows)]
+use windows::Win32::Foundation::HANDLE;
+#[cfg(windows)]
 use windows::Win32::Foundation::HWND;
 #[cfg(windows)]
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
-    SendMessageTimeoutW, SMTO_ABORTIFHUNG,
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetOpenClipboardWindow, OpenClipboard,
+    SetClipboardData,
 };
 #[cfg(windows)]
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    VIRTUAL_KEY, KEYBD_EVENT_FLAGS,
-};
+use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 #[cfg(windows)]
 use windows::Win32::System::Threading::GetCurrentThreadId;
 #[cfg(windows)]
-use windows::Win32::System::DataExchange::{
-    OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData, GetClipboardData,
-    GetOpenClipboardWindow,
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
 };
 #[cfg(windows)]
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-#[cfg(windows)]
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
+    SetForegroundWindow,
+};
 
 use crate::context;
 
@@ -132,7 +142,12 @@ pub struct InjectResult {
 }
 
 #[cfg(windows)]
-pub fn inject_text_to_hwnd(text: &str, target_hwnd_val: isize, focus_hwnd_val: isize, restore_clipboard: bool) -> InjectResult {
+pub fn inject_text_to_hwnd(
+    text: &str,
+    target_hwnd_val: isize,
+    focus_hwnd_val: isize,
+    restore_clipboard: bool,
+) -> InjectResult {
     let target = HWND(target_hwnd_val as *mut _);
     let focus = if focus_hwnd_val != 0 {
         HWND(focus_hwnd_val as *mut _)
@@ -149,8 +164,10 @@ pub fn inject_text(text: &str, restore_clipboard: bool) -> InjectResult {
 
     if ctx.hwnd.is_empty() || ctx.hwnd == "0" {
         return InjectResult {
-            ok: false, strategy: None,
-            reason: Some("no_foreground_window".to_string()), detail: None,
+            ok: false,
+            strategy: None,
+            reason: Some("no_foreground_window".to_string()),
+            detail: None,
             uncertain: false,
         };
     }
@@ -175,12 +192,29 @@ pub fn inject_text(text: &str, restore_clipboard: bool) -> InjectResult {
 }
 
 #[cfg(not(windows))]
-pub fn inject_text_to_hwnd(_text: &str, _target: isize, _focus: isize, _restore_clipboard: bool) -> InjectResult {
-    InjectResult { ok: false, strategy: None, reason: Some("not_windows".to_string()), detail: None, uncertain: false }
+pub fn inject_text_to_hwnd(
+    _text: &str,
+    _target: isize,
+    _focus: isize,
+    _restore_clipboard: bool,
+) -> InjectResult {
+    InjectResult {
+        ok: false,
+        strategy: None,
+        reason: Some("not_windows".to_string()),
+        detail: None,
+        uncertain: false,
+    }
 }
 #[cfg(not(windows))]
 pub fn inject_text(_text: &str, _restore_clipboard: bool) -> InjectResult {
-    InjectResult { ok: false, strategy: None, reason: Some("not_windows".to_string()), detail: None, uncertain: false }
+    InjectResult {
+        ok: false,
+        strategy: None,
+        reason: Some("not_windows".to_string()),
+        detail: None,
+        uncertain: false,
+    }
 }
 
 fn is_likely_editable(ctx: &context::AppContext) -> bool {
@@ -204,17 +238,25 @@ pub fn is_likely_editable_pub(ctx: &context::AppContext) -> bool {
         return false;
     }
 
-    if ctx.has_caret { return true; }
+    if ctx.has_caret {
+        return true;
+    }
 
     // Native Win32 editable controls — always considered editable
     let native_editable_classes = [
-        "edit", "richedit", "richedit20w", "richedit50w",
-        "scintilla", "texteditorsid",
+        "edit",
+        "richedit",
+        "richedit20w",
+        "richedit50w",
+        "scintilla",
+        "texteditorsid",
         // Office Word editor control (used by Outlook, Word, etc.)
         "_wwg",
     ];
     for cls in &native_editable_classes {
-        if fc.contains(cls) || wc.contains(cls) { return true; }
+        if fc.contains(cls) || wc.contains(cls) {
+            return true;
+        }
     }
 
     // UIA-based detection: if control_type is populated, use it as primary signal.
@@ -277,18 +319,42 @@ pub fn is_likely_editable_pub(ctx: &context::AppContext) -> bool {
     }
 
     let editable_procs = [
-        "notepad", "winword", "excel", "powerpnt", "outlook",
-        "code", "devenv", "idea64",
+        "notepad",
+        "winword",
+        "excel",
+        "powerpnt",
+        "outlook",
+        "code",
+        "devenv",
+        "idea64",
         // VS Code 派生的 AI IDE：焦点常报为 Pane 且无 ValuePattern，
         // 与 code/devenv 同类，文本区可编辑，按进程名兜底放行
-        "trae", "cursor", "windsurf", "kiro",
-        "chrome", "msedge", "firefox", "opera", "brave",
-        "teams", "wechat", "weixin", "dingtalk", "slack",
-        "windowsterminal", "cmd", "powershell",
-        "mobaxterm", "putty", "securecrt", "xshell",
+        "trae",
+        "cursor",
+        "windsurf",
+        "kiro",
+        "chrome",
+        "msedge",
+        "firefox",
+        "opera",
+        "brave",
+        "teams",
+        "wechat",
+        "weixin",
+        "dingtalk",
+        "slack",
+        "windowsterminal",
+        "cmd",
+        "powershell",
+        "mobaxterm",
+        "putty",
+        "securecrt",
+        "xshell",
     ];
     for p in &editable_procs {
-        if proc.contains(p) { return true; }
+        if proc.contains(p) {
+            return true;
+        }
     }
     false
 }
@@ -314,7 +380,12 @@ const ID_CONSOLE_PASTE: usize = 0xFFF1;
 /// 待粘贴指令发出、目标程序有机会读取剪贴板之后（延迟一小段时间，在独立线程里），
 /// 再把剪贴板还原为原内容，避免用户之前复制的东西被覆盖丢失。
 #[cfg(windows)]
-unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bool) -> InjectResult {
+unsafe fn do_inject(
+    target: HWND,
+    focus: HWND,
+    text: &str,
+    restore_clipboard: bool,
+) -> InjectResult {
     let paste_id = PASTE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
 
     // 保存原剪贴板内容（在写入新文本之前）。剪贴板本来为空/非文本时为 None，
@@ -363,12 +434,8 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
 
     // 守卫在函数返回时才启动恢复计时，确保恢复延迟从实际粘贴触发之后开始。
     // generation 与剪贴板内容复核可阻止旧线程覆盖后续粘贴或用户新复制的内容。
-    let _clipboard_restore_guard = ClipboardRestoreGuard::new(
-        restore_clipboard,
-        previous_clipboard_text,
-        text,
-        paste_id,
-    );
+    let _clipboard_restore_guard =
+        ClipboardRestoreGuard::new(restore_clipboard, previous_clipboard_text, text, paste_id);
 
     // Step 1.5: 经典控制台窗口（conhost，类名 ConsoleWindowClass）——用控制台
     // 宿主自带的「粘贴」命令，而不是模拟 Ctrl+V 按键。
@@ -380,10 +447,12 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
     // 且会遵循控制台当前输入模式（含 bracketed paste），因此 raw 模式下依然有效。
     let target_class = crate::context::read_class_name(target).to_lowercase();
     if target_class.contains("consolewindowclass") {
-        crate::commands::system::write_log_line(
-            &format!("[RUST] [inject] console paste attempt hwnd={} class={} textLen={}",
-                target.0 as isize, target_class, text.len())
-        );
+        crate::commands::system::write_log_line(&format!(
+            "[RUST] [inject] console paste attempt hwnd={} class={} textLen={}",
+            target.0 as isize,
+            target_class,
+            text.len()
+        ));
 
         // 先把控制台置前台，确保粘贴落在正确的窗口上
         let fg_ok = force_foreground(target);
@@ -400,29 +469,37 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
         );
 
         if send_ok.0 != 0 {
-            crate::commands::system::write_log_line(
-                &format!("[RUST] [inject] console paste ok hwnd={} fgOk={}", target.0 as isize, fg_ok)
-            );
+            crate::commands::system::write_log_line(&format!(
+                "[RUST] [inject] console paste ok hwnd={} fgOk={}",
+                target.0 as isize, fg_ok
+            ));
             return InjectResult {
                 ok: true,
                 strategy: Some("console_paste".to_string()),
                 reason: None,
                 detail: Some(format!(
                     "hwnd={} class={} textLen={} fgOk={}",
-                    target.0 as isize, target_class, text.len(), fg_ok
+                    target.0 as isize,
+                    target_class,
+                    text.len(),
+                    fg_ok
                 )),
                 uncertain: false,
             };
         }
         crate::commands::system::write_log_line(
-            "[RUST] [inject] console paste failed, fallback to SendInput"
+            "[RUST] [inject] console paste failed, fallback to SendInput",
         );
     }
 
     // Step 2: Try WM_PASTE — this is a message sent directly to the target
     // window handle, so it works even if the target is not the foreground
     // window. Most native Win32 controls (Edit, RichEdit) handle it.
-    let paste_target = if focus.0 != std::ptr::null_mut() { focus } else { target };
+    let paste_target = if focus.0 != std::ptr::null_mut() {
+        focus
+    } else {
+        target
+    };
     let focus_class = crate::context::read_class_name(paste_target).to_lowercase();
 
     // WM_PASTE works reliably for native Win32 edit controls
@@ -431,10 +508,12 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
         || focus_class.contains("scintilla");
 
     if try_wm_paste {
-        crate::commands::system::write_log_line(
-            &format!("[RUST] [inject] WM_PASTE attempt hwnd={} class={} textLen={}",
-                paste_target.0 as isize, focus_class, text.len())
-        );
+        crate::commands::system::write_log_line(&format!(
+            "[RUST] [inject] WM_PASTE attempt hwnd={} class={} textLen={}",
+            paste_target.0 as isize,
+            focus_class,
+            text.len()
+        ));
 
         let mut result_val: usize = 0;
         let send_ok = SendMessageTimeoutW(
@@ -448,29 +527,37 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
         );
 
         if send_ok.0 != 0 {
-            crate::commands::system::write_log_line(
-                &format!("[RUST] [inject] WM_PASTE ok hwnd={} class={}", paste_target.0 as isize, focus_class)
-            );
+            crate::commands::system::write_log_line(&format!(
+                "[RUST] [inject] WM_PASTE ok hwnd={} class={}",
+                paste_target.0 as isize, focus_class
+            ));
             return InjectResult {
                 ok: true,
                 strategy: Some("wm_paste".to_string()),
                 reason: None,
                 detail: Some(format!(
                     "hwnd={} class={} textLen={}",
-                    paste_target.0 as isize, focus_class, text.len()
+                    paste_target.0 as isize,
+                    focus_class,
+                    text.len()
                 )),
                 uncertain: false,
             };
         }
-        crate::commands::system::write_log_line("[RUST] [inject] WM_PASTE failed, fallback to SendInput");
+        crate::commands::system::write_log_line(
+            "[RUST] [inject] WM_PASTE failed, fallback to SendInput",
+        );
     }
 
     // Step 3: Fallback — force foreground + SendInput Ctrl+V
     let fg_ok = force_foreground(target);
-    crate::commands::system::write_log_line(
-        &format!("[RUST] [inject] SendInput fallback target={} fg_ok={} class={} textLen={}",
-            target.0 as isize, fg_ok, focus_class, text.len())
-    );
+    crate::commands::system::write_log_line(&format!(
+        "[RUST] [inject] SendInput fallback target={} fg_ok={} class={} textLen={}",
+        target.0 as isize,
+        fg_ok,
+        focus_class,
+        text.len()
+    ));
 
     // Release stuck modifiers
     release_modifiers();
@@ -501,7 +588,13 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
 
     let detail = format!(
         "sent={} err={} class={} target={} focus={} textLen={} fgOk={}",
-        sent, last_err, focus_class, target.0 as isize, focus.0 as isize, text.len(), fg_ok
+        sent,
+        last_err,
+        focus_class,
+        target.0 as isize,
+        focus.0 as isize,
+        text.len(),
+        fg_ok
     );
 
     // SendInput Ctrl+V is fire-and-forget. For Chromium-class windows we
@@ -560,9 +653,7 @@ unsafe fn do_inject(target: HWND, focus: HWND, text: &str, restore_clipboard: bo
                 uncertain: false,
             };
         }
-        crate::commands::system::write_log_line(
-            "[RUST] [inject] WM_PASTE last-resort also failed",
-        );
+        crate::commands::system::write_log_line("[RUST] [inject] WM_PASTE last-resort also failed");
     }
 
     let blocked_by_privilege = sent == 0 && last_err == ERROR_ACCESS_DENIED;
@@ -662,7 +753,11 @@ fn make_key_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: vk, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: 0,
+                wVk: vk,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
             },
         },
     }
@@ -671,9 +766,10 @@ fn make_key_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
 #[cfg(windows)]
 unsafe fn release_modifiers() {
     let modifiers: [u16; 6] = [0xA4, 0xA5, 0xA0, 0xA1, 0xA2, 0xA3];
-    let inputs: Vec<INPUT> = modifiers.iter().map(|&vk| {
-        make_key_input(VIRTUAL_KEY(vk), KEYEVENTF_KEYUP)
-    }).collect();
+    let inputs: Vec<INPUT> = modifiers
+        .iter()
+        .map(|&vk| make_key_input(VIRTUAL_KEY(vk), KEYEVENTF_KEYUP))
+        .collect();
     let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
 }
 
@@ -713,15 +809,27 @@ unsafe fn describe_clipboard_holder() -> String {
 #[cfg(windows)]
 const INPUT_GUARD_PROCESSES: &[&str] = &[
     // 360
-    "360tray.exe", "360safe.exe", "zhudongfangyu.exe", "360sd.exe", "360rp.exe",
+    "360tray.exe",
+    "360safe.exe",
+    "zhudongfangyu.exe",
+    "360sd.exe",
+    "360rp.exe",
     // 火绒
-    "hipstray.exe", "usysdiag.exe", "wsctrlsvc.exe",
+    "hipstray.exe",
+    "usysdiag.exe",
+    "wsctrlsvc.exe",
     // 腾讯电脑管家
-    "qqpctray.exe", "qqpcmgr.exe", "qqpcrtp.exe",
+    "qqpctray.exe",
+    "qqpcmgr.exe",
+    "qqpcrtp.exe",
     // 金山毒霸
-    "kxetray.exe", "kislive.exe", "kwsprotect64.exe",
+    "kxetray.exe",
+    "kislive.exe",
+    "kwsprotect64.exe",
     // 联想电脑管家 / 其他常见国产安全套件
-    "lavasoft.exe", "baidusdtray.exe", "avp.exe",
+    "lavasoft.exe",
+    "baidusdtray.exe",
+    "avp.exe",
 ];
 
 /// 扫一遍进程，列出命中的安全软件。结果缓存 —— 这些软件不会在一次会话中途装上，
@@ -730,41 +838,42 @@ const INPUT_GUARD_PROCESSES: &[&str] = &[
 fn detect_input_guard_software() -> &'static str {
     use std::sync::OnceLock;
     static DETECTED: OnceLock<String> = OnceLock::new();
-    DETECTED.get_or_init(|| {
-        use windows::Win32::System::ProcessStatus::K32EnumProcesses;
-        let mut pids = vec![0u32; 1024];
-        let mut needed: u32 = 0;
-        let ok = unsafe {
-            K32EnumProcesses(
-                pids.as_mut_ptr(),
-                (pids.len() * std::mem::size_of::<u32>()) as u32,
-                &mut needed,
-            )
-        };
-        if !ok.as_bool() {
-            return String::from("<enum_failed>");
-        }
-        let count = needed as usize / std::mem::size_of::<u32>();
-        let mut hits: Vec<String> = Vec::new();
-        for &pid in pids.iter().take(count) {
-            if pid == 0 {
-                continue;
+    DETECTED
+        .get_or_init(|| {
+            use windows::Win32::System::ProcessStatus::K32EnumProcesses;
+            let mut pids = vec![0u32; 1024];
+            let mut needed: u32 = 0;
+            let ok = unsafe {
+                K32EnumProcesses(
+                    pids.as_mut_ptr(),
+                    (pids.len() * std::mem::size_of::<u32>()) as u32,
+                    &mut needed,
+                )
+            };
+            if !ok.as_bool() {
+                return String::from("<enum_failed>");
             }
-            let name = crate::context::get_process_name(pid).to_lowercase();
-            if name.is_empty() {
-                continue;
+            let count = needed as usize / std::mem::size_of::<u32>();
+            let mut hits: Vec<String> = Vec::new();
+            for &pid in pids.iter().take(count) {
+                if pid == 0 {
+                    continue;
+                }
+                let name = crate::context::get_process_name(pid).to_lowercase();
+                if name.is_empty() {
+                    continue;
+                }
+                if INPUT_GUARD_PROCESSES.contains(&name.as_str()) && !hits.contains(&name) {
+                    hits.push(name);
+                }
             }
-            if INPUT_GUARD_PROCESSES.contains(&name.as_str()) && !hits.contains(&name) {
-                hits.push(name);
+            if hits.is_empty() {
+                String::from("<none>")
+            } else {
+                hits.join(",")
             }
-        }
-        if hits.is_empty() {
-            String::from("<none>")
-        } else {
-            hits.join(",")
-        }
-    })
-    .as_str()
+        })
+        .as_str()
 }
 
 #[cfg(windows)]
@@ -843,19 +952,23 @@ unsafe fn native_set_clipboard_text(text: &str) -> Result<(), String> {
 /// 必须在 OpenClipboard/EmptyClipboard 之后、CloseClipboard 之前调用。
 #[cfg(windows)]
 unsafe fn mark_clipboard_history_excluded() {
-    use windows::core::PCWSTR;
     use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+    use windows::core::PCWSTR;
 
     // 写一个 4 字节值为 0 的 DWORD 到指定格式。
     let write_dword_format = |format_name: &[u16], value: u32| {
         let fmt = RegisterClipboardFormatW(PCWSTR(format_name.as_ptr()));
-        if fmt == 0 { return; }
+        if fmt == 0 {
+            return;
+        }
         let hmem = match GlobalAlloc(GMEM_MOVEABLE, 4) {
             Ok(h) => h,
             Err(_) => return,
         };
         let locked = GlobalLock(hmem);
-        if locked.is_null() { return; }
+        if locked.is_null() {
+            return;
+        }
         std::ptr::copy_nonoverlapping(&value as *const u32 as *const u8, locked as *mut u8, 4);
         let _ = GlobalUnlock(hmem);
         // 标记写失败几乎不会发生；与上面 CF_UNICODETEXT 的处理一致，失败时不额外释放。
@@ -872,19 +985,27 @@ unsafe fn mark_clipboard_history_excluded() {
 
     // "ExcludeClipboardContentFromMonitorProcessing" → 兜底：整体排除监控处理
     // 该格式只要存在即生效，值内容不限，这里同样写 0。
-    let exclude: Vec<u16> = "ExcludeClipboardContentFromMonitorProcessing\0".encode_utf16().collect();
+    let exclude: Vec<u16> = "ExcludeClipboardContentFromMonitorProcessing\0"
+        .encode_utf16()
+        .collect();
     write_dword_format(&exclude, 0);
 }
 
 #[cfg(windows)]
-pub unsafe fn set_clipboard_with_retry_pub(text: &str, max_retries: u32, retry_delay_ms: u64) -> bool {
+pub unsafe fn set_clipboard_with_retry_pub(
+    text: &str,
+    max_retries: u32,
+    retry_delay_ms: u64,
+) -> bool {
     set_clipboard_with_retry(text, max_retries, retry_delay_ms)
 }
 
 /// 清空剪贴板（还原场景：插入前剪贴板本来就没有文本内容）。
 #[cfg(windows)]
 unsafe fn native_clear_clipboard() -> bool {
-    if OpenClipboard(HWND(std::ptr::null_mut())).is_err() { return false; }
+    if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
+        return false;
+    }
     let ok = EmptyClipboard().is_ok();
     let _ = CloseClipboard();
     ok
@@ -895,21 +1016,29 @@ unsafe fn native_clear_clipboard() -> bool {
 /// 剪贴板为空、或内容不是文本（图片/文件等）时返回 None，不做处理即等价于「插入前剪贴板本来就没有可还原的文本」。
 #[cfg(windows)]
 unsafe fn native_get_clipboard_text() -> Option<String> {
-    if OpenClipboard(HWND(std::ptr::null_mut())).is_err() { return None; }
+    if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
+        return None;
+    }
 
     let result = (|| -> Option<String> {
         let handle = GetClipboardData(13).ok()?; // CF_UNICODETEXT
         let hmem = windows::Win32::Foundation::HGLOBAL(handle.0);
         let locked = GlobalLock(hmem);
-        if locked.is_null() { return None; }
+        if locked.is_null() {
+            return None;
+        }
 
         // Unicode 文本以 NUL 结尾，逐 u16 扫描找长度（内存块可能比字符串长）
         let mut len = 0usize;
         let ptr = locked as *const u16;
         loop {
-            if *ptr.add(len) == 0 { break; }
+            if *ptr.add(len) == 0 {
+                break;
+            }
             len += 1;
-            if len > 10_000_000 { break; } // 防御性上限，避免异常内存导致死循环
+            if len > 10_000_000 {
+                break;
+            } // 防御性上限，避免异常内存导致死循环
         }
         let slice = std::slice::from_raw_parts(ptr, len);
         let text = String::from_utf16_lossy(slice);

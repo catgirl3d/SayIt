@@ -102,7 +102,10 @@ fn is_checksum_error(err_msg: &str) -> bool {
 fn remove_file_if_exists(path: &Path) -> Result<(), String> {
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(download_io_error("Failed to remove temporary/corrupted file", e));
+            return Err(download_io_error(
+                "Failed to remove temporary/corrupted file",
+                e,
+            ));
         }
     }
     Ok(())
@@ -153,7 +156,6 @@ fn verify_temp_file_sha256(file_path: &Path, expected_sha256: &str) -> Result<()
         Err(e) => Err(e),
     }
 }
-
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadProgress {
@@ -242,8 +244,8 @@ pub fn model_dir(model_id: &str) -> PathBuf {
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Default, Clone)]
 struct RemoteProbe {
@@ -282,7 +284,12 @@ fn build_http_client() -> Result<reqwest::Client, String> {
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_IDLE_TIMEOUT)
         .build()
-        .map_err(|e| download_error("download_network", format!("Failed to create HTTP client: {}", e)))
+        .map_err(|e| {
+            download_error(
+                "download_network",
+                format!("Failed to create HTTP client: {}", e),
+            )
+        })
 }
 
 fn full_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
@@ -637,7 +644,11 @@ fn calculate_chunks(total_size: u64) -> Vec<ChunkSpec> {
             break;
         }
         let end = ((i as u64 + 1) * chunk_size - 1).min(total_size - 1);
-        chunks.push(ChunkSpec { index: i, start, end });
+        chunks.push(ChunkSpec {
+            index: i,
+            start,
+            end,
+        });
     }
     chunks
 }
@@ -678,8 +689,12 @@ fn parallel_chunk_path(temp_path: &Path, index: usize) -> PathBuf {
 }
 
 fn persist_parallel_state(path: &Path, state: &ParallelDownloadState) -> Result<(), String> {
-    let bytes = serde_json::to_vec(state)
-        .map_err(|error| download_error("download_failed", format!("Failed to serialize download state: {}", error)))?;
+    let bytes = serde_json::to_vec(state).map_err(|error| {
+        download_error(
+            "download_failed",
+            format!("Failed to serialize download state: {}", error),
+        )
+    })?;
     std::fs::write(path, bytes)
         .map_err(|error| download_io_error("Failed to persist parallel download state", error))
 }
@@ -762,7 +777,12 @@ fn load_or_create_parallel_state(
             // 清理由旧版下载器或崩溃在状态文件落盘前留下的同名文件。
             cleanup_parallel_artifacts(temp_path, &state_path, chunks)?;
         }
-        Err(error) => return Err(download_io_error("Failed to read parallel download state", error)),
+        Err(error) => {
+            return Err(download_io_error(
+                "Failed to read parallel download state",
+                error,
+            ));
+        }
     }
 
     let state = ParallelDownloadState {
@@ -854,10 +874,8 @@ async fn download_file_parallel(
     if state.phase == ParallelPhase::Downloading {
         let mut initial_downloaded = 0u64;
         for chunk in &chunks {
-            initial_downloaded += chunk_file_len(
-                &parallel_chunk_path(temp_path, chunk.index),
-                chunk.len(),
-            )?;
+            initial_downloaded +=
+                chunk_file_len(&parallel_chunk_path(temp_path, chunk.index), chunk.len())?;
         }
         let downloaded_total = Arc::new(AtomicU64::new(initial_downloaded));
         let client = build_http_client()?;
@@ -1084,11 +1102,7 @@ fn is_valid_resume_content_range(
 }
 
 fn parse_unsatisfied_range_total(content_range: Option<&str>) -> Option<u64> {
-    content_range?
-        .trim()
-        .strip_prefix("bytes */")?
-        .parse()
-        .ok()
+    content_range?.trim().strip_prefix("bytes */")?.parse().ok()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1125,10 +1139,12 @@ async fn send_full_response(
     client: &reqwest::Client,
     url: &str,
 ) -> Result<reqwest::Response, String> {
-    let response = full_request(client, url)
-        .send()
-        .await
-        .map_err(|error| download_error("download_network", format!("Full download request failed: {}", error)))?;
+    let response = full_request(client, url).send().await.map_err(|error| {
+        download_error(
+            "download_network",
+            format!("Full download request failed: {}", error),
+        )
+    })?;
     if response.status().as_u16() != 200 {
         return Err(download_error(
             "download_network",
@@ -1170,8 +1186,9 @@ async fn download_file_single_stream(
     };
     let downloaded_initial = match inspect_resume_state(raw_initial, total_size, sha_result)? {
         ResumeDecision::Finalize => {
-            std::fs::rename(temp_path, dest_path)
-                .map_err(|error| download_io_error("Failed to finalize completed partial download", error))?;
+            std::fs::rename(temp_path, dest_path).map_err(|error| {
+                download_io_error("Failed to finalize completed partial download", error)
+            })?;
             emit_progress(
                 app,
                 model_id,
@@ -1208,7 +1225,12 @@ async fn download_file_single_stream(
         let response = resume_request(&client, url, downloaded_initial, strong_etag)
             .send()
             .await
-            .map_err(|error| download_error("download_network", format!("Resume request failed: {}", error)))?;
+            .map_err(|error| {
+                download_error(
+                    "download_network",
+                    format!("Resume request failed: {}", error),
+                )
+            })?;
         match response.status().as_u16() {
             206 => {
                 let content_range = response
@@ -1223,7 +1245,10 @@ async fn download_file_single_stream(
                 ) {
                     (response, downloaded_initial, true)
                 } else {
-                    log::warn!("Invalid resume Content-Range; restarting {} from zero", file_name);
+                    log::warn!(
+                        "Invalid resume Content-Range; restarting {} from zero",
+                        file_name
+                    );
                     drop(response);
                     remove_file_if_exists(temp_path)?;
                     (send_full_response(&client, url).await?, 0, false)
@@ -1259,7 +1284,10 @@ async fn download_file_single_stream(
                         match verified {
                             Ok(()) => {
                                 std::fs::rename(temp_path, dest_path).map_err(|error| {
-                                    download_io_error("Failed to finalize complete partial download", error)
+                                    download_io_error(
+                                        "Failed to finalize complete partial download",
+                                        error,
+                                    )
                                 })?;
                                 emit_progress(
                                     app,
@@ -1329,7 +1357,9 @@ async fn download_file_single_stream(
             .create(true)
             .append(true)
             .open(temp_path)
-            .map_err(|error| download_io_error("Failed to open partial download for append", error))?
+            .map_err(|error| {
+                download_io_error("Failed to open partial download for append", error)
+            })?
     } else {
         std::fs::OpenOptions::new()
             .create(true)
@@ -1343,7 +1373,10 @@ async fn download_file_single_stream(
     let mut last_emit = std::time::Instant::now();
     while let Some(item) = stream.next().await {
         let bytes = item.map_err(|error| {
-            download_error("download_network", format!("Download interrupted: {}", error))
+            download_error(
+                "download_network",
+                format!("Download interrupted: {}", error),
+            )
         })?;
         if final_total > 0 && downloaded + bytes.len() as u64 > final_total {
             return Err(download_error(
@@ -1660,18 +1693,37 @@ async fn download_archive_once(
     let mut request = client.get(url);
     if downloaded > 0 {
         request = request.header("Range", format!("bytes={}-", downloaded));
-        log::info!("Resuming archive download from {} bytes ({})", downloaded, url);
+        log::info!(
+            "Resuming archive download from {} bytes ({})",
+            downloaded,
+            url
+        );
     }
 
-    emit_progress(app, model_id, "archive", downloaded, 0, "downloading", None, 1, 1);
+    emit_progress(
+        app,
+        model_id,
+        "archive",
+        downloaded,
+        0,
+        "downloading",
+        None,
+        1,
+        1,
+    );
 
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| download_error("download_network", format!("Download request failed: {}", e)))?;
+    let resp = request.send().await.map_err(|e| {
+        download_error(
+            "download_network",
+            format!("Download request failed: {}", e),
+        )
+    })?;
 
     if !resp.status().is_success() && resp.status().as_u16() != 206 {
-        return Err(download_error("download_network", format!("Download failed with HTTP {}", resp.status())));
+        return Err(download_error(
+            "download_network",
+            format!("Download failed with HTTP {}", resp.status()),
+        ));
     }
 
     let content_length = resp.content_length().unwrap_or(0);
@@ -1689,17 +1741,31 @@ async fn download_archive_once(
     let mut last_emit = std::time::Instant::now();
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| download_error("download_network", format!("Download interrupted: {}", e)))?;
-        file.write_all(&chunk).map_err(|e| download_io_error("Failed to write partial archive", e))?;
+        let chunk = chunk.map_err(|e| {
+            download_error("download_network", format!("Download interrupted: {}", e))
+        })?;
+        file.write_all(&chunk)
+            .map_err(|e| download_io_error("Failed to write partial archive", e))?;
         downloaded += chunk.len() as u64;
 
         if last_emit.elapsed().as_millis() >= 300 {
-            emit_progress(app, model_id, "archive", downloaded, total, "downloading", None, 1, 1);
+            emit_progress(
+                app,
+                model_id,
+                "archive",
+                downloaded,
+                total,
+                "downloading",
+                None,
+                1,
+                1,
+            );
             last_emit = std::time::Instant::now();
         }
     }
 
-    file.flush().map_err(|e| download_io_error("Failed to flush partial archive", e))?;
+    file.flush()
+        .map_err(|e| download_io_error("Failed to flush partial archive", e))?;
     drop(file);
     Ok(())
 }
@@ -1733,15 +1799,33 @@ pub async fn download_and_extract_tar_bz2(
     let mut ok = false;
     for (idx, cand) in candidates.iter().enumerate() {
         match download_archive_once(&app, model_id, cand, &temp_path).await {
-            Ok(()) => { ok = true; break; }
+            Ok(()) => {
+                ok = true;
+                break;
+            }
             Err(e) => {
-                log::warn!("Archive source {}/{} failed: {}", idx + 1, candidates.len(), e);
+                log::warn!(
+                    "Archive source {}/{} failed: {}",
+                    idx + 1,
+                    candidates.len(),
+                    e
+                );
                 last_err = e;
             }
         }
     }
     if !ok {
-        emit_progress(&app, model_id, "archive", 0, 0, "failed", Some(&last_err), 1, 1);
+        emit_progress(
+            &app,
+            model_id,
+            "archive",
+            0,
+            0,
+            "failed",
+            Some(&last_err),
+            1,
+            1,
+        );
         return Err(last_err);
     }
 
@@ -1749,7 +1833,17 @@ pub async fn download_and_extract_tar_bz2(
         .map_err(|e| download_io_error("Failed to finalize downloaded archive", e))?;
 
     log::info!("Archive downloaded: {}", model_id);
-    emit_progress(&app, model_id, "extracting", 0, 0, "downloading", None, 1, 1);
+    emit_progress(
+        &app,
+        model_id,
+        "extracting",
+        0,
+        0,
+        "downloading",
+        None,
+        1,
+        1,
+    );
 
     // 解压 tar.bz2
     let archive_file = std::fs::File::open(&archive_path)
@@ -1757,9 +1851,22 @@ pub async fn download_and_extract_tar_bz2(
     let bz_decoder = bzip2::read::BzDecoder::new(archive_file);
     let mut archive = tar::Archive::new(bz_decoder);
 
-    for entry in archive.entries().map_err(|e| download_error("download_failed", format!("Failed to read archive: {}", e)))? {
-        let mut entry = entry.map_err(|e| download_error("download_failed", format!("Failed to read archive entry: {}", e)))?;
-        let path = entry.path().map_err(|e| download_error("download_failed", format!("Failed to read archive path: {}", e)))?;
+    for entry in archive
+        .entries()
+        .map_err(|e| download_error("download_failed", format!("Failed to read archive: {}", e)))?
+    {
+        let mut entry = entry.map_err(|e| {
+            download_error(
+                "download_failed",
+                format!("Failed to read archive entry: {}", e),
+            )
+        })?;
+        let path = entry.path().map_err(|e| {
+            download_error(
+                "download_failed",
+                format!("Failed to read archive path: {}", e),
+            )
+        })?;
         let path_str = path.to_string_lossy().to_string();
 
         // 跳过 test_wavs/ 和 README.md
@@ -1781,10 +1888,15 @@ pub async fn download_and_extract_tar_bz2(
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
-            let mut out = std::fs::File::create(&dest)
-                .map_err(|e| download_io_error(&format!("Failed to create extracted file {:?}", relative), e))?;
-            std::io::copy(&mut entry, &mut out)
-                .map_err(|e| download_io_error(&format!("Failed to extract file {:?}", relative), e))?;
+            let mut out = std::fs::File::create(&dest).map_err(|e| {
+                download_io_error(
+                    &format!("Failed to create extracted file {:?}", relative),
+                    e,
+                )
+            })?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| {
+                download_io_error(&format!("Failed to extract file {:?}", relative), e)
+            })?;
         }
     }
 
@@ -1817,9 +1929,7 @@ mod tests {
         ))
     }
 
-    fn spawn_http_server(
-        responses: Vec<Vec<u8>>,
-    ) -> (String, thread::JoinHandle<Vec<String>>) {
+    fn spawn_http_server(responses: Vec<Vec<u8>>) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
@@ -1850,13 +1960,7 @@ mod tests {
         (format!("http://{}/model", address), handle)
     }
 
-    fn partial_response(
-        start: u64,
-        end: u64,
-        total: u64,
-        etag: &str,
-        body: &[u8],
-    ) -> Vec<u8> {
+    fn partial_response(start: u64, end: u64, total: u64, etag: &str, body: &[u8]) -> Vec<u8> {
         let headers = format!(
             "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nETag: {}\r\nConnection: close\r\n\r\n",
             start,
@@ -1870,13 +1974,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn probe_requires_exact_range_and_captures_strong_etag() {
-        let (url, server) = spawn_http_server(vec![partial_response(
-            0,
-            0,
-            6,
-            "\"model-v1\"",
-            b"a",
-        )]);
+        let (url, server) =
+            spawn_http_server(vec![partial_response(0, 0, 6, "\"model-v1\"", b"a")]);
         let probe = probe_url(&build_http_client().unwrap(), &url).await;
         assert!(probe.supports_range);
         assert_eq!(probe.size, 6);
@@ -1892,13 +1991,8 @@ mod tests {
     async fn chunk_resumes_existing_file_and_uses_if_match() {
         let chunk_path = unique_test_path("chunk_resume");
         std::fs::write(&chunk_path, b"ab").unwrap();
-        let (url, server) = spawn_http_server(vec![partial_response(
-            2,
-            5,
-            6,
-            "\"model-v1\"",
-            b"cdef",
-        )]);
+        let (url, server) =
+            spawn_http_server(vec![partial_response(2, 5, 6, "\"model-v1\"", b"cdef")]);
         let downloaded = Arc::new(AtomicU64::new(2));
         let result = download_chunk(
             build_http_client().unwrap(),
@@ -1927,13 +2021,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn chunk_rejects_a_changed_response_etag_before_writing() {
         let chunk_path = unique_test_path("chunk_etag_change");
-        let (url, server) = spawn_http_server(vec![partial_response(
-            0,
-            3,
-            4,
-            "\"model-v2\"",
-            b"data",
-        )]);
+        let (url, server) =
+            spawn_http_server(vec![partial_response(0, 3, 4, "\"model-v2\"", b"data")]);
         let error = download_chunk(
             build_http_client().unwrap(),
             url,
@@ -2040,12 +2129,7 @@ mod tests {
         .unwrap();
         assert_eq!(reset.strong_etag.as_deref(), Some("\"v2\""));
         assert!(!first_chunk.exists());
-        cleanup_parallel_artifacts(
-            &temp_path,
-            &parallel_state_path(&temp_path),
-            &chunks,
-        )
-        .unwrap();
+        cleanup_parallel_artifacts(&temp_path, &parallel_state_path(&temp_path), &chunks).unwrap();
     }
 
     #[test]
@@ -2059,7 +2143,10 @@ mod tests {
 
     #[test]
     fn parses_only_valid_unsatisfied_range_totals() {
-        assert_eq!(parse_unsatisfied_range_total(Some("bytes */123")), Some(123));
+        assert_eq!(
+            parse_unsatisfied_range_total(Some("bytes */123")),
+            Some(123)
+        );
         assert_eq!(parse_unsatisfied_range_total(Some("bytes 1-2/123")), None);
         assert_eq!(parse_unsatisfied_range_total(Some("bytes */*")), None);
         assert_eq!(parse_unsatisfied_range_total(None), None);
@@ -2102,69 +2189,44 @@ mod tests {
     #[test]
     fn test_validate_range_response_parts_cases() {
         // 1. 标准有效 206 匹配通过
-        assert!(validate_range_response_parts(
-            206,
-            Some("bytes 0-99/1000"),
-            Some(100),
-            0,
-            99,
-            1000
-        ).is_ok());
+        assert!(
+            validate_range_response_parts(206, Some("bytes 0-99/1000"), Some(100), 0, 99, 1000)
+                .is_ok()
+        );
 
         // 2. HTTP 200 OK 必须被严格拒绝
-        assert!(validate_range_response_parts(
-            200,
-            Some("bytes 0-99/1000"),
-            Some(100),
-            0,
-            99,
-            1000
-        ).is_err());
+        assert!(
+            validate_range_response_parts(200, Some("bytes 0-99/1000"), Some(100), 0, 99, 1000)
+                .is_err()
+        );
 
         // 7. 已知文件大小时，未知、畸形或不匹配的 total 必须拒绝
         for header in ["bytes 0-99/*", "bytes 0-99/garbage", "bytes 0-99/999"] {
-            assert!(validate_range_response_parts(206, Some(header), Some(100), 0, 99, 1000).is_err());
+            assert!(
+                validate_range_response_parts(206, Some(header), Some(100), 0, 99, 1000).is_err()
+            );
         }
 
         // 3. Content-Range 缺失必须拒绝
-        assert!(validate_range_response_parts(
-            206,
-            None,
-            Some(100),
-            0,
-            99,
-            1000
-        ).is_err());
+        assert!(validate_range_response_parts(206, None, Some(100), 0, 99, 1000).is_err());
 
         // 4. 起始 offset 错位必须拒绝
-        assert!(validate_range_response_parts(
-            206,
-            Some("bytes 10-99/1000"),
-            Some(90),
-            0,
-            99,
-            1000
-        ).is_err());
+        assert!(
+            validate_range_response_parts(206, Some("bytes 10-99/1000"), Some(90), 0, 99, 1000)
+                .is_err()
+        );
 
         // 5. 结束 offset 错位必须拒绝
-        assert!(validate_range_response_parts(
-            206,
-            Some("bytes 0-199/1000"),
-            Some(200),
-            0,
-            99,
-            1000
-        ).is_err());
+        assert!(
+            validate_range_response_parts(206, Some("bytes 0-199/1000"), Some(200), 0, 99, 1000)
+                .is_err()
+        );
 
         // 6. Content-Length 与区间不符必须拒绝
-        assert!(validate_range_response_parts(
-            206,
-            Some("bytes 0-99/1000"),
-            Some(99),
-            0,
-            99,
-            1000
-        ).is_err());
+        assert!(
+            validate_range_response_parts(206, Some("bytes 0-99/1000"), Some(99), 0, 99, 1000)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2187,16 +2249,46 @@ mod tests {
 
         // 3. 拒绝缺少 Content-Range 或畸形
         assert!(!is_valid_resume_content_range(None, Some(900), 100, 1000));
-        assert!(!is_valid_resume_content_range(Some("invalid-header"), Some(900), 100, 1000));
-        assert!(!is_valid_resume_content_range(Some("bytes 100-garbage/1000"), Some(900), 100, 1000));
-        assert!(!is_valid_resume_content_range(Some("bytes 100-999/garbage"), Some(900), 100, 1000));
+        assert!(!is_valid_resume_content_range(
+            Some("invalid-header"),
+            Some(900),
+            100,
+            1000
+        ));
+        assert!(!is_valid_resume_content_range(
+            Some("bytes 100-garbage/1000"),
+            Some(900),
+            100,
+            1000
+        ));
+        assert!(!is_valid_resume_content_range(
+            Some("bytes 100-999/garbage"),
+            Some(900),
+            100,
+            1000
+        ));
 
         // 4. 拒绝 total 为 *（断点续传未知 total 时强制全量重传）
-        assert!(!is_valid_resume_content_range(Some("bytes 100-999/*"), Some(900), 100, 0));
+        assert!(!is_valid_resume_content_range(
+            Some("bytes 100-999/*"),
+            Some(900),
+            100,
+            0
+        ));
 
         // 5. 拒绝 start 错位
-        assert!(!is_valid_resume_content_range(Some("bytes 0-999/1000"), Some(1000), 100, 1000));
-        assert!(!is_valid_resume_content_range(Some("bytes 50-999/1000"), Some(950), 100, 1000));
+        assert!(!is_valid_resume_content_range(
+            Some("bytes 0-999/1000"),
+            Some(1000),
+            100,
+            1000
+        ));
+        assert!(!is_valid_resume_content_range(
+            Some("bytes 50-999/1000"),
+            Some(950),
+            100,
+            1000
+        ));
 
         // 6. 拒绝 Content-Length 与区间不符
         assert!(!is_valid_resume_content_range(
@@ -2243,12 +2335,28 @@ mod tests {
         std::fs::write(&test_file, b"hello world\n").unwrap();
 
         // 匹配成功
-        assert!(verify_file_sha256(&test_file, "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447").is_ok());
+        assert!(
+            verify_file_sha256(
+                &test_file,
+                "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447"
+            )
+            .is_ok()
+        );
         // 大小写不敏感匹配
-        assert!(verify_file_sha256(&test_file, "A948904F2F0F479B8F8197694B30184B0D2ED1C1CD2A1EC0FB85D299A192A447").is_ok());
+        assert!(
+            verify_file_sha256(
+                &test_file,
+                "A948904F2F0F479B8F8197694B30184B0D2ED1C1CD2A1EC0FB85D299A192A447"
+            )
+            .is_ok()
+        );
 
         // hash 不匹配生成前端可识别的 sayit_error:download_checksum: 错误代码
-        let mismatch_err = verify_file_sha256(&test_file, "0000000000000000000000000000000000000000000000000000000000000000").unwrap_err();
+        let mismatch_err = verify_file_sha256(
+            &test_file,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap_err();
         assert!(is_checksum_error(&mismatch_err));
 
         // 验证非前缀的文本（即便是包含关键字）不会被生产分类器误判
@@ -2262,7 +2370,8 @@ mod tests {
 
     #[test]
     fn test_verify_temp_file_sha256_preserves_io_error() {
-        let test_dir = std::env::temp_dir().join(format!("sayit_sha256_dir_{}", std::process::id()));
+        let test_dir =
+            std::env::temp_dir().join(format!("sayit_sha256_dir_{}", std::process::id()));
         std::fs::create_dir(&test_dir).unwrap();
 
         let err = verify_temp_file_sha256(&test_dir, "0").unwrap_err();
@@ -2279,22 +2388,43 @@ mod tests {
         let io_err = Err("sayit_error:download_permission: Access denied".to_string());
 
         // 1. 完整文件且 SHA-256 匹配（或无预期 hash） -> Finalize
-        assert_eq!(inspect_resume_state(1000, 1000, Some(ok_res)).unwrap(), ResumeDecision::Finalize);
-        assert_eq!(inspect_resume_state(1000, 1000, None).unwrap(), ResumeDecision::Finalize);
+        assert_eq!(
+            inspect_resume_state(1000, 1000, Some(ok_res)).unwrap(),
+            ResumeDecision::Finalize
+        );
+        assert_eq!(
+            inspect_resume_state(1000, 1000, None).unwrap(),
+            ResumeDecision::Finalize
+        );
 
         // 2. 完整文件但明确 SHA-256 不匹配 -> Restart
-        assert_eq!(inspect_resume_state(1000, 1000, Some(hash_err)).unwrap(), ResumeDecision::Restart);
+        assert_eq!(
+            inspect_resume_state(1000, 1000, Some(hash_err)).unwrap(),
+            ResumeDecision::Restart
+        );
 
         // 3. 完整文件但由于 I/O 错误无法校验 -> 原样返回，生产保留文件现场
-        assert_eq!(inspect_resume_state(1000, 1000, Some(io_err)).unwrap_err(), "sayit_error:download_permission: Access denied");
+        assert_eq!(
+            inspect_resume_state(1000, 1000, Some(io_err)).unwrap_err(),
+            "sayit_error:download_permission: Access denied"
+        );
 
         // 4. 文件尺寸超出 total_size -> Restart
-        assert_eq!(inspect_resume_state(1200, 1000, None).unwrap(), ResumeDecision::Restart);
+        assert_eq!(
+            inspect_resume_state(1200, 1000, None).unwrap(),
+            ResumeDecision::Restart
+        );
 
         // 5. 正常断点续传（部分文件） -> Resume(downloaded)
-        assert_eq!(inspect_resume_state(500, 1000, None).unwrap(), ResumeDecision::Resume(500));
+        assert_eq!(
+            inspect_resume_state(500, 1000, None).unwrap(),
+            ResumeDecision::Resume(500)
+        );
 
         // 6. 首次下载（无已有文件） -> Resume(0)
-        assert_eq!(inspect_resume_state(0, 1000, None).unwrap(), ResumeDecision::Resume(0));
+        assert_eq!(
+            inspect_resume_state(0, 1000, None).unwrap(),
+            ResumeDecision::Resume(0)
+        );
     }
 }

@@ -163,9 +163,11 @@ pub async fn test_asr_connection() {}
 
         assert_eq!(declared_cloud_keys, dispatch_keys);
         let matrix = asr_hotword_capability_matrix();
-        assert!(declared_cloud_keys
-            .iter()
-            .all(|provider| { matrix[provider].delivery != HotwordDelivery::UnknownProvider }));
+        assert!(
+            declared_cloud_keys
+                .iter()
+                .all(|provider| { matrix[provider].delivery != HotwordDelivery::UnknownProvider })
+        );
     }
 
     #[test]

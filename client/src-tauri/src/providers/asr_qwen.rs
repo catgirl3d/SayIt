@@ -5,7 +5,8 @@ use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
 use std::time::Instant;
 
-const API_URL: &str = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+const API_URL: &str =
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 const SCOPE: &str = "qwen/asr-flash";
 
 /// 将热词列表拼接为千问 ASR 的上下文偏置文本。
@@ -85,13 +86,21 @@ pub async fn transcribe(
     config: &AsrProviderConfig,
     hotwords: &[String],
 ) -> Result<AsrResult, String> {
-    let pcm = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD, audio_pcm_b64,
-    ).map_err(|e| diag::fail(SCOPE, "decode_b64", format!("Failed to decode base64 audio: {}", e)))?;
+    let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64)
+        .map_err(|e| {
+            diag::fail(
+                SCOPE,
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
 
     if pcm.is_empty() {
         diag::empty_result(SCOPE, "Input audio was empty; provider request was skipped");
-        return Ok(AsrResult { text: String::new(), elapsed_ms: 0 });
+        return Ok(AsrResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
     }
 
     let wav = pcm_to_wav(&pcm, sample_rate);
@@ -171,7 +180,8 @@ pub async fn transcribe(
     let (body_text, data) = super::connection::read_json_body(resp, SCOPE, &http_summary).await?;
 
     // 响应格式：output.choices[0].message.content[0].text
-    let text = data.get("output")
+    let text = data
+        .get("output")
         .and_then(|o| o.get("choices"))
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("message"))
@@ -192,7 +202,11 @@ pub async fn transcribe(
         diag::log(
             SCOPE,
             "hotword_echo_stripped",
-            &format!("Stripped a {}-character hotword echo hotwords={}", raw_chars, words.len()),
+            &format!(
+                "Stripped a {}-character hotword echo hotwords={}",
+                raw_chars,
+                words.len()
+            ),
         );
     }
 

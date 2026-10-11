@@ -1,13 +1,13 @@
-use serde_json::{json, Map, Value};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use serde_json::{Map, Value, json};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::commands::system::write_log_line;
-use crate::context::{capture_foreground_monitor, MonitorBounds};
+use crate::context::{MonitorBounds, capture_foreground_monitor};
 
 const OVERLAY_DEFAULT_BASE_WIDTH: f64 = 360.0;
 const OVERLAY_BASE_HEIGHT: f64 = 56.0;
@@ -74,10 +74,9 @@ impl OverlayLayout {
             OverlayLayout::Subtitles => (OVERLAY_SUBTITLE_WIDTH, OVERLAY_SUBTITLE_HEIGHT),
             OverlayLayout::LiveSubtitles => (OVERLAY_SUBTITLE_WIDTH, OVERLAY_LIVE_SUBTITLE_HEIGHT),
             OverlayLayout::Streaming => (OVERLAY_STREAMING_WIDTH, OVERLAY_STREAMING_HEIGHT),
-            OverlayLayout::StreamingWithMicHint => (
-                OVERLAY_STREAMING_WIDTH,
-                OVERLAY_STREAMING_MIC_HINT_HEIGHT,
-            ),
+            OverlayLayout::StreamingWithMicHint => {
+                (OVERLAY_STREAMING_WIDTH, OVERLAY_STREAMING_MIC_HINT_HEIGHT)
+            }
         }
     }
 }
@@ -163,10 +162,17 @@ impl WindowState {
 
         let state_name = self.latest_state_name();
         let (gdi, user_obj) = gui_resource_counts();
-        let overlay_visible = app.get_webview_window("overlay").and_then(|o| o.is_visible().ok());
+        let overlay_visible = app
+            .get_webview_window("overlay")
+            .and_then(|o| o.is_visible().ok());
         write_log_line(&format!(
             "[overlay-health] present show_id={} state={} generation=0 uptimeSec={} gdi={} user={} overlayVisible={:?}",
-            show_id, state_name, self.created_at.elapsed().as_secs(), gdi, user_obj, overlay_visible,
+            show_id,
+            state_name,
+            self.created_at.elapsed().as_secs(),
+            gdi,
+            user_obj,
+            overlay_visible,
         ));
 
         if self.ensure_visible(app, show_id) {
@@ -179,7 +185,11 @@ impl WindowState {
 
     /// 兼容旧调用点；新代码应使用 present_overlay，将显示和状态更新合成一次操作。
     pub fn show_overlay(&self, app: &AppHandle) -> u64 {
-        let data = self.latest_overlay_payload.lock().unwrap().clone()
+        let data = self
+            .latest_overlay_payload
+            .lock()
+            .unwrap()
+            .clone()
             .unwrap_or_else(|| json!({ "state": "waiting", "elapsedSec": 0 }));
         self.present_overlay(app, data)
     }
@@ -272,7 +282,10 @@ impl WindowState {
     pub fn record_render_ack(&self, data: &Value) {
         let show_id = data.get("showId").and_then(Value::as_u64).unwrap_or(0);
         let generation = data.get("generation").and_then(Value::as_u64).unwrap_or(0);
-        let healthy = data.get("healthy").and_then(Value::as_bool).unwrap_or(false);
+        let healthy = data
+            .get("healthy")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let active_show_id = self.active_show_id.load(Ordering::SeqCst);
         let active_generation = self.active_generation.load(Ordering::SeqCst);
 
@@ -287,7 +300,9 @@ impl WindowState {
         if !healthy {
             write_log_line(&format!(
                 "[overlay-health] unhealthy render ack show_id={} generation={} detail={}",
-                show_id, generation, compact_json(data),
+                show_id,
+                generation,
+                compact_json(data),
             ));
             return;
         }
@@ -300,10 +315,18 @@ impl WindowState {
             show_id,
             generation,
             self.ack_latency_ms(),
-            data.get("overlayState").and_then(Value::as_str).unwrap_or("unknown"),
-            data.get("contentWidth").and_then(Value::as_f64).unwrap_or(0.0),
-            data.get("contentHeight").and_then(Value::as_f64).unwrap_or(0.0),
-            data.get("documentVisibility").and_then(Value::as_str).unwrap_or("unknown"),
+            data.get("overlayState")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            data.get("contentWidth")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            data.get("contentHeight")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            data.get("documentVisibility")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
         ));
     }
 
@@ -340,11 +363,13 @@ impl WindowState {
         let timestamp = now_ms();
         let event_name = match event {
             PageLoadEvent::Started => {
-                self.page_load_started_at_ms.store(timestamp, Ordering::SeqCst);
+                self.page_load_started_at_ms
+                    .store(timestamp, Ordering::SeqCst);
                 "started"
             }
             PageLoadEvent::Finished => {
-                self.page_load_finished_at_ms.store(timestamp, Ordering::SeqCst);
+                self.page_load_finished_at_ms
+                    .store(timestamp, Ordering::SeqCst);
                 "finished"
             }
         };
@@ -385,7 +410,11 @@ impl WindowState {
     fn ack_latency_ms(&self) -> i64 {
         let ack_at = self.last_ack_at_ms.load(Ordering::SeqCst);
         let started_at = self.show_started_at_ms.load(Ordering::SeqCst);
-        if ack_at <= 0 || started_at <= 0 { -1 } else { ack_at - started_at }
+        if ack_at <= 0 || started_at <= 0 {
+            -1
+        } else {
+            ack_at - started_at
+        }
     }
 
     fn is_acked(&self, show_id: u64, generation: u64) -> bool {
@@ -433,7 +462,10 @@ impl WindowState {
         let state = data.get("state").and_then(Value::as_str);
         // streaming 标志在录音开始时即为真（气泡从一开始就在，避免中途弹出+缩放）；
         // 兼容旧逻辑：有 streamingText 也算。
-        let streaming_on = data.get("streaming").and_then(Value::as_bool).unwrap_or(false)
+        let streaming_on = data
+            .get("streaming")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
             || data
                 .get("streamingText")
                 .and_then(Value::as_str)
@@ -474,8 +506,14 @@ impl WindowState {
             && matches!(
                 (&*current_layout, &candidate_layout),
                 (OverlayLayout::BaseWithMicHint, OverlayLayout::Base)
-                    | (OverlayLayout::StreamingWithMicHint, OverlayLayout::Streaming)
-                    | (OverlayLayout::StreamingWithMicHint, OverlayLayout::BaseWithMicHint)
+                    | (
+                        OverlayLayout::StreamingWithMicHint,
+                        OverlayLayout::Streaming
+                    )
+                    | (
+                        OverlayLayout::StreamingWithMicHint,
+                        OverlayLayout::BaseWithMicHint
+                    )
                     | (OverlayLayout::StreamingWithMicHint, OverlayLayout::Base)
             );
 
@@ -489,7 +527,10 @@ impl WindowState {
     }
 
     fn latest_state_name(&self) -> String {
-        self.latest_overlay_payload.lock().unwrap().as_ref()
+        self.latest_overlay_payload
+            .lock()
+            .unwrap()
+            .as_ref()
             .and_then(|payload| payload.get("state"))
             .and_then(Value::as_str)
             .unwrap_or("unknown")
@@ -511,8 +552,12 @@ impl WindowState {
     }
 
     fn emit_latest(&self, app: &AppHandle, probe: bool) {
-        let Some(overlay) = app.get_webview_window("overlay") else { return; };
-        let Some(payload) = self.payload_for_emit(probe) else { return; };
+        let Some(overlay) = app.get_webview_window("overlay") else {
+            return;
+        };
+        let Some(payload) = self.payload_for_emit(probe) else {
+            return;
+        };
         if let Err(error) = overlay.emit("overlay-state", payload) {
             write_log_line(&format!(
                 "[overlay-health] emit FAILED show_id={} generation={} error={:?}",
@@ -541,7 +586,10 @@ impl WindowState {
 
         let position_error = self.apply_native_layout(app, &overlay, &layout);
         let show_error = overlay.show().err().map(|error| format!("{:?}", error));
-        let top_error = overlay.set_always_on_top(true).err().map(|error| format!("{:?}", error));
+        let top_error = overlay
+            .set_always_on_top(true)
+            .err()
+            .map(|error| format!("{:?}", error));
         // set_always_on_top(true) 在状态未变时可能是 no-op，这里再用原生 SetWindowPos 强制
         // 把窗口顶到 topmost 带最上层，确保即使下方已有别的置顶窗口也能压过它。
         reassert_overlay_topmost(app);
@@ -551,12 +599,17 @@ impl WindowState {
         if position_error.is_some() || show_error.is_some() || top_error.is_some() {
             write_log_line(&format!(
                 "[overlay-health] native show FAILED show_id={} position_error={:?} show_error={:?} top_error={:?} snapshot={}",
-                show_id, position_error, show_error, top_error, compact_json(&snapshot),
+                show_id,
+                position_error,
+                show_error,
+                top_error,
+                compact_json(&snapshot),
             ));
         } else {
             write_log_line(&format!(
                 "[overlay-health] native show OK show_id={} snapshot={}",
-                show_id, compact_json(&snapshot),
+                show_id,
+                compact_json(&snapshot),
             ));
         }
         true
@@ -576,12 +629,16 @@ impl WindowState {
             .as_ref()
             .and_then(|value| calc_monitor_overlay_bounds(app, value, layout, base_width))
         {
-            let position_error = overlay.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(bounds.0, bounds.1),
-            )).err();
-            let size_error = overlay.set_size(tauri::Size::Physical(
-                tauri::PhysicalSize::new(bounds.2, bounds.3),
-            )).err();
+            let position_error = overlay
+                .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                    bounds.0, bounds.1,
+                )))
+                .err();
+            let size_error = overlay
+                .set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+                    bounds.2, bounds.3,
+                )))
+                .err();
             let _ = overlay.set_always_on_top(true);
 
             return match (position_error, size_error) {
@@ -591,12 +648,16 @@ impl WindowState {
         }
 
         let bounds = calc_overlay_bounds(app, layout, base_width);
-        let position_error = overlay.set_position(tauri::Position::Logical(
-            tauri::LogicalPosition::new(bounds.0, bounds.1),
-        )).err();
-        let size_error = overlay.set_size(tauri::Size::Logical(
-            tauri::LogicalSize::new(bounds.2, bounds.3),
-        )).err();
+        let position_error = overlay
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                bounds.0, bounds.1,
+            )))
+            .err();
+        let size_error = overlay
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                bounds.2, bounds.3,
+            )))
+            .err();
         let _ = overlay.set_always_on_top(true);
 
         match (position_error, size_error) {
@@ -615,7 +676,8 @@ impl WindowState {
         self.active_generation.store(1, Ordering::SeqCst);
         self.last_ack_show_id.store(0, Ordering::SeqCst);
         self.last_ack_generation.store(0, Ordering::SeqCst);
-        self.recovery_started_show_id.store(show_id, Ordering::SeqCst);
+        self.recovery_started_show_id
+            .store(show_id, Ordering::SeqCst);
         write_log_line(&format!(
             "[overlay-health] recovery begin show_id={} failure_class={} diagnostic={}",
             show_id,
@@ -662,26 +724,23 @@ impl WindowState {
     ) {
         self.reset_renderer_lifecycle();
         let bounds = calc_overlay_bounds(app, &layout, base_width);
-        let builder = WebviewWindowBuilder::new(
-            app,
-            "overlay",
-            WebviewUrl::App("overlay.html".into()),
-        )
-        .title("SayIt Overlay")
-        .inner_size(bounds.2, bounds.3)
-        .position(bounds.0, bounds.1)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .focused(false)
-        .visible(false)
-        .on_page_load(|window, payload| {
-            let state = window.app_handle().state::<WindowState>();
-            state.record_page_load(payload.event(), payload.url().as_str());
-        });
+        let builder =
+            WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+                .title("SayIt Overlay")
+                .inner_size(bounds.2, bounds.3)
+                .position(bounds.0, bounds.1)
+                .decorations(false)
+                .transparent(true)
+                .shadow(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .focused(false)
+                .visible(false)
+                .on_page_load(|window, payload| {
+                    let state = window.app_handle().state::<WindowState>();
+                    state.record_page_load(payload.event(), payload.url().as_str());
+                });
 
         match builder.build() {
             Ok(overlay) => {
@@ -731,10 +790,12 @@ impl WindowState {
 fn reassert_overlay_topmost(app: &AppHandle) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
     };
 
-    let Some(overlay) = app.get_webview_window("overlay") else { return; };
+    let Some(overlay) = app.get_webview_window("overlay") else {
+        return;
+    };
     // 通过 isize 中转重建 HWND，规避 tauri 与本 crate 各自 windows 版本的 HWND 类型不一致。
     let hwnd_raw = match overlay.hwnd() {
         Ok(h) => h.0 as isize,
@@ -892,10 +953,7 @@ fn classify_overlay_failure(
     }
 
     let visible = window.get("visible").and_then(Value::as_bool) == Some(true);
-    let on_screen = window
-        .get("intersectsAnyMonitor")
-        .and_then(Value::as_bool)
-        == Some(true);
+    let on_screen = window.get("intersectsAnyMonitor").and_then(Value::as_bool) == Some(true);
     if !visible || !on_screen {
         return "visibility_or_position";
     }
@@ -940,22 +998,28 @@ fn overlay_window_snapshot(app: &AppHandle) -> Value {
     snapshot.insert("intersectsAnyMonitor".to_string(), json!(intersects_any));
     snapshot.insert(
         "position".to_string(),
-        position.map(|value| json!({ "x": value.x, "y": value.y })).unwrap_or(Value::Null),
+        position
+            .map(|value| json!({ "x": value.x, "y": value.y }))
+            .unwrap_or(Value::Null),
     );
     snapshot.insert(
         "size".to_string(),
-        size.map(|value| json!({ "width": value.width, "height": value.height })).unwrap_or(Value::Null),
+        size.map(|value| json!({ "width": value.width, "height": value.height }))
+            .unwrap_or(Value::Null),
     );
     if let Some(monitor) = primary_monitor {
         let position = monitor.position();
         let size = monitor.size();
-        snapshot.insert("primaryMonitor".to_string(), json!({
-            "x": position.x,
-            "y": position.y,
-            "width": size.width,
-            "height": size.height,
-            "scaleFactor": monitor.scale_factor(),
-        }));
+        snapshot.insert(
+            "primaryMonitor".to_string(),
+            json!({
+                "x": position.x,
+                "y": position.y,
+                "width": size.width,
+                "height": size.height,
+                "scaleFactor": monitor.scale_factor(),
+            }),
+        );
     }
     Value::Object(snapshot)
 }
@@ -966,7 +1030,7 @@ fn set_overlay_interactivity(overlay: &tauri::WebviewWindow, interactive: bool) 
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_overlay_failure, OverlayLayout, WindowState};
+    use super::{OverlayLayout, WindowState, classify_overlay_failure};
     use serde_json::json;
     use std::sync::atomic::Ordering;
 
@@ -1088,7 +1152,9 @@ mod tests {
     #[test]
     fn subtitle_layout_fits_translated_lines_without_intercepting_player_clicks() {
         let state = WindowState::new();
-        state.apply_payload_layout(&json!({ "state": "subtitles", "subtitleText": "Translated speech" }));
+        state.apply_payload_layout(
+            &json!({ "state": "subtitles", "subtitleText": "Translated speech" }),
+        );
         let layout = state.overlay_layout.lock().unwrap().clone();
         let (width, height) = layout.dimensions(360.0);
         assert!(width >= 640.0);
@@ -1163,7 +1229,11 @@ fn monitor_info(app: &AppHandle) -> (f64, f64, f64) {
     }
 }
 
-fn calc_overlay_bounds(app: &AppHandle, layout: &OverlayLayout, base_width: f64) -> (f64, f64, f64, f64) {
+fn calc_overlay_bounds(
+    app: &AppHandle,
+    layout: &OverlayLayout,
+    base_width: f64,
+) -> (f64, f64, f64, f64) {
     let (desired_width, desired_height) = layout.dimensions(base_width);
     let (screen_width, screen_height, _) = monitor_info(app);
     let width = desired_width.min(screen_width - 40.0).max(160.0);

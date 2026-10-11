@@ -40,7 +40,10 @@ fn resolve_test_audio(
 ) -> Result<std::path::PathBuf, String> {
     app_handle
         .path()
-        .resolve(test_audio_resource(language), tauri::path::BaseDirectory::Resource)
+        .resolve(
+            test_audio_resource(language),
+            tauri::path::BaseDirectory::Resource,
+        )
         .map_err(|e| format!("Could not locate test audio: {}", e))
 }
 
@@ -117,9 +120,12 @@ pub async fn get_test_audio_b64(
 ) -> Result<String, String> {
     let language = language.unwrap_or_else(|| "auto".into());
     let resource_path = resolve_test_audio(&app_handle, &language)?;
-    let wav_bytes = std::fs::read(&resource_path)
-        .map_err(|e| format!("Failed to read test audio: {}", e))?;
-    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav_bytes))
+    let wav_bytes =
+        std::fs::read(&resource_path).map_err(|e| format!("Failed to read test audio: {}", e))?;
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &wav_bytes,
+    ))
 }
 
 #[cfg(test)]

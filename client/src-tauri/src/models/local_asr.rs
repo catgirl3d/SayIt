@@ -24,11 +24,8 @@ pub struct LocalAsrResult {
 }
 
 fn decode_pcm(audio_b64: &str) -> Result<Vec<f32>, String> {
-    let pcm_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        audio_b64,
-    )
-    .map_err(|e| format!("Failed to decode base64 audio: {}", e))?;
+    let pcm_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_b64)
+        .map_err(|e| format!("Failed to decode base64 audio: {}", e))?;
 
     if pcm_bytes.len() % 2 != 0 {
         return Err(format!(
@@ -50,12 +47,17 @@ pub async fn local_transcribe(
     language: Option<String>,
     accelerator: Option<String>,
 ) -> Result<LocalAsrResult, String> {
-    let samples = decode_pcm(&audio_b64).map_err(|e| {
-        crate::providers::diag::fail("local/asr", "decode_pcm", e)
-    })?;
+    let samples = decode_pcm(&audio_b64)
+        .map_err(|e| crate::providers::diag::fail("local/asr", "decode_pcm", e))?;
     if samples.is_empty() {
-        crate::providers::diag::empty_result("local/asr", "Input audio was empty; model inference was skipped");
-        return Ok(LocalAsrResult { text: String::new(), elapsed_ms: 0 });
+        crate::providers::diag::empty_result(
+            "local/asr",
+            "Input audio was empty; model inference was skipped",
+        );
+        return Ok(LocalAsrResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
     }
 
     let accel = accelerator.unwrap_or_else(|| "auto".to_string());
@@ -149,7 +151,9 @@ pub async fn unload_local_model() -> Result<(), String> {
 #[tauri::command]
 pub fn set_local_model_idle_unload(idle_minutes: u64) -> Result<(), String> {
     if !matches!(idle_minutes, 0 | 10 | 30 | 60) {
-        return Err(format!("Unsupported model idle unload interval: {idle_minutes}"));
+        return Err(format!(
+            "Unsupported model idle unload interval: {idle_minutes}"
+        ));
     }
     gguf_asr::set_idle_unload_minutes(idle_minutes);
     Ok(())
@@ -259,7 +263,10 @@ pub fn reclaim_legacy_models() -> u64 {
     }
 
     if freed > 0 {
-        log::info!("Removed {:.1} MB of legacy engine models", freed as f64 / 1024.0 / 1024.0);
+        log::info!(
+            "Removed {:.1} MB of legacy engine models",
+            freed as f64 / 1024.0 / 1024.0
+        );
     }
     freed
 }
@@ -340,10 +347,7 @@ mod tests {
         pcm_bytes.extend_from_slice(speech);
         pcm_bytes.extend_from_slice(&silence);
 
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &pcm_bytes,
-        );
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pcm_bytes);
         let result = run_local_transcribe(b64, model_id).unwrap();
         assert!(
             !result.text.trim().is_empty(),
@@ -356,10 +360,7 @@ mod tests {
     #[test]
     fn silence_short_circuits_before_loading_model() {
         let pcm_bytes = vec![0u8; SR * 2 * 3]; // 3s、16-bit PCM 纯静音
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &pcm_bytes,
-        );
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pcm_bytes);
 
         // 故意传不存在的模型：若 VAD 没有先短路，这里会因模型不存在而报错。
         let result = run_local_transcribe(b64, "model-that-must-not-be-loaded").unwrap();
@@ -383,10 +384,7 @@ mod tests {
 
     #[test]
     fn decode_pcm_rejects_incomplete_i16_sample() {
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            [0u8, 1, 2],
-        );
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8, 1, 2]);
         let err = decode_pcm(&b64).unwrap_err();
         assert!(err.contains("16-bit"), "unexpected error: {err}");
     }

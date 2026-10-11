@@ -63,7 +63,9 @@ fn incomplete_reasoning_start(text: &str) -> Option<usize> {
             break;
         };
         if text.is_char_boundary(start)
-            && text[start..].as_bytes().eq_ignore_ascii_case(&tag[..length])
+            && text[start..]
+                .as_bytes()
+                .eq_ignore_ascii_case(&tag[..length])
         {
             return Some(start);
         }

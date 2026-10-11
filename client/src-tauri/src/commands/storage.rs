@@ -1,6 +1,6 @@
+use crate::storage::Storage;
 use serde_json::Value;
 use tauri::State;
-use crate::storage::Storage;
 
 #[tauri::command]
 pub fn store_get(key: String, storage: State<Storage>) -> Result<Value, String> {
@@ -13,8 +13,13 @@ pub fn store_set(key: String, value: Value, storage: State<Storage>) -> Result<(
 }
 
 #[tauri::command]
-pub fn store_set_app_settings(settings: serde_json::Map<String, Value>, storage: State<Storage>) -> Result<(), String> {
-    storage.set_app_settings(&settings).map_err(|e| e.to_string())
+pub fn store_set_app_settings(
+    settings: serde_json::Map<String, Value>,
+    storage: State<Storage>,
+) -> Result<(), String> {
+    storage
+        .set_app_settings(&settings)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -23,17 +28,29 @@ pub fn store_delete(key: String, storage: State<Storage>) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn record_stats_delta(char_count: i64, duration_sec: f64, storage: State<Storage>) -> Result<Value, String> {
+pub fn record_stats_delta(
+    char_count: i64,
+    duration_sec: f64,
+    storage: State<Storage>,
+) -> Result<Value, String> {
     validate_stats_delta(char_count, duration_sec)?;
-    storage.record_stats_delta(char_count, duration_sec).map_err(|e| e.to_string())
+    storage
+        .record_stats_delta(char_count, duration_sec)
+        .map_err(|e| e.to_string())
 }
 
 fn validate_stats_delta(char_count: i64, duration_sec: f64) -> Result<(), String> {
     if char_count < 0 {
-        return Err(format!("char_count must be non-negative, got {}", char_count));
+        return Err(format!(
+            "char_count must be non-negative, got {}",
+            char_count
+        ));
     }
     if !duration_sec.is_finite() || duration_sec < 0.0 {
-        return Err(format!("duration_sec must be finite and non-negative, got {}", duration_sec));
+        return Err(format!(
+            "duration_sec must be finite and non-negative, got {}",
+            duration_sec
+        ));
     }
     Ok(())
 }
@@ -57,7 +74,9 @@ pub fn history_add(record: Value, storage: State<Storage>) -> Result<(), String>
 
 #[tauri::command]
 pub fn history_update(id: String, patch: Value, storage: State<Storage>) -> Result<(), String> {
-    storage.history_update(&id, &patch).map_err(|e| e.to_string())
+    storage
+        .history_update(&id, &patch)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -66,15 +85,27 @@ pub fn history_delete(id: String, storage: State<Storage>) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn history_set_favorite(id: String, favorite: bool, storage: State<Storage>) -> Result<(), String> {
-    storage.history_set_favorite(&id, favorite).map_err(|e| e.to_string())
+pub fn history_set_favorite(
+    id: String,
+    favorite: bool,
+    storage: State<Storage>,
+) -> Result<(), String> {
+    storage
+        .history_set_favorite(&id, favorite)
+        .map_err(|e| e.to_string())
 }
 
 fn parse_history_query(query: &Option<Value>) -> (Option<String>, bool, Option<i64>, Option<i64>) {
     match query {
         Some(v) => {
-            let keyword = v.get("keyword").and_then(|k| k.as_str()).map(|s| s.to_string());
-            let favorite_only = v.get("favoriteOnly").and_then(|f| f.as_bool()).unwrap_or(false);
+            let keyword = v
+                .get("keyword")
+                .and_then(|k| k.as_str())
+                .map(|s| s.to_string());
+            let favorite_only = v
+                .get("favoriteOnly")
+                .and_then(|f| f.as_bool())
+                .unwrap_or(false);
             let limit = v.get("limit").and_then(|l| l.as_i64());
             let offset = v.get("offset").and_then(|o| o.as_i64());
             (keyword, favorite_only, limit, offset)

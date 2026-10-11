@@ -46,7 +46,8 @@ fn stage_transcribe_runtime_libs() {
         .expect("OUT_DIR 形状变了")
         .to_path_buf();
 
-    let staging = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("transcribe-libs");
+    let staging =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("transcribe-libs");
     // 重建 staging，避免上次构建遗留的、这次已经改名/删掉的模块被一起打包。
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).expect("创建 transcribe-libs 目录");
@@ -235,12 +236,7 @@ fn vc_redist_root() -> Option<PathBuf> {
         return None;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let vs_root = PathBuf::from(
-        stdout
-            .lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty())?,
-    );
+    let vs_root = PathBuf::from(stdout.lines().map(str::trim).find(|l| !l.is_empty())?);
 
     let version = std::fs::read_to_string(
         vs_root
@@ -255,11 +251,7 @@ fn vc_redist_root() -> Option<PathBuf> {
         .join("Redist")
         .join("MSVC")
         .join(version.trim());
-    if root.is_dir() {
-        Some(root)
-    } else {
-        None
-    }
+    if root.is_dir() { Some(root) } else { None }
 }
 
 /// 在 `<redist>\<arch>\` 下找形如 `Microsoft.VC143.CRT` 的子目录，按名字取最新的。

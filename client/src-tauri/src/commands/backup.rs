@@ -8,7 +8,7 @@
 // - 全部导入时，历史记录里的 audioFilePath 是旧机绝对路径，会重写为本机 audio 目录下的同名文件。
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::storage::{Storage, BUILTIN_PROMPT_IDS};
+use crate::storage::{BUILTIN_PROMPT_IDS, Storage};
 
 /// 备份文件格式版本。导入时若备份版本高于此值则拒绝。
 const FORMAT_VERSION: i64 = 1;
@@ -314,10 +314,21 @@ fn build_full_value(storage: &Storage, scope: BackupScope) -> Value {
     payload
 }
 
-fn check_kind_and_version(data: &Value, expected_kind: &str, max_version: i64) -> Result<i64, String> {
+fn check_kind_and_version(
+    data: &Value,
+    expected_kind: &str,
+    max_version: i64,
+) -> Result<i64, String> {
     let kind = data.get("kind").and_then(Value::as_str).unwrap_or("");
     if kind != expected_kind {
-        return Err(format!("This is not a valid SayIt {} file", if expected_kind == "full" { "full-data backup" } else { "configuration" }));
+        return Err(format!(
+            "This is not a valid SayIt {} file",
+            if expected_kind == "full" {
+                "full-data backup"
+            } else {
+                "configuration"
+            }
+        ));
     }
     let version = data
         .get("formatVersion")
@@ -334,8 +345,7 @@ fn check_kind_and_version(data: &Value, expected_kind: &str, max_version: i64) -
 
 fn is_selected_config(data: &Value) -> bool {
     data.get("scope").and_then(Value::as_str) == Some("selected")
-        && data.get("formatVersion").and_then(Value::as_i64)
-            == Some(SELECTED_CONFIG_FORMAT_VERSION)
+        && data.get("formatVersion").and_then(Value::as_i64) == Some(SELECTED_CONFIG_FORMAT_VERSION)
 }
 
 /// 应用完整配置部分（设置 + Prompt 预设 + 分应用规则），两档共用。
@@ -372,7 +382,11 @@ fn apply_config_part(
 fn rewrite_audio_path(rec: &Value, adir: &Path) -> Value {
     let mut rec = rec.clone();
     if let Some(obj) = rec.as_object_mut() {
-        if let Some(p) = obj.get("audioFilePath").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+        if let Some(p) = obj
+            .get("audioFilePath")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
             let base = basename(&p);
             if !base.is_empty() {
                 let new_path = adir.join(&base).to_string_lossy().to_string();
@@ -416,7 +430,10 @@ fn unique_import_name(base: &str, used_names: &mut HashSet<String>) -> String {
     }
 }
 
-fn build_selected_import_plan(storage: &Storage, data: &Value) -> Result<SelectedImportPlan, String> {
+fn build_selected_import_plan(
+    storage: &Storage,
+    data: &Value,
+) -> Result<SelectedImportPlan, String> {
     let items = data
         .get("items")
         .and_then(Value::as_object)
@@ -485,8 +502,7 @@ fn build_selected_import_plan(storage: &Storage, data: &Value) -> Result<Selecte
                         merged_words.push(word);
                     }
                 }
-                if merged_words.len()
-                    == normalized_strings(local_groups[index].get("words")).len()
+                if merged_words.len() == normalized_strings(local_groups[index].get("words")).len()
                 {
                     skipped += 1;
                 } else if let Some(local_obj) = local_groups[index].as_object_mut() {
@@ -495,10 +511,7 @@ fn build_selected_import_plan(storage: &Storage, data: &Value) -> Result<Selecte
                 }
             } else {
                 let id = next_import_id("theme_import", &mut used_ids, &mut sequence);
-                let enabled = obj
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                let enabled = obj.get("enabled").and_then(Value::as_bool).unwrap_or(true);
                 local_groups.push(json!({ "id": id, "name": name, "words": words }));
                 active_map.insert(id, Value::Bool(enabled));
                 added += 1;
@@ -523,7 +536,10 @@ fn build_selected_import_plan(storage: &Storage, data: &Value) -> Result<Selecte
             });
         }
 
-        app_settings.insert("customHotwordThemes".to_string(), Value::Array(local_groups));
+        app_settings.insert(
+            "customHotwordThemes".to_string(),
+            Value::Array(local_groups),
+        );
         app_settings.insert("customThemeActive".to_string(), Value::Object(active_map));
         sections.push(ConfigImportSectionPreview {
             kind: "hotwords".to_string(),
@@ -570,9 +586,9 @@ fn build_selected_import_plan(storage: &Storage, data: &Value) -> Result<Selecte
                 continue;
             }
             let to = obj.get("to").and_then(Value::as_str).unwrap_or("");
-            let existing_index = local_rules.iter().position(|rule| {
-                rule.get("from").and_then(Value::as_str) == Some(from)
-            });
+            let existing_index = local_rules
+                .iter()
+                .position(|rule| rule.get("from").and_then(Value::as_str) == Some(from));
 
             if let Some(index) = existing_index {
                 let current_to = local_rules[index]
@@ -766,7 +782,8 @@ fn audio_progress_percent(processed_bytes: u64, total_bytes: u64) -> f64 {
 #[tauri::command]
 pub fn get_backup_directory() -> Result<String, String> {
     let directory = backup_dir();
-    fs::create_dir_all(&directory).map_err(|e| format!("Failed to create backup directory: {}", e))?;
+    fs::create_dir_all(&directory)
+        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
     Ok(directory.to_string_lossy().to_string())
 }
 
@@ -777,7 +794,8 @@ pub async fn export_config(
 ) -> Result<String, String> {
     let out_path = timestamped_backup_path("sayit-config", "json");
     if let Some(parent) = out_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create backup directory: {}", e))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create backup directory: {}", e))?;
     }
     let payload = match selection.mode.as_str() {
         "full" => build_config_value(storage.inner()),
@@ -836,7 +854,8 @@ pub fn write_backup_archive(
 
     let result = (|| -> Result<(), String> {
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create export directory: {}", e))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create export directory: {}", e))?;
         }
 
         let payload = build_full_value(storage, scope);
@@ -851,12 +870,13 @@ pub fn write_backup_archive(
             percent: 5.0,
         });
 
-        let file = fs::File::create(&temp_path).map_err(|e| format!("Failed to create file: {}", e))?;
+        let file =
+            fs::File::create(&temp_path).map_err(|e| format!("Failed to create file: {}", e))?;
         let mut zip = zip::ZipWriter::new(file);
-        let text_opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        let audio_opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let text_opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let audio_opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         zip.start_file("backup.json", text_opts)
             .map_err(|e| e.to_string())?;
@@ -922,9 +942,11 @@ pub fn write_backup_archive(
         zip.finish().map_err(|e| e.to_string())?;
 
         if output.exists() {
-            fs::remove_file(output).map_err(|e| format!("Failed to replace the previous backup: {}", e))?;
+            fs::remove_file(output)
+                .map_err(|e| format!("Failed to replace the previous backup: {}", e))?;
         }
-        fs::rename(&temp_path, output).map_err(|e| format!("Failed to finalize the backup file: {}", e))?;
+        fs::rename(&temp_path, output)
+            .map_err(|e| format!("Failed to finalize the backup file: {}", e))?;
         Ok(())
     })();
 
@@ -1033,8 +1055,12 @@ fn content_fingerprint(content: &str) -> String {
 
 fn read_config_file(in_path: &str) -> Result<(Value, String), String> {
     let content = fs::read_to_string(in_path).map_err(|e| format!("Failed to read file: {}", e))?;
-    let data = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse the file; it may be damaged or have an invalid format: {}", e))?;
+    let data = serde_json::from_str(&content).map_err(|e| {
+        format!(
+            "Failed to parse the file; it may be damaged or have an invalid format: {}",
+            e
+        )
+    })?;
     Ok((data, content_fingerprint(&content)))
 }
 
@@ -1166,11 +1192,7 @@ pub async fn inspect_config_import(
     storage: State<'_, Storage>,
 ) -> Result<ConfigImportPreview, String> {
     let (data, file_fingerprint) = read_config_file(&in_path)?;
-    let version = check_kind_and_version(
-        &data,
-        "config",
-        SELECTED_CONFIG_FORMAT_VERSION,
-    )?;
+    let version = check_kind_and_version(&data, "config", SELECTED_CONFIG_FORMAT_VERSION)?;
 
     if is_selected_config(&data) {
         let plan = build_selected_import_plan(storage.inner(), &data)?;
@@ -1211,11 +1233,7 @@ pub async fn import_config(
     storage: State<'_, Storage>,
 ) -> Result<ConfigImportResult, String> {
     let (data, file_fingerprint) = read_config_file(&in_path)?;
-    let version = check_kind_and_version(
-        &data,
-        "config",
-        SELECTED_CONFIG_FORMAT_VERSION,
-    )?;
+    let version = check_kind_and_version(&data, "config", SELECTED_CONFIG_FORMAT_VERSION)?;
 
     if is_selected_config(&data) {
         let actual_token = config_import_token(storage.inner(), &data, &file_fingerprint)?;
@@ -1277,17 +1295,21 @@ pub async fn import_full(in_path: String, storage: State<'_, Storage>) -> Result
 /// 此时**保留本机现有历史**而不是清空 —— 见 `build_full_value` 里为什么不写空数组。
 pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String> {
     let file = fs::File::open(in_path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Not a valid backup archive: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Not a valid backup archive: {}", e))?;
 
     // 1. 读取并校验 backup.json
     let mut json_str = String::new();
     {
-        let mut entry = archive
-            .by_name("backup.json")
-            .map_err(|_| "The archive is missing backup.json and may not be a SayIt full backup".to_string())?;
-        entry.read_to_string(&mut json_str).map_err(|e| e.to_string())?;
+        let mut entry = archive.by_name("backup.json").map_err(|_| {
+            "The archive is missing backup.json and may not be a SayIt full backup".to_string()
+        })?;
+        entry
+            .read_to_string(&mut json_str)
+            .map_err(|e| e.to_string())?;
     }
-    let data: Value = serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse backup.json: {}", e))?;
+    let data: Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse backup.json: {}", e))?;
     check_kind_and_version(&data, "full", FORMAT_VERSION)?;
     full_config_preview_sections(&data)?;
 
@@ -1307,7 +1329,8 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
             }
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-            fs::write(adir.join(&base), &buf).map_err(|e| format!("Failed to write audio file {}: {}", base, e))?;
+            fs::write(adir.join(&base), &buf)
+                .map_err(|e| format!("Failed to write audio file {}: {}", base, e))?;
         }
     }
 
@@ -1316,19 +1339,26 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
 
     // 4. 历史：重写音频路径后整表替换
     if let Some(history) = data.get("history").and_then(|v| v.as_array()) {
-        let rewritten: Vec<Value> = history.iter().map(|rec| rewrite_audio_path(rec, &adir)).collect();
+        let rewritten: Vec<Value> = history
+            .iter()
+            .map(|rec| rewrite_audio_path(rec, &adir))
+            .collect();
         storage
             .set("history", &Value::Array(rewritten))
             .map_err(|e| format!("Failed to write history: {}", e))?;
     }
     if let Some(arr) = data.get("manualCorrections") {
         if arr.is_array() {
-            storage.set("manualCorrections", arr).map_err(|e| format!("Failed to write manual corrections: {}", e))?;
+            storage
+                .set("manualCorrections", arr)
+                .map_err(|e| format!("Failed to write manual corrections: {}", e))?;
         }
     }
     if let Some(arr) = data.get("feedbackQueue") {
         if arr.is_array() {
-            storage.set("feedbackQueue", arr).map_err(|e| format!("Failed to write feedback queue: {}", e))?;
+            storage
+                .set("feedbackQueue", arr)
+                .map_err(|e| format!("Failed to write feedback queue: {}", e))?;
         }
     }
     Ok(())
@@ -1345,7 +1375,11 @@ mod tests {
     use super::*;
 
     fn temp_storage(tag: &str) -> (Storage, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("sayit-backup-test-{}-{}", tag, uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "sayit-backup-test-{}-{}",
+            tag,
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(&dir).unwrap();
         let storage = Storage::new(dir.join("test.db")).unwrap();
         (storage, dir)
@@ -1382,10 +1416,15 @@ mod tests {
         assert!(config_only.get("manualCorrections").is_none());
         assert!(config_only.get("feedbackQueue").is_none());
         // 配置部分照旧在，且 kind 仍是 full —— 用现有的导入路径就能恢复。
-        assert_eq!(config_only.get("kind").and_then(Value::as_str), Some("full"));
+        assert_eq!(
+            config_only.get("kind").and_then(Value::as_str),
+            Some("full")
+        );
         assert!(config_only.get("appSettings").is_some());
         assert_eq!(
-            config_only.pointer("/scope/includeAudio").and_then(Value::as_bool),
+            config_only
+                .pointer("/scope/includeAudio")
+                .and_then(Value::as_bool),
             Some(false)
         );
 

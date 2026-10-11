@@ -31,3 +31,9 @@
 - Bound Cargo's parallelism on this machine: pass `CARGO_BUILD_JOBS=2` inline with cargo commands (same rationale as the release workflow's `CARGO_BUILD_JOBS: 2`).
 - `cargo test` and `cargo check` share no artifacts across profiles. Prefer `cargo test --no-run` / the targeted test filter to warm the test profile, and run `cargo check` as its own, separate invocation — never as an `&&` tail after a test run.
 - Frontend commands (`npm test`, `npx tsc --noEmit`) are cheap; batch them freely. The one-command-per-invocation rule applies to cargo/npm-install-scale builds only.
+
+## 7. CI Checks (GitHub Actions)
+- `ci-frontend.yml` runs lint, i18n check, release-script tests, vitest, and build for `client/**` changes (excluding `client/src-tauri/**`).
+- `ci-rust.yml` runs `cargo fmt --all --check`, an advisory `cargo clippy`, and `cargo test --locked` for `client/src-tauri/**`, `rust-toolchain.toml`, and `rustfmt.toml` changes, on the toolchain pinned in `rust-toolchain.toml` (1.97.1) with `rustfmt.toml` pinning style edition 2024.
+- The Rust gate is formatting-enforced: run `cargo fmt --all` in `client/src-tauri` before committing Rust changes. After applying upstream port patches, format the touched files before committing — ported upstream code arrives unformatted.
+- `cargo clippy` runs with `continue-on-error` as a baseline measurement; do not treat its result as a merge gate until a baseline decision is made.

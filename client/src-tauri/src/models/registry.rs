@@ -48,7 +48,8 @@ pub fn list_downloaded_models() -> Vec<LocalModelInfo> {
                             // 递归计算子目录大小（如 Qwen3-0.6B/）
                             for sub in std::fs::read_dir(&path).into_iter().flatten().flatten() {
                                 if sub.path().is_file() {
-                                    actual_size += std::fs::metadata(sub.path()).map(|m| m.len()).unwrap_or(0);
+                                    actual_size +=
+                                        std::fs::metadata(sub.path()).map(|m| m.len()).unwrap_or(0);
                                 }
                             }
                         }
@@ -82,9 +83,7 @@ pub fn list_downloaded_models() -> Vec<LocalModelInfo> {
                 for file in &source.files {
                     let file_path = model_path.join(&file.name);
                     if file_path.exists() {
-                        actual_size += std::fs::metadata(&file_path)
-                            .map(|m| m.len())
-                            .unwrap_or(0);
+                        actual_size += std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
                     } else {
                         complete = false;
                     }
@@ -116,29 +115,28 @@ pub async fn download_model(
     source: String,
 ) -> Result<(), String> {
     let catalog = catalog::get_available_models();
-    let model = catalog
-        .iter()
-        .find(|m| m.id == model_id)
-        .ok_or_else(|| error_protocol::encode("download_failed", format!("Unknown model: {}", model_id)))?;
+    let model = catalog.iter().find(|m| m.id == model_id).ok_or_else(|| {
+        error_protocol::encode("download_failed", format!("Unknown model: {}", model_id))
+    })?;
 
     let dest_dir = downloader::model_dir(&model_id);
     let _download_lease = downloader::acquire_model_path(&dest_dir)?;
 
     // 如果模型有 archive_url，使用 tar.bz2 下载+解压
     if let Some(ref archive_url) = model.archive_url {
-        downloader::download_and_extract_tar_bz2(
-            app.clone(),
-            &model_id,
-            archive_url,
-        )
-        .await?;
+        downloader::download_and_extract_tar_bz2(app.clone(), &model_id, archive_url).await?;
     } else {
         let download_source = model
             .sources
             .iter()
             .find(|s| s.source == source)
             .or_else(|| model.sources.first())
-            .ok_or_else(|| error_protocol::encode("download_network", format!("Model {} has no available download source", model_id)))?;
+            .ok_or_else(|| {
+                error_protocol::encode(
+                    "download_network",
+                    format!("Model {} has no available download source", model_id),
+                )
+            })?;
 
         let file_count = download_source.files.len() as u32;
         for (i, file) in download_source.files.iter().enumerate() {
@@ -166,8 +164,16 @@ pub async fn download_model(
         "downloaded_at": chrono::Utc::now().to_rfc3339(),
     });
     let meta_path = dest_dir.join("meta.json");
-    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap_or_default())
-        .map_err(|e| error_protocol::encode("download_failed", format!("Failed to write meta.json: {}", e)))?;
+    std::fs::write(
+        &meta_path,
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    )
+    .map_err(|e| {
+        error_protocol::encode(
+            "download_failed",
+            format!("Failed to write meta.json: {}", e),
+        )
+    })?;
 
     Ok(())
 }
@@ -233,7 +239,9 @@ pub fn get_models_dir() -> ModelsDirInfo {
 fn copy_path_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     if src.is_dir() {
         std::fs::create_dir_all(dst).map_err(|e| format!("Failed to create directory: {}", e))?;
-        for entry in std::fs::read_dir(src).map_err(|e| format!("Failed to read directory: {}", e))? {
+        for entry in
+            std::fs::read_dir(src).map_err(|e| format!("Failed to read directory: {}", e))?
+        {
             let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
             copy_path_recursive(&entry.path(), &dst.join(entry.file_name()))?;
         }
@@ -247,7 +255,9 @@ fn copy_path_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 /// 优先 rename（同盘瞬时）；跨盘失败则递归复制后删除源。
 /// 目标已存在同名条目则跳过（不覆盖新目录已有内容）。
 fn move_dir_contents(from: &Path, to: &Path) -> Result<(), String> {
-    for entry in std::fs::read_dir(from).map_err(|e| format!("Failed to read old directory: {}", e))? {
+    for entry in
+        std::fs::read_dir(from).map_err(|e| format!("Failed to read old directory: {}", e))?
+    {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let src = entry.path();
         let dst = to.join(entry.file_name());
@@ -308,7 +318,8 @@ pub async fn set_models_dir(
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
             // 可写性探测
             let probe = new_for_task.join(".sayit_write_test");
-            std::fs::write(&probe, b"ok").map_err(|e| format!("Directory is not writable: {}", e))?;
+            std::fs::write(&probe, b"ok")
+                .map_err(|e| format!("Directory is not writable: {}", e))?;
             let _ = std::fs::remove_file(&probe);
             if move_existing && old_for_task.exists() {
                 move_dir_contents(&old_for_task, &new_for_task)?;
