@@ -1,0 +1,6 @@
+# Single pinned toolchain for local development, CI, and the release build.
+# Bump deliberately in a dedicated commit: compiler, rustfmt, and clippy behavior
+# can change between versions, and the Rust CI job enforces `cargo fmt --all --check`.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
