@@ -3,6 +3,8 @@
 // fires despite addModule() succeeding.  We detect this and fall back to the
 // deprecated-but-reliable ScriptProcessorNode.
 
+import { PCMResampler } from '../../../server/web/pcm-processor.js'
+import pcmProcessorSource from '../../../server/web/pcm-processor.js?raw'
 import { addRuntimeEvent } from './debugLog'
 import { DEFAULT_MIC_BOOST, resolveMicBoost } from './defaults'
 import { getSetting } from './store'
@@ -71,94 +73,23 @@ export function getActualSampleRate(): number {
   return actualSampleRate
 }
 
-const PCM_WORKLET_CODE = `
-class PCMProcessor extends AudioWorkletProcessor {
-  constructor(options) {
-    super();
-    const opts = options.processorOptions || {};
-    this.targetRate = opts.targetRate || 16000;
-    this.inputRate = opts.inputRate || sampleRate || 48000;
-    this.ratio = this.inputRate / this.targetRate;
-    this.tail = new Float32Array(0);
-    this.phase = 0;
-  }
-
-  process(inputs) {
-    const input = inputs[0]?.[0];
-    if (!input || input.length === 0) {
-      return true;
-    }
-
-    let sum = 0;
-    for (let i = 0; i < input.length; i++) {
-      const s = Math.max(-1, Math.min(1, input[i]));
-      sum += s * s;
-    }
-    const rms = Math.sqrt(sum / input.length);
-
-    const merged = new Float32Array(this.tail.length + input.length);
-    merged.set(this.tail, 0);
-    merged.set(input, this.tail.length);
-
-    let outFloat;
-
-    if (Math.abs(this.ratio - 1) < 0.0001) {
-      outFloat = merged;
-      this.tail = new Float32Array(0);
-      this.phase = 0;
-    } else {
-      const available = merged.length - this.phase;
-      const outLen = Math.floor(available / this.ratio);
-
-      if (outLen <= 0) {
-        this.tail = merged;
-        this.port.postMessage({ rms, sampleRate: this.targetRate });
-        return true;
-      }
-
-      outFloat = new Float32Array(outLen);
-      for (let i = 0; i < outLen; i++) {
-        const pos = this.phase + i * this.ratio;
-        const i0 = Math.floor(pos);
-        const i1 = Math.min(i0 + 1, merged.length - 1);
-        const frac = pos - i0;
-        outFloat[i] = merged[i0] * (1 - frac) + merged[i1] * frac;
-      }
-
-      const consumed = this.phase + outLen * this.ratio;
-      const keepFrom = Math.floor(consumed);
-      this.phase = consumed - keepFrom;
-      this.tail = keepFrom < merged.length ? merged.slice(keepFrom) : new Float32Array(0);
-    }
-
-    const int16 = new Int16Array(outFloat.length);
-    for (let i = 0; i < outFloat.length; i++) {
-      const s = Math.max(-1, Math.min(1, outFloat[i]));
-      int16[i] = s < 0 ? s * 32768 : s * 32767;
-    }
-
-    this.port.postMessage({ pcm: int16.buffer, rms, sampleRate: this.targetRate }, [int16.buffer]);
-    return true;
-  }
-}
-
-registerProcessor('pcm-processor', PCMProcessor);
-`
+const PCM_WORKLET_CODE = `${pcmProcessorSource}\nregisterPCMProcessor();`
 
 export async function listMicrophones(): Promise<MediaDeviceInfo[]> {
   const audioInputs = (list: MediaDeviceInfo[]) => list.filter((d) => d.kind === 'audioinput')
 
   let devices = audioInputs(await navigator.mediaDevices.enumerateDevices())
 
-  // 没有持久麦克风权限时，enumerateDevices() 只返回一个无名字的通用项。
-  // 此时临时打开一路音频流触发授权，趁流活跃时重新枚举，拿到真实名称。
+  // Without persistent microphone permission, enumerateDevices() returns only an
+  // unnamed generic entry. Open a temporary stream to request permission, then
+  // enumerate while it is active to obtain the real device names.
   if (devices.length <= 1 || devices.some((d) => !d.label)) {
     let stream: MediaStream | null = null
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       devices = audioInputs(await navigator.mediaDevices.enumerateDevices())
     } catch {
-      // 权限被拒或无可用麦克风：保留已有结果
+      // Permission denied or no microphone available: keep the existing results.
     } finally {
       if (stream) stream.getTracks().forEach((t) => t.stop())
     }
@@ -172,10 +103,12 @@ function createAudioContext() {
   if (!AudioContextCtor) {
     throw new Error('Current browser does not support AudioContext')
   }
-  // 优先直接开 16 kHz 的 AudioContext：拿到的话浏览器会用自己的高质量重采样器，
-  // 我们下面那套手写线性插值就可以整段跳过。线性插值没有抗混叠低通，48k→16k
-  // 是 3 倍抽取，8~24 kHz 的能量会折回 0~8 kHz，直接损害识别准确度。
-  // 不是所有 WebView2/浏览器都接受 sampleRate 约束，所以拿不到就回退原路径。
+  // Prefer a 16 kHz AudioContext so the browser's high-quality resampler handles
+  // conversion and our linear interpolation can be skipped. Linear interpolation
+  // has no anti-aliasing low-pass filter: 48k-to-16k downsamples by a factor of 3,
+  // folding energy from 8-24 kHz into 0-8 kHz and directly harming ASR accuracy.
+  // Not every WebView2/browser accepts the sampleRate option; otherwise fall back
+  // to the original context creation path.
   for (const opts of [
     { latencyHint: 'interactive', sampleRate: TARGET_SAMPLE_RATE, sinkId: { type: 'none' } },
     { latencyHint: 'interactive', sampleRate: TARGET_SAMPLE_RATE },
@@ -185,7 +118,7 @@ function createAudioContext() {
     try {
       return new AudioContextCtor(opts)
     } catch {
-      // 该组合不被支持，试下一个
+      // This option combination is unsupported; try the next one.
     }
   }
   return new AudioContextCtor()
@@ -226,69 +159,10 @@ async function teardownCapture() {
   actualSampleRate = TARGET_SAMPLE_RATE
 }
 
-// ── Resampler state for ScriptProcessorNode fallback ──
-let spnTail = new Float32Array(0)
-let spnPhase = 0
-
-/** Resample + convert to Int16 (same algorithm as the AudioWorklet) */
-function resampleToInt16(input: Float32Array, inputRate: number): { pcm: Int16Array; rms: number } {
-  const ratio = inputRate / TARGET_SAMPLE_RATE
-
-  let sum = 0
-  for (let i = 0; i < input.length; i++) {
-    const s = Math.max(-1, Math.min(1, input[i]))
-    sum += s * s
-  }
-  const rms = Math.sqrt(sum / input.length)
-
-  const merged = new Float32Array(spnTail.length + input.length)
-  merged.set(spnTail, 0)
-  merged.set(input, spnTail.length)
-
-  let outFloat: Float32Array
-
-  if (Math.abs(ratio - 1) < 0.0001) {
-    outFloat = merged
-    spnTail = new Float32Array(0)
-    spnPhase = 0
-  } else {
-    const available = merged.length - spnPhase
-    const outLen = Math.floor(available / ratio)
-
-    if (outLen <= 0) {
-      spnTail = merged
-      return { pcm: new Int16Array(0), rms }
-    }
-
-    outFloat = new Float32Array(outLen)
-    for (let i = 0; i < outLen; i++) {
-      const pos = spnPhase + i * ratio
-      const i0 = Math.floor(pos)
-      const i1 = Math.min(i0 + 1, merged.length - 1)
-      const frac = pos - i0
-      outFloat[i] = merged[i0] * (1 - frac) + merged[i1] * frac
-    }
-
-    const consumed = spnPhase + outLen * ratio
-    const keepFrom = Math.floor(consumed)
-    spnPhase = consumed - keepFrom
-    spnTail = keepFrom < merged.length ? merged.slice(keepFrom) : new Float32Array(0)
-  }
-
-  const int16 = new Int16Array(outFloat.length)
-  for (let i = 0; i < outFloat.length; i++) {
-    const s = Math.max(-1, Math.min(1, outFloat[i]))
-    int16[i] = s < 0 ? s * 32768 : s * 32767
-  }
-
-  return { pcm: int16, rms }
-}
-
 /** Wire up ScriptProcessorNode as fallback when AudioWorklet fails */
 function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
   usingFallback = true
-  spnTail = new Float32Array(0)
-  spnPhase = 0
+  const resampler = new PCMResampler(ctx.sampleRate, TARGET_SAMPLE_RATE)
   actualSampleRate = TARGET_SAMPLE_RATE
 
   // Disconnect worklet if it was connected
@@ -309,7 +183,7 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
 
   spn.onaudioprocess = (event) => {
     const input = event.inputBuffer.getChannelData(0)
-    const { pcm, rms } = resampleToInt16(input, ctx.sampleRate)
+    const { pcm, rms } = resampler.process(input)
 
     if (!firstRmsLogged && rms > 0) {
       firstRmsLogged = true
@@ -374,7 +248,7 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
   })
 }
 
-/** 尝试加载 AudioWorklet 模块（data URL → Blob URL 两种方式） */
+/** Try loading the AudioWorklet module via a data URL, then a Blob URL. */
 async function tryLoadAudioWorklet(ctx: AudioContext): Promise<boolean> {
   try {
     const dataUrl = 'data:application/javascript;base64,' + btoa(PCM_WORKLET_CODE)
@@ -408,7 +282,7 @@ async function tryLoadAudioWorklet(ctx: AudioContext): Promise<boolean> {
   return false
 }
 
-/** 创建 AudioWorkletNode 并绑定 onmessage 处理 */
+/** Create the AudioWorkletNode and attach its message handler. */
 function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode): AudioWorkletNode {
   const node = new AudioWorkletNode(ctx, 'pcm-processor', {
     numberOfInputs: 1,
@@ -431,7 +305,7 @@ function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode): AudioWorkletN
   let captureStartTime = performance.now()
 
   node.port.onmessage = (e) => {
-    // 标记已收到 worklet 数据（用于外部静默检测）
+    // Signal worklet data receipt for the external silence monitor.
     node.dispatchEvent(new Event('worklet-data'))
 
     if (typeof e.data.sampleRate === 'number') {
@@ -539,9 +413,11 @@ export async function startCapture(
     audio: {
       channelCount: 1,
       echoCancellation: false,
-      // 默认开启降噪：部分机器麦克风底噪大（低频电流声），关闭降噪会原样录入。
-      // 但浏览器降噪对 ASR 是个变量——它按"人听得舒服"优化，可能削掉模型要的细节，
-      // 所以做成开关，麦克风环境干净的用户可以关掉对比。
+      // Enable noise suppression by default: some microphones have substantial
+      // low-frequency electrical noise, which would otherwise be recorded as-is.
+      // Browser suppression optimizes listening comfort, not ASR, and may remove
+      // details the model needs. Keep it configurable so users with a clean
+      // microphone environment can disable it and compare recognition results.
       // Fixed gain modes keep browser AGC disabled; auto delegates level control to the browser.
       noiseSuppression,
       autoGainControl: boostConfig.autoGainControl,
@@ -585,8 +461,8 @@ export async function startCapture(
       sampleRate: audioCtx.sampleRate,
       nativeSixteenK,
     })
-    // 记一条到运行时日志：这是判断"有没有走上高质量重采样"的唯一依据，
-    // 排查识别准确度问题时先看这里。
+    // This runtime event is the only evidence that the high-quality resampling
+    // path was selected; check it first when diagnosing recognition accuracy.
     addRuntimeEvent('info', 'audio', nativeSixteenK ? 'AudioContext is natively 16 kHz; resampling skipped' : 'AudioContext is not 16 kHz; using linear resampling', {
       contextSampleRate: audioCtx.sampleRate,
       targetSampleRate: TARGET_SAMPLE_RATE,
