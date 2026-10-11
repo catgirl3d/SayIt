@@ -275,37 +275,11 @@ class ASREngine:
 
         for (ctx, lang), entries in seg_groups.items():
             audio_list = [(seg_audio, 16000) for _, _, seg_audio in entries]
-            results = None
             try:
                 t_inf = time.monotonic()
-                if self._engine_type == "firered":
-                    # FireRed: transcribe one segment at a time (no native batch for wav arrays)
-                    texts = []
-                    for _, _, seg_audio in entries:
-                        texts.append(self._firered_backend.transcribe_audio(seg_audio))
-                    infer_ms = int((time.monotonic() - t_inf) * 1000)
-                    seg_total = len(entries)
-                    seg_counter: dict[int, int] = {}
-                    for job_idx, _, _ in entries:
-                        seg_counter[job_idx] = seg_counter.get(job_idx, 0) + 1
-                    for job_idx, seg_cnt in seg_counter.items():
-                        job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int(infer_ms * (seg_cnt / seg_total))
-                    for (job_idx, seg_idx, _), text in zip(entries, texts):
-                        job_text_parts[job_idx][seg_idx] = text
-                elif self._engine_type == "gigaam":
-                    # GigaAM: transcribe one segment at a time
-                    texts = []
-                    for _, _, seg_audio in entries:
-                        texts.append(self._gigaam_backend.transcribe_audio(seg_audio))
-                    infer_ms = int((time.monotonic() - t_inf) * 1000)
-                    seg_total = len(entries)
-                    seg_counter: dict[int, int] = {}
-                    for job_idx, _, _ in entries:
-                        seg_counter[job_idx] = seg_counter.get(job_idx, 0) + 1
-                    for job_idx, seg_cnt in seg_counter.items():
-                        job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int(infer_ms * (seg_cnt / seg_total))
-                    for (job_idx, seg_idx, _), text in zip(entries, texts):
-                        job_text_parts[job_idx][seg_idx] = text
+                if self._engine_type in ("firered", "gigaam"):
+                    # No native batching for wav arrays: transcribe the group one segment at a time
+                    texts = [self._transcribe_segment_sync(seg_audio, lang, ctx) for _, _, seg_audio in entries]
                 else:
                     if len(audio_list) == 1:
                         results = self._model.transcribe(
@@ -315,30 +289,23 @@ class ASREngine:
                         results = self._model.transcribe(
                             audio=audio_list, language=lang, context=ctx,
                         )
-                    infer_ms = int((time.monotonic() - t_inf) * 1000)
                     if not results or len(results) != len(entries):
                         raise RuntimeError(f"batch result mismatch: got={len(results) if results else 0} expected={len(entries)}")
-                    seg_total = len(entries)
-                    seg_counter: dict[int, int] = {}
-                    for job_idx, _, _ in entries:
-                        seg_counter[job_idx] = seg_counter.get(job_idx, 0) + 1
-                    for job_idx, seg_cnt in seg_counter.items():
-                        job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int(infer_ms * (seg_cnt / seg_total))
-                    for (job_idx, seg_idx, _), r in zip(entries, results):
-                        job_text_parts[job_idx][seg_idx] = r.text
+                    texts = [r.text for r in results]
+                infer_ms = int((time.monotonic() - t_inf) * 1000)
+                seg_total = len(entries)
+                seg_counter: dict[int, int] = {}
+                for job_idx, _, _ in entries:
+                    seg_counter[job_idx] = seg_counter.get(job_idx, 0) + 1
+                for job_idx, seg_cnt in seg_counter.items():
+                    job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int(infer_ms * (seg_cnt / seg_total))
+                for (job_idx, seg_idx, _), text in zip(entries, texts):
+                    job_text_parts[job_idx][seg_idx] = text
             except Exception:
                 logger.exception("Batched transcribe failed, fallback to single requests")
                 for job_idx, seg_idx, seg_audio in entries:
                     t_inf = time.monotonic()
-                    if self._engine_type == "firered":
-                        text = self._firered_backend.transcribe_audio(seg_audio)
-                    elif self._engine_type == "gigaam":
-                        text = self._gigaam_backend.transcribe_audio(seg_audio)
-                    else:
-                        res = self._model.transcribe(
-                            audio=(seg_audio, 16000), language=lang, context=ctx,
-                        )
-                        text = res[0].text if res else ""
+                    text = self._transcribe_segment_sync(seg_audio, lang, ctx)
                     job_infer_ms[job_idx] = job_infer_ms.get(job_idx, 0) + int((time.monotonic() - t_inf) * 1000)
                     job_text_parts[job_idx][seg_idx] = text
 
@@ -352,6 +319,22 @@ class ASREngine:
             outputs[idx] = (sep.join(t.strip() for t in job_text_parts[idx] if t and t.strip()), debug)
 
         return outputs
+
+    def _transcribe_segment_sync(self, seg_audio: np.ndarray, lang: str | None, ctx: str) -> str:
+        """Transcribe a single segment with the active engine.
+
+        FireRed and GigaAM have no native batching for wav arrays and are
+        always called segment by segment; Qwen serves single-item requests
+        through the same path, e.g. the batch fallback below.
+        """
+        if self._engine_type == "firered":
+            return self._firered_backend.transcribe_audio(seg_audio)
+        if self._engine_type == "gigaam":
+            return self._gigaam_backend.transcribe_audio(seg_audio)
+        results = self._model.transcribe(
+            audio=(seg_audio, 16000), language=lang, context=ctx,
+        )
+        return results[0].text if results else ""
 
     @staticmethod
     def _energy_subsplit(seg: np.ndarray, max_chunk: float = 15.0,
