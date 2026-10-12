@@ -32,7 +32,6 @@ describe('locale 表', () => {
     const liveSubtitleKeys = [
       'systemAudio.liveRecognitionLabel',
       'systemAudio.liveRecognitionHelp',
-      'systemAudio.liveRecognitionUnsupported',
       'systemAudio.liveTargetHelp',
       'systemAudio.liveOriginalLabel',
       'systemAudio.livePhraseOverflow',

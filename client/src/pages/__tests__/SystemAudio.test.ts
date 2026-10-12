@@ -1,9 +1,10 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDefault } from '@/services/defaults'
 import { listSystemAudioDevices, systemAudioSession } from '@/services/systemAudio'
+import { getWorkMode } from '@/services/transcription'
 import SystemAudio, { buildTranslationOptions, defaultSubtitleTargetLanguage, SystemAudioControls } from '../SystemAudio'
 import type { SelectOption } from '@/components/ui/select'
 import type { PromptPreset } from '@/services/store'
@@ -16,7 +17,18 @@ const pageMocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
   getPromptPresets: vi.fn(),
   setSetting: vi.fn(),
+  loadActiveAsrProfile: vi.fn(),
 }))
+
+vi.mock('@/services/transcription', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/transcription')>()
+  return { ...actual, getWorkMode: vi.fn(() => 'cloud_api') }
+})
+
+vi.mock('@/features/settings/asrProfileStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/settings/asrProfileStore')>()
+  return { ...actual, loadActiveAsrProfile: pageMocks.loadActiveAsrProfile }
+})
 
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>()
@@ -70,6 +82,17 @@ vi.mock('@/components/ui/switch', async (importOriginal) => {
       return React.createElement(actual.Switch, props)
     },
   }
+})
+
+beforeEach(() => {
+  vi.mocked(getWorkMode).mockReturnValue('cloud_api')
+  pageMocks.loadActiveAsrProfile.mockReset()
+  pageMocks.loadActiveAsrProfile.mockResolvedValue({
+    id: 'deepgram-account',
+    provider: 'deepgram',
+    model: 'nova-3',
+    apiKey: 'key',
+  })
 })
 
 describe('system audio translation options', () => {
@@ -141,21 +164,64 @@ describe('live system-audio recognition setting', () => {
     pageMocks.getSetting.mockReset().mockImplementation(async (_key: string, fallback: unknown) => fallback)
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
-    const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
-    expect(pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition'))
-      .toMatchObject({ checked: false, disabled: true })
-    expect(markup).toContain('Live computer-audio recognition')
-    expect(markup).toContain('Live recognition requires Deepgram in Cloud API mode')
+    const initialMarkup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(initialMarkup).not.toContain('Live computer-audio recognition')
 
     pageMocks.effects[0]?.()
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     pageMocks.stateCursor = 0
     pageMocks.switchProps.length = 0
-    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition'))
+      .toMatchObject({ checked: false, disabled: false })
+    expect(markup).toContain('Live computer-audio recognition')
     pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition')?.onChange()
 
     expect(pageMocks.setSetting).toHaveBeenCalledTimes(1)
     expect(pageMocks.setSetting).toHaveBeenCalledWith('systemAudio.liveRecognitionEnabled', true)
+  })
+
+  it('offers the live-recognition setting only while Deepgram is the active cloud profile', async () => {
+    pageMocks.effects.length = 0
+    pageMocks.switchProps.length = 0
+    pageMocks.stateValues.length = 0
+    pageMocks.stateCursor = 0
+    pageMocks.getSetting.mockReset().mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    pageMocks.getPromptPresets.mockResolvedValue([])
+    pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
+    vi.mocked(listSystemAudioDevices).mockResolvedValue([])
+    pageMocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'doubao-account',
+      provider: 'doubao_v2',
+      model: 'Doubao-Seed-ASR-2.0',
+      apiKey: 'key',
+    })
+
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    pageMocks.effects[0]?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    let markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(markup).not.toContain('Live computer-audio recognition')
+    expect(pageMocks.switchProps.some(({ label }) => label === 'Live computer-audio recognition')).toBe(false)
+
+    pageMocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-account',
+      provider: 'deepgram',
+      model: 'nova-3',
+      apiKey: 'key',
+    })
+    vi.mocked(getWorkMode).mockReturnValue('local')
+    pageMocks.effects[0]?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(markup).not.toContain('Live computer-audio recognition')
+    expect(pageMocks.switchProps.some(({ label }) => label === 'Live computer-audio recognition')).toBe(false)
   })
 
   it('loads the saved opt-in into page state without writing other subtitle settings', async () => {
@@ -303,8 +369,12 @@ describe('live system-audio recognition setting', () => {
     })
 
     renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
-    const liveSwitchDuringLoad = pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition')
     pageMocks.effects[0]?.()
+    await Promise.resolve()
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    const liveSwitchDuringLoad = pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition')
 
     expect(liveSwitchDuringLoad).toMatchObject({ checked: false, disabled: true })
     liveSwitchDuringLoad?.onChange()
@@ -344,8 +414,12 @@ describe('live system-audio recognition setting', () => {
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
 
     renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
-    const liveSwitchDuringLoad = pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition')
     pageMocks.effects[0]?.()
+    await Promise.resolve()
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    const liveSwitchDuringLoad = pageMocks.switchProps.find(({ label }) => label === 'Live computer-audio recognition')
 
     expect(liveSwitchDuringLoad).toMatchObject({ checked: false, disabled: true })
     liveSwitchDuringLoad?.onChange()

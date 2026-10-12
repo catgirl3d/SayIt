@@ -3,6 +3,7 @@ import * as asrModels from '../asrModels'
 import {
   buildCloudAsrExtra,
   getCloudAsrSupportedLanguages,
+  isLiveRecognitionProvider,
   isQwenOmniProvider,
   isStreamingDisplayCapable,
   isStreamingDisplayReady,
@@ -102,6 +103,15 @@ describe('streaming display readiness', () => {
   it('keeps the Qwen realtime workspace requirement', () => {
     expect(isStreamingDisplayReady('qwen_realtime')).toBe(false)
     expect(isStreamingDisplayReady('qwen_realtime', 'ws-1')).toBe(true)
+  })
+})
+
+describe('live computer-audio recognition support', () => {
+  it('supports only Deepgram', () => {
+    expect(isLiveRecognitionProvider('deepgram')).toBe(true)
+    for (const provider of ['doubao_v2', 'qwen', 'qwen_realtime', 'qwen_audio_stream', 'mimo', 'groq_whisper', '']) {
+      expect(isLiveRecognitionProvider(provider), provider).toBe(false)
+    }
   })
 })
 

@@ -17,7 +17,6 @@
   "systemAudio.segmentLengthHint": "A caption never covers more speech than this. Once speech reaches about two thirds of the limit, the next short pause ends the caption. A lower limit shows captions sooner but gives the translation less context. Applies from the next start.",
   "systemAudio.liveRecognitionLabel": "Live computer-audio recognition",
   "systemAudio.liveRecognitionHelp": "With live recognition enabled on a supported profile, computer audio is sent continuously to Deepgram Cloud, including silence and background sound. More audio leaves this computer and usage may cost more than batch recognition.",
-  "systemAudio.liveRecognitionUnsupported": "Live recognition requires Deepgram in Cloud API mode. Other speech engines keep using batch recognition.",
   "systemAudio.liveTargetHelp": "With live recognition supported, this length is a target, not a hard cap; a caption can run longer while Deepgram finishes recognizing speech. Unsupported profiles keep the batch length limit.",
   "systemAudio.liveOriginalLabel": "Live original",
   "systemAudio.dualSubtitles": "Show original and translation",

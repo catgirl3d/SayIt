@@ -127,6 +127,13 @@ export function isStreamingDisplayReady(provider: string, qwenWorkspaceId?: stri
   return false
 }
 
+/** Whether a cloud ASR provider can run live computer-audio recognition. Only Deepgram opens a
+ * live stream today; every other provider keeps batch recognition. Shared by the runtime gate in
+ * CloudAPIProvider.openLive and by the Computer subtitles page so both stay in sync. */
+export function isLiveRecognitionProvider(provider: string): boolean {
+  return provider === 'deepgram'
+}
+
 export function resolveCloudAsrLanguageRequest(provider: string, language: SpeechInputLanguage): string | undefined {
   if (provider === 'groq_whisper') return language === 'auto' ? undefined : language
   if (provider === 'mimo') return language === 'zh' || language === 'en' ? language : undefined

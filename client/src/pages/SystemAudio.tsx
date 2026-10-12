@@ -10,6 +10,9 @@ import { promptPresetDisplayName } from '@/i18n/displayNames'
 import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
 import { getWorkMode } from '@/services/transcription'
+import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
+import { addRuntimeEvent } from '@/services/debugLog'
+import { isLiveRecognitionProvider } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { getSystemAudioDualSubtitles, getSystemAudioMaxSegmentSeconds, getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
 import { DEFAULT_SEGMENT_SECONDS, MAX_SEGMENT_SECONDS, MIN_SEGMENT_SECONDS, SEGMENT_SECONDS_STEP } from '@/services/subtitleSegmentation'
@@ -68,12 +71,17 @@ export default function SystemAudio() {
   const [liveRecognitionEnabled, setLiveRecognitionEnabled] = useState(false)
   const [liveRecognitionReady, setLiveRecognitionReady] = useState(false)
   const [liveRecognitionError, setLiveRecognitionError] = useState('')
+  const [activeAsrProvider, setActiveAsrProvider] = useState('')
   const locale = useLocale()
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
   const active = snapshot.state !== 'idle'
   const error = snapshot.error || loadError || liveRecognitionError
   const mode = getWorkMode()
+  // Mirrors the runtime gate: live recognition is implemented only by CloudAPIProvider, and only
+  // the Deepgram profile can open it; every other engine keeps batch recognition, so the page must
+  // not offer the setting at all.
+  const liveRecognitionSupported = mode === 'cloud_api' && isLiveRecognitionProvider(activeAsrProvider)
   const deviceOptions: SelectOption[] = [
     { value: '', label: t('systemAudio.defaultOutput') },
     ...devices.map((device) => ({ value: device.id, label: device.name })),
@@ -116,6 +124,13 @@ export default function SystemAudio() {
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
       setReady(true)
     }).catch(() => { if (!disposed) setLoadError(t('systemAudio.captureFailed')) })
+    // Resolved independently from the settings batch: a slow saved switch value must not delay
+    // knowing whether this engine supports live recognition.
+    void loadActiveAsrProfile().then((activeProfile) => {
+      if (!disposed) setActiveAsrProvider(activeProfile?.provider ?? '')
+    }).catch((error: unknown) => {
+      addRuntimeEvent('warn', 'system-audio', 'Failed to load the active ASR profile for live-recognition support', { error: String(error) })
+    })
     // Navigation does not own the listening session; only its controls or app teardown stop it.
     return () => { disposed = true }
   }, [])
@@ -223,28 +238,29 @@ export default function SystemAudio() {
               <span>{t('duration.seconds', { count: MAX_SEGMENT_SECONDS })}</span>
             </div>
             <p className="text-xs text-muted-foreground">{t('systemAudio.segmentLengthHint')}</p>
-            {liveRecognitionEnabled && <p className="text-xs text-muted-foreground">{t('systemAudio.liveTargetHelp')}</p>}
+            {liveRecognitionSupported && liveRecognitionEnabled && <p className="text-xs text-muted-foreground">{t('systemAudio.liveTargetHelp')}</p>}
           </div>
-          <div className="space-y-1">
-            <Switch
-              checked={liveRecognitionEnabled}
-              onChange={() => {
-                if (!liveRecognitionReady || active || pending) return
-                const enabled = !liveRecognitionEnabled
-                setPending(true)
-                void setSetting('systemAudio.liveRecognitionEnabled', enabled).then(() => {
-                  setLiveRecognitionEnabled(enabled)
-                  setLiveRecognitionError('')
-                }).catch(() => {
-                  setLiveRecognitionError(t('systemAudio.captureFailed'))
-                }).finally(() => { setPending(false) })
-              }}
-              label={t('systemAudio.liveRecognitionLabel')}
-              disabled={!liveRecognitionReady || active || pending}
-            />
-            <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionHelp')}</p>
-            <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionUnsupported')}</p>
-          </div>
+          {liveRecognitionSupported && (
+            <div className="space-y-1">
+              <Switch
+                checked={liveRecognitionEnabled}
+                onChange={() => {
+                  if (!liveRecognitionReady || active || pending) return
+                  const enabled = !liveRecognitionEnabled
+                  setPending(true)
+                  void setSetting('systemAudio.liveRecognitionEnabled', enabled).then(() => {
+                    setLiveRecognitionEnabled(enabled)
+                    setLiveRecognitionError('')
+                  }).catch(() => {
+                    setLiveRecognitionError(t('systemAudio.captureFailed'))
+                  }).finally(() => { setPending(false) })
+                }}
+                label={t('systemAudio.liveRecognitionLabel')}
+                disabled={!liveRecognitionReady || active || pending}
+              />
+              <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionHelp')}</p>
+            </div>
+          )}
           <div className="space-y-1">
             <Switch
               checked={dualSubtitles}

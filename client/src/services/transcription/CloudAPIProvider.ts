@@ -2,7 +2,7 @@
 // 豆包 ASR：边录边发（实时流式）
 // 其他 ASR：录完再发（BufferedProvider）
 
-import { isQwenOmniProvider, isStreamingDisplayReady } from '@/lib/asrModels'
+import { isLiveRecognitionProvider, isQwenOmniProvider, isStreamingDisplayReady } from '@/lib/asrModels'
 import {
   buildAsrProviderConfig,
   CUSTOM_ASR_PROVIDER,
@@ -466,7 +466,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     try {
       const loadedProfile = await loadActiveAsrProfile()
       if (!this.isLiveOwnerCurrent(owner)) return null
-      if (!loadedProfile || loadedProfile.provider !== 'deepgram') {
+      if (!loadedProfile || !isLiveRecognitionProvider(loadedProfile.provider)) {
         await this.closeLiveOwner(owner)
         return null
       }
