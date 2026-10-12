@@ -21,13 +21,15 @@ import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/
 import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode } from '@/services/transcription/types'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Download, Search, Check, FolderOpen } from 'lucide-react'
+import { Download, Search, Check, FolderOpen, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { Tooltip } from '@/components/ui/tooltip'
 import { Feedback } from '@/components/ui/feedback'
 import HistoryRecordList from '@/components/history/HistoryRecordList'
 import { exportHistory } from '@/services/exports'
 import {
+  clearHistory,
   countHistory,
   deleteHistory,
   listHistory,
@@ -436,6 +438,9 @@ export default function History() {
   const [totalCount, setTotalCount] = useState(0)
   const [exportResult, setExportResult] = useState<{ filePath: string | null; canceled: boolean } | null>(null)
   const [reprocessWarning, setReprocessWarning] = useState<AsrWarningCode | null>(null)
+  const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
+  const [clearError, setClearError] = useState(false)
   const reprocessWarningGeneration = useRef(0)
 
   const loadRecords = useCallback(async (searchKeyword: string, limit: number, favOnly: boolean) => {
@@ -512,6 +517,26 @@ export default function History() {
     const result = await exportHistory({ keyword: debouncedKeyword })
     setExportResult(result)
     if (!result.canceled) setTimeout(() => setExportResult(null), 8000)
+  }
+
+  // Clearing the whole history: records, their recordings, and their share of the
+  // usage stats. The dialog closes and the refresh event fires only after success,
+  // so Home totals follow; on failure the dialog keeps the warning visible instead
+  // of silently leaving the old list on screen.
+  const handleClearHistory = async () => {
+    setIsClearing(true)
+    setClearError(false)
+    try {
+      await clearHistory()
+      setIsClearDialogOpen(false)
+      void bridge.emit('history-updated')
+      await loadRecords(debouncedKeyword, visibleCount, favoriteOnly)
+    } catch (error) {
+      console.error('[history] Failed to clear history:', error)
+      setClearError(true)
+    } finally {
+      setIsClearing(false)
+    }
   }
 
   const handleReprocess = async (record: HistoryRecord) => {
@@ -658,6 +683,21 @@ export default function History() {
               <Download className="h-4 w-4" />
             </Button>
           </Tooltip>
+          <Tooltip content={t('history.clear')}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-destructive"
+              onClick={() => {
+                setClearError(false)
+                setIsClearDialogOpen(true)
+              }}
+              aria-label={t('history.clear')}
+              title={t('history.clear')}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </Tooltip>
         </div>
       </div>
 
@@ -698,6 +738,28 @@ export default function History() {
             {t('history.loadMore')}
           </Button>
         </div>
+      )}
+
+      {isClearDialogOpen && (
+        <Modal
+          title={t('history.clearTitle')}
+          onClose={() => setIsClearDialogOpen(false)}
+          locked={isClearing}
+          panelClassName="w-[420px]"
+        >
+          <div className="mt-3 space-y-4">
+            <p className="text-sm leading-relaxed text-muted-foreground">{t('history.clearConfirm')}</p>
+            {clearError && <p role="alert" className="text-sm text-destructive">{t('history.clearError')}</p>}
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="outline" size="sm" disabled={isClearing} onClick={() => setIsClearDialogOpen(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button type="button" variant="destructive" size="sm" disabled={isClearing} onClick={() => void handleClearHistory()}>
+                {isClearing ? t('history.clearLoading') : t('history.clear')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )

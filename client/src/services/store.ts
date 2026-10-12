@@ -306,6 +306,10 @@ export async function setHistoryFavorite(id: string, favorite: boolean): Promise
   await api().historySetFavorite(id, favorite)
 }
 
+export async function clearHistory(): Promise<void> {
+  await api().historyClear()
+}
+
 export async function getFavoriteHistory(): Promise<HistoryRecord[]> {
   return listHistory({ favoriteOnly: true })
 }

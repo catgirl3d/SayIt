@@ -76,6 +76,12 @@ pub struct Storage {
     pub db: Mutex<Connection>,
 }
 
+/// Outcome of clearing the whole history: the caller (the Tauri command layer)
+/// deletes the listed audio recordings from disk, which storage must not touch.
+pub struct HistoryClearSummary {
+    pub audio_file_paths: Vec<String>,
+}
+
 impl Storage {
     pub fn new(db_path: PathBuf) -> SqlResult<Self> {
         if let Some(parent) = db_path.parent() {
@@ -519,6 +525,64 @@ impl Storage {
         let stats_duration_sec = if is_empty { 0.0 } else { duration_sec };
         let _ = self.update_stats_delta(&db, char_count, stats_duration_sec, -1);
         Ok(())
+    }
+
+    /// Deletes every history record in one transaction, including favorites.
+    ///
+    /// Mirrors `history_delete` in bulk: the usage stats fall by exactly the sum
+    /// of the removed records (empty records never contributed dictation time),
+    /// and the audio file paths are returned so the command layer can remove the
+    /// recordings from disk. Either the whole clear lands or nothing does — a
+    /// crash must not leave the list empty while the stats still count it.
+    pub fn history_clear(&self) -> SqlResult<HistoryClearSummary> {
+        let mut db = self.db.lock().unwrap();
+        let tx = db.transaction()?;
+
+        let rows: Vec<(i64, f64, bool, Option<String>, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT char_count, duration_sec, is_empty, audio_file_path, raw_json FROM history_records",
+            )?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get::<_, i64>(2)? != 0,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?;
+            mapped.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut total_chars = 0i64;
+        let mut total_duration_sec = 0.0f64;
+        let mut audio_file_paths = Vec::new();
+        for (char_count, duration_sec, is_empty, column_audio_path, raw_json) in &rows {
+            total_chars += char_count;
+            if !is_empty {
+                total_duration_sec += duration_sec;
+            }
+            // raw_json is the record the UI works with; it stays authoritative
+            // when a backup restore filled the JSON but not the column.
+            let json_audio_path = serde_json::from_str::<Value>(raw_json).ok().and_then(|v| {
+                v.get("audioFilePath")
+                    .and_then(|p| p.as_str())
+                    .map(str::to_string)
+            });
+            if let Some(audio_path) = json_audio_path.or_else(|| column_audio_path.clone()) {
+                if !audio_path.is_empty() {
+                    audio_file_paths.push(audio_path);
+                }
+            }
+        }
+
+        tx.execute("DELETE FROM history_records", [])?;
+        if !rows.is_empty() {
+            self.update_stats_delta(&tx, total_chars, total_duration_sec, -1)?;
+        }
+        tx.commit()?;
+
+        Ok(HistoryClearSummary { audio_file_paths })
     }
 
     pub fn history_set_favorite(&self, id: &str, favorite: bool) -> SqlResult<()> {
@@ -1310,6 +1374,126 @@ mod tests {
             storage.get("stats", None),
             serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
         );
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn history_clear_removes_all_records_including_favorites_and_returns_audio_paths() {
+        let path = test_db_path("history-clear");
+        let storage = Storage::new(path.clone()).unwrap();
+        storage
+            .set(
+                "stats",
+                &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 }),
+            )
+            .unwrap();
+
+        storage
+            .history_add(&serde_json::json!({
+                "id": "favorite-1",
+                "timestamp": 1,
+                "charCount": 5,
+                "durationSec": 1.5,
+                "favorite": true,
+                "audioFilePath": "C:/audio/favorite-1.wav",
+            }))
+            .unwrap();
+        storage
+            .history_add(&serde_json::json!({
+                "id": "empty-1",
+                "timestamp": 2,
+                "charCount": 0,
+                "durationSec": 2.5,
+                "isEmpty": true,
+            }))
+            .unwrap();
+        storage
+            .history_add(&serde_json::json!({
+                "id": "plain-1",
+                "timestamp": 3,
+                "charCount": 7,
+                "durationSec": 3.0,
+                "audioFilePath": "C:/audio/plain-1.wav",
+            }))
+            .unwrap();
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 14.5, "totalChars": 112 })
+        );
+
+        let summary = storage.history_clear().unwrap();
+
+        let mut audio_file_paths = summary.audio_file_paths;
+        audio_file_paths.sort();
+        assert_eq!(
+            audio_file_paths,
+            vec![
+                "C:/audio/favorite-1.wav".to_string(),
+                "C:/audio/plain-1.wav".to_string()
+            ]
+        );
+        assert!(storage.history_list(None, false, None, None).is_empty());
+        assert_eq!(storage.history_count(None, false), 0);
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
+        );
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn history_clear_on_empty_history_is_a_noop() {
+        let path = test_db_path("history-clear-empty");
+        let storage = Storage::new(path.clone()).unwrap();
+        storage
+            .set(
+                "stats",
+                &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 }),
+            )
+            .unwrap();
+
+        let summary = storage.history_clear().unwrap();
+
+        assert!(summary.audio_file_paths.is_empty());
+        assert_eq!(
+            storage.get("stats", None),
+            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
+        );
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn history_clear_collects_audio_paths_from_records_restored_without_column_backfill() {
+        let path = test_db_path("history-clear-restored-audio");
+        let storage = Storage::new(path.clone()).unwrap();
+        // A full-backup restore writes history through the collection path,
+        // which fills raw_json but leaves the audio_file_path column empty.
+        storage
+            .set(
+                "history",
+                &serde_json::json!([{
+                    "id": "restored-1",
+                    "timestamp": 1,
+                    "charCount": 3,
+                    "durationSec": 1.0,
+                    "audioFilePath": "C:/audio/restored-1.wav",
+                }]),
+            )
+            .unwrap();
+
+        let summary = storage.history_clear().unwrap();
+
+        assert_eq!(
+            summary.audio_file_paths,
+            vec!["C:/audio/restored-1.wav".to_string()]
+        );
+        assert!(storage.history_list(None, false, None, None).is_empty());
 
         drop(storage);
         let _ = fs::remove_file(path);

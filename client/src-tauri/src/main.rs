@@ -609,6 +609,7 @@ fn main() {
             commands::storage::history_update,
             commands::storage::history_delete,
             commands::storage::history_set_favorite,
+            commands::storage::history_clear,
             // Window
             commands::window::present_overlay,
             commands::window::show_overlay,
