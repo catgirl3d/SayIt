@@ -831,17 +831,19 @@ export default function Overlay() {
                 )}
 
                 {state === 'error' && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-red-400">{errorMessage || t('overlay.genericError')}</span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate whitespace-nowrap text-xs text-red-400" title={errorMessage || t('overlay.genericError')}>
+                      {errorMessage || t('overlay.genericError')}
+                    </span>
                   </div>
                 )}
 
                 {state === 'toast' && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     {toastTone === 'warn' ? (
-                      <span className="whitespace-nowrap text-xs text-amber-400">{toastText}</span>
+                      <span className="truncate whitespace-nowrap text-xs text-amber-400" title={toastText}>{toastText}</span>
                     ) : (
-                      <span className="whitespace-nowrap text-xs" style={{ color: 'var(--overlay-text)' }}>
+                      <span className="truncate whitespace-nowrap text-xs" style={{ color: 'var(--overlay-text)' }} title={toastText}>
                         {toastText}
                       </span>
                     )}

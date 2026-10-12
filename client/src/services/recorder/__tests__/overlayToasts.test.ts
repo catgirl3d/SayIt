@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale, t } from '@/i18n'
-import { OverlayService } from '../OverlayService'
+import { OVERLAY_TOAST_WINDOW_WIDTH, OverlayService } from '../OverlayService'
 
 function payloads(command: 'present_overlay' | 'update_overlay_state') {
   return native.invoke.mock.calls
@@ -129,6 +129,27 @@ describe('overlay toasts', () => {
       state: 'listening',
       warning: t('overlay.warnLowVolume'),
       warningTone: 'warn',
+    })
+  })
+
+  it('requests the expanded 600px base width for toasts to prevent clipping long notices', () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showAiCleanupFailed('provider_error')
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
+    })
+  })
+
+  it('requests the expanded 600px base width for error notices', () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showError('Audio capture failed')
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'error',
+      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
+      errorMessage: 'Audio capture failed',
     })
   })
 })

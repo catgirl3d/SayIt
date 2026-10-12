@@ -25,6 +25,17 @@ interface MicSourceHint {
 
 const MIC_SOURCE_HINT_DURATION_MS = 3000
 
+/**
+ * Window width assigned to toast and single-line error notices.
+ *
+ * Recording waveforms take a fixed width according to `OverlayWidthPreset` (200-360px),
+ * but toasts carry localized diagnostic messages (e.g. AI cleanup failure reasons) that
+ * need up to ~550px. The native overlay clamps `baseWidth` at 600px without layout changes.
+ * The transparent overlay window centers the pill horizontally, and the pill itself hugs
+ * its content (`fit-content`), so shorter toasts remain compact.
+ */
+export const OVERLAY_TOAST_WINDOW_WIDTH = 600
+
 const AI_CLEANUP_FAILURE_TOAST_KEYS: Record<AiFailureReason, TranslationKey> = {
   timeout: 'overlay.toastAiCleanupTimeout',
   provider_error: 'overlay.toastAiCleanupError',
@@ -447,6 +458,7 @@ export class OverlayService {
       toastText: text,
       toastTone: tone,
       ...this.getCommonPayload(),
+      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
     })
     this.fallbackHideId = setTimeout(() => {
       if (generation === this.overlayGeneration) this.hide()
@@ -514,6 +526,7 @@ export class OverlayService {
       state: 'error',
       errorMessage: message,
       ...this.getCommonPayload(),
+      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
     })
     this.fallbackHideId = setTimeout(() => {
       if (generation === this.overlayGeneration) this.hide()
