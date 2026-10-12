@@ -616,9 +616,12 @@ pub struct UpdateManifestFetch {
 const FORK_MANIFEST_URL: &str =
     "https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json";
 
-/// A release manifest is a few hundred bytes; anything larger is not a manifest.
-/// The cap bounds memory before JSON parsing so an oversized or malicious asset
-/// on an allowed host can never exhaust the native process.
+/// A release manifest is a small JSON document. Since the fork's release notes ride
+/// inside it, expect tens of kilobytes (v0.2.2 measured ~23 KB) rather than the few
+/// hundred bytes of the metadata-only era. The cap bounds memory before JSON parsing
+/// so an oversized or malicious asset on an allowed host can never exhaust the native
+/// process; the release generator (scripts/generate-update-manifest.mjs) enforces the
+/// same bound before publishing.
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 /// Fetch the pinned fork update manifest server-side (reqwest).

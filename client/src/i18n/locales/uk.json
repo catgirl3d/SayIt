@@ -309,6 +309,8 @@
   "about.checkingShort": "Перевірка…",
   "about.checkUpdate": "Перевірити оновлення",
   "about.releaseNotes": "Що нового у v{version}",
+  "about.showAllNotes": "Показати все",
+  "about.collapseNotes": "Згорнути",
   "settings.title": "Налаштування",
   "settings.helpAria": "Про {label}",
   "settings.shortcuts.title": "Гарячі клавіші",
@@ -1530,6 +1532,5 @@
   "webdav.error.verifySize": "Розмір файлу на сервері відрізняється від локального, копія може бути неповною. Спробуйте ще раз.",
   "webdav.error.emptyDownload": "Завантажений із сервера файл порожній, відновити дані неможливо.",
   "webdav.error.badName": "Некоректне ім'я файлу резервної копії.",
-  "modeStatus.qwenAudioStream": "Qwen Audio 3.1",
-  "release.0.2.1.1": "Оновлення тепер надходять лише з власних релізів цього форку, а нова версія завантажується й встановлюється лише після натискання «Завантажити та встановити» — закриття застосунку більше нічого не встановлює"
+  "modeStatus.qwenAudioStream": "Qwen Audio 3.1"
 }

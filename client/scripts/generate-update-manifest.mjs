@@ -9,6 +9,10 @@
  * 64 bytes. This generator enforces the same rules, so a malformed manifest can
  * never be published in the first place.
  *
+ * The manifest also carries the release notes for the version — the CHANGELOG-FORK.md
+ * section that the release workflow already extracts — so the desktop app can show
+ * what changed at the moment it discovers the update, without a second request.
+ *
  * The repository is pinned: running the release workflow from any repository other
  * than the fork fails here instead of publishing metadata that points at the wrong
  * release assets.
@@ -23,6 +27,11 @@ export const UPDATE_MANIFEST_FILENAME = 'latest-win32-x64.json'
 
 // Exact numeric major.minor.patch, same rule as the client and the Rust downloader.
 const NUMERIC_VERSION = /^\d+\.\d+\.\d+$/
+// The native fetcher (src-tauri/src/commands/system.rs) rejects manifests over 64 KiB;
+// the notes make the manifest tens of kilobytes, so the bound is enforced here at
+// generation time. Publishing an oversized manifest would silently break update checks
+// for every client.
+const MAX_MANIFEST_BYTES = 64 * 1024
 // Canonical UTC ISO timestamp, exactly what Date.prototype.toISOString() emits.
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
@@ -30,7 +39,7 @@ export function installerNameForVersion(version) {
   return `SayIt_${version}_x64-setup.exe`
 }
 
-export function buildUpdateManifest({ version, repository, installerName, installerBytes, releaseDate }) {
+export function buildUpdateManifest({ version, repository, installerName, installerBytes, releaseDate, notes }) {
   if (repository !== FORK_REPOSITORY) {
     throw new Error(`Refusing to build a manifest for repository '${repository}' (expected '${FORK_REPOSITORY}')`)
   }
@@ -47,16 +56,29 @@ export function buildUpdateManifest({ version, repository, installerName, instal
   if (!Buffer.isBuffer(installerBytes)) {
     throw new Error('installerBytes must be a Buffer with the exact installer file bytes')
   }
+  // The release notes ride inside the manifest so the app can show what changed at the
+  // moment it finds the update. They are the CHANGELOG-FORK.md section for this version;
+  // a manifest without them would leave the About page silent, so this fails closed.
+  if (typeof notes !== 'string' || notes.trim() === '') {
+    throw new Error('Invalid release notes (expected the CHANGELOG-FORK.md section for this version)')
+  }
 
-  return {
+  const manifest = {
     version,
     releaseDate,
     url: `https://github.com/${FORK_REPOSITORY}/releases/download/v${version}/${expectedName}`,
     sha512: createHash('sha512').update(installerBytes).digest('base64'),
+    notes: notes.trim(),
   }
+  // Measure exactly what main() writes: pretty-printed JSON plus a trailing newline.
+  const manifestBytes = Buffer.byteLength(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  if (manifestBytes > MAX_MANIFEST_BYTES) {
+    throw new Error(`Manifest is ${manifestBytes} bytes (limit ${MAX_MANIFEST_BYTES}): the release notes are too large`)
+  }
+  return manifest
 }
 
-const CLI_OPTIONS = new Set(['version', 'repository', 'installer', 'release-date', 'output'])
+const CLI_OPTIONS = new Set(['version', 'repository', 'installer', 'release-date', 'notes-file', 'output'])
 
 function parseArgs(args) {
   const options = {}
@@ -76,18 +98,20 @@ function parseArgs(args) {
 
 function main(args) {
   const options = parseArgs(args)
-  const required = ['version', 'repository', 'installer', 'release-date', 'output']
+  const required = ['version', 'repository', 'installer', 'release-date', 'notes-file', 'output']
   for (const key of required) {
     if (!options[key]) throw new Error(`Missing required option --${key}`)
   }
 
   const installerBytes = readFileSync(options.installer)
+  const notes = readFileSync(options['notes-file'], 'utf8')
   const manifest = buildUpdateManifest({
     version: options.version,
     repository: options.repository,
     installerName: options.installer.replace(/^.*[\\/]/, ''),
     installerBytes,
     releaseDate: options['release-date'],
+    notes,
   })
 
   writeFileSync(options.output, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')

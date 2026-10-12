@@ -39,7 +39,9 @@ describe('release generator output satisfies the runtime manifest validator', ()
     try {
       const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
       const manifestPath = join(dir, UPDATE_MANIFEST_FILENAME)
+      const notesPath = join(dir, 'notes.md')
       writeFileSync(installerPath, 'installer-bytes')
+      writeFileSync(notesPath, '## v0.2.1\n\n- Something changed\n')
 
       execFileSync(process.execPath, [
         GENERATOR_PATH,
@@ -47,6 +49,7 @@ describe('release generator output satisfies the runtime manifest validator', ()
         '--repository', 'catgirl3d/SayIt',
         '--installer', installerPath,
         '--release-date', '2026-09-19T00:00:00.000Z',
+        '--notes-file', notesPath,
         '--output', manifestPath,
       ])
 
@@ -66,6 +69,7 @@ describe('release generator output satisfies the runtime manifest validator', ()
       expect(info.releaseDate).toBe(generated.releaseDate)
       expect(info.downloadUrl).toBe(generated.url)
       expect(info.sha512).toBe(generated.sha512)
+      expect(info.notes).toBe('## v0.2.1\n\n- Something changed')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

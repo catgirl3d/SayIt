@@ -30,6 +30,7 @@ This fork is a hard fork.
 | `dev-scripts/upstream-slices/` | Read-only review evidence for large upstream commits (local, git-ignored). Packet format and reviewer contract: `dev-scripts/upstream-slices/README.md`. |
 | `UPSTREAM-TRACKER.md` | Committed mirror of porting progress, one row per feature. Update it when a port lands or a decision changes. |
 | `CHANGELOG-FORK.md` | Release-facing summary of user-visible fork changes. Release-note discipline: `AGENTS.md` section 4. |
+| `docs/RELEASE_GUIDE.md` | Release runbook: version bump, changelog freeze, workflow dispatch, verification. Also available as the `/release` command. |
 | `AGENTS.md` | Repository-wide engineering rules. |
 
 `UPSTREAM-TRACKER.md` mirrors progress for humans; the decision journal remains
@@ -99,8 +100,8 @@ journal: its `data/` folder resolves relative to the script file.
   Windows GigaAM environment.
 - The release workflow requires matching versions in `client/package.json` and
   `client/src-tauri/tauri.conf.json`, installs with `npm ci`, and refuses to
-  publish without a non-empty `CHANGELOG-FORK.md`. Preserve those contracts
-  when a port touches release-related files.
+  publish without a non-empty `CHANGELOG-FORK.md` section for the released
+  version. Preserve those contracts when a port touches release-related files.
 - Treat manifests, version fields, workflows, and server configuration as
   substantive even when they look like metadata.
 

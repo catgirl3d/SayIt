@@ -16,8 +16,9 @@
 
 ## 4. Changelog Discipline
 - **Always update `CHANGELOG-FORK.md`** when adding or materially changing an important user-facing feature or improvement in the fork.
-- Add concise release-note entries for all important fork-specific features, including meaningful behavior changes that users need to know about.
+- Add concise release-note entries for all important fork-specific features, including meaningful behavior changes that users need to know about. New entries go into the newest `(unreleased)` version section at the top of the file: sections are per version, newest first, and the release workflow embeds the released version's section into the GitHub release notes and into the update manifest, so the app shows the same notes.
 - Before finishing the work, compare the final changes with `CHANGELOG-FORK.md` and ensure no important feature is missing. Do not add internal refactors, formatting-only changes, or test-only changes as user-facing features.
+- The release runbook is `docs/RELEASE_GUIDE.md` (also available as the `/release` command): version bumps, changelog freeze, workflow dispatch, and post-release verification.
 
 ## 5. Local Rust Build Directory
 - This Windows workstation has insufficient free space on the repository volume for Rust/Tauri build artifacts. Keep the Cargo target directory outside the repository.
