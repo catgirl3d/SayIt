@@ -1,7 +1,7 @@
 import * as bridge from '../bridge'
 import { startCapture, stopCapture } from '../audio'
 import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult } from '../transcription'
-import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode } from '../transcription/types'
+import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode, type AiFailureReason } from '../transcription/types'
 import {
   CUSTOM_ASR_PROVIDER,
   formatAsrHistoryProvider,
@@ -56,6 +56,7 @@ import {
   classifyMicLevel,
   judgeOsMicMute,
   createHistoryRecordId,
+  resolveAiCleanupFailure,
   type MicLevel,
 } from './helpers'
 import { t } from '@/i18n'
@@ -1349,7 +1350,7 @@ export class RecorderOrchestrator {
 
   private async handleTextInsertion(
     text: string,
-    options: { allowWhenIdle?: boolean; runId: number; probeResult?: ProbeResult | null; warning?: string },
+    options: { allowWhenIdle?: boolean; runId: number; probeResult?: ProbeResult | null; warning?: string; aiCleanupFailure?: AiFailureReason },
   ) {
     const insertionStartedAt = Date.now()
     const { runId } = options
@@ -1452,9 +1453,17 @@ export class RecorderOrchestrator {
       })
 
       this.finishRun(runId)
-      if (options.warning) this.overlayService.showAsrWarning()
+      // A failed AI cleanup is reported only after the text is actually inserted; when the
+      // Deepgram dictionary notice is also due, it rides along on the same single-line toast.
+      if (options.warning && !options.aiCleanupFailure) this.overlayService.showAsrWarning()
       if (this.state === 'processing') {
-        this.resetToIdle({ keepOverlay: Boolean(options.warning) })
+        this.resetToIdle({ keepOverlay: Boolean(options.warning) || Boolean(options.aiCleanupFailure) })
+      }
+      if (options.aiCleanupFailure) {
+        this.overlayService.showAiCleanupFailed(
+          options.aiCleanupFailure,
+          options.warning ? t('asr.deepgramKeytermLimitToast') : undefined,
+        )
       }
       return
     }
@@ -2422,6 +2431,8 @@ export class RecorderOrchestrator {
     const warning = (result.asrWarning ?? this.activeAsrWarning) === DEEPGRAM_KEYTERM_LIMIT
       ? t('asr.deepgramKeytermLimitWarning')
       : undefined
+    // A failed AI cleanup is only reported to the user once the text is actually inserted.
+    const aiCleanupFailure = resolveAiCleanupFailure(result)
 
     // llmText === asrText 说明这段没经过 AI 整理（极速模式，或后端未跑 LLM 直接回 asrText）。
     // 此时文本仍是纯 ASR，「格式规范」由我们兜底；AI 整理过的文本则把格式交给 AI，只做文本替换。
@@ -2635,6 +2646,7 @@ export class RecorderOrchestrator {
         runId,
         probeResult: context.probeResult,
         warning,
+        aiCleanupFailure,
       })
     } catch (error) {
       if (!this.isRunCurrent(runId)) return

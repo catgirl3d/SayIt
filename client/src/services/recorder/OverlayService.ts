@@ -1,8 +1,9 @@
-import { getLocale, t } from '@/i18n'
+import { getLocale, t, type TranslationKey } from '@/i18n'
 import * as bridge from '../bridge'
 import { addRuntimeEvent } from '../debugLog'
 import { getSetting } from '../store'
 import { clampSec } from '../timeModel'
+import type { AiFailureReason } from '../transcription/types'
 import {
   formatRecordingLimit,
   OVERLAY_WIDTH_PRESETS,
@@ -23,6 +24,13 @@ interface MicSourceHint {
 }
 
 const MIC_SOURCE_HINT_DURATION_MS = 3000
+
+const AI_CLEANUP_FAILURE_TOAST_KEYS: Record<AiFailureReason, TranslationKey> = {
+  timeout: 'overlay.toastAiCleanupTimeout',
+  provider_error: 'overlay.toastAiCleanupError',
+  empty_result: 'overlay.toastAiCleanupEmpty',
+  incomplete_profile: 'overlay.toastAiCleanupProfile',
+}
 
 function normalizeTheme(value: unknown): OverlayWaveTheme {
   if (value === 'black-white' || value === 'black-blue' || value === 'black-rainbow') {
@@ -453,6 +461,20 @@ export class OverlayService {
   /** Lightweight confirmation for the global AI-cleanup shortcut; it does not interrupt active recording. */
   showAiCleanupToggled(enabled: boolean) {
     this.showToast(t(enabled ? 'overlay.toastAiCleanupOn' : 'overlay.toastAiCleanupOff'), 'info', 1400)
+  }
+
+  /**
+   * Explain a failed AI cleanup once the recognized text has actually been inserted.
+   *
+   * The toast carries the reason (no response, provider error, empty response, incomplete
+   * profile) because the inserted fallback text alone cannot tell the user whether the AI
+   * stage ran at all. `warningLabel` is a short, already translated second fact for the
+   * same single-line toast (e.g. the dictionary was dropped).
+   */
+  showAiCleanupFailed(reason: AiFailureReason, warningLabel?: string) {
+    addRuntimeEvent('warn', 'recorder', 'Showing AI cleanup failure toast', { reason })
+    const baseLabel = t(AI_CLEANUP_FAILURE_TOAST_KEYS[reason])
+    this.showToast(warningLabel ? `${baseLabel} · ${warningLabel}` : baseLabel, 'warn', 4000)
   }
 
   /**

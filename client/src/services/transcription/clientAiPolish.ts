@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { addRuntimeEvent } from '../debugLog'
 import { loadRuntimeAiConfig } from '../aiRuntimeConfig'
 import { buildAiProviderConfig, findProvider } from '@/features/settings/aiProviderCatalog'
-import type { AiExecutionSource, AiExecutionStatus, StartOptions } from './types'
+import type { AiExecutionSource, AiExecutionStatus, AiFailureReason, StartOptions } from './types'
 
 interface AiResult {
   text: string
@@ -19,6 +19,7 @@ export interface ClientAiPolishResult {
   contextApplied?: boolean
   aiSource: AiExecutionSource
   aiStatus: AiExecutionStatus
+  aiFailureReason?: AiFailureReason
   aiProvider?: string
   aiModel?: string
 }
@@ -114,6 +115,7 @@ export async function polishWithClientAi(
       contextApplied: startOptions?.textContext ? false : undefined,
       aiSource: 'custom',
       aiStatus: 'unavailable',
+      aiFailureReason: 'incomplete_profile',
       aiProvider: config.provider || undefined,
       aiModel: config.model || undefined,
     }
@@ -141,6 +143,7 @@ export async function polishWithClientAi(
   }
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
   try {
     const request = invoke<AiResult>('cloud_polish', {
       request: {
@@ -156,7 +159,10 @@ export async function polishWithClientAi(
       request,
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
-          () => reject(new Error(`Custom AI timed out after ${CLIENT_AI_TIMEOUT_MS}ms`)),
+          () => {
+            timedOut = true
+            reject(new Error(`Custom AI timed out after ${CLIENT_AI_TIMEOUT_MS}ms`))
+          },
           CLIENT_AI_TIMEOUT_MS,
         )
       }),
@@ -173,6 +179,7 @@ export async function polishWithClientAi(
       contextApplied: startOptions?.textContext ? succeeded : undefined,
       aiSource: 'custom',
       aiStatus: succeeded ? 'applied' : 'failed',
+      aiFailureReason: succeeded ? undefined : 'empty_result',
       aiProvider: config.provider,
       aiModel: config.model,
     }
@@ -182,6 +189,7 @@ export async function polishWithClientAi(
       error: String(error),
       provider: config.provider,
       model: config.model,
+      timedOut,
     })
     return {
       llmText: safeFallbackText(asrText, startOptions),
@@ -189,6 +197,7 @@ export async function polishWithClientAi(
       contextApplied: startOptions?.textContext ? false : undefined,
       aiSource: 'custom',
       aiStatus: 'failed',
+      aiFailureReason: timedOut ? 'timeout' : 'provider_error',
       aiProvider: config.provider,
       aiModel: config.model,
     }

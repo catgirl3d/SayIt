@@ -10,6 +10,12 @@ export type ProviderState = 'disconnected' | 'connecting' | 'connected' | 'error
 
 export type AiExecutionSource = 'server' | 'custom' | 'none'
 export type AiExecutionStatus = 'applied' | 'skipped' | 'unavailable' | 'failed'
+/**
+ * Why the client-side AI stage did not apply. The fallback text alone cannot tell the
+ * user whether the provider answered at all, so the cause travels with the final result
+ * to drive the overlay notice and the History mark.
+ */
+export type AiFailureReason = 'timeout' | 'provider_error' | 'empty_result' | 'incomplete_profile'
 /** Stable wire code the Rust side emits after it recovered from a rejected Deepgram dictionary. */
 export const DEEPGRAM_KEYTERM_LIMIT = 'deepgram_keyterm_limit' as const
 export type AsrWarningCode = typeof DEEPGRAM_KEYTERM_LIMIT
@@ -39,6 +45,8 @@ export interface FinalResult {
   /** Explicit execution metadata; text equality cannot prove whether AI ran. */
   aiSource?: AiExecutionSource
   aiStatus?: AiExecutionStatus
+  /** Set only when aiStatus is 'failed' or 'unavailable' and the cause is known. */
+  aiFailureReason?: AiFailureReason
   aiProvider?: string
   aiModel?: string
   asrWarning?: AsrWarningCode

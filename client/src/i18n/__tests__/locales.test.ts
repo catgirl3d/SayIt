@@ -13,6 +13,7 @@ import {
 } from '..'
 import {
   appPromptRuleDisplayName,
+  historyAiNotAppliedDisplay,
   historyFailureReasonDisplay,
   localModelDisplayDescription,
   localModelDisplayLanguages,
@@ -264,6 +265,25 @@ describe('历史失败原因显示', () => {
   it('老记录没有 code 时原样显示', () => {
     setLocale('en')
     expect(historyFailureReasonDisplay({ failReason: '旧版失败原因' })).toBe('旧版失败原因')
+  })
+})
+
+describe('历史 AI 未应用标记', () => {
+  afterEach(() => setLocale('en'))
+
+  it('translates the mark from the stable status and follows the active locale', () => {
+    expect(historyAiNotAppliedDisplay('failed')).toBe(en['record.aiNotAppliedFailed'])
+    expect(historyAiNotAppliedDisplay('unavailable')).toBe(en['record.aiNotAppliedUnavailable'])
+
+    setLocale('uk')
+    expect(historyAiNotAppliedDisplay('failed')).toBe(uk['record.aiNotAppliedFailed'])
+    expect(historyAiNotAppliedDisplay('unavailable')).toBe(uk['record.aiNotAppliedUnavailable'])
+  })
+
+  it('leaves applied, skipped, and legacy records without a mark', () => {
+    for (const status of ['applied', 'skipped', undefined] as const) {
+      expect(historyAiNotAppliedDisplay(status), String(status)).toBe('')
+    }
   })
 })
 

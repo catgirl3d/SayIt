@@ -1,4 +1,4 @@
-import type { HistoryFailReasonCode, PromptPreset } from '@/services/store'
+import type { HistoryFailReasonCode, HistoryRecord, PromptPreset } from '@/services/store'
 import type { AppPromptRule } from '@/services/personalization/types'
 import { t, tForLocale, type TranslationKey } from '.'
 
@@ -178,4 +178,15 @@ export function historyFailureReasonDisplay(record: {
 }): string {
   const key = record.failReasonCode ? HISTORY_FAILURE_KEYS[record.failReasonCode] : undefined
   return key ? t(key) : record.failReason || ''
+}
+
+/**
+ * AI stage was requested but did not apply (provider error, empty answer, incomplete
+ * profile). History shows this mark instead of hiding the AI row, so a silent fallback
+ * to raw text is visible after the fact. Applied/skipped/legacy records get no mark.
+ */
+export function historyAiNotAppliedDisplay(status?: HistoryRecord['aiStatus']): string {
+  if (status === 'failed') return t('record.aiNotAppliedFailed')
+  if (status === 'unavailable') return t('record.aiNotAppliedUnavailable')
+  return ''
 }

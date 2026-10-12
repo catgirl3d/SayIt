@@ -91,12 +91,64 @@ describe('client AI polish completion handling', () => {
       llmText: ASR_COMMAND,
       aiSource: 'custom',
       aiStatus: 'failed',
+      aiFailureReason: 'provider_error',
     })
 
     expect(resolveContextAwareOutput({
       asrText: ASR_COMMAND,
       llmText: polished!.llmText,
     }).baseText).toBe(ASR_COMMAND)
+  })
+
+  it('reports an empty provider answer as its own failure reason', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') return { text: '', elapsed_ms: 9 }
+      return undefined
+    })
+
+    const polished = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 7 },
+      logSource: 'test',
+    })
+
+    expect(polished).toMatchObject({
+      llmText: ASR_COMMAND,
+      llmMs: 9,
+      aiSource: 'custom',
+      aiStatus: 'failed',
+      aiFailureReason: 'empty_result',
+    })
+  })
+
+  it('reports a provider that never answers as a timeout, not a generic error', async () => {
+    vi.useFakeTimers()
+    try {
+      boundaries.invoke.mockImplementation((command: string) => (
+        command === 'cloud_polish' ? new Promise(() => {}) : Promise.resolve(undefined)
+      ))
+
+      const pending = polishWithClientAi({
+        asrText: ASR_COMMAND,
+        durationSec: 2,
+        startOptions: { runId: 8 },
+        logSource: 'test',
+      })
+      // Let the settings reads and the native invoke settle before the timeout timer exists.
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(8_000)
+      const polished = await pending
+
+      expect(polished).toMatchObject({
+        llmText: ASR_COMMAND,
+        aiSource: 'custom',
+        aiStatus: 'failed',
+        aiFailureReason: 'timeout',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('treats a nonempty completion equal to ASR text as applied', async () => {
@@ -148,6 +200,7 @@ describe('client AI polish completion handling', () => {
       llmMs: 0,
       aiSource: 'custom',
       aiStatus: 'unavailable',
+      aiFailureReason: 'incomplete_profile',
       aiProvider: provider,
     })
     expect(boundaries.addRuntimeEvent).toHaveBeenCalledWith(
