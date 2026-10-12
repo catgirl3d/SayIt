@@ -1,0 +1,4 @@
+# Node scripts must keep LF line endings: a CRLF shebang breaks tooling that
+# executes the file through a VM (the vitest/Vite SSR transform), so tests
+# that import these scripts fail on Windows checkouts (core.autocrlf=true).
+*.mjs text eol=lf
