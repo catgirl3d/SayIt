@@ -1,6 +1,6 @@
 [package]
 name = "sayit"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Liu Qianglong", "Claude"]
 edition = "2021"
 
