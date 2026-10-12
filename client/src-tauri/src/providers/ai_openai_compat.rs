@@ -222,8 +222,11 @@ pub async fn polish(
     let cleaned = strip_thinking(&result_text);
 
     if cleaned.is_empty() {
-        return Err(diag::fail(
+        // Explicit stable code: the client tells an empty completion apart from other
+        // provider failures, so it must not collapse into the generic connect_failed code.
+        return Err(diag::fail_code(
             SCOPE,
+            "empty_completion",
             "empty_completion",
             "AI returned no usable completion text".to_string(),
         ));
@@ -340,8 +343,11 @@ pub async fn polish_stream(
     let cleaned = strip_thinking(&result_text);
 
     if cleaned.is_empty() {
-        return Err(diag::fail(
+        // Explicit stable code: the client tells an empty completion apart from other
+        // provider failures, so it must not collapse into the generic connect_failed code.
+        return Err(diag::fail_code(
             SCOPE,
+            "empty_completion",
             "empty_completion",
             "AI returned no usable completion text".to_string(),
         ));
@@ -705,7 +711,7 @@ mod tests {
     const TEST_INPUT: &str = "spoken transcript marker";
     const RESPONSE_MARKER: &str = "completion-payload-marker";
     const SAFE_COMPLETION_ERROR: &str =
-        "sayit_error:connect_failed:AI returned no usable completion text";
+        "sayit_error:empty_completion:AI returned no usable completion text";
 
     /// Stream chunks split lines and multi-byte characters at arbitrary points; only complete
     /// `data:` lines may be parsed, and the accumulated text must survive the split.

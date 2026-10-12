@@ -122,6 +122,29 @@ describe('client AI polish completion handling', () => {
     })
   })
 
+  it('classifies the backend empty-completion failure as an empty result', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') {
+        throw 'sayit_error:empty_completion:AI returned no usable completion text'
+      }
+      return undefined
+    })
+
+    const polished = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 9 },
+      logSource: 'test',
+    })
+
+    expect(polished).toMatchObject({
+      llmText: ASR_COMMAND,
+      aiSource: 'custom',
+      aiStatus: 'failed',
+      aiFailureReason: 'empty_result',
+    })
+  })
+
   it('reports a provider that never answers as a timeout, not a generic error', async () => {
     vi.useFakeTimers()
     try {
