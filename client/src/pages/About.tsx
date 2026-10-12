@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Github, Loader2, CheckCircle } from 'lucide-react'
@@ -11,7 +11,7 @@ import {
   hasAvailableUpdate,
   type AutoUpdateState,
 } from '@/features/update/autoUpdate'
-import { RELEASE_HIGHLIGHTS } from '@/features/update/releaseHighlights'
+import { parseReleaseNotes } from '@/features/update/releaseNotes'
 import appIconOnDark from '@/assets/icon-128.png'
 import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { getLocale, t } from '@/i18n'
@@ -44,6 +44,30 @@ export default function About() {
   // on `phase === someValue`, which is exactly the shape that used to get stuck.
   const hasUpdate = hasAvailableUpdate(state)
   const canInstall = hasUpdate && !downloading && !installing
+
+  // Release notes for the version the manifest describes: the available update when one
+  // exists, otherwise the latest released version. They arrive with the manifest itself,
+  // so the page shows the real changelog section of that release.
+  const notes = versionInfo?.notes ?? null
+  const notesVersion = versionInfo?.latestVersion ?? null
+  const releaseNotes = useMemo(() => (notes ? parseReleaseNotes(notes) : []), [notes])
+
+  // A long catch-up section (90+ entries) must not stretch the About card to thousands of
+  // pixels, so the block is capped and scrolls. This measures the real overflow and offers
+  // "Show all" only when something is actually hidden; expanding resets when the notes
+  // change (a different version is reported by the manifest).
+  const notesRef = useRef<HTMLDivElement | null>(null)
+  const [notesExpanded, setNotesExpanded] = useState(false)
+  const [notesOverflow, setNotesOverflow] = useState(false)
+  useEffect(() => setNotesExpanded(false), [notes])
+  useEffect(() => {
+    const el = notesRef.current
+    if (!el) {
+      setNotesOverflow(false)
+      return
+    }
+    setNotesOverflow(el.scrollHeight > el.clientHeight + 1)
+  }, [notes, notesExpanded])
 
   const updateStatusText = (() => {
     if (installing) return t('about.installing')
@@ -158,19 +182,59 @@ export default function About() {
           </div>
 
           {/* This release */}
-          {RELEASE_HIGHLIGHTS.version === currentVersion && RELEASE_HIGHLIGHTS.items.length > 0 && (
+          {releaseNotes.length > 0 && notesVersion && (
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-medium">
-                {t('about.releaseNotes', { version: RELEASE_HIGHLIGHTS.version })}
+                {t('about.releaseNotes', { version: notesVersion })}
               </h3>
-              <ul className="space-y-1.5">
-                {RELEASE_HIGHLIGHTS.items.map((item, index) => (
-                  <li key={index} className="flex gap-2 text-sm text-muted-foreground">
-                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/50" />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
+              <div
+                ref={notesRef}
+                className={
+                  notesExpanded
+                    ? 'space-y-1.5'
+                    : 'custom-scrollbar max-h-72 space-y-1.5 overflow-y-auto pr-1'
+                }
+              >
+                {releaseNotes.map((block, index) => {
+                  if (block.kind === 'heading') {
+                    return (
+                      <div
+                        key={index}
+                        className={
+                          block.level === 3
+                            ? 'pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70'
+                            : 'pt-1 text-xs font-medium text-muted-foreground'
+                        }
+                      >
+                        {block.text}
+                      </div>
+                    )
+                  }
+                  if (block.kind === 'bullet') {
+                    return (
+                      <div key={index} className="flex gap-2 text-sm text-muted-foreground">
+                        <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/50" />
+                        <span>{block.text}</span>
+                      </div>
+                    )
+                  }
+                  return (
+                    <p key={index} className="text-sm text-muted-foreground">
+                      {block.text}
+                    </p>
+                  )
+                })}
+              </div>
+              {(notesOverflow || notesExpanded) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2 h-7 px-2 text-xs text-muted-foreground"
+                  onClick={() => setNotesExpanded((value) => !value)}
+                >
+                  {notesExpanded ? t('about.collapseNotes') : t('about.showAllNotes')}
+                </Button>
+              )}
             </div>
           )}
         </CardContent>

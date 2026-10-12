@@ -14,6 +14,7 @@ const VALID = {
   installerName: 'SayIt_0.2.1_x64-setup.exe',
   installerBytes: Buffer.from('fixture'),
   releaseDate: '2026-09-16T00:00:00.000Z',
+  notes: '## v0.2.1\n\n- Something changed',
 }
 
 test('builds the exact manifest contract', () => {
@@ -22,6 +23,7 @@ test('builds the exact manifest contract', () => {
     releaseDate: '2026-09-16T00:00:00.000Z',
     url: 'https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe',
     sha512: createHash('sha512').update('fixture').digest('base64'),
+    notes: '## v0.2.1\n\n- Something changed',
   })
 })
 
@@ -86,12 +88,32 @@ test('rejects non-buffer installer bytes', () => {
   }
 })
 
+test('rejects missing or empty release notes', () => {
+  for (const notes of [undefined, '', '   ', 42]) {
+    assert.throws(
+      () => buildUpdateManifest({ ...VALID, notes }),
+      /Invalid release notes/,
+      `notes ${JSON.stringify(notes)} must be rejected`,
+    )
+  }
+})
+
+test('rejects release notes that would exceed the native manifest size limit', () => {
+  const notes = `## v0.2.1\n\n- ${'x'.repeat(70 * 1024)}`
+  assert.throws(
+    () => buildUpdateManifest({ ...VALID, notes }),
+    /Manifest is \d+ bytes \(limit 65536\): the release notes are too large/,
+  )
+})
+
 test('CLI writes the manifest with a trailing newline', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-test-'))
   try {
     const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
     const outputPath = join(dir, 'latest-win32-x64.json')
+    const notesPath = join(dir, 'notes.md')
     writeFileSync(installerPath, 'installer-bytes')
+    writeFileSync(notesPath, '## v0.2.1\n\n- Note one\n')
 
     const stdout = execFileSync(
       process.execPath,
@@ -101,6 +123,7 @@ test('CLI writes the manifest with a trailing newline', () => {
         '--repository', 'catgirl3d/SayIt',
         '--installer', installerPath,
         '--release-date', '2026-09-19T00:00:00.000Z',
+        '--notes-file', notesPath,
         '--output', outputPath,
       ],
       { encoding: 'utf8' },
@@ -114,6 +137,7 @@ test('CLI writes the manifest with a trailing newline', () => {
       releaseDate: '2026-09-19T00:00:00.000Z',
       url: 'https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe',
       sha512: createHash('sha512').update('installer-bytes').digest('base64'),
+      notes: '## v0.2.1\n\n- Note one',
     })
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -124,7 +148,9 @@ test('CLI fails closed on a foreign repository', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-test-'))
   try {
     const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
+    const notesPath = join(dir, 'notes.md')
     writeFileSync(installerPath, 'installer-bytes')
+    writeFileSync(notesPath, '## v0.2.1\n\n- Note one\n')
     assert.throws(
       () => execFileSync(
         process.execPath,
@@ -134,6 +160,7 @@ test('CLI fails closed on a foreign repository', () => {
           '--repository', 'crosswk/SayIt',
           '--installer', installerPath,
           '--release-date', '2026-09-19T00:00:00.000Z',
+          '--notes-file', notesPath,
           '--output', join(dir, 'latest-win32-x64.json'),
         ],
         { encoding: 'utf8', stdio: 'pipe' },

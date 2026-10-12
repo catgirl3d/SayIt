@@ -13,6 +13,7 @@ function validManifest() {
     releaseDate: '2026-09-16T00:00:00.000Z',
     url: `${PROJECT_RELEASES_URL}/download/v0.2.1/SayIt_0.2.1_x64-setup.exe`,
     sha512: VALID_SHA512,
+    notes: '## v0.2.1\n\n- Something changed',
   }
 }
 
@@ -34,13 +35,14 @@ async function check(currentVersion: string, manifest: unknown, status = 200): P
   return info
 }
 
-/** Every rejected manifest must fail closed: no version, no URL, no hash. */
+/** Every rejected manifest must fail closed: no version, no URL, no hash, no notes. */
 function expectRejected(info: VersionInfo, expectedError = 'Invalid fork update manifest') {
   expect(info.hasUpdate).toBe(false)
   expect(info.latestVersion).toBeNull()
   expect(info.downloadUrl).toBeNull()
   expect(info.releaseDate).toBeNull()
   expect(info.sha512).toBeNull()
+  expect(info.notes).toBeNull()
   expect(info.error).toBe(expectedError)
 }
 
@@ -80,6 +82,7 @@ describe('checkVersionUpdate', () => {
     expect(info.downloadUrl).toBe(validManifest().url)
     expect(info.releaseDate).toBe('2026-09-16T00:00:00.000Z')
     expect(info.sha512).toBe(VALID_SHA512)
+    expect(info.notes).toBe(validManifest().notes)
     expect(info.error).toBeNull()
     expect(info.sourceUrl).toBe(PROJECT_UPDATE_MANIFEST_URL)
   })
@@ -165,6 +168,23 @@ describe('checkVersionUpdate', () => {
 
   it('rejects a manifest missing fields', async () => {
     expectRejected(await check('0.1.9', { version: '0.2.1' }))
+  })
+
+  it('accepts a manifest without notes (releases published before the field existed)', async () => {
+    const manifest = validManifest()
+    delete (manifest as Record<string, unknown>).notes
+    const info = await check('0.1.9', manifest)
+    expect(info.hasUpdate).toBe(true)
+    expect(info.notes).toBeNull()
+    expect(info.error).toBeNull()
+  })
+
+  it('rejects blank release notes', async () => {
+    expectRejected(await check('0.1.9', manifestWith({ notes: '   ' })))
+  })
+
+  it('rejects non-string release notes', async () => {
+    expectRejected(await check('0.1.9', manifestWith({ notes: ['x'] })))
   })
 
   it('reports HTTP failures with their status and no partial metadata', async () => {

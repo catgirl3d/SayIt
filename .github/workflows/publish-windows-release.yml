@@ -119,6 +119,7 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "notes_file=$notesPath" >> $env:GITHUB_OUTPUT
+          "section_file=$sectionPath" >> $env:GITHUB_OUTPUT
 
       - name: Build NSIS installer
         working-directory: client
@@ -157,6 +158,7 @@ jobs:
             --repository '${{ github.repository }}' `
             --installer '${{ steps.installer.outputs.path }}' `
             --release-date $releaseDate `
+            --notes-file '${{ steps.meta.outputs.section_file }}' `
             --output $manifestPath
           if ($LASTEXITCODE -ne 0) {
             throw 'Could not generate the update manifest'

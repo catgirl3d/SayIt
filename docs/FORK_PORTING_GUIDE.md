@@ -30,6 +30,7 @@ This fork is a hard fork.
 | `dev-scripts/upstream-slices/` | Read-only review evidence for large upstream commits (local, git-ignored). Packet format and reviewer contract: `dev-scripts/upstream-slices/README.md`. |
 | `UPSTREAM-TRACKER.md` | Committed mirror of porting progress, one row per feature. Update it when a port lands or a decision changes. |
 | `CHANGELOG-FORK.md` | Release-facing summary of user-visible fork changes. Release-note discipline: `AGENTS.md` section 4. |
+| `docs/RELEASE_GUIDE.md` | Release runbook: version bump, changelog freeze, workflow dispatch, verification. Also available as the `/release` command. |
 | `AGENTS.md` | Repository-wide engineering rules. |
 
 `UPSTREAM-TRACKER.md` mirrors progress for humans; the decision journal remains

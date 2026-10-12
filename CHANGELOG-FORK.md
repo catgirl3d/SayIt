@@ -107,6 +107,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Added a confirmation-protected "Clear history" action on the History page that deletes every record (starred ones included) together with its saved audio recordings, and subtracts the deleted records from the home-screen usage totals.
 - Corrected equivalent typing-time estimates to use 50 words per minute (250 standardized characters per minute) instead of 50 characters per minute, and show seconds for short Home statistics.
 - Updates are now fork-only and consent-based: SayIt checks this fork's own GitHub releases for new versions, and a version is downloaded and installed only when you press "Download and install" — closing the app never installs anything. A "Check for updates automatically" switch was added to General settings, and the About page now shows a fork build marker.
+- The About page now shows the real release notes of the latest released version, and of an available update before installing it: the notes travel inside the update manifest, straight from the fork changelog. The hand-written highlight list and its translations are gone.
 
 #### Support and Diagnostics
 

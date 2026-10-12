@@ -14,6 +14,11 @@ export interface VersionInfo {
   releaseDate: string | null
   /** Installer SHA-512 (Base64). Re-verified by the Rust side after download. */
   sha512: string | null
+  /**
+   * Release notes for the manifest's version (the CHANGELOG-FORK.md section), shown on
+   * the About page. Optional: manifests published before this field existed stay valid.
+   */
+  notes: string | null
   error: string | null
   /** The URL the manifest was fetched from. The fork channel is fixed, so this is constant. */
   sourceUrl: string | null
@@ -62,7 +67,8 @@ const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
  * mandatory, and the installer URL must be the canonical fork release asset for exactly
  * the version the manifest declares. Any deviation returns the invalid-manifest result
  * with every field null, so a half-valid manifest can never smuggle a download URL or
- * a hash past this boundary.
+ * a hash past this boundary. Release notes are optional (manifests published before the
+ * field existed stay valid) but must be a non-empty string when present.
  */
 export async function checkVersionUpdate(currentVersion: string): Promise<VersionInfo> {
   const base: VersionInfo = {
@@ -72,6 +78,7 @@ export async function checkVersionUpdate(currentVersion: string): Promise<Versio
     downloadUrl: null,
     releaseDate: null,
     sha512: null,
+    notes: null,
     error: null,
     sourceUrl: PROJECT_UPDATE_MANIFEST_URL,
   }
@@ -104,6 +111,7 @@ function validateManifest(base: VersionInfo, currentVersion: string, raw: unknow
   const releaseDate = manifest.releaseDate
   const url = manifest.url
   const sha512 = manifest.sha512
+  const notes = manifest.notes
 
   if (
     typeof version !== 'string' ||
@@ -114,7 +122,10 @@ function validateManifest(base: VersionInfo, currentVersion: string, raw: unknow
     typeof url !== 'string' ||
     url !== projectReleaseInstallerUrl(version) ||
     typeof sha512 !== 'string' ||
-    !isSixtyFourByteSha512Base64(sha512)
+    !isSixtyFourByteSha512Base64(sha512) ||
+    // Notes are optional so manifests from before the field stay valid, but a present
+    // field must be a non-empty string: a blank one would silently blank the About page.
+    (notes !== undefined && (typeof notes !== 'string' || notes.trim() === ''))
   ) {
     return invalidManifest(base)
   }
@@ -123,6 +134,7 @@ function validateManifest(base: VersionInfo, currentVersion: string, raw: unknow
   base.releaseDate = releaseDate
   base.sha512 = sha512
   base.downloadUrl = url
+  base.notes = typeof notes === 'string' ? notes : null
   base.hasUpdate = compareVersions(currentVersion, version) > 0
   return base
 }
