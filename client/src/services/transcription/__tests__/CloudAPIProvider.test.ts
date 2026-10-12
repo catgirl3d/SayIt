@@ -708,6 +708,53 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     await session?.close()
   })
 
+  it('keeps a completed buffered run from closing the socket of an open live owner', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'deepgram-profile', provider: 'deepgram', apiKey: 'key', appId: '',
+      console: 'new', otherKey: '', workspaceId: '', model: 'nova-3', omniPrompt: '',
+    })
+    const provider = new CloudAPIProvider()
+    const liveCallbacks = { onResult: vi.fn(), onError: vi.fn(), onWarning: vi.fn() }
+    const session = await provider.openLive({ runId: 72 }, liveCallbacks)
+    expect(session).not.toBeNull()
+
+    let finishRun!: () => void
+    const runDone = new Promise<void>((resolve) => { finishRun = resolve })
+    const onFinal = vi.fn()
+    await provider.connect({ onFinal, onDone: finishRun })
+    expect(provider.start({ runId: 73, disableStreaming: true })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    provider.stop()
+    await runDone
+
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(true)
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ asrText: 'recognized' }))
+
+    const sessionId = session?.sessionId
+    for (const listener of mocks.listeners.get('deepgram-live-result') ?? []) {
+      listener({ payload: {
+        sessionId,
+        resultId: 11,
+        audioStartMs: 0,
+        audioEndMs: 500,
+        text: 'live text',
+        isFinal: true,
+        speechFinal: true,
+        fromFinalize: false,
+      } })
+    }
+    expect(liveCallbacks.onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId, text: 'live text' }))
+    expect(liveCallbacks.onError).not.toHaveBeenCalled()
+
+    await session?.close()
+    for (const command of ['doubao_stream_close', 'qwen_stream_close', 'qwen_audio_stream_close']) {
+      expect(mocks.invoke.mock.calls.filter(([name]) => name === command)).toHaveLength(1)
+    }
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_close')).toEqual([
+      ['deepgram_stream_close', { sessionId }],
+    ])
+  })
+
   it('returns null for a known unsupported live profile without opening or using batch recognition', async () => {
     mocks.loadActiveAsrProfile.mockResolvedValue({
       id: 'openai-profile', provider: 'openai_transcribe', apiKey: 'key', appId: '',

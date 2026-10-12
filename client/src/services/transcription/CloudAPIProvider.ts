@@ -257,8 +257,16 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
   private completeRun(runId: number): void {
     if (!this.isRunCurrent(runId)) return
+    this.resetSessionState()
+  }
 
-    // 先让本次 run 失效，后续迟到结果一律丢弃；close 在队列中等待旧发送链排空。
+  /**
+   * Single source of truth for ending a run: invalidate it first so late results are
+   * dropped, clear the front-end state, and queue the native stream close. The close
+   * is enqueued behind the send chain captured here, so the native stream is never
+   * closed while a flush is still in flight.
+   */
+  private resetSessionState(): void {
     this.activeRunId = 0
     this.activeStartOpts = undefined
     this.activeProfileSnapshot = null
@@ -276,6 +284,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.qwenCommands = null
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     this.teardownPartials()
+    // A live owner closes its own tagged socket; the untagged close must not be sent here.
     void this.queueNativeClose(sendLockToDrain, this.liveOwner !== null)
   }
 
@@ -401,25 +410,9 @@ export class CloudAPIProvider implements TranscriptionProvider {
       })
     }
 
-    // 必须先使 run 失效，再清理前端状态；close 最后入队且等待此刻的旧发送链。
-    this.activeRunId = 0
-    this.activeStartOpts = undefined
-    this.activeProfileSnapshot = null
-    const sendLockToDrain = this.sendLock
-    this.sessionActive = false
-    this.pcmBuffers = []
-    this.pendingChunks = []
-    this.streamFinishing = true
-    this.isDoubaoStream = false
-    this.isQwenStream = false
-    this.isDeepgramStream = false
-    this.doubaoStreamReady = false
-    this.qwenStreamReady = false
-    this.deepgramStreamReady = false
-    this.qwenCommands = null
-    this.teardownPartials()
-    if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
-    void this.queueNativeClose(sendLockToDrain, liveOwner !== null)
+    // Invalidate the run, clear front-end state, and enqueue the native close behind
+    // the send chain as of this moment.
+    this.resetSessionState()
   }
 
   disconnect(): void {
