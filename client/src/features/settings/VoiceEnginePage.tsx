@@ -17,6 +17,8 @@ import CloudAPISection from './CloudAPISection'
 import LocalModeSection, { LocalModeAdvancedSection } from './LocalModeSection'
 import ServerSection from './ServerSection'
 import AsrTestSection from './AsrTestSection'
+import { PageHelp } from './PageHelp'
+import { VoiceEngineHelpContent } from './HelpContents'
 import { useT } from '@/i18n/useT'
 import SpeechLanguageSection from './SpeechLanguageSection'
 import { systemAudioSession } from '@/services/systemAudio'
@@ -59,8 +61,15 @@ export default function VoiceEnginePage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="mb-2 text-2xl font-bold">{t('nav.voiceEngine')}</h1>
-      <p className="mb-6 text-sm text-muted-foreground">{t('voiceEngine.subtitle')}</p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-2 text-2xl font-bold">{t('nav.voiceEngine')}</h1>
+          <p className="text-sm text-muted-foreground">{t('voiceEngine.subtitle')}</p>
+        </div>
+        <PageHelp title={t('help.voiceEngine.title')}>
+          <VoiceEngineHelpContent />
+        </PageHelp>
+      </div>
 
       <div className="space-y-6">
         <div className="space-y-2">

@@ -28,10 +28,12 @@ export interface AiProvider {
   defaultUrl: string
   /** 建议的模型，第一个作为新建时的默认值；同时作为表单里的快速选择 */
   defaultModels: string[]
-  /** 不需要 API Key（目前只有本机 Ollama） */
+  /** No API key required (currently only local Ollama) */
   keyless?: boolean
-  /** 申请密钥的控制台地址 */
+  /** Console URL for obtaining a key */
   consoleUrl?: string
+  /** Catalog-driven "Recommended" mark shown in the help dialog */
+  recommended?: boolean
 }
 
 export const AI_PROVIDERS: AiProvider[] = [
@@ -64,12 +66,15 @@ export const AI_PROVIDERS: AiProvider[] = [
   },
   {
     value: 'groq',
-    // 品牌名，中英文都写 Groq，不需要 locale 键（同 DeepSeek 的处理）
+    // Brand name, written Groq in every locale — no locale key needed (same handling as DeepSeek).
     label: 'Groq',
-    // 末段已经是 /v1，normalize_base_url 会原样保留、不再追加版本段
+    // The last segment is already /v1, so normalize_base_url keeps it as-is and does not append a version segment.
     defaultUrl: 'https://api.groq.com/openai/v1',
     defaultModels: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.3-70b-versatile'],
     consoleUrl: 'https://console.groq.com/keys',
+    // Free tier is generous enough to run cleanup daily, so the help marks it as the
+    // recommended starting point for users who have no provider configured yet.
+    recommended: true,
   },
   {
     value: 'opencode_go',

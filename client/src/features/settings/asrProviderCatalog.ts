@@ -33,21 +33,32 @@ export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemi
 
 export interface AsrPlatformInfo {
   label: string
-  /** 去哪儿领密钥 */
+  /** Console URL for obtaining a key */
   consoleUrl: string
+  /** Catalog-driven "Recommended" mark shown in the help dialog */
+  recommended?: boolean
+  /**
+   * Position in the help dialog list below the recommended entries: lower goes first.
+   * Entries without it keep catalog order after the ranked ones.
+   */
+  helpRank?: number
 }
 
-// label 用 getter：这是模块级常量，普通字段会把加载那一刻的语言固化下来。
-// 见 aiProviderCatalog.ts 里 AiProvider.label 的注释。
+// label uses getters: this is a module-level constant, so a plain field would freeze
+// the language at load time. See the AiProvider.label comment in aiProviderCatalog.ts.
 export const ASR_PLATFORMS: Record<AsrPlatform, AsrPlatformInfo> = {
   doubao: { get label() { return t('asrPlatform.doubao') }, consoleUrl: 'https://console.volcengine.com/speech/app' },
   qwen: { get label() { return t('asrPlatform.qwen') }, consoleUrl: 'https://bailian.console.aliyun.com' },
   mimo: { get label() { return t('asrPlatform.mimo') }, consoleUrl: 'https://xiaoai.mi.com' },
-  groq: { label: 'Groq', consoleUrl: 'https://console.groq.com/keys' },
-  openai: { label: 'OpenAI', consoleUrl: 'https://platform.openai.com/api-keys' },
+  // Same free-tier rationale as the AI provider catalog: a good default ASR pick.
+  groq: { label: 'Groq', consoleUrl: 'https://console.groq.com/keys', recommended: true },
+  // OpenAI and OpenRouter are the most broadly usable global services, so they sit right
+  // below the recommended entries, ahead of the region-specific ones.
+  openai: { label: 'OpenAI', consoleUrl: 'https://platform.openai.com/api-keys', helpRank: 0 },
   gemini: { label: 'Gemini', consoleUrl: 'https://aistudio.google.com/app/apikey' },
-  openrouter: { label: 'OpenRouter', consoleUrl: 'https://openrouter.ai/settings/keys' },
-  deepgram: { label: 'Deepgram', consoleUrl: 'https://console.deepgram.com' },
+  openrouter: { label: 'OpenRouter', consoleUrl: 'https://openrouter.ai/settings/keys', helpRank: 1 },
+  // $200 free credit and strong Nova-3 models with live captions, hence recommended too.
+  deepgram: { label: 'Deepgram', consoleUrl: 'https://console.deepgram.com', recommended: true },
   custom: { get label() { return t('asrPlatform.openaiCompat') }, consoleUrl: '' },
 }
 
