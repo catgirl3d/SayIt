@@ -90,22 +90,24 @@ jobs:
           }
 
           $tag = "v$version"
-          $forkChangelogPath = Join-Path $env:GITHUB_WORKSPACE 'CHANGELOG-FORK.md'
-          $forkChangelog = ''
-          if (Test-Path -LiteralPath $forkChangelogPath) {
-            $forkChangelog = (Get-Content -LiteralPath $forkChangelogPath -Raw).Trim()
-          }
-          if ([string]::IsNullOrWhiteSpace($forkChangelog)) {
-            throw 'CHANGELOG-FORK.md is missing or empty'
+
+          # The release notes are exactly the CHANGELOG-FORK.md section for the version
+          # being released (the delta since the previous release). The extractor fails
+          # on a missing or empty section, so a build can never be published with notes
+          # that do not describe it; the footer links the full fork changelog pinned to
+          # this build's commit, which keeps the link stable even as main moves on.
+          $sectionPath = Join-Path $env:RUNNER_TEMP 'sayit-release-section.md'
+          node client/scripts/extract-release-notes.mjs --version $version --output $sectionPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not extract the CHANGELOG-FORK.md section for $tag"
           }
 
           $notes = [System.Collections.Generic.List[string]]::new()
-          $notes.Add("# SayIt $tag (Fork)")
-          $notes.Add('')
           $notes.Add("Built from commit $($env:RELEASE_SHA) on branch $($env:GITHUB_REF_NAME).")
           $notes.Add('')
-
-          $notes.Add($forkChangelog)
+          $notes.Add((Get-Content -LiteralPath $sectionPath -Raw).Trim())
+          $notes.Add('')
+          $notes.Add("Full fork changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG-FORK.md")
 
           $notesPath = Join-Path $env:RUNNER_TEMP 'sayit-release-notes.md'
           [System.IO.File]::WriteAllText(

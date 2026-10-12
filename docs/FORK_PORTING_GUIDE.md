@@ -99,8 +99,8 @@ journal: its `data/` folder resolves relative to the script file.
   Windows GigaAM environment.
 - The release workflow requires matching versions in `client/package.json` and
   `client/src-tauri/tauri.conf.json`, installs with `npm ci`, and refuses to
-  publish without a non-empty `CHANGELOG-FORK.md`. Preserve those contracts
-  when a port touches release-related files.
+  publish without a non-empty `CHANGELOG-FORK.md` section for the released
+  version. Preserve those contracts when a port touches release-related files.
 - Treat manifests, version fields, workflows, and server configuration as
   substantive even when they look like metadata.
 

@@ -1,11 +1,13 @@
-# SayIt (Fork Changelog)
+# SayIt Changelog
 
-This file records the meaningful changes maintained in the SayIt fork relative to upstream `crosswk/SayIt`.
-The manual Windows release workflow embeds it into the GitHub Release notes for every build.
+Release history and notable changes for the SayIt fork.
+Sections are ordered by version, newest first. For upstream history prior to the fork, see [CHANGELOG.md](CHANGELOG.md).
 
-## Features and Improvements
+## v0.2.2 — 2026-10-12
 
-### System-Audio Translation Subtitles
+### Features and Improvements
+
+#### System-Audio Translation Subtitles
 
 - Added a Windows computer-audio subtitle mode using native WASAPI loopback, without a virtual audio cable or browser extension. Select an output device and translate short speech fragments into Russian, Ukrainian, or English in a persistent, click-through overlay.
 - Added a separate subtitle source-audio language setting, defaulting to Auto and independent of microphone dictation language.
@@ -29,7 +31,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Added opt-in live recognition for Computer subtitles with Deepgram in Cloud API mode. Supported live sessions send computer audio continuously, including silence and background sound, to Deepgram Cloud, which may increase usage; unsupported profiles retain batch recognition. The selected caption length is a target, not a hard cap while live recognition finishes.
 - Live originals are shown separately from settled captions, and only confirmed phrases enter translation. Network errors are surfaced instead of silently replaying sent audio through a billed batch request; a capture discontinuity starts a fresh live stream and can lose unfinished speech during recovery.
 
-### Speech Recognition
+#### Speech Recognition
 
 - Replaced the hardcoded hotword support table with a Rust capability matrix tied to ASR dispatch, including provider-specific delivery, client limits, and unsupported paths.
 - Added `whisper-large-v3` as a direct Groq ASR model choice; `whisper-large-v3-turbo` remains the default.
@@ -65,7 +67,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Made downloaded model cards selectable by clicking anywhere on the card body (with keyboard navigation via Enter and Space), removed redundant explicit select buttons, and highlighted the model delete action with a clear soft-destructive style.
 - Saving or deleting a speech-recognition card now reports a failed write instead of leaving the confirmation dialog open and doing nothing: the deletion stays unconfirmed, and the error appears on the page or inside the editor with the draft intact. A test whose result could not be saved (single card or batch) now reports the save failure instead of claiming the test never ran.
 
-### AI Prompts and Localization
+#### AI Prompts and Localization
 
 - Added English variants for built-in cleanup, translation, conversational, context-editing, provider, and application prompts.
 - Added Ukrainian built-in cleanup, translation, and conversational presets with per-language prompt overrides.
@@ -75,7 +77,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Removed the Chinese built-in prompt option. Legacy Chinese prompt records may remain stored for safe parsing, but Chinese prompt selection and active legacy Chinese overrides are no longer supported; English and Ukrainian instructions remain available with per-language prompt overrides.
 - Moved shared prompt and rule definitions into reusable constants.
 
-### AI Providers
+#### AI Providers
 
 - Fixed History reprocessing to run keyless Ollama, preserve raw ASR after failed or blank cleanup, and write or clear AI attribution from the configuration and outcome actually used.
 - Added remote model discovery for Ollama and OpenAI-compatible endpoints, with selectable model catalogs in the settings UI.
@@ -87,7 +89,7 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Activating or deleting an AI service card now reports a failed save instead of silently doing nothing, and the card list keeps matching what was actually stored: a failed write no longer leaves the broken selection highlighted or hides the error. A single-card connection test whose verdict cannot be saved reports the save failure too, instead of leaving the card spinning with the page stuck busy. Overlapping saves are now serialized, so the list of one save can no longer be paired with the active selection of another.
 - AI service changes now save the profile list, active selection, and runtime settings in one database transaction, so a failed database write cannot leave one profile's URL or model paired with another profile's key. Other profile writes stay blocked until deletion and any error reconciliation finish, preventing deleted cards from returning after a quick activation. Deletion errors no longer claim that the card was kept when the save outcome could not be confirmed.
 
-### Desktop Client
+#### Desktop Client
 
 - Profile cards in Settings no longer react to clicks on the test, edit, and delete buttons while those buttons are hidden until hover; keyboard focus still reveals and reaches them.
 - Added an optional setting to prevent automatic insertion of ASR results received after processing times out. During the existing 15-second grace period, late results are saved to History when possible, otherwise discarded; they do not update personalization statistics. The default remains automatic insertion.
@@ -106,14 +108,14 @@ The manual Windows release workflow embeds it into the GitHub Release notes for 
 - Corrected equivalent typing-time estimates to use 50 words per minute (250 standardized characters per minute) instead of 50 characters per minute, and show seconds for short Home statistics.
 - Updates are now fork-only and consent-based: SayIt checks this fork's own GitHub releases for new versions, and a version is downloaded and installed only when you press "Download and install" — closing the app never installs anything. A "Check for updates automatically" switch was added to General settings, and the About page now shows a fork build marker.
 
-### Support and Diagnostics
+#### Support and Diagnostics
 
 - Replaced the desktop-client feedback flow with direct GitHub Issue reporting for the fork, using shared repository links and a public bug-report template.
 - Added local allowlist-based public-safe diagnostics bundles for preview, manual review, and attachment to GitHub Issues; exports contain structured environment, summary, and event data rather than raw logs, transcripts, screenshots, or user-entered descriptions.
 
-## Reliability and Build
+### Reliability and Build
 
 - Added deployable GigaAM backend support, including dependency locks, container model provisioning, and ASR-engine selection.
 - Updated the Vulkan SDK fallback to `1.4.357.0` for the GGUF/transcribe.cpp build.
 - Added regression coverage for microphone boost and GigaAM recognition paths.
-- Added a manual Windows release workflow that validates and embeds `CHANGELOG-FORK.md`, builds the dispatched fork commit, recreates the current-version tag and Release, and publishes the NSIS installer with bounded Cargo parallelism.
+- Added a manual Windows release workflow that builds the dispatched fork commit, recreates the current-version tag and Release with the released version's changelog section as the release notes, and publishes the NSIS installer with bounded Cargo parallelism.
