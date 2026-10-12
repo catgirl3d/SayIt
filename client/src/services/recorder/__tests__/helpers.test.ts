@@ -7,6 +7,7 @@ import {
   classifyMicLevel,
   judgeOsMicMute,
   createHistoryRecordId,
+  resolveAiCleanupFailure,
   MIC_NO_SIGNAL_PEAK_THRESHOLD,
   MIC_LOW_RMS_THRESHOLD,
   OS_MIC_MUTE_CONFIRM_SAMPLES,
@@ -147,5 +148,26 @@ describe('createHistoryRecordId', () => {
     vi.spyOn(Math, 'random').mockReturnValueOnce(0.123456).mockReturnValueOnce(0.654321)
 
     expect(createHistoryRecordId()).not.toBe(createHistoryRecordId())
+  })
+})
+
+describe('resolveAiCleanupFailure', () => {
+  it('explains a failed custom AI stage with its recorded cause', () => {
+    expect(resolveAiCleanupFailure({ aiSource: 'custom', aiStatus: 'failed', aiFailureReason: 'timeout' }))
+      .toBe('timeout')
+    expect(resolveAiCleanupFailure({ aiSource: 'custom', aiStatus: 'unavailable', aiFailureReason: 'incomplete_profile' }))
+      .toBe('incomplete_profile')
+  })
+
+  it('falls back to a generic cause when the status carries none', () => {
+    expect(resolveAiCleanupFailure({ aiSource: 'custom', aiStatus: 'failed' })).toBe('provider_error')
+    expect(resolveAiCleanupFailure({ aiSource: 'custom', aiStatus: 'unavailable' })).toBe('incomplete_profile')
+  })
+
+  it('reports nothing for applied, skipped, and managed-server AI', () => {
+    expect(resolveAiCleanupFailure({ aiSource: 'custom', aiStatus: 'applied' })).toBeUndefined()
+    expect(resolveAiCleanupFailure({ aiSource: 'custom', aiStatus: 'skipped' })).toBeUndefined()
+    expect(resolveAiCleanupFailure({ aiSource: 'server', aiStatus: 'unavailable' })).toBeUndefined()
+    expect(resolveAiCleanupFailure({ aiSource: 'none', aiStatus: 'skipped' })).toBeUndefined()
   })
 })

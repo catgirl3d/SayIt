@@ -104,8 +104,11 @@ pub async fn polish(
     // An empty reply is a silent failure: returning ASR text makes users think
     // proofreading ran when it did not. Report the failure through diagnostics.
     if result_text.is_empty() {
-        return Err(diag::fail(
+        // Explicit stable code: the client tells an empty completion apart from other
+        // provider failures, so it must not collapse into the generic connect_failed code.
+        return Err(diag::fail_code(
             SCOPE,
+            "empty_completion",
             "empty_completion",
             "AI returned no usable completion text".to_string(),
         ));
@@ -229,8 +232,11 @@ pub async fn polish_stream(
     let result_text = strip_thinking(&raw_text);
 
     if result_text.is_empty() {
-        return Err(diag::fail(
+        // Explicit stable code: the client tells an empty completion apart from other
+        // provider failures, so it must not collapse into the generic connect_failed code.
+        return Err(diag::fail_code(
             SCOPE,
+            "empty_completion",
             "empty_completion",
             "AI returned no usable completion text".to_string(),
         ));
@@ -460,7 +466,7 @@ mod tests {
     const TEST_INPUT: &str = "spoken transcript marker";
     const RESPONSE_MARKER: &str = "completion-payload-marker";
     const SAFE_COMPLETION_ERROR: &str =
-        "sayit_error:connect_failed:AI returned no usable completion text";
+        "sayit_error:empty_completion:AI returned no usable completion text";
 
     /// Ollama streams one JSON object per line; the parser must assemble text across arbitrary
     /// chunk boundaries and stop at the `done` marker.

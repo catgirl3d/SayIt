@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale, t } from '@/i18n'
-import { OverlayService } from '../OverlayService'
+import { OVERLAY_TOAST_WINDOW_WIDTH, OverlayService } from '../OverlayService'
 
 function payloads(command: 'present_overlay' | 'update_overlay_state') {
   return native.invoke.mock.calls
@@ -71,6 +71,38 @@ describe('overlay toasts', () => {
     expect(hideCount()).toBe(1)
   })
 
+  it.each([
+    ['timeout', 'overlay.toastAiCleanupTimeout'],
+    ['provider_error', 'overlay.toastAiCleanupError'],
+    ['empty_result', 'overlay.toastAiCleanupEmpty'],
+    ['incomplete_profile', 'overlay.toastAiCleanupProfile'],
+  ] as const)('shows the %s AI cleanup failure toast with its own reason', (reason, key) => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showAiCleanupFailed(reason)
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      toastText: t(key),
+      toastTone: 'warn',
+    })
+  })
+
+  it('appends the dictionary warning label and auto-hides the AI failure toast after 4000ms', async () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showAiCleanupFailed('timeout', t('asr.deepgramKeytermLimitToast'))
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      toastText: `${t('overlay.toastAiCleanupTimeout')} · ${t('asr.deepgramKeytermLimitToast')}`,
+      toastTone: 'warn',
+    })
+
+    await vi.advanceTimersByTimeAsync(3999)
+    expect(hideCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(hideCount()).toBe(1)
+  })
+
   it('publishes the mic-source hint and drops it from the payload after 3000ms', async () => {
     const overlay = new OverlayService(() => 0)
     overlay.startListeningTicker()
@@ -97,6 +129,27 @@ describe('overlay toasts', () => {
       state: 'listening',
       warning: t('overlay.warnLowVolume'),
       warningTone: 'warn',
+    })
+  })
+
+  it('requests the expanded 600px base width for toasts to prevent clipping long notices', () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showAiCleanupFailed('provider_error')
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
+    })
+  })
+
+  it('requests the expanded 600px base width for error notices', () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showError('Audio capture failed')
+
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'error',
+      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
+      errorMessage: 'Audio capture failed',
     })
   })
 })

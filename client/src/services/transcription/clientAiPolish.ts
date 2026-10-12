@@ -3,7 +3,8 @@ import { listen } from '@tauri-apps/api/event'
 import { addRuntimeEvent } from '../debugLog'
 import { loadRuntimeAiConfig } from '../aiRuntimeConfig'
 import { buildAiProviderConfig, findProvider } from '@/features/settings/aiProviderCatalog'
-import type { AiExecutionSource, AiExecutionStatus, StartOptions } from './types'
+import { errorProtocolCode } from '@/lib/errorMessages'
+import type { AiExecutionSource, AiExecutionStatus, AiFailureReason, StartOptions } from './types'
 
 interface AiResult {
   text: string
@@ -19,6 +20,7 @@ export interface ClientAiPolishResult {
   contextApplied?: boolean
   aiSource: AiExecutionSource
   aiStatus: AiExecutionStatus
+  aiFailureReason?: AiFailureReason
   aiProvider?: string
   aiModel?: string
 }
@@ -42,6 +44,17 @@ function safeFallbackText(asrText: string, startOptions?: Readonly<StartOptions>
   // 选区编辑依赖 AI 理解口述命令。AI 没有真正完成时，回填原选区才是安全 no-op；
   // 直接回填 ASR 会把“改成更正式”这种命令本身覆盖进正文。
   return startOptions?.textContext?.selectedText || asrText
+}
+
+/**
+ * Map one rejected custom-AI request to the reason the user sees. The Rust adapters
+ * reject an empty completion with the stable `empty_completion` code instead of
+ * resolving with empty text, so that case is classified here, not in the success path.
+ */
+function classifyPolishFailure(error: unknown, timedOut: boolean): AiFailureReason {
+  if (timedOut) return 'timeout'
+  if (errorProtocolCode(error) === 'empty_completion') return 'empty_result'
+  return 'provider_error'
 }
 
 /**
@@ -114,6 +127,7 @@ export async function polishWithClientAi(
       contextApplied: startOptions?.textContext ? false : undefined,
       aiSource: 'custom',
       aiStatus: 'unavailable',
+      aiFailureReason: 'incomplete_profile',
       aiProvider: config.provider || undefined,
       aiModel: config.model || undefined,
     }
@@ -141,6 +155,7 @@ export async function polishWithClientAi(
   }
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
   try {
     const request = invoke<AiResult>('cloud_polish', {
       request: {
@@ -156,7 +171,10 @@ export async function polishWithClientAi(
       request,
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
-          () => reject(new Error(`Custom AI timed out after ${CLIENT_AI_TIMEOUT_MS}ms`)),
+          () => {
+            timedOut = true
+            reject(new Error(`Custom AI timed out after ${CLIENT_AI_TIMEOUT_MS}ms`))
+          },
           CLIENT_AI_TIMEOUT_MS,
         )
       }),
@@ -173,6 +191,7 @@ export async function polishWithClientAi(
       contextApplied: startOptions?.textContext ? succeeded : undefined,
       aiSource: 'custom',
       aiStatus: succeeded ? 'applied' : 'failed',
+      aiFailureReason: succeeded ? undefined : 'empty_result',
       aiProvider: config.provider,
       aiModel: config.model,
     }
@@ -182,6 +201,7 @@ export async function polishWithClientAi(
       error: String(error),
       provider: config.provider,
       model: config.model,
+      timedOut,
     })
     return {
       llmText: safeFallbackText(asrText, startOptions),
@@ -189,6 +209,7 @@ export async function polishWithClientAi(
       contextApplied: startOptions?.textContext ? false : undefined,
       aiSource: 'custom',
       aiStatus: 'failed',
+      aiFailureReason: classifyPolishFailure(error, timedOut),
       aiProvider: config.provider,
       aiModel: config.model,
     }

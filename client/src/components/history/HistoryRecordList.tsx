@@ -10,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
-import { historyFailureReasonDisplay } from '@/i18n/displayNames'
+import { historyAiNotAppliedDisplay, historyFailureReasonDisplay } from '@/i18n/displayNames'
 import { useRecordingPlayback } from './useRecordingPlayback'
 import { AudioProgressBar } from './AudioProgressBar'
 import { AsrCorrectionDialog } from './AsrCorrectionDialog'
@@ -130,6 +130,9 @@ function HistoryItem({
 
   const text = record.llmText || record.asrText
   const isEmpty = record.isEmpty || (!text && record.charCount === 0)
+  // New records carry an explicit execution status; legacy ones fall back to llmMs.
+  const aiApplied = record.aiStatus ? record.aiStatus === 'applied' : record.llmMs > 0
+  const aiNotApplied = historyAiNotAppliedDisplay(record.aiStatus)
   const voiceDurationSec = pickVoiceDurationSec({
     holdSec: record.durationSec,
     audioSec: record.audioDurationSec,
@@ -394,10 +397,13 @@ function HistoryItem({
                       {record.asrProvider && (
                         <span className="text-xs">ASR: {asrProviderDisplay(record.asrProvider)}</span>
                       )}
-                      {record.aiProvider && record.aiProvider !== 'server' && record.llmMs > 0 && (
+                      {record.aiProvider && record.aiProvider !== 'server' && aiApplied && (
                         <span className="text-xs">
                           AI: {record.aiProvider}{record.aiModel ? ` (${record.aiModel})` : ''}
                         </span>
+                      )}
+                      {aiNotApplied && (
+                        <span className="text-xs text-amber-600 dark:text-amber-400">{aiNotApplied}</span>
                       )}
                       <span className="text-border">|</span>
                     </>

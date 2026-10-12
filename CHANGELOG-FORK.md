@@ -3,6 +3,13 @@
 Release history and notable changes for the SayIt fork.
 Sections are ordered by version, newest first. For upstream history prior to the fork, see [CHANGELOG.md](CHANGELOG.md).
 
+## v0.2.3 (unreleased)
+
+### Features and Improvements
+
+- AI cleanup failures are no longer silent: when the selected provider does not respond, returns an error or an empty result, or its profile is incomplete, the overlay shows a short reason notice after the recognized text is inserted, and History marks the record as "AI: not applied" instead of hiding the AI row.
+- Fixed overlay toast and error notices being truncated when messages exceed recording waveform preset widths: the overlay window now expands up to 600px for toast and single-line error cards while preserving the dynamic, centered pill layout, and overflowing text falls back to an ellipsis.
+
 ## v0.2.2 — 2026-10-12
 
 ### Features and Improvements

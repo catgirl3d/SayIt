@@ -613,6 +613,80 @@ describe('recorder failure cards', () => {
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(1)
   })
 
+  it('reports a failed AI cleanup after the recognized text is pasted', async () => {
+    const recorder = new RecorderOrchestrator()
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+    prepareRun(recorder, 45, 1, 'recording')
+    Reflect.set(recorder, 'cachedProbeResult', {
+      editable: true,
+      hwnd: '0x1',
+      process: 'Editor',
+      detail: 'editable',
+    })
+    const callbacks = callbacksFor(recorder)
+    Reflect.set(recorder, 'state', 'processing')
+    callbacks.onFinal?.(makeFinal({
+      aiSource: 'custom',
+      aiStatus: 'failed',
+      aiFailureReason: 'timeout',
+      aiProvider: 'ollama',
+    }))
+    await historyWritten.promise
+    await flushMicrotasks()
+
+    expect(harness.invoke).toHaveBeenCalledWith('paste_text', expect.objectContaining({ text: 'recognized words' }))
+    expect(harness.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      aiSource: 'custom',
+      aiStatus: 'failed',
+    }))
+    expect(latestPayload('present_overlay')).toMatchObject({
+      state: 'toast',
+      toastText: t('overlay.toastAiCleanupTimeout'),
+      toastTone: 'warn',
+    })
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(1)
+  })
+
+  it('does not report an AI cleanup failure when the AI stage applied', async () => {
+    const recorder = new RecorderOrchestrator()
+    const historyWritten = deferred<Record<string, unknown>>()
+    harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
+      historyWritten.resolve(record)
+      return Promise.resolve()
+    })
+    prepareRun(recorder, 46, 1, 'recording')
+    Reflect.set(recorder, 'cachedProbeResult', {
+      editable: true,
+      hwnd: '0x1',
+      process: 'Editor',
+      detail: 'editable',
+    })
+    const callbacks = callbacksFor(recorder)
+    Reflect.set(recorder, 'state', 'processing')
+    callbacks.onFinal?.(makeFinal({
+      llmText: 'polished words',
+      llmMs: 25,
+      aiSource: 'custom',
+      aiStatus: 'applied',
+      aiProvider: 'ollama',
+    }))
+    await historyWritten.promise
+    await flushMicrotasks()
+
+    expect(harness.invoke).toHaveBeenCalledWith('paste_text', expect.objectContaining({ text: 'polished words' }))
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'toast')).toBe(false)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(1)
+  })
+
   it('keeps the Deepgram warning alongside recognized text on the fallback card', async () => {
     const recorder = new RecorderOrchestrator()
     const historyWritten = deferred<Record<string, unknown>>()

@@ -4,6 +4,7 @@
  */
 
 import type { ActiveAppContext } from '@/types/appContext'
+import type { AiFailureReason, FinalResult } from '../transcription/types'
 
 /** Generate the id of one history record: a base36 timestamp plus a short random suffix.
  *  The suffix keeps ids distinct when two records are created within the same millisecond,
@@ -145,4 +146,18 @@ export function computeProcessingTimeoutMs(
     timeout = Math.min(Math.max(timeout, cloudTimeout), 90000)
   }
   return timeout
+}
+
+/**
+ * The reason to explain when the client-side AI stage failed. Only a custom provider
+ * reports a concrete cause; a managed server AI only says "not applied" (llmMs 0), so it
+ * gets no overlay toast — History still marks the record through aiStatus.
+ */
+export function resolveAiCleanupFailure(
+  result: Pick<FinalResult, 'aiSource' | 'aiStatus' | 'aiFailureReason'>,
+): AiFailureReason | undefined {
+  if (result.aiSource !== 'custom') return undefined
+  if (result.aiStatus === 'failed') return result.aiFailureReason ?? 'provider_error'
+  if (result.aiStatus === 'unavailable') return result.aiFailureReason ?? 'incomplete_profile'
+  return undefined
 }
