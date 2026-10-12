@@ -21,6 +21,8 @@ const claude: ThemeDefinition = {
     '--foreground': '25 8% 20%',         // #3b3530 深棕
     '--card': '40 33% 98%',              // #fbfaf7 卡片白
     '--card-foreground': '25 8% 20%',
+    // Floating panels keep the card tone: in light themes the shadow separates them.
+    '--popover': '40 33% 98%',
     '--primary': '22 85% 38%',           // #b5490f 棕橙（Claude 标志色）
     '--primary-foreground': '40 33% 97%',
     '--secondary': '37 22% 90%',         // #eeece7 暖灰

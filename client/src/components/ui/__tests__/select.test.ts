@@ -94,6 +94,21 @@ describe('Select rendered accessibility markup', () => {
     expect(markup).not.toContain('title="Laptop microphone"')
   })
 
+  it('renders the open dropdown on the popover surface', () => {
+    hookStateOverrides.values = [true, { top: 100, left: 20, width: 240, maxHeight: 180 }]
+    vi.stubGlobal('document', { body: {} })
+
+    const markup = renderToStaticMarkup(createElement(Select, {
+      value: 'default',
+      onChange: () => {},
+      labelledBy: 'mic-select-label',
+      options: [{ value: 'default', label: 'System default' }],
+    }))
+
+    expect(markup).toContain('bg-popover')
+    expect(markup).not.toContain('bg-card')
+  })
+
   it('associates the microphone label and keeps the full physical device name available', () => {
     const mic = {
       deviceId: 'device-123',

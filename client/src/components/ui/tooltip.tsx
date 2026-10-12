@@ -57,7 +57,7 @@ export function Tooltip({ content, children, className, forceVisible, variant = 
           ref={tooltipRef}
           className={
             variant === 'light'
-              ? 'pointer-events-none fixed z-[9999] max-w-[600px] whitespace-pre-line rounded-lg border border-border bg-card px-3.5 py-2.5 text-left text-xs leading-relaxed text-muted-foreground shadow-lg'
+              ? 'pointer-events-none fixed z-[9999] max-w-[600px] whitespace-pre-line rounded-lg border border-border bg-popover px-3.5 py-2.5 text-left text-xs leading-relaxed text-muted-foreground shadow-lg'
               : 'pointer-events-none fixed z-[9999] max-w-xs rounded-md bg-foreground px-2.5 py-1.5 text-xs leading-relaxed text-background shadow-lg'
           }
           style={{

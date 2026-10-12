@@ -21,6 +21,9 @@ const tealDark: ThemeDefinition = {
     '--foreground': '170 5% 88%',
     '--card': '180 4% 13%',
     '--card-foreground': '170 5% 88%',
+    // Floating panels: darker than the card and the page background, same
+    // rationale as the dark theme.
+    '--popover': '180 6% 8%',
     '--primary': '174 65% 47%',            // #2ec4b6 亮青绿
     '--primary-foreground': '180 8% 6%',
     '--secondary': '180 4% 16%',

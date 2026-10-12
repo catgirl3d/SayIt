@@ -21,6 +21,8 @@ const light: ThemeDefinition = {
     '--foreground': '240 10% 3.9%',
     '--card': '0 0% 100%',
     '--card-foreground': '240 10% 3.9%',
+    // Floating panels keep the card tone: in light themes the shadow separates them.
+    '--popover': '0 0% 100%',
     '--primary': '240 5.9% 10%',
     '--primary-foreground': '0 0% 98%',
     '--secondary': '240 4.8% 95.9%',

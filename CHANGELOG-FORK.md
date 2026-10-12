@@ -10,6 +10,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - AI cleanup failures are no longer silent: when the selected provider does not respond, returns an error or an empty result, or its profile is incomplete, the overlay shows a short reason notice after the recognized text is inserted, and History marks the record as "AI: not applied" instead of hiding the AI row.
 - Fixed overlay toast and error notices being truncated when messages exceed recording waveform preset widths: the overlay window now expands up to 600px for toast and single-line error cards while preserving the dynamic, centered pill layout, and overflowing text falls back to an ellipsis.
 - The Live computer-audio recognition setting is now shown only while Deepgram is the active Cloud API speech service. With any other engine the setting is hidden and its explanation is not offered, since live recognition is not available there; the saved preference is kept and reappears when Deepgram is active again.
+- In dark themes, floating panels — help tooltips, dropdown lists, and the model language popover — are now drawn on a darker surface than the cards and page behind them, so they no longer blend into the background. Light themes are unchanged.
 
 ## v0.2.2 — 2026-10-12
 

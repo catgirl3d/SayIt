@@ -36,6 +36,7 @@ module.exports = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        popover: "hsl(var(--popover))",
         // 区域色
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-bg))",

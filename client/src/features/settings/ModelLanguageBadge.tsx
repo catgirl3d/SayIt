@@ -218,7 +218,7 @@ export function ModelLanguageBadge({ model, badgeLanguage }: ModelLanguageBadgeP
             ref={popoverRef}
             role="dialog"
             aria-label={t('local.languagesTitle', { count: languages.length })}
-            className="fixed z-[9999] w-80 rounded-lg border border-border bg-card p-3 shadow-xl sm:w-96"
+            className="fixed z-[9999] w-80 rounded-lg border border-border bg-popover p-3 shadow-xl sm:w-96"
             style={{
               top: pos ? `${pos.top}px` : '-9999px',
               left: pos ? `${pos.left}px` : '-9999px',

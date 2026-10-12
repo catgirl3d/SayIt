@@ -21,6 +21,9 @@ const dark: ThemeDefinition = {
     '--foreground': '0 0% 90%',
     '--card': '0 0% 15%',
     '--card-foreground': '0 0% 90%',
+    // Floating panels: darker than both the card above them and the page
+    // background, so they stay readable as a separate layer without shadows.
+    '--popover': '0 0% 10%',
     '--primary': '210 60% 58%',            // VS Code 蓝
     '--primary-foreground': '0 0% 100%',
     '--secondary': '0 0% 18%',

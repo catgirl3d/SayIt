@@ -113,7 +113,7 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
     const dropdown = isOpen && dropdownStyle ? createPortal(
       <div
         ref={dropdownRef}
-        className="fixed z-[9999] rounded-md border border-border bg-card shadow-xl"
+        className="fixed z-[9999] rounded-md border border-border bg-popover shadow-xl"
         style={{
           top: `${dropdownStyle.top}px`,
           left: `${dropdownStyle.left}px`,

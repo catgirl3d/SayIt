@@ -22,6 +22,8 @@ const teal: ThemeDefinition = {
     '--foreground': '220 13% 18%',         // #1f2937
     '--card': '44 50% 97%',               // #faf8f2 暖白卡片
     '--card-foreground': '220 13% 18%',
+    // Floating panels keep the card tone: in light themes the shadow separates them.
+    '--popover': '44 50% 97%',
     '--primary': '182 80% 26%',            // #0d7377 青绿，比之前更亮更鲜活
     '--primary-foreground': '0 0% 100%',
     '--secondary': '40 16% 90%',           // #ece9e1

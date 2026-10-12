@@ -7,6 +7,10 @@ export interface ThemeVars {
   '--foreground': string
   '--card': string
   '--card-foreground': string
+  // Floating surfaces (tooltips, dropdowns, popovers). In dark themes this must
+  // stay darker than both --card and --background: shadows are nearly invisible
+  // there, so the fill difference is what separates a panel from what it covers.
+  '--popover': string
   '--primary': string
   '--primary-foreground': string
   '--secondary': string
