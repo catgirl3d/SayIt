@@ -24,6 +24,7 @@ import SettingsRow from '@/features/systemAudio/SettingsRow'
 import SubtitleSavingSettings from '@/features/systemAudio/SubtitleSavingSettings'
 import SystemAudioHelpContent from '@/features/systemAudio/SystemAudioHelpContent'
 import { PageHelp } from '@/features/settings/PageHelp'
+import BetaBadge from '@/components/BetaBadge'
 
 export type SubtitleAction = 'start' | 'pause' | 'resume' | 'stop'
 
@@ -202,7 +203,10 @@ export default function SystemAudio() {
     <div className="mx-auto max-w-4xl space-y-6">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="mb-2 text-2xl font-bold">{t('systemAudio.title')}</h1>
+          <h1 className="mb-2 flex items-center gap-2 text-2xl font-bold">
+            {t('systemAudio.title')}
+            <BetaBadge className="text-xs" />
+          </h1>
           <p className="text-sm text-muted-foreground">{t('systemAudio.description')}</p>
         </div>
         <PageHelp title={t('help.systemAudio.title')}>

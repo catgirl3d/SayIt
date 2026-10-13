@@ -646,6 +646,14 @@ describe('settings rows and dialogs', () => {
     expect(loaded).toContain('Up to 6s · translation only')
   })
 
+  it('marks the page title with the shared beta badge', async () => {
+    const { loaded } = await renderRows()
+
+    const titleStart = loaded.indexOf('Translate computer audio')
+    expect(titleStart).toBeGreaterThan(-1)
+    expect(loaded.slice(titleStart, loaded.indexOf('</h1>', titleStart))).toContain('Beta')
+  })
+
   it('summarises what will run: original above translation and live recognition', async () => {
     vi.mocked(getSystemAudioDualSubtitles).mockResolvedValueOnce(true)
     const { loaded } = await renderRows({ 'systemAudio.liveRecognitionEnabled': true })
