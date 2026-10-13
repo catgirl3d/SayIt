@@ -9,10 +9,8 @@ import {
   CUSTOM_ASR_PROVIDER,
   resolveAsrRequestMetadata,
 } from '@/features/settings/asrProviderCatalog'
-import { buildAiProviderConfig, findProvider } from '@/features/settings/aiProviderCatalog'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
-import { loadRuntimeAiConfig } from '@/services/aiRuntimeConfig'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
@@ -216,7 +214,7 @@ async function reprocessViaServer(
   return polished ? { ...serverResult, ...polished } : serverResult
 }
 
-/** 云 API 模式重新识别：调用 cloud_transcribe + 可选 cloud_polish，与 CloudAPIProvider 一致 */
+/** Cloud API reprocessing: cloud_transcribe for ASR plus the shared client-AI cleanup policy. */
 export async function reprocessViaCloudApi(
   chunk: ArrayBuffer,
   hotwords: string[],
@@ -257,7 +255,7 @@ export async function reprocessViaCloudApi(
   const asrText = restoreHotwordSpacing(asrResult.text, hotwords)
   const asrMs = asrResult.elapsed_ms || Math.round(performance.now() - asrStart)
 
-  // Qwen Omni 已内置 AI，无需再校对
+  // Qwen Omni already includes its own cleanup; a second AI pass is unnecessary.
   let llmText = asrText
   let llmMs = 0
   let aiSource: AiExecutionSource = 'none'
@@ -265,29 +263,23 @@ export async function reprocessViaCloudApi(
   let requestAiProvider: string | undefined
   let requestAiModel: string | undefined
   if (asrText.trim() && aiEnabled && !isQwenOmni) {
-    const ai = await loadRuntimeAiConfig()
-    const aiProvider = ai.provider
-    aiSource = 'custom'
-    if (ai.apiUrl && (findProvider(aiProvider).keyless || ai.apiKey) && ai.model) {
-      requestAiProvider = aiProvider
-      requestAiModel = ai.model
-      try {
-        const aiResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_polish', {
-          request: {
-            text: asrText,
-            ai_config: buildAiProviderConfig(ai),
-            system_prompt: systemPrompt || null,
-          },
-        })
-        const succeeded = Boolean(aiResult.text.trim())
-        llmText = succeeded ? aiResult.text : asrText
-        llmMs = aiResult.elapsed_ms
-        aiStatus = succeeded ? 'applied' : 'failed'
-      } catch {
-        aiStatus = 'failed'
-      }
-    } else {
-      aiStatus = 'unavailable'
+    // The live recording pipeline owns the client-AI policy (keyless providers, the
+    // duration threshold, the request timeout, and the raw-ASR fallback). Reprocessing
+    // only supplies its settings snapshot, so the two paths cannot drift apart again.
+    const aiMinDurationSec = Math.max(0, Number(await getSetting('aiMinDurationSec', 0)) || 0)
+    const polish = await polishWithClientAi({
+      asrText,
+      durationSec,
+      startOptions: { runId: 1, systemPrompt, aiMinDurationSec },
+      logSource: 'history',
+    })
+    if (polish) {
+      llmText = polish.llmText
+      llmMs = polish.llmMs
+      aiSource = polish.aiSource
+      aiStatus = polish.aiStatus
+      requestAiProvider = polish.aiProvider
+      requestAiModel = polish.aiModel
     }
   }
 
@@ -310,7 +302,7 @@ export async function reprocessViaCloudApi(
   }
 }
 
-/** 本地模式重新识别：调用 local_transcribe + 可选 cloud_polish，与 LocalProvider 一致 */
+/** Local reprocessing: local_transcribe for ASR plus the shared client-AI cleanup policy. */
 export async function reprocessViaLocal(
   chunk: ArrayBuffer,
   hotwords: string[],
@@ -340,33 +332,21 @@ export async function reprocessViaLocal(
   let requestAiProvider: string | undefined
   let requestAiModel: string | undefined
   if (asrText.trim() && aiEnabled) {
-    const ai = await loadRuntimeAiConfig()
-    const aiProvider = ai.provider
-    aiSource = 'custom'
-    if (
-      ai.apiUrl
-      && (ai.apiKey || findProvider(aiProvider).keyless)
-      && (Boolean(ai.model.trim()) || (aiProvider === 'ollama' && ai.model === ''))
-    ) {
-      requestAiProvider = aiProvider
-      requestAiModel = ai.model
-      try {
-        const aiResult = await invoke<{ text: string; elapsed_ms: number }>('cloud_polish', {
-          request: {
-            text: asrText,
-            ai_config: buildAiProviderConfig(ai),
-            system_prompt: systemPrompt || null,
-          },
-        })
-        const succeeded = Boolean(aiResult.text.trim())
-        llmText = succeeded ? aiResult.text : asrText
-        llmMs = aiResult.elapsed_ms
-        aiStatus = succeeded ? 'applied' : 'failed'
-      } catch {
-        aiStatus = 'failed'
-      }
-    } else {
-      aiStatus = 'unavailable'
+    // Same shared policy as the recording pipeline and the cloud reprocess path.
+    const aiMinDurationSec = Math.max(0, Number(await getSetting('aiMinDurationSec', 0)) || 0)
+    const polish = await polishWithClientAi({
+      asrText,
+      durationSec,
+      startOptions: { runId: 1, systemPrompt, aiMinDurationSec },
+      logSource: 'history',
+    })
+    if (polish) {
+      llmText = polish.llmText
+      llmMs = polish.llmMs
+      aiSource = polish.aiSource
+      aiStatus = polish.aiStatus
+      requestAiProvider = polish.aiProvider
+      requestAiModel = polish.aiModel
     }
   }
 
