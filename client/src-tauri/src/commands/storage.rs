@@ -1,4 +1,4 @@
-use crate::storage::Storage;
+use crate::storage::{Storage, UsageEventInput, UsageSummary};
 use serde_json::Value;
 use tauri::State;
 
@@ -27,32 +27,32 @@ pub fn store_delete(key: String, storage: State<Storage>) -> Result<(), String> 
     storage.delete(&key).map_err(|e| e.to_string())
 }
 
+/// Records one completed dictation in the usage log. The timestamp is taken
+/// here rather than from the webview so it cannot be spoofed or skewed.
 #[tauri::command]
-pub fn record_stats_delta(
-    char_count: i64,
-    duration_sec: f64,
-    storage: State<Storage>,
-) -> Result<Value, String> {
-    validate_stats_delta(char_count, duration_sec)?;
+pub async fn usage_record(
+    event: UsageEventInput,
+    storage: State<'_, Storage>,
+) -> Result<(), String> {
+    event.validate()?;
     storage
-        .record_stats_delta(char_count, duration_sec)
+        .usage_record(chrono::Utc::now().timestamp_millis(), &event)
         .map_err(|e| e.to_string())
 }
 
-fn validate_stats_delta(char_count: i64, duration_sec: f64) -> Result<(), String> {
-    if char_count < 0 {
-        return Err(format!(
-            "char_count must be non-negative, got {}",
-            char_count
-        ));
-    }
-    if !duration_sec.is_finite() || duration_sec < 0.0 {
-        return Err(format!(
-            "duration_sec must be finite and non-negative, got {}",
-            duration_sec
-        ));
-    }
-    Ok(())
+/// Aggregates the usage log for the home totals and the usage page. Async so
+/// the aggregate runs off the main thread, like the other heavy commands.
+#[tauri::command]
+pub async fn usage_summary(
+    since_ms: Option<i64>,
+    storage: State<'_, Storage>,
+) -> Result<UsageSummary, String> {
+    storage.usage_summary(since_ms).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn usage_clear(storage: State<Storage>) -> Result<(), String> {
+    storage.usage_clear().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -95,10 +95,11 @@ pub fn history_set_favorite(
         .map_err(|e| e.to_string())
 }
 
-/// Deletes the whole history (records, usage-stat contribution, and the audio
-/// recordings on disk). Audio deletion is best-effort: the records are already
-/// gone, so a locked file must not turn a successful clear into an error — it
-/// is logged and the orphaned file is left behind.
+/// Deletes the whole history (records and the audio recordings on disk).
+/// Usage statistics live in `usage_events` and are not touched. Audio deletion
+/// is best-effort: the records are already gone, so a locked file must not turn
+/// a successful clear into an error — it is logged and the orphaned file is
+/// left behind.
 #[tauri::command]
 pub fn history_clear(storage: State<Storage>) -> Result<(), String> {
     let summary = storage.history_clear().map_err(|e| e.to_string())?;
@@ -130,20 +131,5 @@ fn parse_history_query(query: &Option<Value>) -> (Option<String>, bool, Option<i
             (keyword, favorite_only, limit, offset)
         }
         None => (None, false, None, None),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_stats_delta;
-
-    #[test]
-    fn stats_delta_validation_rejects_negative_and_non_finite_values() {
-        assert!(validate_stats_delta(-1, 1.0).is_err());
-        assert!(validate_stats_delta(0, -0.5).is_err());
-        assert!(validate_stats_delta(0, f64::NAN).is_err());
-        assert!(validate_stats_delta(0, f64::INFINITY).is_err());
-        assert!(validate_stats_delta(0, 0.0).is_ok());
-        assert!(validate_stats_delta(5, 1.5).is_ok());
     }
 }

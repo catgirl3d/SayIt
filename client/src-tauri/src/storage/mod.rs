@@ -1,8 +1,14 @@
-use rusqlite::{Connection, OptionalExtension, Result as SqlResult, params};
+use rusqlite::{
+    Connection, DatabaseName, OpenFlags, OptionalExtension, Result as SqlResult, params,
+};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+mod usage;
+
+pub use usage::{UsageEventInput, UsageSummary, parse_usage_backup};
 
 /// Default settings values (mirrors electron-app/electron/store.ts)
 const DEFAULT_SETTINGS: &[(&str, &str)] = &[
@@ -17,7 +23,6 @@ const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     ("selectedMic", r#""""#),
     ("hotwords", "[]"),
     ("builtinHotwordSets", r#"{"ai":false}"#),
-    ("stats", r#"{"totalDurationSec":0,"totalChars":0}"#),
     ("activePresetId", r#""intent""#),
 ];
 
@@ -72,6 +77,24 @@ fn collection_table(key: &str) -> Option<&'static str> {
     }
 }
 
+/// The migration versions this binary applies. `apply_migrations` decides its
+/// branches from these same bindings and `pending_migration_versions` tests
+/// them as one set, so the pending decision cannot drift from what runs.
+/// Version 4 is deliberately absent: older builds recorded an unrelated
+/// `seed-stats-total-sessions` marker under that number, so the applied set
+/// must be these explicit versions - never a contiguous 1..=5 range or
+/// MAX(version), which would both misread a foreign version 4 as ours.
+const MIGRATION_INIT_VERSION: i64 = 1;
+const MIGRATION_AUDIO_FILE_PATH_VERSION: i64 = 2;
+const MIGRATION_PROMPT_PRESET_KEYS_VERSION: i64 = 3;
+const MIGRATION_USAGE_EVENTS_VERSION: i64 = 5;
+const MIGRATION_VERSIONS: [i64; 4] = [
+    MIGRATION_INIT_VERSION,
+    MIGRATION_AUDIO_FILE_PATH_VERSION,
+    MIGRATION_PROMPT_PRESET_KEYS_VERSION,
+    MIGRATION_USAGE_EVENTS_VERSION,
+];
+
 pub struct Storage {
     pub db: Mutex<Connection>,
 }
@@ -89,6 +112,11 @@ impl Storage {
         }
 
         let conn = Connection::open(&db_path)?;
+        // Snapshot before anything else can touch the file: the WAL pragma may
+        // checkpoint the existing log and the migrations below rewrite the
+        // schema. A failed snapshot must abort startup while the database is
+        // still exactly the state the backup saw.
+        Self::snapshot_before_migrations(&conn, &db_path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
 
         let storage = Self {
@@ -97,6 +125,210 @@ impl Storage {
         storage.apply_migrations()?;
         storage.seed_defaults()?;
         Ok(storage)
+    }
+
+    /// Writes one verified snapshot beside `db_path` when the database still
+    /// has pending migrations, so the pre-migration state survives however
+    /// many migrations run this startup. Databases with nothing to preserve -
+    /// fresh files, `:memory:`, or a database whose supported migrations are
+    /// all recorded - return without writing.
+    fn snapshot_before_migrations(conn: &Connection, db_path: &Path) -> SqlResult<()> {
+        let pending = match Self::pending_migration_versions(conn)? {
+            Some(pending) => pending,
+            None => return Ok(()),
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let destination = Self::migration_snapshot_path(db_path);
+        log::info!(
+            "Pending migrations {:?}: writing pre-migration backup to {}",
+            pending,
+            destination.display()
+        );
+        match Self::create_verified_snapshot(conn, &destination) {
+            Ok(()) => {
+                log::info!("Pre-migration backup verified: {}", destination.display());
+                Ok(())
+            }
+            Err(error) => {
+                // The snapshot is the only copy of the pre-migration state:
+                // without it a broken migration would be unrecoverable, so
+                // abort startup instead of migrating anyway.
+                log::error!("Pre-migration backup failed: {error}");
+                Err(error)
+            }
+        }
+    }
+
+    /// The supported migration versions missing from `schema_migrations`, or
+    /// `None` when the file has no user schema at all (fresh or `:memory:`)
+    /// and there is nothing worth keeping. Read errors propagate: an
+    /// unreadable migration state aborts startup, it is never treated as
+    /// fresh. A database with user tables but no marker table predates
+    /// migrations entirely, so every version is pending.
+    fn pending_migration_versions(conn: &Connection) -> SqlResult<Option<Vec<i64>>> {
+        let user_tables: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )?;
+        if user_tables == 0 {
+            return Ok(None);
+        }
+
+        let has_marker_table: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_marker_table {
+            return Ok(Some(MIGRATION_VERSIONS.to_vec()));
+        }
+
+        let mut pending = Vec::new();
+        for &version in &MIGRATION_VERSIONS {
+            if !Self::migration_exists(conn, version)? {
+                pending.push(version);
+            }
+        }
+        Ok(Some(pending))
+    }
+
+    /// Snapshot destination, derived from the database file itself and placed
+    /// directly beside it: `<stem>-before-migration-<UTC>-<uuid>.sqlite3`. The
+    /// timestamp keeps copies sortable, the UUID keeps two startups within
+    /// the same second from colliding.
+    fn migration_snapshot_path(db_path: &Path) -> PathBuf {
+        let stem = db_path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "sayit".to_owned());
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+        db_path.with_file_name(format!(
+            "{stem}-before-migration-{stamp}-{}.sqlite3",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    /// Copies the live database - WAL content included - to `destination`,
+    /// leaves the copy as a self-contained rollback-journal file, and verifies
+    /// it before it is trusted. The destination is reserved with `create_new`
+    /// first so an existing file is never reused or overwritten; a copy whose
+    /// backup, normalization, or verification fails is removed and its error
+    /// propagates, aborting startup before any migration ran.
+    fn create_verified_snapshot(conn: &Connection, destination: &Path) -> SqlResult<()> {
+        // The reservation handle closes here, before SQLite opens the same
+        // path to fill it in.
+        if let Err(error) = fs::File::create_new(destination) {
+            return Err(Self::snapshot_failure(destination, error));
+        }
+
+        if let Err(error) = conn.backup(DatabaseName::Main, destination, None) {
+            Self::remove_failed_snapshot(destination);
+            return Err(Self::snapshot_failure(destination, error));
+        }
+
+        if let Err(error) = Self::normalize_snapshot_journal_mode(destination) {
+            Self::remove_failed_snapshot(destination);
+            return Err(error);
+        }
+
+        if let Err(error) = Self::verify_snapshot(destination) {
+            Self::remove_failed_snapshot(destination);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Rewrites the fresh copy out of WAL mode before it is verified. The
+    /// backup copies the source header verbatim, so the copy claims WAL mode
+    /// and would need `-wal`/`-shm` sidecars wherever it is opened - from
+    /// read-only media it could not be opened at all. The copy carries no WAL
+    /// of its own, so switching it to the ordinary rollback journal costs
+    /// nothing and leaves one self-contained file. The destination is opened
+    /// read-write WITHOUT create: a copy that vanished after the backup must
+    /// fail here, not be recreated as an empty database that would pass
+    /// verification. The writable connection closes here, before the
+    /// read-only verification opens the result.
+    fn normalize_snapshot_journal_mode(destination: &Path) -> SqlResult<()> {
+        let mode: String =
+            Connection::open_with_flags(destination, OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .and_then(|copy| {
+                    copy.query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+                })
+                .map_err(|error| Self::snapshot_failure(destination, error))?;
+        if !mode.eq_ignore_ascii_case("delete") {
+            return Err(Self::snapshot_failure(
+                destination,
+                format!("journal_mode normalization returned {mode:?}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Best-effort removal of an incomplete snapshot this startup just wrote,
+    /// together with the `-wal`/`-shm`/`-journal` files SQLite may have
+    /// attached to it: the backup error is what aborts startup, and no part of
+    /// the failed attempt may survive it.
+    fn remove_failed_snapshot(destination: &Path) {
+        let mut targets = vec![destination.to_path_buf()];
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut name = destination.as_os_str().to_os_string();
+            name.push(suffix);
+            targets.push(PathBuf::from(name));
+        }
+        for target in &targets {
+            if let Err(error) = fs::remove_file(target) {
+                // An absent file is the normal case; anything else matters.
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!(
+                        "Could not remove the failed pre-migration backup file {}: {}",
+                        target.display(),
+                        error
+                    );
+                }
+            }
+        }
+    }
+
+    /// Reads the fresh snapshot back through a plain read-only connection -
+    /// never `Storage::new`, which would migrate the copy - and accepts it
+    /// only when `PRAGMA quick_check` returns a non-empty list of `ok` rows.
+    fn verify_snapshot(destination: &Path) -> SqlResult<()> {
+        let check = match Connection::open_with_flags(destination, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        {
+            Ok(check) => check,
+            Err(error) => return Err(Self::snapshot_failure(destination, error)),
+        };
+        let results = check
+            .prepare("PRAGMA quick_check")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<SqlResult<Vec<String>>>()
+            });
+        match results {
+            Ok(rows) if !rows.is_empty() && rows.iter().all(|row| row == "ok") => Ok(()),
+            Ok(rows) => Err(Self::snapshot_failure(
+                destination,
+                format!("quick_check reported {rows:?}"),
+            )),
+            Err(error) => Err(Self::snapshot_failure(destination, error)),
+        }
+    }
+
+    /// Adds destination and failure context to an error that would otherwise
+    /// surface as a bare SQLite or filesystem code.
+    fn snapshot_failure(destination: &Path, error: impl std::fmt::Display) -> rusqlite::Error {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "pre-migration backup to {} failed: {error}",
+                destination.display()
+            ),
+        )))
     }
 
     fn apply_migrations(&self) -> SqlResult<()> {
@@ -111,12 +343,12 @@ impl Storage {
         )?;
 
         // Migration 1: init
-        if !Self::migration_exists(&db, 1)? {
+        if !Self::migration_exists(&db, MIGRATION_INIT_VERSION)? {
             db.execute_batch(include_str!("migration_001.sql"))?;
             db.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
                 params![
-                    1,
+                    MIGRATION_INIT_VERSION,
                     "init-sqlite-storage",
                     chrono::Utc::now().timestamp_millis()
                 ],
@@ -124,12 +356,12 @@ impl Storage {
         }
 
         // Migration 2: add audio_file_path
-        if !Self::migration_exists(&db, 2)? {
+        if !Self::migration_exists(&db, MIGRATION_AUDIO_FILE_PATH_VERSION)? {
             db.execute_batch("ALTER TABLE history_records ADD COLUMN audio_file_path TEXT;")?;
             db.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
                 params![
-                    2,
+                    MIGRATION_AUDIO_FILE_PATH_VERSION,
                     "add-audio-file-path",
                     chrono::Utc::now().timestamp_millis()
                 ],
@@ -137,16 +369,47 @@ impl Storage {
         }
 
         // Migration 3: allow one built-in prompt override per language.
-        if !Self::migration_exists(&db, 3)? {
+        if !Self::migration_exists(&db, MIGRATION_PROMPT_PRESET_KEYS_VERSION)? {
             Self::migrate_prompt_preset_keys(&db)?;
             db.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
                 params![
-                    3,
+                    MIGRATION_PROMPT_PRESET_KEYS_VERSION,
                     "add-prompt-preset-language-key",
                     chrono::Utc::now().timestamp_millis()
                 ],
             )?;
+        }
+
+        // Migration 5: anonymous usage events, seeded from history and the
+        // legacy counters. The SQL file moved here from migration 4 because
+        // version 4 can already be occupied in existing databases by an
+        // unrelated marker (seed-stats-total-sessions), which the old
+        // version-4 guard mistook for a completed usage migration and skipped
+        // the table creation entirely. The branch below is decided from the
+        // table itself: an existing usage_events - written by the previous
+        // add-usage-events version 4, even if the user has cleared it since -
+        // only gains the nullable legacy_profile_chars column and is never
+        // rebuilt, while a missing table is created and backfilled once. One
+        // transaction: a crash midway must not leave a half-filled table,
+        // which the "only when empty" backfill would then skip forever.
+        if !Self::migration_exists(&db, MIGRATION_USAGE_EVENTS_VERSION)? {
+            let tx = db.unchecked_transaction()?;
+            if usage::usage_events_exists(&tx)? {
+                tx.execute_batch(usage::MIGRATION_005_ADD_LEGACY_PROFILE_CHARS_SQL)?;
+            } else {
+                tx.execute_batch(usage::MIGRATION_005_SQL)?;
+                usage::rebuild_usage_from_legacy(&tx)?;
+            }
+            tx.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![
+                    MIGRATION_USAGE_EVENTS_VERSION,
+                    "add-usage-events",
+                    chrono::Utc::now().timestamp_millis()
+                ],
+            )?;
+            tx.commit()?;
         }
 
         Ok(())
@@ -407,9 +670,6 @@ impl Storage {
             params![id, timestamp, favorite as i32, char_count, duration_sec, is_empty as i32, app_id, app_name, audio_file_path, raw_json],
         )?;
 
-        // Update stats: empty records never contribute dictation time.
-        let stats_duration_sec = if is_empty { 0.0 } else { duration_sec };
-        let _ = self.update_stats_delta(&db, char_count, stats_duration_sec, 1);
         Ok(())
     }
 
@@ -431,15 +691,6 @@ impl Storage {
 
         let mut prev: serde_json::Map<String, Value> =
             serde_json::from_str(&raw_json).unwrap_or_default();
-        let prev_chars = prev.get("charCount").and_then(|v| v.as_i64()).unwrap_or(0);
-        let prev_dur = prev
-            .get("durationSec")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let prev_is_empty = prev
-            .get("isEmpty")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
 
         if let Some(patch_obj) = patch.as_object() {
             for (k, v) in patch_obj {
@@ -481,87 +732,48 @@ impl Storage {
             params![timestamp, favorite as i32, char_count, duration_sec, is_empty as i32, app_id, app_name, audio_file_path, new_json, id],
         )?;
 
-        // Update stats: subtract old, add new; empty states contribute no dictation time.
-        let prev_stats_dur = if prev_is_empty { 0.0 } else { prev_dur };
-        let next_stats_dur = if is_empty { 0.0 } else { duration_sec };
-        self.update_stats_replacement(&db, prev_chars, prev_stats_dur, char_count, next_stats_dur);
         Ok(())
     }
 
     pub fn history_delete(&self, id: &str) -> SqlResult<()> {
         let db = self.db.lock().unwrap();
 
-        let row: Option<(i64, String)> = db
+        let list_order: Option<i64> = db
             .query_row(
-                "SELECT list_order, raw_json FROM history_records WHERE id = ?1",
+                "SELECT list_order FROM history_records WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
-            .ok();
-
-        let (list_order, raw_json) = match row {
-            Some(r) => r,
-            None => return Ok(()),
+            .optional()?;
+        let Some(list_order) = list_order else {
+            return Ok(());
         };
-
-        let obj: serde_json::Map<String, Value> =
-            serde_json::from_str(&raw_json).unwrap_or_default();
-        let char_count = obj.get("charCount").and_then(|v| v.as_i64()).unwrap_or(0);
-        let duration_sec = obj
-            .get("durationSec")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let is_empty = obj
-            .get("isEmpty")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
 
         db.execute("DELETE FROM history_records WHERE id = ?1", params![id])?;
         db.execute(
             "UPDATE history_records SET list_order = list_order - 1 WHERE list_order > ?1",
             params![list_order],
         )?;
-
-        let stats_duration_sec = if is_empty { 0.0 } else { duration_sec };
-        let _ = self.update_stats_delta(&db, char_count, stats_duration_sec, -1);
         Ok(())
     }
 
     /// Deletes every history record in one transaction, including favorites.
     ///
-    /// Mirrors `history_delete` in bulk: the usage stats fall by exactly the sum
-    /// of the removed records (empty records never contributed dictation time),
-    /// and the audio file paths are returned so the command layer can remove the
-    /// recordings from disk. Either the whole clear lands or nothing does — a
-    /// crash must not leave the list empty while the stats still count it.
+    /// Usage statistics live in `usage_events` and are not touched. The audio
+    /// file paths are returned so the command layer can remove the recordings
+    /// from disk, which storage must not do itself.
     pub fn history_clear(&self) -> SqlResult<HistoryClearSummary> {
         let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
 
-        let rows: Vec<(i64, f64, bool, Option<String>, String)> = {
-            let mut stmt = tx.prepare(
-                "SELECT char_count, duration_sec, is_empty, audio_file_path, raw_json FROM history_records",
-            )?;
-            let mapped = stmt.query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get::<_, i64>(2)? != 0,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            })?;
+        let rows: Vec<(Option<String>, String)> = {
+            let mut stmt = tx.prepare("SELECT audio_file_path, raw_json FROM history_records")?;
+            let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
             mapped.collect::<Result<Vec<_>, _>>()?
         };
 
-        let mut total_chars = 0i64;
-        let mut total_duration_sec = 0.0f64;
         let mut audio_file_paths = Vec::new();
-        for (char_count, duration_sec, is_empty, column_audio_path, raw_json) in &rows {
-            total_chars += char_count;
-            if !is_empty {
-                total_duration_sec += duration_sec;
-            }
+        for (column_audio_path, raw_json) in &rows {
             // raw_json is the record the UI works with; it stays authoritative
             // when a backup restore filled the JSON but not the column.
             let json_audio_path = serde_json::from_str::<Value>(raw_json).ok().and_then(|v| {
@@ -577,9 +789,6 @@ impl Storage {
         }
 
         tx.execute("DELETE FROM history_records", [])?;
-        if !rows.is_empty() {
-            self.update_stats_delta(&tx, total_chars, total_duration_sec, -1)?;
-        }
         tx.commit()?;
 
         Ok(HistoryClearSummary { audio_file_paths })
@@ -728,76 +937,6 @@ impl Storage {
         }
         Self::replace_collection_on(&db, key, items)
     }
-
-    // ─── Stats helpers ───
-
-    fn update_stats_delta(
-        &self,
-        db: &Connection,
-        char_count: i64,
-        duration_sec: f64,
-        direction: i64,
-    ) -> SqlResult<(f64, i64)> {
-        let stats_json: Option<String> = db
-            .query_row(
-                "SELECT value_json FROM app_settings WHERE key = 'stats'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-
-        let (mut total_dur, mut total_chars) = parse_stats(&stats_json);
-        total_dur = (total_dur + duration_sec * direction as f64).max(0.0);
-        total_chars = (total_chars + char_count * direction).max(0);
-
-        let new_stats =
-            serde_json::json!({"totalDurationSec": total_dur, "totalChars": total_chars});
-        let now = chrono::Utc::now().timestamp_millis();
-        db.execute(
-            "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('stats', ?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-            params![new_stats.to_string(), now],
-        )?;
-        Ok((total_dur, total_chars))
-    }
-
-    fn update_stats_replacement(
-        &self,
-        db: &Connection,
-        prev_chars: i64,
-        prev_dur: f64,
-        next_chars: i64,
-        next_dur: f64,
-    ) {
-        let stats_json: Option<String> = db
-            .query_row(
-                "SELECT value_json FROM app_settings WHERE key = 'stats'",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let (mut total_dur, mut total_chars) = parse_stats(&stats_json);
-        total_dur = (total_dur - prev_dur + next_dur).max(0.0);
-        total_chars = (total_chars - prev_chars + next_chars).max(0);
-
-        let new_stats =
-            serde_json::json!({"totalDurationSec": total_dur, "totalChars": total_chars});
-        let now = chrono::Utc::now().timestamp_millis();
-        let _ = db.execute(
-            "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('stats', ?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-            params![new_stats.to_string(), now],
-        );
-    }
-
-    /// Atomically add one completed dictation to the usage stats, sharing the
-    /// same locked read-modify-write path as the history mutations.
-    pub fn record_stats_delta(&self, char_count: i64, duration_sec: f64) -> SqlResult<Value> {
-        let db = self.db.lock().unwrap();
-        let (total_dur, total_chars) = self.update_stats_delta(&db, char_count, duration_sec, 1)?;
-        Ok(serde_json::json!({"totalDurationSec": total_dur, "totalChars": total_chars}))
-    }
 }
 
 impl Storage {
@@ -885,6 +1024,16 @@ impl Storage {
             "id, list_order, app_id, name, enabled, priority, raw_json",
         );
         migrated_counts.push(("app_prompt_rules".into(), count));
+
+        // 7. Usage events: migration 5 ran on the empty database before this
+        //    import, so seed them from the imported history and counters now.
+        let tx = db
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to start usage statistics import: {}", e))?;
+        usage::rebuild_usage_from_legacy(&tx)
+            .map_err(|e| format!("Failed to seed usage statistics from imported data: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit imported usage statistics: {}", e))?;
 
         // Mark migration as done
         let now = chrono::Utc::now().timestamp_millis();
@@ -1079,21 +1228,6 @@ impl Storage {
     }
 }
 
-fn parse_stats(json: &Option<String>) -> (f64, i64) {
-    match json {
-        Some(s) => {
-            let v: Value = serde_json::from_str(s).unwrap_or(Value::Null);
-            let dur = v
-                .get("totalDurationSec")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let chars = v.get("totalChars").and_then(|v| v.as_i64()).unwrap_or(0);
-            (dur, chars)
-        }
-        None => (0.0, 0),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1282,113 +1416,9 @@ mod tests {
     }
 
     #[test]
-    fn record_stats_delta_shares_counters_with_history_writes() {
-        let path = test_db_path("record-stats-delta");
-        let storage = Storage::new(path.clone()).unwrap();
-        storage
-            .set(
-                "stats",
-                &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 }),
-            )
-            .unwrap();
-
-        let first = storage.record_stats_delta(5, 1.5).unwrap();
-        assert_eq!(
-            first,
-            serde_json::json!({ "totalDurationSec": 11.5, "totalChars": 105 })
-        );
-
-        storage
-            .history_add(&serde_json::json!({
-                "id": "history-1",
-                "timestamp": 1,
-                "charCount": 7,
-                "durationSec": 2.0,
-            }))
-            .unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 13.5, "totalChars": 112 })
-        );
-
-        let second = storage.record_stats_delta(3, 0.5).unwrap();
-        assert_eq!(
-            second,
-            serde_json::json!({ "totalDurationSec": 14.0, "totalChars": 115 })
-        );
-
-        drop(storage);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn concurrent_record_stats_deltas_accumulate_without_loss() {
-        let path = test_db_path("record-stats-delta-concurrent");
-        let storage = std::sync::Arc::new(Storage::new(path.clone()).unwrap());
-
-        let handles: Vec<_> = (0..8)
-            .map(|_| {
-                let storage = std::sync::Arc::clone(&storage);
-                std::thread::spawn(move || storage.record_stats_delta(5, 0.5).unwrap())
-            })
-            .collect();
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 4.0, "totalChars": 40 })
-        );
-        drop(storage);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn empty_history_records_do_not_move_usage_stats() {
-        let path = test_db_path("empty-history-stats");
-        let storage = Storage::new(path.clone()).unwrap();
-        storage
-            .set(
-                "stats",
-                &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 }),
-            )
-            .unwrap();
-
-        storage
-            .history_add(&serde_json::json!({
-                "id": "empty-1",
-                "timestamp": 1,
-                "charCount": 0,
-                "durationSec": 2.5,
-                "isEmpty": true,
-            }))
-            .unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
-        );
-
-        storage.history_delete("empty-1").unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
-        );
-
-        drop(storage);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
     fn history_clear_removes_all_records_including_favorites_and_returns_audio_paths() {
         let path = test_db_path("history-clear");
         let storage = Storage::new(path.clone()).unwrap();
-        storage
-            .set(
-                "stats",
-                &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 }),
-            )
-            .unwrap();
 
         storage
             .history_add(&serde_json::json!({
@@ -1418,10 +1448,6 @@ mod tests {
                 "audioFilePath": "C:/audio/plain-1.wav",
             }))
             .unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 14.5, "totalChars": 112 })
-        );
 
         let summary = storage.history_clear().unwrap();
 
@@ -1436,10 +1462,6 @@ mod tests {
         );
         assert!(storage.history_list(None, false, None, None).is_empty());
         assert_eq!(storage.history_count(None, false), 0);
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
-        );
 
         drop(storage);
         let _ = fs::remove_file(path);
@@ -1449,20 +1471,10 @@ mod tests {
     fn history_clear_on_empty_history_is_a_noop() {
         let path = test_db_path("history-clear-empty");
         let storage = Storage::new(path.clone()).unwrap();
-        storage
-            .set(
-                "stats",
-                &serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 }),
-            )
-            .unwrap();
 
         let summary = storage.history_clear().unwrap();
 
         assert!(summary.audio_file_paths.is_empty());
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 10.0, "totalChars": 100 })
-        );
 
         drop(storage);
         let _ = fs::remove_file(path);
@@ -1494,58 +1506,6 @@ mod tests {
             vec!["C:/audio/restored-1.wav".to_string()]
         );
         assert!(storage.history_list(None, false, None, None).is_empty());
-
-        drop(storage);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn history_edit_rebalances_usage_stats_across_empty_states() {
-        let path = test_db_path("history-edit-stats");
-        let storage = Storage::new(path.clone()).unwrap();
-
-        storage
-            .history_add(&serde_json::json!({
-                "id": "edit-1",
-                "timestamp": 1,
-                "charCount": 5,
-                "durationSec": 1.0,
-            }))
-            .unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 1.0, "totalChars": 5 })
-        );
-
-        storage
-            .history_update(
-                "edit-1",
-                &serde_json::json!({
-                    "charCount": 0,
-                    "durationSec": 2.0,
-                    "isEmpty": true,
-                }),
-            )
-            .unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 0.0, "totalChars": 0 })
-        );
-
-        storage
-            .history_update(
-                "edit-1",
-                &serde_json::json!({
-                    "charCount": 3,
-                    "durationSec": 0.5,
-                    "isEmpty": false,
-                }),
-            )
-            .unwrap();
-        assert_eq!(
-            storage.get("stats", None),
-            serde_json::json!({ "totalDurationSec": 0.5, "totalChars": 3 })
-        );
 
         drop(storage);
         let _ = fs::remove_file(path);
@@ -1599,6 +1559,577 @@ mod tests {
 
         drop(storage);
         let _ = fs::remove_file(path);
+    }
+
+    /// A per-test temporary directory. Pre-migration snapshots embed a
+    /// timestamp and a UUID in their names, so tests that produce them keep
+    /// the database and its snapshots in one owned directory and remove it
+    /// whole once every handle is closed.
+    fn test_db_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sayit-{name}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The automatic pre-migration snapshot databases written directly beside
+    /// a database, sorted by name. Sidecar files of a snapshot (`-wal`,
+    /// `-shm`, `-journal`) are not snapshots themselves.
+    fn snapshot_files(dir: &Path) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .map(|name| {
+                        let name = name.to_string_lossy();
+                        name.contains("-before-migration-") && name.ends_with(".sqlite3")
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    fn read_migration_versions(connection: &Connection) -> Vec<i64> {
+        let mut statement = connection
+            .prepare("SELECT version FROM schema_migrations ORDER BY version ASC")
+            .unwrap();
+        let versions = statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<SqlResult<Vec<i64>>>()
+            .unwrap();
+        versions
+    }
+
+    fn read_setting_value(connection: &Connection, key: &str) -> Option<String> {
+        connection
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap()
+    }
+
+    /// A real on-disk database in an older shape: schema version 1 recorded,
+    /// legacy counters in `app_settings`, no usage schema. The returned
+    /// connection must stay open while `Storage::new` runs: auto-checkpoint is
+    /// off, so everything written here is still only in the `-wal` file and
+    /// reaches a copy solely through the backup API.
+    fn legacy_database_fixture(path: &Path) -> Connection {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;")
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     applied_at INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migration_001.sql"))
+            .unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'init-sqlite-storage', 0);
+                 INSERT INTO app_settings (key, value_json, updated_at) VALUES
+                     ('stats', '{\"totalChars\":1234,\"totalDurationSec\":56.0}', 0),
+                     ('userStats', '{\"totalSessions\":7}', 0),
+                     ('walOnlySentinel', '\"committed-to-wal\"', 0);",
+            )
+            .unwrap();
+        connection
+    }
+
+    #[test]
+    fn pre_migration_snapshot_keeps_old_schema_and_wal_only_data() {
+        let dir = test_db_dir("snapshot-content");
+        let path = dir.join("sayit.db");
+        let fixture = legacy_database_fixture(&path);
+
+        // Every committed row, the sentinel included, is still only in the
+        // WAL; a copy that misses WAL content would miss the sentinel too.
+        let sentinel = b"walOnlySentinel";
+        let wal_bytes = fs::read(dir.join("sayit.db-wal")).unwrap();
+        assert!(
+            wal_bytes
+                .windows(sentinel.len())
+                .any(|window| window == &sentinel[..])
+        );
+        let main_bytes = fs::read(&path).unwrap();
+        assert!(
+            !main_bytes
+                .windows(sentinel.len())
+                .any(|window| window == &sentinel[..])
+        );
+
+        let storage = Storage::new(path.clone()).unwrap();
+
+        let snapshots = snapshot_files(&dir);
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "pending versions 2, 3 and 5 must share one pre-migration snapshot"
+        );
+
+        let copy =
+            Connection::open_with_flags(&snapshots[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        let quick_check: Vec<String> = {
+            let mut statement = copy.prepare("PRAGMA quick_check").unwrap();
+            statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<SqlResult<Vec<String>>>()
+                .unwrap()
+        };
+        assert_eq!(
+            quick_check,
+            vec!["ok".to_string()],
+            "the snapshot must be a valid, readable database"
+        );
+        assert_eq!(
+            read_migration_versions(&copy),
+            vec![1],
+            "the snapshot must keep the pre-migration markers"
+        );
+        assert!(
+            !usage::usage_events_exists(&copy).unwrap(),
+            "the snapshot must predate the usage schema"
+        );
+        assert_eq!(
+            read_setting_value(&copy, "stats").as_deref(),
+            Some(r#"{"totalChars":1234,"totalDurationSec":56.0}"#)
+        );
+        assert_eq!(
+            read_setting_value(&copy, "userStats").as_deref(),
+            Some(r#"{"totalSessions":7}"#)
+        );
+        assert_eq!(
+            read_setting_value(&copy, "walOnlySentinel").as_deref(),
+            Some("\"committed-to-wal\""),
+            "the snapshot must include data that was still only in the WAL"
+        );
+        drop(copy);
+
+        {
+            let live = storage.db.lock().unwrap();
+            assert_eq!(
+                read_migration_versions(&live),
+                vec![1, 2, 3, 5],
+                "startup must still migrate the live database"
+            );
+        }
+        let summary = storage.usage_summary(None).unwrap();
+        assert_eq!((summary.takes, summary.total_chars), (7, 1234));
+        assert_eq!(
+            storage.get("stats", None),
+            Value::Null,
+            "migration 5 consumes the legacy counters"
+        );
+
+        drop(storage);
+        drop(fixture);
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn fresh_and_schema_less_databases_get_no_snapshot() {
+        let dir = test_db_dir("snapshot-fresh");
+        let path = dir.join("sayit.db");
+
+        // A pre-created file with no tables is as fresh as a missing one.
+        let empty_path = dir.join("pre-created.db");
+        drop(Connection::open(&empty_path).unwrap());
+
+        // `:memory:` cannot stay behind on disk; unwrap proves the startup
+        // path itself does not try to snapshot it.
+        drop(Storage::new(PathBuf::from(":memory:")).unwrap());
+        drop(Storage::new(path.clone()).unwrap());
+        drop(Storage::new(empty_path.clone()).unwrap());
+
+        assert!(
+            snapshot_files(&dir).is_empty(),
+            "databases without user schema have no pre-migration state to keep"
+        );
+        let check = Connection::open(&empty_path).unwrap();
+        assert_eq!(read_migration_versions(&check), vec![1, 2, 3, 5]);
+        drop(check);
+
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn reopening_a_migrated_database_without_version_four_writes_no_snapshot() {
+        let dir = test_db_dir("snapshot-reopen");
+        let path = dir.join("sayit.db");
+
+        drop(Storage::new(path.clone()).unwrap());
+        assert!(snapshot_files(&dir).is_empty());
+
+        drop(Storage::new(path.clone()).unwrap());
+
+        let check = Connection::open(&path).unwrap();
+        assert_eq!(read_migration_versions(&check), vec![1, 2, 3, 5]);
+        drop(check);
+        assert!(
+            snapshot_files(&dir).is_empty(),
+            "versions 1, 2, 3 and 5 recorded is complete even though version 4 is absent"
+        );
+
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn a_second_pending_startup_never_overwrites_the_first_snapshot() {
+        let dir = test_db_dir("snapshot-no-overwrite");
+        let path = dir.join("sayit.db");
+        let fixture = legacy_database_fixture(&path);
+
+        let storage = Storage::new(path.clone()).unwrap();
+        let first = snapshot_files(&dir);
+        assert_eq!(first.len(), 1);
+        let first_path = first[0].clone();
+        let first_bytes = fs::read(&first_path).unwrap();
+
+        // Rewind the live database to the pre-usage shape so the next startup
+        // has pending work again and attempts a second snapshot.
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE usage_events;
+                 DELETE FROM schema_migrations WHERE version = 5;",
+            )
+            .unwrap();
+        drop(storage);
+
+        let storage = Storage::new(path.clone()).unwrap();
+        let snapshots = snapshot_files(&dir);
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "each startup with pending work writes its own snapshot"
+        );
+        assert!(snapshots.contains(&first_path));
+        assert_eq!(
+            fs::read(&first_path).unwrap(),
+            first_bytes,
+            "an existing snapshot must never be rewritten"
+        );
+
+        let first_copy =
+            Connection::open_with_flags(&first_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        assert_eq!(
+            read_migration_versions(&first_copy),
+            vec![1],
+            "the first snapshot must still hold the oldest pre-migration state"
+        );
+        drop(first_copy);
+
+        drop(storage);
+        drop(fixture);
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn snapshot_refuses_to_overwrite_an_existing_file_and_reports_backup_context() {
+        let dir = test_db_dir("snapshot-refuse-overwrite");
+        let path = dir.join("sayit.db");
+        let fixture = legacy_database_fixture(&path);
+        // The source opens and reads fine, so the failure below can only come
+        // from the snapshot step itself.
+        let markers_before = read_migration_versions(&fixture);
+
+        let destination = dir.join("sayit-before-migration-20000101T000000Z-taken.sqlite3");
+        fs::write(&destination, b"earlier snapshot, never to be replaced").unwrap();
+
+        let error = Storage::create_verified_snapshot(&fixture, &destination).unwrap_err();
+
+        let message = error.to_string();
+        assert!(
+            message.contains("pre-migration backup"),
+            "the error must say the backup failed: {message}"
+        );
+        assert!(
+            message.contains("taken.sqlite3"),
+            "the error must name the failed destination: {message}"
+        );
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            b"earlier snapshot, never to be replaced",
+            "an existing file must be left exactly as it was"
+        );
+        assert_eq!(
+            read_migration_versions(&fixture),
+            markers_before,
+            "a failed backup must not touch the source database"
+        );
+        assert_eq!(
+            read_setting_value(&fixture, "stats").as_deref(),
+            Some(r#"{"totalChars":1234,"totalDurationSec":56.0}"#)
+        );
+        assert!(!usage::usage_events_exists(&fixture).unwrap());
+
+        drop(fixture);
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn failed_backup_removes_the_copy_it_created() {
+        let dir = test_db_dir("snapshot-cleanup");
+        let source = dir.join("corrupt.db");
+        fs::write(&source, b"this is not a SQLite database").unwrap();
+        let broken = Connection::open(&source).unwrap();
+
+        let destination = dir.join("sayit-before-migration-20000101T000000Z-partial.sqlite3");
+        let error = Storage::create_verified_snapshot(&broken, &destination).unwrap_err();
+
+        assert!(
+            error.to_string().contains("pre-migration backup"),
+            "the error must say the backup failed: {error}"
+        );
+        assert!(
+            !destination.exists(),
+            "an incomplete copy must not stay behind"
+        );
+
+        // The cleanup owns the attempt's sidecars too: recreate an incomplete
+        // copy with the `-wal`/`-shm` files SQLite would have attached to it.
+        let destination_name = destination
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        fs::write(&destination, b"incomplete copy").unwrap();
+        fs::write(dir.join(format!("{destination_name}-wal")), b"leftover wal").unwrap();
+        fs::write(dir.join(format!("{destination_name}-shm")), b"leftover shm").unwrap();
+        Storage::remove_failed_snapshot(&destination);
+        let remaining: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&destination_name))
+            .collect();
+        assert!(
+            remaining.is_empty(),
+            "the failed attempt's own files must all be removed, found {remaining:?}"
+        );
+
+        drop(broken);
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn snapshot_verification_rejects_a_file_that_is_not_an_intact_database() {
+        let dir = test_db_dir("snapshot-verification");
+        let garbage = dir.join("sayit-before-migration-20000101T000000Z-garbage.sqlite3");
+        fs::write(&garbage, b"not a database").unwrap();
+
+        let error = Storage::verify_snapshot(&garbage).unwrap_err();
+
+        assert!(
+            error.to_string().contains("pre-migration backup"),
+            "the error must say the backup failed: {error}"
+        );
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn snapshot_normalization_refuses_a_missing_destination() {
+        let dir = test_db_dir("snapshot-normalize-missing");
+        let destination = dir.join("sayit-before-migration-20000101T000000Z-missing.sqlite3");
+
+        let error = Storage::normalize_snapshot_journal_mode(&destination).unwrap_err();
+
+        assert!(
+            error.to_string().contains("pre-migration backup"),
+            "the error must say the backup failed: {error}"
+        );
+        assert!(
+            !destination.exists(),
+            "a missing copy must not be recreated as an empty database"
+        );
+
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn verified_snapshot_survives_a_later_migration_failure() {
+        let dir = test_db_dir("snapshot-migration-failure");
+        let path = dir.join("sayit.db");
+
+        // A database that records version 1 but is missing the tables
+        // migration 2 alters: the snapshot succeeds, the migration then fails.
+        {
+            let fixture = Connection::open(&path).unwrap();
+            fixture
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (
+                         version INTEGER PRIMARY KEY,
+                         name TEXT NOT NULL,
+                         applied_at INTEGER NOT NULL
+                     );
+                     INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'init-sqlite-storage', 0);",
+                )
+                .unwrap();
+        }
+
+        let error = match Storage::new(path.clone()) {
+            Ok(_) => panic!("migration 2 must fail on a database without history_records"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("history_records"),
+            "the migration must be the step that failed: {error}"
+        );
+
+        let snapshots = snapshot_files(&dir);
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "a failed migration must not remove the verified snapshot"
+        );
+        let copy =
+            Connection::open_with_flags(&snapshots[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        assert_eq!(read_migration_versions(&copy), vec![1]);
+        drop(copy);
+
+        let live = Connection::open(&path).unwrap();
+        assert_eq!(
+            read_migration_versions(&live),
+            vec![1],
+            "the failed startup must not have applied later migrations"
+        );
+        drop(live);
+
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
+    }
+
+    #[test]
+    fn renamed_snapshot_is_a_standalone_database_and_restores_the_old_state() {
+        let dir = test_db_dir("snapshot-rename-restore");
+        let path = dir.join("sayit.db");
+        let fixture = legacy_database_fixture(&path);
+        // One old history record, so the restored copy can prove history and
+        // the usage backfill, not merely that the file opens.
+        fixture
+            .execute(
+                "INSERT INTO history_records
+                     (id, list_order, timestamp, favorite, char_count, duration_sec, is_empty, app_id, app_name, raw_json)
+                 VALUES ('legacy-record-1', 0, 1737000000000, 0, 40, 1.5, 0, 'Code.exe', 'Code',
+                     '{\"id\":\"legacy-record-1\",\"timestamp\":1737000000000,\"charCount\":40,\"durationSec\":1.5,\"processName\":\"Code.exe\"}')",
+                [],
+            )
+            .unwrap();
+
+        let storage = Storage::new(path.clone()).unwrap();
+        let snapshots = snapshot_files(&dir);
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = snapshots[0].clone();
+        let snapshot_name = snapshot.file_name().unwrap().to_string_lossy().into_owned();
+        drop(storage);
+        drop(fixture);
+
+        // The snapshot must be an ordinary rollback-journal database: one
+        // self-contained file the user can rename or archive anywhere and open
+        // with a plain read-only connection, with no sidecar files.
+        let header = fs::read(&snapshot).unwrap();
+        assert_eq!(
+            (header[18], header[19]),
+            (1, 1),
+            "the copy must carry rollback-journal format versions"
+        );
+        let copy =
+            Connection::open_with_flags(&snapshot, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        let journal_mode: String = copy
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "delete");
+        let quick_check: Vec<String> = {
+            let mut statement = copy.prepare("PRAGMA quick_check").unwrap();
+            statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<SqlResult<Vec<String>>>()
+                .unwrap()
+        };
+        assert_eq!(quick_check, vec!["ok".to_string()]);
+        assert!(
+            !usage::usage_events_exists(&copy).unwrap(),
+            "the snapshot must predate the usage schema"
+        );
+        assert_eq!(read_migration_versions(&copy), vec![1]);
+        assert_eq!(
+            read_setting_value(&copy, "walOnlySentinel").as_deref(),
+            Some("\"committed-to-wal\"")
+        );
+        drop(copy);
+
+        // Neither the startup that wrote it nor the read-only open above may
+        // leave `-wal`/`-shm` files named after the snapshot.
+        let companions: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&snapshot_name))
+            .collect();
+        assert_eq!(
+            companions,
+            vec![snapshot_name.clone()],
+            "the snapshot must stand alone without sidecar files"
+        );
+
+        // The restore flow the feature promises: keep the already-migrated
+        // database aside, rename the snapshot to the app's database name, and
+        // let a real startup open it.
+        fs::rename(&path, dir.join("sayit-migrated.db")).unwrap();
+        fs::rename(&snapshot, &path).unwrap();
+
+        let restored = Storage::new(path.clone()).unwrap();
+        {
+            let live = restored.db.lock().unwrap();
+            assert_eq!(read_migration_versions(&live), vec![1, 2, 3, 5]);
+        }
+        assert_eq!(
+            restored.get("walOnlySentinel", None),
+            serde_json::json!("committed-to-wal"),
+            "the old settings must survive the renamed snapshot"
+        );
+        let history = restored.history_list(None, false, None, None);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["id"], "legacy-record-1");
+        let summary = restored.usage_summary(None).unwrap();
+        assert_eq!(
+            (
+                summary.takes,
+                summary.total_chars,
+                summary.dated_takes,
+                summary.dated_chars
+            ),
+            (7, 1234, 1, 40),
+            "usage must be backfilled from the old counters and history"
+        );
+
+        let migrated = Connection::open(dir.join("sayit-migrated.db")).unwrap();
+        assert_eq!(
+            read_migration_versions(&migrated),
+            vec![1, 2, 3, 5],
+            "the set-aside database holds the newer changes the snapshot predates"
+        );
+        drop(migrated);
+
+        drop(restored);
+        fs::remove_dir_all(&dir).expect("test directory must be removable after all handles close");
     }
 }
 

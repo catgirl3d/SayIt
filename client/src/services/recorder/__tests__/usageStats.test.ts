@@ -22,9 +22,11 @@ const store = vi.hoisted(() => ({
   getActivePresetId: vi.fn(),
   getPromptPresets: vi.fn(),
   getSetting: vi.fn(),
-  recordStats: vi.fn(),
+  recordUsage: vi.fn(),
   setActivePresetId: vi.fn(),
 }))
+
+const personalization = vi.hoisted(() => ({ getUserStats: vi.fn() }))
 
 const textPostProcess = vi.hoisted(() => ({
   applyTextTransforms: vi.fn(),
@@ -33,6 +35,10 @@ const textPostProcess = vi.hoisted(() => ({
 vi.mock('../../bridge', () => bridge)
 vi.mock('../../audio', () => audio)
 vi.mock('../../store', () => store)
+vi.mock('../../personalization/store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../personalization/store')>()),
+  getUserStats: personalization.getUserStats,
+}))
 vi.mock('../../textPostProcess', () => textPostProcess)
 vi.mock('../../transcription', () => ({ getProvider: vi.fn(() => provider) }))
 
@@ -70,7 +76,6 @@ function createOrchestrator() {
   orchestrator.resetToIdle = vi.fn()
   orchestrator.buildHistoryMetadata = vi.fn().mockReturnValue({})
   orchestrator.buildProviderMetadata = vi.fn().mockResolvedValue({})
-  orchestrator.updatePersonalizationFromFinal = vi.fn().mockResolvedValue(undefined)
   orchestrator.handleTextInsertion = vi.fn().mockResolvedValue(undefined)
   orchestrator.overlayService = {
     showNoSpeech: vi.fn(),
@@ -78,79 +83,52 @@ function createOrchestrator() {
   return orchestrator
 }
 
-describe('history-disabled usage stats', () => {
+const FINAL = { asrText: 'hello', llmText: 'hello', asrMs: 10, llmMs: 0, durationSec: 2 }
+const EXPECTED_EVENT = { charCount: 5, durationSec: 2, appId: 'unknown', workMode: 'server', promptPresetId: undefined }
+
+describe('usage recording', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     textPostProcess.applyTextTransforms.mockImplementation(async (text: string) => text)
+    store.recordUsage.mockResolvedValue(undefined)
+    store.addHistory.mockResolvedValue(undefined)
+    personalization.getUserStats.mockResolvedValue({ totalWords: 5, totalSessions: 1, domainWords: {}, appUsageCount: {} })
   })
 
-  it('records text usage once when history is disabled', async () => {
-    const orchestrator = createOrchestrator()
-    store.getSetting.mockResolvedValue(false)
-    store.recordStats.mockResolvedValue({ totalDurationSec: 2, totalChars: 5 })
+  it.each([{ historyEnabled: false }, { historyEnabled: true }])(
+    'records exactly one usage event when history enabled is $historyEnabled',
+    async ({ historyEnabled }) => {
+      const orchestrator = createOrchestrator()
+      store.getSetting.mockResolvedValue(historyEnabled)
 
-    orchestrator.buildProviderCallbacks().onFinal?.({
-      asrText: 'hello',
-      llmText: 'hello',
-      asrMs: 10,
-      llmMs: 0,
-      durationSec: 2,
-    })
+      orchestrator.buildProviderCallbacks().onFinal?.(FINAL)
 
-    await vi.waitFor(() => expect(store.recordStats).toHaveBeenCalledWith(5, 2))
-    expect(store.recordStats).toHaveBeenCalledTimes(1)
-    expect(store.addHistory).not.toHaveBeenCalled()
-    expect(bridge.emit).toHaveBeenCalledWith('stats-updated')
-  })
+      await vi.waitFor(() => expect(store.recordUsage).toHaveBeenCalledWith(EXPECTED_EVENT))
+      expect(store.recordUsage).toHaveBeenCalledTimes(1)
+      expect(store.addHistory).toHaveBeenCalledTimes(historyEnabled ? 1 : 0)
+      await vi.waitFor(() => expect(bridge.emit).toHaveBeenCalledWith('stats-updated'))
+    },
+  )
 
   it('does not record usage when the final result has no text', async () => {
     const orchestrator = createOrchestrator()
     store.getSetting.mockResolvedValue(false)
 
-    orchestrator.buildProviderCallbacks().onFinal?.({
-      asrText: '',
-      llmText: '',
-      asrMs: 10,
-      llmMs: 0,
-      durationSec: 2,
-    })
+    orchestrator.buildProviderCallbacks().onFinal?.({ ...FINAL, asrText: '', llmText: '' })
 
     await vi.waitFor(() => expect(orchestrator.overlayService.showNoSpeech).toHaveBeenCalled())
-    expect(store.recordStats).not.toHaveBeenCalled()
-  })
-
-  it('does not write usage stats directly when history is enabled', async () => {
-    const orchestrator = createOrchestrator()
-    store.getSetting.mockResolvedValue(true)
-    store.addHistory.mockResolvedValue(undefined)
-
-    orchestrator.buildProviderCallbacks().onFinal?.({
-      asrText: 'hello',
-      llmText: 'hello',
-      asrMs: 10,
-      llmMs: 0,
-      durationSec: 2,
-    })
-
-    await vi.waitFor(() => expect(store.addHistory).toHaveBeenCalled())
-    expect(store.recordStats).not.toHaveBeenCalled()
+    expect(store.recordUsage).not.toHaveBeenCalled()
   })
 
   it('keeps delivering text and skips the stats event when recording fails', async () => {
     const orchestrator = createOrchestrator()
     store.getSetting.mockResolvedValue(false)
-    store.recordStats.mockRejectedValue(new Error('db unavailable'))
+    store.recordUsage.mockRejectedValue(new Error('db unavailable'))
 
-    orchestrator.buildProviderCallbacks().onFinal?.({
-      asrText: 'hello',
-      llmText: 'hello',
-      asrMs: 10,
-      llmMs: 0,
-      durationSec: 2,
-    })
+    orchestrator.buildProviderCallbacks().onFinal?.(FINAL)
 
     await vi.waitFor(() => expect(orchestrator.handleTextInsertion).toHaveBeenCalled())
-    expect(store.recordStats).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(store.recordUsage).toHaveBeenCalledTimes(1))
     expect(bridge.emit).not.toHaveBeenCalledWith('stats-updated')
   })
 })

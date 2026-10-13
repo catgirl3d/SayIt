@@ -1,11 +1,18 @@
-// 备份 / 恢复：配置（JSON）与全部数据（zip，含音频）的导出与导入。
+// Backup / restore: export and import of configuration (JSON) and of all data
+// (zip, audio included).
 //
-// 设计要点：
-// - 导入走活动数据库的正常写入通道（app_settings upsert + 集合表整表替换），
-//   不替换 sqlite 文件、不涉及文件锁，导入完成后由前端触发重启使内存状态重载。
-// - 语义为「覆盖」：集合表整表替换；app_settings 逐 key 覆盖（不删除未出现的 key）。
-// - 「配置」不含使用统计 stats，避免覆盖本机计数；「全部」包含 stats。
-// - 全部导入时，历史记录里的 audioFilePath 是旧机绝对路径，会重写为本机 audio 目录下的同名文件。
+// Design notes:
+// - Import goes through the active database's normal write path (app_settings
+//   upsert + whole-table replacement of collections); it does not replace the
+//   sqlite file and involves no file locks. The frontend restarts the app after
+//   the import so in-memory state reloads.
+// - The semantics are "overwrite": collections are replaced wholesale;
+//   app_settings are overwritten key by key (keys absent from the file stay).
+// - "Config" excludes the usage statistics, so importing it never overwrites
+//   local counts; every full backup carries the `usage` section instead.
+// - On a full import the history records' audioFilePath values are absolute
+//   paths from the old machine; they are rewritten to the same file names under
+//   the local audio directory.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -16,15 +23,23 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::storage::{BUILTIN_PROMPT_IDS, Storage};
+use crate::storage::{BUILTIN_PROMPT_IDS, Storage, parse_usage_backup};
 
-/// 备份文件格式版本。导入时若备份版本高于此值则拒绝。
+/// Plain configuration file format version; imports reject a file newer than
+/// this. The selected-config file and the full-data archive have their own
+/// version constants below.
 const FORMAT_VERSION: i64 = 1;
-/// 分项配置文件格式；完整配置与全部数据继续使用 v1，保持兼容。
+/// Selected-configuration file format. Plain config files and full-data
+/// archives keep their own separate version constants.
 const SELECTED_CONFIG_FORMAT_VERSION: i64 = 2;
+/// Full-data archive format. Version 2 adds the optional `legacyProfileChars`
+/// value on usage rows; version-1 archives stay readable.
+const FULL_FORMAT_VERSION: i64 = 2;
 const MAX_HOTWORDS: usize = 1000;
-/// 「配置」档不导出/导入的 app_settings key（使用统计属于使用数据，不属于配置）。
-const CONFIG_EXCLUDE: &[&str] = &["stats"];
+/// app_settings keys that the config-only export/import skips: usage statistics
+/// are usage data, not configuration. Both are legacy counter keys that old
+/// config files may still carry; usage now lives in `usage_events`.
+const CONFIG_EXCLUDE: &[&str] = &["stats", "userStats"];
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -276,18 +291,26 @@ fn build_selected_config_value(
     }))
 }
 
-/// 组装 `backup.json`。
+/// Assembles `backup.json`.
 ///
-/// 不含历史时**整个字段都不写**（而不是写一个空数组）：`import_full` 对缺失段是
-/// `if let Some(...)`，字段缺席就跳过、保留本机现有历史；写成空数组反而会把本机
-/// 历史整表清空。「只备份配置」这一档能安全恢复，全靠这个区别。
-fn build_full_value(storage: &Storage, scope: BackupScope) -> Value {
+/// Without history the field is **omitted entirely** (not written as an empty
+/// array): `import_full` uses `if let Some(...)` for missing sections, so an
+/// absent field is skipped and the local history is kept; an empty array would
+/// wipe the local history table instead. The config-only profile can be safely
+/// restored only because of this difference.
+fn build_full_value(storage: &Storage, scope: BackupScope) -> Result<Value, String> {
+    let usage = storage
+        .usage_backup()
+        .map_err(|e| format!("Failed to read usage statistics: {}", e))?;
+    let usage = serde_json::to_value(&usage)
+        .map_err(|e| format!("Failed to serialize usage statistics: {}", e))?;
     let mut payload = json!({
         "kind": "full",
-        "formatVersion": FORMAT_VERSION,
+        "formatVersion": FULL_FORMAT_VERSION,
         "appVersion": app_version(),
         "exportedAt": chrono::Utc::now().to_rfc3339(),
-        // 备份包自报装了什么，供恢复前预览与排查「为什么恢复完没有历史」。
+        // The archive reports what it contains, for the pre-restore preview and
+        // for diagnosing "why is my history missing after a restore".
         "scope": {
             "includeHistory": scope.include_history,
             "includeAudio": scope.include_audio,
@@ -295,6 +318,10 @@ fn build_full_value(storage: &Storage, scope: BackupScope) -> Value {
         "appSettings": storage.export_app_settings(&[]),
         "promptPresets": storage.get("promptPresets", None),
         "appPromptRules": storage.get("appPromptRules", None),
+        // Usage travels with every full backup, the config-only WebDAV profile
+        // included, the same way the legacy `stats` key travelled inside
+        // appSettings.
+        "usage": usage,
     });
 
     if scope.include_history {
@@ -311,7 +338,7 @@ fn build_full_value(storage: &Storage, scope: BackupScope) -> Value {
         }
     }
 
-    payload
+    Ok(payload)
 }
 
 fn check_kind_and_version(
@@ -858,7 +885,7 @@ pub fn write_backup_archive(
                 .map_err(|e| format!("Failed to create export directory: {}", e))?;
         }
 
-        let payload = build_full_value(storage, scope);
+        let payload = build_full_value(storage, scope)?;
         let json_str = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
         on_progress(ArchiveProgress {
             phase: "packingData",
@@ -1273,7 +1300,7 @@ pub async fn import_config(
         return Err("The configuration file changed; select it again and reconfirm".to_string());
     }
 
-    // 完整配置导入排除 stats，避免覆盖本机使用统计。
+    // A full config import excludes the legacy counter keys so it cannot overwrite local counts.
     apply_config_part(storage.inner(), &data, CONFIG_EXCLUDE)?;
     Ok(ConfigImportResult {
         changed_sections: vec!["fullConfig".to_string()],
@@ -1289,16 +1316,19 @@ pub async fn import_full(in_path: String, storage: State<'_, Storage>) -> Result
     apply_full_backup(storage.inner(), &in_path)
 }
 
-/// 应用一个全量备份 zip。本地导入与 WebDAV 恢复共用。
+/// Applies a full backup zip. Shared by local import and WebDAV restore.
 ///
-/// 对缺失段是宽容的：只含配置的备份（WebDAV 默认档）不会带 `history` 字段，
-/// 此时**保留本机现有历史**而不是清空 —— 见 `build_full_value` 里为什么不写空数组。
+/// Tolerant of missing sections: a config-only backup (the WebDAV default
+/// profile) has no `history` field, and then the **local history is kept**
+/// rather than cleared — see `build_full_value` for why an empty array is
+/// never written. A missing `usage` section is handled the same way; see
+/// `Storage::usage_restore`.
 pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String> {
     let file = fs::File::open(in_path).map_err(|e| format!("Failed to open file: {}", e))?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("Not a valid backup archive: {}", e))?;
 
-    // 1. 读取并校验 backup.json
+    // 1. Read and validate backup.json
     let mut json_str = String::new();
     {
         let mut entry = archive.by_name("backup.json").map_err(|_| {
@@ -1310,10 +1340,14 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
     }
     let data: Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse backup.json: {}", e))?;
-    check_kind_and_version(&data, "full", FORMAT_VERSION)?;
+    check_kind_and_version(&data, "full", FULL_FORMAT_VERSION)?;
     full_config_preview_sections(&data)?;
 
-    // 2. 释放音频文件到本机 audio 目录
+    // Validate the usage section up front: a malformed one must abort the
+    // restore before any part of it is applied.
+    let usage = data.get("usage").map(parse_usage_backup).transpose()?;
+
+    // 2. Extract the audio files into the local audio directory
     let adir = audio_dir();
     fs::create_dir_all(&adir).map_err(|e| format!("Failed to create audio directory: {}", e))?;
     for i in 0..archive.len() {
@@ -1334,10 +1368,10 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
         }
     }
 
-    // 3. 应用配置部分（含 stats）
+    // 3. Apply the configuration part (appSettings, including any legacy counters).
     apply_config_part(storage, &data, &[])?;
 
-    // 4. 历史：重写音频路径后整表替换
+    // 4. History: rewrite the audio paths, then replace the whole table
     if let Some(history) = data.get("history").and_then(|v| v.as_array()) {
         let rewritten: Vec<Value> = history
             .iter()
@@ -1361,6 +1395,13 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
                 .map_err(|e| format!("Failed to write feedback queue: {}", e))?;
         }
     }
+
+    // 5. Usage statistics come last: when the section is absent (a backup made
+    //    before usage events existed), the rebuild reads the history and legacy
+    //    counters restored above.
+    storage
+        .usage_restore(usage.as_ref())
+        .map_err(|e| format!("Failed to restore usage statistics: {}", e))?;
     Ok(())
 }
 
@@ -1407,7 +1448,8 @@ mod tests {
                 include_history: false,
                 include_audio: false,
             },
-        );
+        )
+        .unwrap();
         assert!(
             config_only.get("history").is_none(),
             "history must be absent, got {:?}",
@@ -1434,7 +1476,8 @@ mod tests {
                 include_history: true,
                 include_audio: false,
             },
-        );
+        )
+        .unwrap();
         assert_eq!(
             with_history
                 .get("history")
@@ -1519,5 +1562,292 @@ mod tests {
         });
 
         assert!(full_config_preview_sections(&data).is_err());
+    }
+
+    #[test]
+    fn malformed_usage_aborts_restore_before_any_write() {
+        let (storage, dir) = temp_storage("malformed-usage");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        storage
+            .set(
+                "history",
+                &json!([{ "id": "local-1", "timestamp": 1, "charCount": 3 }]),
+            )
+            .unwrap();
+        storage
+            .usage_record(
+                0,
+                &crate::storage::UsageEventInput {
+                    char_count: 5,
+                    duration_sec: 1.0,
+                    app_id: None,
+                    work_mode: None,
+                    prompt_preset_id: None,
+                },
+            )
+            .unwrap();
+        let usage_before = storage.usage_summary(None).unwrap();
+
+        let backup_path = dir.join("malformed-usage.zip");
+        let payload = json!({
+            "kind": "full",
+            "formatVersion": 1,
+            "appSettings": { "cloudAi.model": "restored-model" },
+            "promptPresets": [],
+            "appPromptRules": [],
+            "history": [{ "id": "restored-1", "timestamp": 2, "charCount": 9 }],
+            "usage": { "events": "nope" },
+        });
+        {
+            let file = fs::File::create(&backup_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            zip.start_file("backup.json", zip::write::FileOptions::default())
+                .unwrap();
+            zip.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+        assert!(error.contains("usage"), "unexpected error: {error}");
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        assert_eq!(
+            storage.get("history", None),
+            json!([{ "id": "local-1", "timestamp": 1, "charCount": 3 }])
+        );
+        assert_eq!(storage.usage_summary(None).unwrap(), usage_before);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_full_backup_carries_the_usage_section() {
+        let (storage, dir) = temp_storage("usage-section");
+        storage
+            .usage_record(
+                0,
+                &crate::storage::UsageEventInput {
+                    char_count: 5,
+                    duration_sec: 1.0,
+                    app_id: None,
+                    work_mode: None,
+                    prompt_preset_id: None,
+                },
+            )
+            .unwrap();
+
+        for include_history in [false, true] {
+            let payload = build_full_value(
+                &storage,
+                BackupScope {
+                    include_history,
+                    include_audio: false,
+                },
+            )
+            .unwrap();
+            assert_eq!(payload["formatVersion"], 2);
+            assert_eq!(payload["usage"]["events"][0]["charCount"], 5);
+        }
+        drop(storage);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn full_restore_of_a_format_two_backup_keeps_legacy_profile_chars() {
+        let (storage, dir) = temp_storage("format-two-restore");
+
+        let backup_path = dir.join("format-two-restore.zip");
+        let payload = json!({
+            "kind": "full",
+            "formatVersion": 2,
+            "appSettings": {},
+            "promptPresets": [],
+            "appPromptRules": [],
+            "usage": {
+                "firstUsedAt": 111,
+                "events": [
+                    {
+                        "ts": null,
+                        "takes": 6,
+                        "charCount": 0,
+                        "durationSec": 0.0,
+                        "appId": "Code.exe",
+                        "workMode": null,
+                        "promptPresetId": null,
+                        "legacyProfileChars": 700,
+                    },
+                    {
+                        "ts": 222,
+                        "takes": 1,
+                        "charCount": 25,
+                        "durationSec": 3.0,
+                        "appId": "Code.exe",
+                        "workMode": "cloud_api",
+                        "promptPresetId": null,
+                    },
+                ],
+            },
+        });
+        {
+            let file = fs::File::create(&backup_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            zip.start_file("backup.json", zip::write::FileOptions::default())
+                .unwrap();
+            zip.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+
+        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
+
+        let summary = storage.usage_summary(None).unwrap();
+        assert_eq!(
+            (summary.takes, summary.total_chars),
+            (7, 25),
+            "the overall total sums char_count only"
+        );
+        assert_eq!(
+            summary
+                .apps
+                .iter()
+                .find(|item| item.key == "Code.exe")
+                .map(|item| (item.takes, item.chars)),
+            Some((7, 725)),
+            "the profile combines the legacy residual with the dated characters"
+        );
+        assert_eq!(summary.first_used_at, Some(111));
+
+        drop(storage);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_legacy_profile_chars_aborts_restore_before_any_write() {
+        let (storage, dir) = temp_storage("malformed-profile-chars");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        storage
+            .set(
+                "history",
+                &json!([{ "id": "local-1", "timestamp": 1, "charCount": 3 }]),
+            )
+            .unwrap();
+        storage
+            .usage_record(
+                0,
+                &crate::storage::UsageEventInput {
+                    char_count: 5,
+                    duration_sec: 1.0,
+                    app_id: None,
+                    work_mode: None,
+                    prompt_preset_id: None,
+                },
+            )
+            .unwrap();
+        let usage_before = storage.usage_summary(None).unwrap();
+
+        let backup_path = dir.join("malformed-profile-chars.zip");
+        let payload = json!({
+            "kind": "full",
+            "formatVersion": 2,
+            "appSettings": { "cloudAi.model": "restored-model" },
+            "promptPresets": [],
+            "appPromptRules": [],
+            "history": [{ "id": "restored-1", "timestamp": 2, "charCount": 9 }],
+            "usage": {
+                "firstUsedAt": null,
+                "events": [{
+                    "ts": 5,
+                    "takes": 1,
+                    "charCount": 0,
+                    "durationSec": 0.0,
+                    "appId": "Code.exe",
+                    "legacyProfileChars": 5,
+                }],
+            },
+        });
+        {
+            let file = fs::File::create(&backup_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            zip.start_file("backup.json", zip::write::FileOptions::default())
+                .unwrap();
+            zip.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+        assert!(error.contains("usage"), "unexpected error: {error}");
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        assert_eq!(
+            storage.get("history", None),
+            json!([{ "id": "local-1", "timestamp": 1, "charCount": 3 }])
+        );
+        assert_eq!(storage.usage_summary(None).unwrap(), usage_before);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_applies_the_usage_section_from_the_archive() {
+        let (storage, dir) = temp_storage("usage-restore");
+        storage
+            .usage_record(
+                0,
+                &crate::storage::UsageEventInput {
+                    char_count: 5,
+                    duration_sec: 1.0,
+                    app_id: None,
+                    work_mode: None,
+                    prompt_preset_id: None,
+                },
+            )
+            .unwrap();
+
+        let backup_path = dir.join("usage-restore.zip");
+        let payload = json!({
+            "kind": "full",
+            "formatVersion": 1,
+            "appSettings": {},
+            "promptPresets": [],
+            "appPromptRules": [],
+            "usage": {
+                "firstUsedAt": 111,
+                "events": [{
+                    "ts": 222,
+                    "takes": 1,
+                    "charCount": 42,
+                    "durationSec": 3.0,
+                    "appId": "Code.exe",
+                    "workMode": "cloud_api",
+                    "promptPresetId": null,
+                }],
+            },
+        });
+        {
+            let file = fs::File::create(&backup_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            zip.start_file("backup.json", zip::write::FileOptions::default())
+                .unwrap();
+            zip.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+
+        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
+
+        let summary = storage.usage_summary(None).unwrap();
+        assert_eq!(
+            (
+                summary.takes,
+                summary.total_chars,
+                summary.total_duration_sec
+            ),
+            (1, 42, 3.0),
+            "the backup's usage must replace the local usage, not be ignored or appended"
+        );
+        assert_eq!(summary.first_used_at, Some(111));
+
+        drop(storage);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

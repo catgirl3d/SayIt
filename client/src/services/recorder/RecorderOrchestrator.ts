@@ -15,7 +15,7 @@ import {
   getActivePresetId,
   getPromptPresets,
   getSetting,
-  recordStats,
+  recordUsage,
   setActivePresetId,
   type HistoryFailReasonCode,
   type PromptPreset,
@@ -26,7 +26,7 @@ import { saveRecordingAudio } from '../audioFileService'
 import { loadActiveHotwords } from '../hotwords/settings'
 import { invoke } from '@tauri-apps/api/core'
 import { createWaveformBarState, computeBarsFromPCM, resetWaveformBarState } from '../waveform'
-import { elapsedSecFromPerf } from '../timeModel'
+import { elapsedSecFromPerf, pickVoiceDurationSec } from '../timeModel'
 import {
   captureActiveInsertionTarget,
   clearCapturedInsertionTarget,
@@ -43,7 +43,6 @@ import { resolvePromptRouting } from '../personalization/promptRouter'
 import {
   getAppPromptRules,
   getUserStats,
-  recordSessionStats,
 } from '../personalization/store'
 import type { AppPromptRule, PromptResolution, UserStats } from '../personalization/types'
 import type { PTTEventPayload, RecorderState, SubtitleOverlayPayload } from './types'
@@ -2581,14 +2580,6 @@ export class RecorderOrchestrator {
         historyWriteSucceeded = true
         void bridge.emit('history-updated')
         historyRetryAvailable = emptyAfterProcessing && Boolean(historyArtifact.audioFilePath)
-      } else if (hasText && !suppressLateFinalInsertion) {
-        // History retention is off: still count the completed dictation in usage stats.
-        try {
-          await recordStats(textToPaste.length, wallSec)
-          void bridge.emit('stats-updated')
-        } catch (error) {
-          addRuntimeEvent('warn', 'recorder', 'Failed to record usage stats while history disabled', { error: String(error), runId })
-        }
       }
     } catch (error) {
       if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
@@ -2637,7 +2628,15 @@ export class RecorderOrchestrator {
       return
     }
 
-    void this.updatePersonalizationFromFinal(runId, textToPaste, promptResolution, appContext)
+    // The single usage write point: the run is current, the text is non-empty,
+    // and it is not a suppressed late final — independent of the history setting.
+    void this.recordUsageFromFinal(
+      runId,
+      textToPaste,
+      pickVoiceDurationSec({ holdSec: wallSec, audioSec: audioDur, asrSec: result.durationSec }),
+      promptResolution,
+      appContext,
+    )
 
     this.textInsertionInFlight = true
     try {
@@ -2657,33 +2656,48 @@ export class RecorderOrchestrator {
     }
   }
 
-  private async updatePersonalizationFromFinal(
+  /**
+   * Records one completed dictation in the usage log, then refreshes the
+   * personalization profile that is derived from it.
+   */
+  private async recordUsageFromFinal(
     runId: number,
     finalText: string,
+    durationSec: number,
     promptResolution: PromptResolution | null,
     appContext: ActiveAppContext | null,
   ) {
     if (!finalText.trim() || !this.isRunCurrent(runId)) return
 
+    const appId = this.buildStatsAppId(appContext, promptResolution)
     try {
-      const wordCount = finalText.length
-      const appId = this.buildStatsAppId(appContext, promptResolution)
+      await recordUsage({
+        charCount: finalText.length,
+        durationSec,
+        appId,
+        workMode: this.provider.mode,
+        promptPresetId: promptResolution?.preset.id,
+      })
+    } catch (error) {
+      addRuntimeEvent('warn', 'personalization', 'failed to record usage', { error: String(error), runId })
+      return
+    }
+    void bridge.emit('stats-updated')
 
-      const nextStats = await recordSessionStats(appId, wordCount)
+    try {
+      const nextStats = await getUserStats()
       if (!this.isRunCurrent(runId)) return
       this.cachedUserStats = nextStats
-      addRuntimeEvent('info', 'personalization', 'session stats recorded', {
+      addRuntimeEvent('info', 'personalization', 'usage recorded', {
         appId,
         appName: promptResolution?.appName,
-        wordCount,
-        totalWords: this.cachedUserStats.totalWords,
-        totalSessions: this.cachedUserStats.totalSessions,
+        charCount: finalText.length,
+        totalWords: nextStats.totalWords,
+        totalSessions: nextStats.totalSessions,
       })
     } catch (error) {
       if (!this.isRunCurrent(runId)) return
-      addRuntimeEvent('warn', 'personalization', 'failed to record session stats', {
-        error: String(error),
-      })
+      addRuntimeEvent('warn', 'personalization', 'failed to refresh usage profile', { error: String(error) })
     }
   }
 }

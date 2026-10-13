@@ -14,7 +14,7 @@ vi.mock('@/services/store', () => ({
   deleteHistory: vi.fn(),
   getActivePresetId: vi.fn(),
   getPromptPresets: vi.fn(),
-  recordStats: vi.fn(),
+  recordUsage: vi.fn(),
   setActivePresetId: vi.fn(),
   setSetting: vi.fn(async (key: string, value: unknown) => {
     const delay = harness.delayedWrites.get(key)
@@ -301,7 +301,7 @@ describe('ASR profile activation and recording ordering', () => {
       getProbeResult: async () => ({ editable: true }),
       pasteText: async () => ({ ok: true, strategy: 'test', detail: '', attempts: 1 }),
     })
-    Reflect.set(recorder, 'updatePersonalizationFromFinal', async () => {})
+    Reflect.set(recorder, 'recordUsageFromFinal', async () => {})
     const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
       this: RecorderOrchestrator,
     ) => Parameters<typeof provider.connect>[0]
@@ -444,7 +444,7 @@ describe('ASR profile activation and recording ordering', () => {
       getProbeResult: async () => ({ editable: true }),
       pasteText: async () => ({ ok: true, strategy: 'test', detail: '', attempts: 1 }),
     })
-    Reflect.set(recorder, 'updatePersonalizationFromFinal', async () => {})
+    Reflect.set(recorder, 'recordUsageFromFinal', async () => {})
     const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
       this: RecorderOrchestrator,
     ) => Parameters<typeof provider.connect>[0]
@@ -528,7 +528,7 @@ describe('ASR profile activation and recording ordering', () => {
       getProbeResult: async () => ({ editable: true }),
       pasteText: async () => ({ ok: true, strategy: 'test', detail: '', attempts: 1 }),
     })
-    Reflect.set(recorder, 'updatePersonalizationFromFinal', async () => {})
+    Reflect.set(recorder, 'recordUsageFromFinal', async () => {})
     const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
       this: RecorderOrchestrator,
     ) => Parameters<typeof provider.connect>[0]

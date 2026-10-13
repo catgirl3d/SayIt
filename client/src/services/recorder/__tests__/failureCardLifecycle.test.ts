@@ -13,8 +13,8 @@ const harness = vi.hoisted(() => ({
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
   runtimeEvents: vi.fn(),
   addHistory: vi.fn(),
-  recordStats: vi.fn(),
-  recordSessionStats: vi.fn(),
+  recordUsage: vi.fn(),
+  getUserStats: vi.fn(),
   startCapture: vi.fn(),
   saveRecordingAudio: vi.fn(),
   stopCapture: vi.fn(),
@@ -34,7 +34,7 @@ vi.mock('@/services/store', () => ({
     if (key === 'selectedMic' && harness.unrelatedSettingsReadError) throw new Error('microphone setting unavailable')
     return harness.settings.has(key) ? harness.settings.get(key) : fallback
   }),
-  recordStats: (...args: unknown[]) => harness.recordStats(...args),
+  recordUsage: (...args: unknown[]) => harness.recordUsage(...args),
   setActivePresetId: vi.fn(async () => undefined),
   setSetting: vi.fn(async (key: string, value: unknown) => harness.settings.set(key, value)),
 }))
@@ -47,8 +47,7 @@ vi.mock('@/services/audioFileService', () => ({
 }))
 vi.mock('@/services/personalization/store', () => ({
   getAppPromptRules: vi.fn(async () => []),
-  getUserStats: vi.fn(async () => ({ totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} })),
-  recordSessionStats: (...args: unknown[]) => harness.recordSessionStats(...args),
+  getUserStats: (...args: unknown[]) => harness.getUserStats(...args),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => harness.invoke(...args) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -177,8 +176,8 @@ beforeEach(async () => {
   })
   harness.addHistory.mockReset().mockResolvedValue(undefined)
   harness.runtimeEvents.mockReset()
-  harness.recordStats.mockReset().mockResolvedValue(undefined)
-  harness.recordSessionStats.mockReset().mockResolvedValue({ totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} })
+  harness.recordUsage.mockReset().mockResolvedValue(undefined)
+  harness.getUserStats.mockReset().mockResolvedValue({ totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} })
   harness.startCapture.mockReset().mockResolvedValue({ label: 'Microphone', deviceId: 'device-1', groupId: 'group-1' })
   harness.saveRecordingAudio.mockReset().mockResolvedValue('history/recording.wav')
   harness.stopCapture.mockReset().mockResolvedValue(undefined)
@@ -737,8 +736,7 @@ describe('recorder failure cards', () => {
     await flushMicrotasks()
 
     expect(harness.addHistory).toHaveBeenCalledTimes(1)
-    expect(harness.recordSessionStats).not.toHaveBeenCalled()
-    expect(harness.recordStats).not.toHaveBeenCalled()
+    expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
     expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
@@ -854,6 +852,24 @@ describe('recorder failure cards', () => {
     expect(harness.suppressLateSettingReadCount).toBe(0)
   })
 
+  it('refreshes the cached derived profile from the usage log after statistics are cleared', async () => {
+    const clearedProfile = { totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} }
+    harness.getUserStats.mockResolvedValue(clearedProfile)
+    const recorder = new RecorderOrchestrator()
+    Reflect.set(recorder, 'cachedUserStats', {
+      totalWords: 1800,
+      totalSessions: 60,
+      domainWords: { 'Code.exe': 1500 },
+      appUsageCount: { 'Code.exe': 30 },
+    })
+
+    await recorder.refreshRuntimeSettings()
+
+    // The next prompt must be built from the cleared usage, not the stale counters.
+    expect(harness.getUserStats).toHaveBeenCalledTimes(1)
+    expect(Reflect.get(recorder, 'cachedUserStats')).toBe(clearedProfile)
+  })
+
   it('does not count a History-only late result and permits the next recording', async () => {
     harness.settings.set('suppressLateFinalInsertion', true)
     const historyWritten = deferred<Record<string, unknown>>()
@@ -869,8 +885,7 @@ describe('recorder failure cards', () => {
     await flushMicrotasks()
 
     expect(harness.addHistory).toHaveBeenCalledTimes(1)
-    expect(harness.recordSessionStats).not.toHaveBeenCalled()
-    expect(harness.recordStats).not.toHaveBeenCalled()
+    expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
 
@@ -890,7 +905,7 @@ describe('recorder failure cards', () => {
     expect(recorder.getState()).toBe('recording')
     expect(newRunId).not.toBe(141)
     expect(Reflect.get(recorder, 'activeRunId')).toBe(newRunId)
-    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
   })
 
@@ -939,8 +954,7 @@ describe('recorder failure cards', () => {
 
     expect(transformSpy).not.toHaveBeenCalled()
     expect(harness.addHistory).not.toHaveBeenCalled()
-    expect(harness.recordStats).not.toHaveBeenCalled()
-    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
@@ -963,8 +977,7 @@ describe('recorder failure cards', () => {
     await flushMicrotasks()
 
     expect(harness.addHistory).toHaveBeenCalledTimes(1)
-    expect(harness.recordStats).not.toHaveBeenCalled()
-    expect(harness.recordSessionStats).not.toHaveBeenCalled()
+    expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
