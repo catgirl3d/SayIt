@@ -20,6 +20,7 @@ import {
   type LiveRecognitionError,
 } from './systemAudioLiveRecognition'
 import { buildSubtitlePrompt, RecentSpeech, SUBTITLE_CONTEXT_SOURCE, subtitleLanguageName } from './subtitleTranslation'
+import { SubtitleTranscriptJournal } from './subtitleTranscript'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
 import {
@@ -131,6 +132,8 @@ interface TranslationJob {
   readonly asrModel?: string
   readonly phraseId?: number
   readonly sourceSpan?: SegmentSpan
+  /** Speech-order number for the transcript journal; assigned when the fragment's text became final. */
+  readonly journalSequence?: number
 }
 
 interface OverlayDelivery {
@@ -165,6 +168,8 @@ const PROCESSING_TIMEOUT_MS = 30_000
 const MAX_CONSECUTIVE_FAILURES = 3
 // Keep the latest settled caption visible for 8 seconds before clearing it unless a newer caption replaces it.
 const CAPTION_HOLD_MS = 8_000
+// A stalled transcript destination must not keep the session stopping forever; the unfinished write tail is dropped.
+const JOURNAL_FLUSH_TIMEOUT_MS = 3_000
 // Streamed translation text is repainted at most this often; the settled caption is always published.
 const PARTIAL_UPDATE_INTERVAL_MS = 100
 // Every caption-bound field of the snapshot; reset together so a notice or original never outlives its caption.
@@ -246,6 +251,9 @@ export class SystemAudioSession {
   private liveSessionId: string | null = null
   private liveAccumulator: LiveSpeechAccumulator | null = null
   private liveDiscontinuityWarning = ''
+  private journal: SubtitleTranscriptJournal | null = null
+  private journalSequence = 0
+  private freshStart = false
 
   getSnapshot = () => this.snapshot
   subscribe = (listener: () => void) => {
@@ -344,6 +352,44 @@ export class SystemAudioSession {
     return warnings.join(' ')
   }
 
+  /** The journal stopped for this session; subtitles keep running without it. */
+  private reportJournalFailure(message: string): void {
+    const warning = t('systemAudio.transcriptWriteFailed', { reason: message })
+    this.publish({ warning: this.liveSelected ? this.currentWarning(warning) : warning })
+    addRuntimeEvent('warn', 'system-audio', 'Subtitle transcript write failed; recording stopped', { message })
+  }
+
+  /** Journals a settled fragment outcome; the original is always recorded, with its translation when there is one. */
+  private recordTranscriptOutcome(
+    transcript: { sequence: number; span?: SegmentSpan } | undefined,
+    original: string,
+    translation: string | null,
+    untranslated: boolean,
+  ): void {
+    if (!transcript || !this.journal) return
+    this.journal.record({
+      sequence: transcript.sequence,
+      startedAt: transcript.span?.startedAt ?? Date.now(),
+      original,
+      translation,
+      untranslated,
+    })
+  }
+
+  /** Journals the recognized original of a fragment whose translation was dropped or cancelled. */
+  private recordUnfinishedTranscript(job: Pick<TranslationJob, 'journalSequence' | 'sourceSpan' | 'asrText'>): void {
+    if (job.journalSequence === undefined || !this.journal) return
+    const original = job.asrText.trim()
+    if (!original) return
+    this.journal.record({
+      sequence: job.journalSequence,
+      startedAt: job.sourceSpan?.startedAt ?? Date.now(),
+      original,
+      translation: null,
+      untranslated: true,
+    })
+  }
+
   private finishDetails(result: FinalResult, caption: string): PipelineFinishDetails {
     return {
       asrMs: result.asrMs,
@@ -361,13 +407,20 @@ export class SystemAudioSession {
   // the recognized original with an untranslated notice and counts toward the failure streak; an applied
   // translation replaces the caption and pairs with its original in dual-subtitle mode. Returns false when
   // the session stopped and the caller must not continue.
-  private publishTranslationOutcome(result: FinalResult, runId: number | null, generation: number, phraseId?: number): boolean {
+  private publishTranslationOutcome(
+    result: FinalResult,
+    runId: number | null,
+    generation: number,
+    phraseId?: number,
+    transcript?: { sequence: number; span?: SegmentSpan },
+  ): boolean {
     const original = result.asrText.trim()
     const comparableTranslation = result.llmText.replace(/\s+/g, ' ').trim()
     const comparableSource = result.asrText.replace(/\s+/g, ' ').trim()
     if (result.aiStatus !== 'applied' || !comparableTranslation) {
       // The AI produced no translation. Show what was heard, marked as untranslated, and keep listening.
       failRun(runId, 'rejected', result.aiStatus !== 'applied' ? result.aiStatus : 'empty translation')
+      this.recordTranscriptOutcome(transcript, original, null, true)
       if (this.recordFailure(t('systemAudio.translationFailed'))) return false
       this.publishCaption(original, generation, undefined, undefined, t('systemAudio.untranslated'), '', phraseId)
       return true
@@ -378,6 +431,7 @@ export class SystemAudioSession {
     // A translation identical to the transcript is speech already in the target language, a name, a number,
     // or an AI echoing its input when its answer was empty. Never present it as a translation.
     const identical = comparableTranslation === comparableSource
+    this.recordTranscriptOutcome(transcript, original, identical ? null : caption, identical)
     this.publishCaption(caption, generation, traceRunId, traceRunId === null ? undefined : this.finishDetails(result, caption),
       identical ? t('systemAudio.untranslated') : '', this.dual && !identical ? original : '', phraseId)
     return true
@@ -428,6 +482,8 @@ export class SystemAudioSession {
   async start(options: { deviceId: string; targetLanguage: SubtitleTargetLanguage; asrOnly?: boolean }): Promise<void> {
     if (this.snapshot.state !== 'idle') return
     this.options = { ...options, asrOnly: options.asrOnly ?? false }
+    // A user start opens the optional transcript journal; pause, resume, and recovery keep it.
+    this.freshStart = true
     await this.begin()
   }
 
@@ -458,18 +514,32 @@ export class SystemAudioSession {
       if (generation !== this.generation) return
       const asrOnly = this.options!.asrOnly
       if (!reuseSnapshot) {
-        const [presets, language, hotwords, maxSegmentSeconds, dual, liveRecognitionEnabled] = await Promise.all([
+        const [presets, language, hotwords, maxSegmentSeconds, dual, liveRecognitionEnabled, transcriptEnabled, transcriptDir] = await Promise.all([
           asrOnly ? Promise.resolve([]) : getPromptPresets(),
           getSystemAudioSourceLanguage(),
           loadActiveHotwords(),
           getSystemAudioMaxSegmentSeconds(),
           getSystemAudioDualSubtitles(),
           getSetting('systemAudio.liveRecognitionEnabled', false),
+          getSetting('systemAudio.transcriptEnabled', false),
+          getSetting<string>('systemAudio.transcriptDir', ''),
         ])
         if (generation !== this.generation) return
         this.plan = segmentPlan(maxSegmentSeconds)
         this.segmenter = new SubtitleSegmenter(this.plan)
         this.dual = dual && !asrOnly
+        if (this.freshStart) {
+          this.freshStart = false
+          if (transcriptEnabled === true) {
+            this.journal = new SubtitleTranscriptJournal({
+              dir: typeof transcriptDir === 'string' ? transcriptDir : '',
+              startedAt: Date.now(),
+              untranslatedMarker: t('systemAudio.transcriptUntranslatedMarker'),
+              onWriteError: (message) => this.reportJournalFailure(message),
+            })
+            this.journalSequence = 0
+          }
+        }
         if (asrOnly) {
           this.startOptions = { systemPrompt: '', language, hotwords: [...hotwords], disableAi: true, aiMinDurationSec: 0, requireTranslation: false, disableStreaming: true }
         } else {
@@ -521,11 +591,21 @@ export class SystemAudioSession {
             failRun(this.activeRunId, 'empty')
             return
           }
+          // One speech-order sequence per recognized fragment: a translation that settles, drops, or is
+          // cancelled later than a following one still reaches the journal in speech order.
+          const transcriptSequence = ++this.journalSequence
           if (asrOnly) {
             this.consecutiveFailures = 0
             const caption = result.asrText.trim()
             const runId = isPipelineDebugEnabled() ? this.activeRunId : null
             const finishDetails = this.finishDetails(result, caption)
+            this.journal?.record({
+              sequence: transcriptSequence,
+              startedAt: this.activeSpan?.startedAt ?? Date.now(),
+              original: caption,
+              translation: null,
+              untranslated: false,
+            })
             if (this.publishedAsrJob !== jobId) {
               this.publishedAsrJob = jobId
               this.publishCaption(caption, generation, runId, finishDetails)
@@ -538,11 +618,14 @@ export class SystemAudioSession {
           // Client-AI modes detach the translation from this run, so the next segment's ASR can start
           // while this text is still being translated.
           if (this.activeSplit) {
-            this.enqueueTranslation(result)
+            this.enqueueTranslation(result, transcriptSequence)
             this.pumpTranslation()
             return
           }
-          this.publishTranslationOutcome(result, this.activeRunId, generation)
+          this.publishTranslationOutcome(result, this.activeRunId, generation, undefined, {
+            sequence: transcriptSequence,
+            span: this.activeSpan ?? undefined,
+          })
         },
         onDone: () => {
           if (generation !== this.generation || !this.activeJob) return
@@ -817,6 +900,7 @@ export class SystemAudioSession {
       const sourceSpan = { startedAt: prepared.startedAt, endedAt: prepared.endedAt }
       const context = this.translationContext(sourceSpan)
       const phraseId = ++sequence
+      const transcriptSequence = ++this.journalSequence
       const asrMs = Math.max(0, (prepared.confirmedAt ?? Date.now()) - sourceSpan.endedAt)
       const speechMs = Math.max(0, sourceSpan.endedAt - sourceSpan.startedAt)
       const asrEngine = prepared.asrEngine || 'deepgram'
@@ -841,6 +925,13 @@ export class SystemAudioSession {
         }
         this.consecutiveFailures = 0
         recognitionOnlyResult = { caption, phraseId, runId, finishDetails }
+        this.journal?.record({
+          sequence: transcriptSequence,
+          startedAt: sourceSpan.startedAt,
+          original: text,
+          translation: null,
+          untranslated: false,
+        })
       } else {
         job = {
           runId,
@@ -853,6 +944,7 @@ export class SystemAudioSession {
           asrModel,
           phraseId,
           sourceSpan,
+          journalSequence: transcriptSequence,
         }
       }
     }
@@ -1058,7 +1150,7 @@ export class SystemAudioSession {
     setQueueDepth(this.queue.length + this.translations.length)
   }
 
-  private enqueueTranslation(result: FinalResult | TranslationJob): void {
+  private enqueueTranslation(result: FinalResult | TranslationJob, transcriptSequence?: number): void {
     const job: TranslationJob = 'runId' in result
       ? result
       : {
@@ -1070,6 +1162,8 @@ export class SystemAudioSession {
           context: this.activeContext,
           asrEngine: result.asrEngine,
           asrModel: result.asrModel,
+          journalSequence: transcriptSequence,
+          sourceSpan: this.activeSpan ? { ...this.activeSpan } : undefined,
         }
     this.translations.push(job)
     this.translationBacklogMs += job.speechMs
@@ -1080,6 +1174,7 @@ export class SystemAudioSession {
       const oldest = this.translations.shift()!
       this.translationBacklogMs -= oldest.speechMs
       failRun(oldest.runId, 'failed', 'dropped: translation is behind playback')
+      this.recordUnfinishedTranscript(oldest)
       dropped = true
     }
     if (dropped) this.publish({ warning: this.liveSelected
@@ -1144,7 +1239,8 @@ export class SystemAudioSession {
       asrEngine: job.asrEngine,
       asrModel: job.asrModel,
     }
-    if (!this.publishTranslationOutcome(outcome, job.runId, generation, job.phraseId)) return
+    if (!this.publishTranslationOutcome(outcome, job.runId, generation, job.phraseId,
+      job.journalSequence === undefined ? undefined : { sequence: job.journalSequence, span: job.sourceSpan })) return
     if (!this.activeJob) setPipelineActivity({ phase: 'listening', stageStartedAt: null })
     this.pumpTranslation()
   }
@@ -1169,9 +1265,13 @@ export class SystemAudioSession {
     this.queue = []
     if (this.translating) {
       failRun(this.translating.runId, 'cancelled')
+      this.recordUnfinishedTranscript(this.translating)
       this.translating = null
     }
-    this.translations.forEach(({ runId }) => failRun(runId, 'cancelled'))
+    this.translations.forEach((job) => {
+      failRun(job.runId, 'cancelled')
+      this.recordUnfinishedTranscript(job)
+    })
     this.translations = []
     this.translationBacklogMs = 0
     this.recent.clear()
@@ -1345,6 +1445,15 @@ export class SystemAudioSession {
       await this.liveRecovery
       this.liveRequested = false
       this.clearWork()
+      const journal = this.journal
+      this.journal = null
+      if (journal) {
+        // The journal keeps finishing in the background; the deadline only bounds how long stop waits.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, JOURNAL_FLUSH_TIMEOUT_MS)
+          void journal.finish().then(() => { clearTimeout(timer); resolve() })
+        })
+      }
       await this.awaitOverlayUpdates()
       if (this.leased) {
         await this.dependencies.overlay.hide()

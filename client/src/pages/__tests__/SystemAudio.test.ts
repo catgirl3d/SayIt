@@ -11,6 +11,7 @@ import type { PromptPreset } from '@/services/store'
 
 const pageMocks = vi.hoisted(() => ({
   switchProps: [] as Array<{ checked: boolean; disabled?: boolean; label?: string; onChange: () => void }>,
+  buttonProps: [] as Array<{ children?: unknown; disabled?: boolean; onClick?: (event?: unknown) => void }>,
   effects: [] as Array<() => void | (() => void)>,
   stateValues: [] as unknown[],
   stateCursor: 0,
@@ -18,6 +19,9 @@ const pageMocks = vi.hoisted(() => ({
   getPromptPresets: vi.fn(),
   setSetting: vi.fn(),
   loadActiveAsrProfile: vi.fn(),
+  resolveTranscriptDir: vi.fn(),
+  openTranscriptFolder: vi.fn(),
+  dialogOpen: vi.fn(),
 }))
 
 vi.mock('@/services/transcription', async (importOriginal) => {
@@ -84,6 +88,33 @@ vi.mock('@/components/ui/switch', async (importOriginal) => {
   }
 })
 
+vi.mock('@/components/ui/button', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/ui/button')>()
+  const React = await import('react')
+  return {
+    ...actual,
+    Button: (props: Parameters<typeof actual.Button>[0]) => {
+      pageMocks.buttonProps.push({
+        children: props.children,
+        disabled: props.disabled,
+        onClick: props.onClick as unknown as ((event?: unknown) => void) | undefined,
+      })
+      return React.createElement(actual.Button, props)
+    },
+  }
+})
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: pageMocks.dialogOpen }))
+
+vi.mock('@/services/bridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/bridge')>()
+  return {
+    ...actual,
+    resolveSubtitleTranscriptDir: pageMocks.resolveTranscriptDir,
+    openSubtitleTranscriptFolder: pageMocks.openTranscriptFolder,
+  }
+})
+
 beforeEach(() => {
   vi.mocked(getWorkMode).mockReturnValue('cloud_api')
   pageMocks.loadActiveAsrProfile.mockReset()
@@ -93,6 +124,10 @@ beforeEach(() => {
     model: 'nova-3',
     apiKey: 'key',
   })
+  pageMocks.resolveTranscriptDir.mockReset().mockResolvedValue('C:/Users/test/Documents/SayIt/Subtitles')
+  pageMocks.openTranscriptFolder.mockReset().mockResolvedValue(undefined)
+  pageMocks.dialogOpen.mockReset().mockResolvedValue(null)
+  pageMocks.buttonProps.length = 0
 })
 
 describe('system audio translation options', () => {
@@ -550,5 +585,157 @@ describe('live system-audio recognition setting', () => {
     } finally {
       getSnapshot.mockRestore()
     }
+  })
+})
+
+describe('subtitle transcript journal setting', () => {
+  const journalLabel = 'Save a text journal of subtitles'
+
+  function loadPage(settings: Record<string, unknown>) {
+    pageMocks.effects.length = 0
+    pageMocks.switchProps.length = 0
+    pageMocks.buttonProps.length = 0
+    pageMocks.stateValues.length = 0
+    pageMocks.stateCursor = 0
+    pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
+      key in settings ? settings[key] : fallback
+    ))
+    pageMocks.getPromptPresets.mockResolvedValue([])
+    pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
+    vi.mocked(listSystemAudioDevices).mockResolvedValue([])
+  }
+
+  async function renderLoaded(settings: Record<string, unknown> = {}) {
+    loadPage(settings)
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    pageMocks.effects[0]?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    pageMocks.switchProps.length = 0
+    pageMocks.buttonProps.length = 0
+    pageMocks.stateCursor = 0
+    return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+  }
+
+  it('shows the saved journal folder and persists the switch without writing other settings', async () => {
+    pageMocks.resolveTranscriptDir.mockResolvedValue('D:/journals')
+    const markup = await renderLoaded({ 'systemAudio.transcriptEnabled': true, 'systemAudio.transcriptDir': 'D:/journals' })
+
+    expect(markup).toContain('D:/journals')
+    expect(pageMocks.resolveTranscriptDir).toHaveBeenCalledWith('D:/journals')
+    const journalSwitch = pageMocks.switchProps.find(({ label }) => label === journalLabel)
+    expect(journalSwitch).toMatchObject({ checked: true, disabled: false })
+    expect(pageMocks.setSetting).not.toHaveBeenCalled()
+
+    journalSwitch?.onChange()
+    expect(pageMocks.setSetting).toHaveBeenCalledExactlyOnceWith('systemAudio.transcriptEnabled', false)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(pageMocks.switchProps.find(({ label }) => label === journalLabel)).toMatchObject({ checked: false, disabled: false })
+  })
+
+  it('keeps the journal switch disabled until its saved value has loaded', async () => {
+    let resolveTranscriptLoad!: (value: boolean) => void
+    const pendingLoad = new Promise<boolean>((resolve) => { resolveTranscriptLoad = resolve })
+    pageMocks.effects.length = 0
+    pageMocks.switchProps.length = 0
+    pageMocks.buttonProps.length = 0
+    pageMocks.stateValues.length = 0
+    pageMocks.stateCursor = 0
+    vi.mocked(listSystemAudioDevices).mockResolvedValue([])
+    pageMocks.getSetting.mockReset().mockImplementation((key: string, fallback: unknown) => (
+      key === 'systemAudio.transcriptEnabled' ? pendingLoad : Promise.resolve(fallback)
+    ))
+    pageMocks.getPromptPresets.mockResolvedValue([])
+    pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
+
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    pageMocks.effects[0]?.()
+    await Promise.resolve()
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    const duringLoad = pageMocks.switchProps.find(({ label }) => label === journalLabel)
+
+    expect(duringLoad).toMatchObject({ checked: false, disabled: true })
+    duringLoad?.onChange()
+    expect(pageMocks.setSetting).not.toHaveBeenCalled()
+
+    resolveTranscriptLoad(true)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    pageMocks.switchProps.length = 0
+    pageMocks.stateCursor = 0
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(pageMocks.switchProps.find(({ label }) => label === journalLabel))
+      .toMatchObject({ checked: true, disabled: false })
+  })
+
+  it('keeps the saved state and shows an error when the journal toggle write fails', async () => {
+    await renderLoaded()
+    pageMocks.setSetting.mockRejectedValueOnce(new Error('write failed'))
+    const journalSwitch = pageMocks.switchProps.find(({ label }) => label === journalLabel)
+    expect(journalSwitch).toMatchObject({ checked: false, disabled: false })
+
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason)
+    const processEvents = Reflect.get(globalThis, 'process') as {
+      on: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+      off: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+    }
+    processEvents.on('unhandledRejection', onUnhandledRejection)
+    try {
+      journalSwitch?.onChange()
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(pageMocks.setSetting).toHaveBeenCalledExactlyOnceWith('systemAudio.transcriptEnabled', true)
+      expect(unhandledRejections).toEqual([])
+
+      pageMocks.switchProps.length = 0
+      pageMocks.stateCursor = 0
+      const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+      expect(pageMocks.switchProps.find(({ label }) => label === journalLabel))
+        .toMatchObject({ checked: false, disabled: false })
+      expect(markup).toContain('Could not save the transcript setting.')
+    } finally {
+      processEvents.off('unhandledRejection', onUnhandledRejection)
+    }
+  })
+
+  it('opens the configured transcript folder from the page and reports a failure', async () => {
+    await renderLoaded()
+
+    const openButton = pageMocks.buttonProps.find(({ children }) => children === 'Open folder')
+    expect(openButton).toBeDefined()
+    openButton?.onClick?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(pageMocks.openTranscriptFolder).toHaveBeenCalledExactlyOnceWith('')
+
+    pageMocks.openTranscriptFolder.mockRejectedValueOnce(new Error('explorer failed'))
+    pageMocks.buttonProps.length = 0
+    pageMocks.stateCursor = 0
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    pageMocks.buttonProps.find(({ children }) => children === 'Open folder')?.onClick?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    pageMocks.stateCursor = 0
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(markup).toMatch(/<p role="alert"[^>]*>[^<]+<\/p>/)
+    expect(markup).toContain('Could not open the transcript folder.')
+  })
+
+  it('writes the picked folder and shows its resolved path', async () => {
+    await renderLoaded()
+    pageMocks.dialogOpen.mockResolvedValue('E:/picked')
+    pageMocks.resolveTranscriptDir.mockResolvedValue('E:/picked')
+
+    pageMocks.buttonProps.find(({ children }) => children === 'Choose folder…')?.onClick?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(pageMocks.dialogOpen).toHaveBeenCalled()
+    expect(pageMocks.setSetting).toHaveBeenCalledExactlyOnceWith('systemAudio.transcriptDir', 'E:/picked')
+    pageMocks.stateCursor = 0
+    const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
+    expect(markup).toContain('E:/picked')
   })
 })

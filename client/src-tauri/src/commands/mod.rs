@@ -6,6 +6,7 @@ pub mod export;
 pub mod paste;
 pub mod shortcuts;
 pub mod storage;
+pub mod subtitle_transcript;
 pub mod system;
 pub mod system_audio;
 pub mod tray;

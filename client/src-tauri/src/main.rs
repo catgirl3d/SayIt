@@ -354,6 +354,7 @@ fn main() {
         .manage(keyboard_hook)
         .manage(context_detector)
         .manage(commands::system_audio::SystemAudioCaptureState::default())
+        .manage(commands::subtitle_transcript::SubtitleTranscriptState::default())
         .setup(move |app| {
             // SayIt's main window and lazy overlay share one WebView2 user-data directory.
             // Per-window browser arguments violate WebView2's environment compatibility
@@ -660,6 +661,12 @@ fn main() {
             commands::system_audio::list_system_audio_devices,
             commands::system_audio::start_system_audio_capture,
             commands::system_audio::stop_system_audio_capture,
+            // Subtitle transcript journal
+            commands::subtitle_transcript::resolve_subtitle_transcript_dir,
+            commands::subtitle_transcript::create_subtitle_transcript,
+            commands::subtitle_transcript::append_subtitle_transcript,
+            commands::subtitle_transcript::close_subtitle_transcript,
+            commands::subtitle_transcript::open_subtitle_transcript_folder,
             // Shortcuts
             commands::shortcuts::shortcuts_changed,
             commands::shortcuts::test_shortcut,

@@ -266,6 +266,28 @@ export function saveExportBundle(payload: { defaultPath: string; files: Array<{ 
   return invoke<string | null>('save_export_bundle', { payload })
 }
 
+// ─── Subtitle transcript journal ───
+
+export function resolveSubtitleTranscriptDir(dir: string) {
+  return invoke<string>('resolve_subtitle_transcript_dir', { dir: dir || null })
+}
+
+export function createSubtitleTranscript(dir: string, name: string) {
+  return invoke<string>('create_subtitle_transcript', { dir: dir || null, name })
+}
+
+export function appendSubtitleTranscript(journalId: string, content: string) {
+  return invoke<void>('append_subtitle_transcript', { journalId, content })
+}
+
+export function closeSubtitleTranscript(journalId: string) {
+  return invoke<void>('close_subtitle_transcript', { journalId })
+}
+
+export function openSubtitleTranscriptFolder(dir: string) {
+  return invoke<void>('open_subtitle_transcript_folder', { dir: dir || null })
+}
+
 // ─── Shortcuts ───
 
 /** 前端内部广播：快捷键设置已变化，供页面（如首页提示）实时刷新显示。 */

@@ -9,6 +9,8 @@ import { getLocale } from '@/i18n'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
 import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
+import * as bridge from '@/services/bridge'
+import { open } from '@tauri-apps/plugin-dialog'
 import { getWorkMode } from '@/services/transcription'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { addRuntimeEvent } from '@/services/debugLog'
@@ -68,6 +70,11 @@ export default function SystemAudio() {
   const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
   const [asrOnlyTest, setAsrOnlyTest] = useState(false)
   const [dualSubtitles, setDualSubtitles] = useState(false)
+  const [transcriptEnabled, setTranscriptEnabled] = useState(false)
+  const [transcriptReady, setTranscriptReady] = useState(false)
+  const [transcriptDir, setTranscriptDir] = useState('')
+  const [transcriptDirDisplay, setTranscriptDirDisplay] = useState('')
+  const [transcriptError, setTranscriptError] = useState('')
   const [liveRecognitionEnabled, setLiveRecognitionEnabled] = useState(false)
   const [liveRecognitionReady, setLiveRecognitionReady] = useState(false)
   const [liveRecognitionError, setLiveRecognitionError] = useState('')
@@ -76,7 +83,7 @@ export default function SystemAudio() {
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
   const active = snapshot.state !== 'idle'
-  const error = snapshot.error || loadError || liveRecognitionError
+  const error = snapshot.error || loadError || liveRecognitionError || transcriptError
   const mode = getWorkMode()
   // Mirrors the runtime gate: live recognition is implemented only by CloudAPIProvider, and only
   // the Deepgram profile can open it; every other engine keeps batch recognition, so the page must
@@ -108,6 +115,24 @@ export default function SystemAudio() {
           setLiveRecognitionReady(true)
         }
         return savedLiveRecognitionEnabled
+      }),
+      getSetting<boolean>('systemAudio.transcriptEnabled', false).then((savedTranscriptEnabled) => {
+        if (!disposed) {
+          setTranscriptEnabled(savedTranscriptEnabled)
+          setTranscriptReady(true)
+        }
+        return savedTranscriptEnabled
+      }),
+      getSetting<string>('systemAudio.transcriptDir', '').then(async (savedTranscriptDir) => {
+        if (!disposed) setTranscriptDir(savedTranscriptDir)
+        try {
+          // Display only: a failed resolution must not break the rest of the page load.
+          const resolved = await bridge.resolveSubtitleTranscriptDir(savedTranscriptDir)
+          if (!disposed) setTranscriptDirDisplay(resolved)
+        } catch (error: unknown) {
+          addRuntimeEvent('warn', 'system-audio', 'Could not resolve the transcript folder for display', { error: String(error) })
+        }
+        return savedTranscriptDir
       }),
     ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds, savedDualSubtitles]) => {
       if (disposed) return
@@ -142,6 +167,24 @@ export default function SystemAudio() {
       setReady(true)
       setLoadError('')
     } catch { setLoadError(t('systemAudio.captureFailed')) } finally { setPending(false) }
+  }
+
+  const chooseTranscriptFolder = async () => {
+    setTranscriptError('')
+    try {
+      const picked = await open({ directory: true, multiple: false, defaultPath: transcriptDirDisplay || undefined })
+      if (typeof picked !== 'string') return
+      await setSetting('systemAudio.transcriptDir', picked)
+      setTranscriptDir(picked)
+      setTranscriptDirDisplay(await bridge.resolveSubtitleTranscriptDir(picked))
+    } catch { setTranscriptError(t('systemAudio.transcriptFolderFailed')) }
+  }
+
+  const openTranscriptFolder = async () => {
+    setTranscriptError('')
+    try {
+      await bridge.openSubtitleTranscriptFolder(transcriptDir)
+    } catch { setTranscriptError(t('systemAudio.transcriptFolderFailed')) }
   }
 
   const handleAction = async (action: SubtitleAction) => {
@@ -273,6 +316,35 @@ export default function SystemAudio() {
               disabled={active || pending || asrOnlyTest}
             />
             <p className="text-xs text-muted-foreground">{t('systemAudio.dualSubtitlesHint')}</p>
+          </div>
+          <div className="space-y-1">
+            <Switch
+              checked={transcriptEnabled}
+              onChange={() => {
+                if (!transcriptReady || active || pending) return
+                const enabled = !transcriptEnabled
+                setPending(true)
+                void setSetting('systemAudio.transcriptEnabled', enabled).then(() => {
+                  setTranscriptEnabled(enabled)
+                  setTranscriptError('')
+                }).catch(() => {
+                  setTranscriptError(t('systemAudio.transcriptSettingFailed'))
+                }).finally(() => { setPending(false) })
+              }}
+              label={t('systemAudio.transcriptLabel')}
+              disabled={!transcriptReady || active || pending}
+            />
+            <p className="text-xs text-muted-foreground">{t('systemAudio.transcriptHelp')}</p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <span className="text-xs text-muted-foreground">{t('systemAudio.transcriptFolderLabel')}:</span>
+              <span className="min-w-0 flex-1 truncate text-xs" title={transcriptDirDisplay}>{transcriptDirDisplay}</span>
+              <Button variant="outline" size="sm" disabled={!transcriptReady || active || pending} onClick={() => void chooseTranscriptFolder()}>
+                {t('systemAudio.transcriptChoose')}
+              </Button>
+              <Button variant="outline" size="sm" disabled={!transcriptReady || active || pending} onClick={() => void openTranscriptFolder()}>
+                {t('systemAudio.transcriptOpen')}
+              </Button>
+            </div>
           </div>
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">

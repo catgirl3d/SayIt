@@ -209,6 +209,39 @@ function emitPolishDelta(requestId: unknown, text: string) {
   native.listeners.get('cloud-polish-delta')?.({ payload: { requestId, text } })
 }
 
+function enableTranscriptJournal() {
+  native.settings.set('systemAudio.transcriptEnabled', true)
+  native.settings.set('systemAudio.transcriptDir', 'C:/transcripts')
+  const appends: string[] = []
+  const creates: Array<{ dir: unknown; name: unknown }> = []
+  const closes: string[] = []
+  const original = native.invoke.getMockImplementation()!
+  native.invoke.mockImplementation(async (name, args) => {
+    if (name === 'create_subtitle_transcript') {
+      creates.push({ dir: args.dir, name: args.name })
+      return 'transcript-7'
+    }
+    if (name === 'append_subtitle_transcript') {
+      appends.push(args.content as string)
+      return undefined
+    }
+    if (name === 'close_subtitle_transcript') {
+      closes.push(args.journalId as string)
+      return undefined
+    }
+    return original(name, args)
+  })
+  return { appends, creates, closes }
+}
+
+function appendCalls() {
+  return native.invoke.mock.calls.filter(([name]) => name === 'append_subtitle_transcript')
+}
+
+function journalTexts(appends: string[]) {
+  return appends.map((content) => content.split('\n')[0].replace(/^\[\d{2}:\d{2}:\d{2}\] /, ''))
+}
+
 function speak() {
   frames(20, 0.9)
   frames(15, 0)
@@ -4086,6 +4119,191 @@ describe('system audio subtitle session', () => {
         .some((call) => call.payload.subtitleText === 'Settled original'
           && call.payload.subtitleLiveText === 'Settled original')).toBe(false)
       expect(polishRequests()).toHaveLength(0)
+    })
+  })
+
+  describe('subtitle transcript journal', () => {
+    function deferredPolish() {
+      const pendings: Array<ReturnType<typeof deferred<{ text: string; elapsed_ms: number }>>> = []
+      const requestIds: unknown[] = []
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => {
+        if (name === 'cloud_polish') {
+          const pending = deferred<{ text: string; elapsed_ms: number }>()
+          pendings.push(pending)
+          requestIds.push((args.request as { request_id?: string }).request_id)
+          return pending.promise
+        }
+        return original(name, args)
+      })
+      return { pendings, requestIds }
+    }
+
+    it('writes a settled translated fragment as two lines and never records streamed partials', async () => {
+      const { appends, creates } = enableTranscriptJournal()
+      const { pendings, requestIds } = deferredPolish()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      expect(polishRequests()).toHaveLength(1)
+
+      emitPolishDelta(requestIds[0], 'Streamed partial')
+      await settle()
+      expect(appends).toHaveLength(0)
+
+      pendings[0].resolve({ text: 'Translated speech', elapsed_ms: 5 })
+      await settle()
+
+      expect(appends).toEqual([
+        expect.stringMatching(/^\[\d{2}:\d{2}:\d{2}\] Original speech\n {11}Translated speech\n$/),
+      ])
+      expect(creates).toEqual([
+        { dir: 'C:/transcripts', name: expect.stringMatching(/^subtitles-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.txt$/) },
+      ])
+    })
+
+    it('marks fragments whose translation did not arrive', async () => {
+      const { appends } = enableTranscriptJournal()
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation(async (name, args) => (
+        name === 'cloud_polish' ? { text: '', elapsed_ms: 5 } : original(name, args)
+      ))
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+
+      expect(appends).toHaveLength(1)
+      expect(appends[0]).toMatch(/^\[\d{2}:\d{2}:\d{2}\] Original speech /)
+      expect(appends[0]).toContain(t('systemAudio.transcriptUntranslatedMarker'))
+      expect(appends[0].endsWith('\n')).toBe(true)
+    })
+
+    it('writes recognition-only fragments once even when a partial caption was already shown', async () => {
+      const { appends } = enableTranscriptJournal()
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      speak()
+      await settle()
+
+      expect(appends).toEqual([expect.stringMatching(/^\[\d{2}:\d{2}:\d{2}\] Original speech\n$/)])
+    })
+
+    it('writes confirmed live recognition-only phrases', async () => {
+      const { appends } = enableTranscriptJournal()
+      native.settings.set('systemAudio.liveRecognitionEnabled', true)
+      const harness = createLiveProviderHarness()
+      session = new SystemAudioSession({
+        getProvider: () => harness.provider,
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+      await session.start({ deviceId: 'speakers', targetLanguage: '', asrOnly: true })
+      frames(2, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 64, text: 'Live phrase', isFinal: true, speechFinal: true })
+      await settle()
+
+      expect(journalTexts(appends)).toEqual(['Live phrase'])
+    })
+
+    it('keeps listening and warns once when the transcript cannot be written', async () => {
+      const { appends } = enableTranscriptJournal()
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => (
+        name === 'append_subtitle_transcript' ? Promise.reject(new Error('sharing violation')) : original(name, args)
+      ))
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(session.getSnapshot().warning).toContain('sharing violation')
+      expect(appends).toHaveLength(0)
+      expect(appendCalls()).toHaveLength(1)
+
+      speak()
+      await settle()
+      expect(appendCalls()).toHaveLength(1)
+      expect(session.getSnapshot().state).toBe('listening')
+    })
+
+    it('writes pending recognized fragments with a marker when the session stops', async () => {
+      const { appends } = enableTranscriptJournal()
+      const { pendings } = deferredPolish()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      expect(pendings).toHaveLength(1)
+
+      await session.stop()
+
+      expect(session.getSnapshot().state).toBe('idle')
+      expect(journalTexts(appends)).toEqual([`Original speech ${t('systemAudio.transcriptUntranslatedMarker')}`])
+    })
+
+    it('releases the backend journal handle when the session stops', async () => {
+      const { appends, closes } = enableTranscriptJournal()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+      expect(appends).toHaveLength(1)
+      expect(closes).toEqual([])
+
+      await session.stop()
+      expect(closes).toEqual(['transcript-7'])
+    })
+
+    it('stops even when a journal write stalls past the flush deadline', async () => {
+      enableTranscriptJournal()
+      const appendGate = deferred<void>()
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => (
+        name === 'append_subtitle_transcript' ? appendGate.promise : original(name, args)
+      ))
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+
+      const stopping = session.stop()
+      await vi.advanceTimersByTimeAsync(3_100)
+      await stopping
+
+      expect(session.getSnapshot().state).toBe('idle')
+      appendGate.resolve()
+      await settle()
+    })
+
+    it('keeps the file in speech order when a lagging translation is dropped', async () => {
+      const { appends } = enableTranscriptJournal()
+      numberRecognizedSpeech()
+      const { pendings } = deferredPolish()
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      const speakLong = () => { frames(125, 0.9); frames(5, 0) }
+      for (let index = 0; index < 4; index++) { speakLong(); await settle() }
+
+      expect(appends).toHaveLength(0)
+
+      pendings[0].resolve({ text: 'Translation 1', elapsed_ms: 5 })
+      await settle()
+      expect(journalTexts(appends)).toEqual(['Speech 1', `Speech 2 ${t('systemAudio.transcriptUntranslatedMarker')}`])
+
+      pendings[1].resolve({ text: 'Translation 3', elapsed_ms: 5 })
+      await settle()
+      await session.stop()
+      expect(journalTexts(appends)).toEqual([
+        'Speech 1',
+        `Speech 2 ${t('systemAudio.transcriptUntranslatedMarker')}`,
+        'Speech 3',
+        `Speech 4 ${t('systemAudio.transcriptUntranslatedMarker')}`,
+      ])
+    })
+
+    it('writes nothing when the journal is disabled', async () => {
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      speak()
+      await settle()
+
+      expect(appendCalls()).toHaveLength(0)
+      expect(native.invoke.mock.calls.filter(([name]) => name === 'create_subtitle_transcript')).toHaveLength(0)
     })
   })
 })
