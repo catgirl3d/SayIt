@@ -1,16 +1,14 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { Link } from 'react-router-dom'
-import { Monitor, Pause, Play, Square, RefreshCw } from 'lucide-react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { ChevronDown, Monitor, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
 import { Select, type SelectOption } from '@/components/ui/select'
 import { getLocale } from '@/i18n'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
 import { useLocale, useT } from '@/i18n/useT'
 import { getPromptPresets, getSetting, setSetting, TRANSLATION_PRESET_PREFIX, type PromptPreset } from '@/services/store'
-import * as bridge from '@/services/bridge'
-import { open } from '@tauri-apps/plugin-dialog'
 import { getWorkMode } from '@/services/transcription'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { addRuntimeEvent } from '@/services/debugLog'
@@ -22,6 +20,10 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { setPipelineDebugEnabled } from '@/services/pipelineTrace'
 import PipelineDebugPanel from '@/features/systemAudio/PipelineDebugPanel'
+import SettingsRow from '@/features/systemAudio/SettingsRow'
+import SubtitleSavingSettings from '@/features/systemAudio/SubtitleSavingSettings'
+import SystemAudioHelpContent from '@/features/systemAudio/SystemAudioHelpContent'
+import { PageHelp } from '@/features/settings/PageHelp'
 
 export type SubtitleAction = 'start' | 'pause' | 'resume' | 'stop'
 
@@ -55,6 +57,28 @@ export function SystemAudioControls({ state, busy, onAction }: { state: SystemAu
   )
 }
 
+// The content stays mounted and is hidden rather than unmounted, so the controls inside keep their
+// state and a collapsed group never changes what the page has loaded.
+function CollapsibleGroup({ id, title, description, open, onToggle, children }: { id: string; title: string; description: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <section className="space-y-4">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 rounded-md px-1 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+        <span className="shrink-0 font-medium">{title}</span>
+        <span className="min-w-0 truncate text-xs">{description}</span>
+        <span className="h-px flex-1 bg-border" aria-hidden />
+      </button>
+      <div id={id} hidden={!open} className="space-y-6">{children}</div>
+    </section>
+  )
+}
+
 export default function SystemAudio() {
   const t = useT()
   const snapshot = useSyncExternalStore(systemAudioSession.subscribe, systemAudioSession.getSnapshot)
@@ -70,25 +94,33 @@ export default function SystemAudio() {
   const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
   const [asrOnlyTest, setAsrOnlyTest] = useState(false)
   const [dualSubtitles, setDualSubtitles] = useState(false)
-  const [transcriptEnabled, setTranscriptEnabled] = useState(false)
-  const [transcriptReady, setTranscriptReady] = useState(false)
-  const [transcriptDir, setTranscriptDir] = useState('')
-  const [transcriptDirDisplay, setTranscriptDirDisplay] = useState('')
-  const [transcriptError, setTranscriptError] = useState('')
   const [liveRecognitionEnabled, setLiveRecognitionEnabled] = useState(false)
   const [liveRecognitionReady, setLiveRecognitionReady] = useState(false)
   const [liveRecognitionError, setLiveRecognitionError] = useState('')
   const [activeAsrProvider, setActiveAsrProvider] = useState('')
+  const [captionsOpen, setCaptionsOpen] = useState(false)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const locale = useLocale()
   // Derive option labels from the loaded presets on every locale change; they are not stored in state.
   const translationOptions = useMemo(() => buildTranslationOptions(presets), [presets, locale])
   const active = snapshot.state !== 'idle'
-  const error = snapshot.error || loadError || liveRecognitionError || transcriptError
+  const error = snapshot.error || loadError || liveRecognitionError
   const mode = getWorkMode()
   // Mirrors the runtime gate: live recognition is implemented only by CloudAPIProvider, and only
   // the Deepgram profile can open it; every other engine keeps batch recognition, so the page must
   // not offer the setting at all.
   const liveRecognitionSupported = mode === 'cloud_api' && isLiveRecognitionProvider(activeAsrProvider)
+  // One-line state shown on the captions row, kept in step with what will actually run: recognition-only
+  // mode ignores translation and dual subtitles, and live recognition counts only where it is offered.
+  // Empty until the saved values have loaded, so a row never advertises a default that the stored
+  // setting is about to replace.
+  const captionsSummary = ready
+    ? [
+      t('systemAudio.summaryMaxLength', { duration: t('duration.seconds', { count: maxSegmentSeconds }) }),
+      asrOnlyTest ? t('systemAudio.summaryRecognitionOnly') : dualSubtitles ? t('systemAudio.summaryDual') : t('systemAudio.summaryTranslationOnly'),
+      liveRecognitionSupported && liveRecognitionEnabled ? t('systemAudio.summaryLive') : '',
+    ].filter(Boolean).join(' · ')
+    : ''
   const deviceOptions: SelectOption[] = [
     { value: '', label: t('systemAudio.defaultOutput') },
     ...devices.map((device) => ({ value: device.id, label: device.name })),
@@ -116,24 +148,6 @@ export default function SystemAudio() {
         }
         return savedLiveRecognitionEnabled
       }),
-      getSetting<boolean>('systemAudio.transcriptEnabled', false).then((savedTranscriptEnabled) => {
-        if (!disposed) {
-          setTranscriptEnabled(savedTranscriptEnabled)
-          setTranscriptReady(true)
-        }
-        return savedTranscriptEnabled
-      }),
-      getSetting<string>('systemAudio.transcriptDir', '').then(async (savedTranscriptDir) => {
-        if (!disposed) setTranscriptDir(savedTranscriptDir)
-        try {
-          // Display only: a failed resolution must not break the rest of the page load.
-          const resolved = await bridge.resolveSubtitleTranscriptDir(savedTranscriptDir)
-          if (!disposed) setTranscriptDirDisplay(resolved)
-        } catch (error: unknown) {
-          addRuntimeEvent('warn', 'system-audio', 'Could not resolve the transcript folder for display', { error: String(error) })
-        }
-        return savedTranscriptDir
-      }),
     ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds, savedDualSubtitles]) => {
       if (disposed) return
       setDevices(outputs)
@@ -144,6 +158,9 @@ export default function SystemAudio() {
       setPipelineDebugEnabledState(debugPipeline)
       setPipelineDebugEnabled(debugPipeline)
       setAsrOnlyTest(asrOnly)
+      // Recognition-only mode disables the translation controls above, so a saved "on" must stay
+      // visible instead of hiding behind a collapsed group.
+      if (debugPipeline || asrOnly) setDiagnosticsOpen(true)
       const options = buildTranslationOptions(presets)
       setPresets(presets)
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
@@ -169,24 +186,6 @@ export default function SystemAudio() {
     } catch { setLoadError(t('systemAudio.captureFailed')) } finally { setPending(false) }
   }
 
-  const chooseTranscriptFolder = async () => {
-    setTranscriptError('')
-    try {
-      const picked = await open({ directory: true, multiple: false, defaultPath: transcriptDirDisplay || undefined })
-      if (typeof picked !== 'string') return
-      await setSetting('systemAudio.transcriptDir', picked)
-      setTranscriptDir(picked)
-      setTranscriptDirDisplay(await bridge.resolveSubtitleTranscriptDir(picked))
-    } catch { setTranscriptError(t('systemAudio.transcriptFolderFailed')) }
-  }
-
-  const openTranscriptFolder = async () => {
-    setTranscriptError('')
-    try {
-      await bridge.openSubtitleTranscriptFolder(transcriptDir)
-    } catch { setTranscriptError(t('systemAudio.transcriptFolderFailed')) }
-  }
-
   const handleAction = async (action: SubtitleAction) => {
     setPending(true)
     setLoadError('')
@@ -201,9 +200,14 @@ export default function SystemAudio() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <header>
-        <h1 className="mb-2 text-2xl font-bold">{t('systemAudio.title')}</h1>
-        <p className="text-sm text-muted-foreground">{t('systemAudio.description')}</p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-2 text-2xl font-bold">{t('systemAudio.title')}</h1>
+          <p className="text-sm text-muted-foreground">{t('systemAudio.description')}</p>
+        </div>
+        <PageHelp title={t('help.systemAudio.title')}>
+          <SystemAudioHelpContent />
+        </PageHelp>
       </header>
       <Card>
         <CardContent className="space-y-6 p-6">
@@ -258,127 +262,6 @@ export default function SystemAudio() {
               />
             </div>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-3">
-              <label id="subtitle-segment-length-label" className="text-sm font-medium">{t('systemAudio.segmentLength')}</label>
-              <span className="text-sm tabular-nums text-muted-foreground">{t('duration.seconds', { count: maxSegmentSeconds })}</span>
-            </div>
-            <Slider
-              value={maxSegmentSeconds}
-              min={MIN_SEGMENT_SECONDS}
-              max={MAX_SEGMENT_SECONDS}
-              step={SEGMENT_SECONDS_STEP}
-              onChange={(value) => {
-                setMaxSegmentSeconds(value)
-                void setSetting('systemAudio.maxSegmentSec', value)
-              }}
-              labelledBy="subtitle-segment-length-label"
-              valueText={t('duration.seconds', { count: maxSegmentSeconds })}
-              disabled={active || pending}
-            />
-            <div className="flex justify-between text-xs text-muted-foreground" aria-hidden>
-              <span>{t('duration.seconds', { count: MIN_SEGMENT_SECONDS })}</span>
-              <span>{t('duration.seconds', { count: MAX_SEGMENT_SECONDS })}</span>
-            </div>
-            <p className="text-xs text-muted-foreground">{t('systemAudio.segmentLengthHint')}</p>
-            {liveRecognitionSupported && liveRecognitionEnabled && <p className="text-xs text-muted-foreground">{t('systemAudio.liveTargetHelp')}</p>}
-          </div>
-          {liveRecognitionSupported && (
-            <div className="space-y-1">
-              <Switch
-                checked={liveRecognitionEnabled}
-                onChange={() => {
-                  if (!liveRecognitionReady || active || pending) return
-                  const enabled = !liveRecognitionEnabled
-                  setPending(true)
-                  void setSetting('systemAudio.liveRecognitionEnabled', enabled).then(() => {
-                    setLiveRecognitionEnabled(enabled)
-                    setLiveRecognitionError('')
-                  }).catch(() => {
-                    setLiveRecognitionError(t('systemAudio.captureFailed'))
-                  }).finally(() => { setPending(false) })
-                }}
-                label={t('systemAudio.liveRecognitionLabel')}
-                disabled={!liveRecognitionReady || active || pending}
-              />
-              <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionHelp')}</p>
-            </div>
-          )}
-          <div className="space-y-1">
-            <Switch
-              checked={dualSubtitles}
-              onChange={() => {
-                const enabled = !dualSubtitles
-                setDualSubtitles(enabled)
-                void setSetting('systemAudio.dualSubtitles', enabled)
-              }}
-              label={t('systemAudio.dualSubtitles')}
-              disabled={active || pending || asrOnlyTest}
-            />
-            <p className="text-xs text-muted-foreground">{t('systemAudio.dualSubtitlesHint')}</p>
-          </div>
-          <div className="space-y-1">
-            <Switch
-              checked={transcriptEnabled}
-              onChange={() => {
-                if (!transcriptReady || active || pending) return
-                const enabled = !transcriptEnabled
-                setPending(true)
-                void setSetting('systemAudio.transcriptEnabled', enabled).then(() => {
-                  setTranscriptEnabled(enabled)
-                  setTranscriptError('')
-                }).catch(() => {
-                  setTranscriptError(t('systemAudio.transcriptSettingFailed'))
-                }).finally(() => { setPending(false) })
-              }}
-              label={t('systemAudio.transcriptLabel')}
-              disabled={!transcriptReady || active || pending}
-            />
-            <p className="text-xs text-muted-foreground">{t('systemAudio.transcriptHelp')}</p>
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <span className="text-xs text-muted-foreground">{t('systemAudio.transcriptFolderLabel')}:</span>
-              <span className="min-w-0 flex-1 truncate text-xs" title={transcriptDirDisplay}>{transcriptDirDisplay}</span>
-              <Button variant="outline" size="sm" disabled={!transcriptReady || active || pending} onClick={() => void chooseTranscriptFolder()}>
-                {t('systemAudio.transcriptChoose')}
-              </Button>
-              <Button variant="outline" size="sm" disabled={!transcriptReady || active || pending} onClick={() => void openTranscriptFolder()}>
-                {t('systemAudio.transcriptOpen')}
-              </Button>
-            </div>
-          </div>
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={pipelineDebugEnabled}
-                  onChange={(event) => {
-                    const enabled = event.target.checked
-                    setPipelineDebugEnabledState(enabled)
-                    setPipelineDebugEnabled(enabled)
-                    void setSetting('systemAudio.debugPipeline', enabled)
-                  }}
-                  className="rounded"
-                />
-                {t('systemAudio.debug.toggle')}
-              </label>
-              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={asrOnlyTest}
-                  disabled={active || pending}
-                  onChange={(event) => {
-                    const enabled = event.target.checked
-                    setAsrOnlyTest(enabled)
-                    void setSetting('systemAudio.asrOnlyTest', enabled)
-                  }}
-                  className="rounded"
-                />
-                {t('systemAudio.asrOnlyTest')}
-              </label>
-            </div>
-            <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
-          </div>
           {error && <p role="alert" className="text-sm leading-6 text-destructive">{error}</p>}
           {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
           <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
@@ -396,14 +279,127 @@ export default function SystemAudio() {
           )}
         </CardContent>
       </Card>
+      <Card>
+        <CardContent className="divide-y divide-border p-0">
+          <SettingsRow
+            title={t('systemAudio.captionsRow')}
+            summary={captionsSummary}
+            configureLabel={t('systemAudio.configureCaptions')}
+            onConfigure={() => setCaptionsOpen(true)}
+          />
+          <SubtitleSavingSettings active={active} pending={pending} onPendingChange={setPending} />
+        </CardContent>
+      </Card>
+      <CollapsibleGroup
+        id="subtitle-diagnostics"
+        title={t('systemAudio.diagnostics')}
+        description={t('systemAudio.diagnosticsDesc')}
+        open={diagnosticsOpen}
+        onToggle={() => setDiagnosticsOpen(!diagnosticsOpen)}
+      >
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={pipelineDebugEnabled}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  setPipelineDebugEnabledState(enabled)
+                  setPipelineDebugEnabled(enabled)
+                  void setSetting('systemAudio.debugPipeline', enabled)
+                }}
+                className="rounded"
+              />
+              {t('systemAudio.debug.toggle')}
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={asrOnlyTest}
+                disabled={active || pending}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  setAsrOnlyTest(enabled)
+                  void setSetting('systemAudio.asrOnlyTest', enabled)
+                }}
+                className="rounded"
+              />
+              {t('systemAudio.asrOnlyTest')}
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
+        </div>
+      </CollapsibleGroup>
       {pipelineDebugEnabled && <PipelineDebugPanel />}
-      <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-        <p>{t('systemAudio.engineHint')} <Link to="/voice-engine" className="text-foreground underline underline-offset-4">{t('nav.voiceEngine')}</Link> / <Link to="/ai-service" className="text-foreground underline underline-offset-4">{t('nav.aiService')}</Link></p>
-        <p>{t('systemAudio.sourceLanguageHint')}</p>
-        <p>{t('systemAudio.mixHint')}</p>
-        <p>{t('systemAudio.delayHint')}</p>
-        <p>{t('systemAudio.privacyHint')}</p>
-      </div>
+      {/* The dialog sits last so the page-level alert stays the first one in the document. */}
+      {captionsOpen && (
+        <Modal title={t('systemAudio.captionsRow')} onClose={() => setCaptionsOpen(false)} showCloseButton panelClassName="custom-scrollbar w-[520px]">
+          <div className="mt-4 space-y-6">
+            <div className="space-y-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <label id="subtitle-segment-length-label" className="text-sm font-medium">{t('systemAudio.segmentLength')}</label>
+                <span className="text-sm tabular-nums text-muted-foreground">{t('duration.seconds', { count: maxSegmentSeconds })}</span>
+              </div>
+              <Slider
+                value={maxSegmentSeconds}
+                min={MIN_SEGMENT_SECONDS}
+                max={MAX_SEGMENT_SECONDS}
+                step={SEGMENT_SECONDS_STEP}
+                onChange={(value) => {
+                  setMaxSegmentSeconds(value)
+                  void setSetting('systemAudio.maxSegmentSec', value)
+                }}
+                labelledBy="subtitle-segment-length-label"
+                valueText={t('duration.seconds', { count: maxSegmentSeconds })}
+                disabled={active || pending}
+              />
+              <div className="flex justify-between text-xs text-muted-foreground" aria-hidden>
+                <span>{t('duration.seconds', { count: MIN_SEGMENT_SECONDS })}</span>
+                <span>{t('duration.seconds', { count: MAX_SEGMENT_SECONDS })}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{t('systemAudio.segmentLengthHint')}</p>
+              {liveRecognitionSupported && liveRecognitionEnabled && <p className="text-xs text-muted-foreground">{t('systemAudio.liveTargetHelp')}</p>}
+            </div>
+            {liveRecognitionSupported && (
+              <div className="space-y-1">
+                <Switch
+                  checked={liveRecognitionEnabled}
+                  onChange={() => {
+                    if (!liveRecognitionReady || active || pending) return
+                    const enabled = !liveRecognitionEnabled
+                    setPending(true)
+                    void setSetting('systemAudio.liveRecognitionEnabled', enabled).then(() => {
+                      setLiveRecognitionEnabled(enabled)
+                      setLiveRecognitionError('')
+                    }).catch(() => {
+                      setLiveRecognitionError(t('systemAudio.captureFailed'))
+                    }).finally(() => { setPending(false) })
+                  }}
+                  label={t('systemAudio.liveRecognitionLabel')}
+                  disabled={!liveRecognitionReady || active || pending}
+                />
+                <p className="text-xs text-muted-foreground">{t('systemAudio.liveRecognitionHelp')}</p>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Switch
+                checked={dualSubtitles}
+                onChange={() => {
+                  const enabled = !dualSubtitles
+                  setDualSubtitles(enabled)
+                  void setSetting('systemAudio.dualSubtitles', enabled)
+                }}
+                label={t('systemAudio.dualSubtitles')}
+                disabled={active || pending || asrOnlyTest}
+              />
+              <p className="text-xs text-muted-foreground">{t('systemAudio.dualSubtitlesHint')}</p>
+            </div>
+            {/* The page-level alert is behind the dimmed backdrop and hidden from assistive technology while a dialog is open. */}
+            {liveRecognitionError && <p role="alert" className="text-sm leading-6 text-destructive">{liveRecognitionError}</p>}
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
