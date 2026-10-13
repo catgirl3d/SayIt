@@ -8,7 +8,7 @@ SERVER_README = ROOT / "server" / "README.md"
 
 
 def test_readmes_describe_hotword_support():
-    assert "Гарячі слова та правила для застосунків" in README_UK.read_text(encoding="utf-8")
+    assert "Словник термінів (hotwords) і правила для застосунків" in README_UK.read_text(encoding="utf-8")
     assert "Hotwords and per-app rules" in README_EN.read_text(encoding="utf-8")
     assert "Hotword Boosting" in SERVER_README.read_text(encoding="utf-8")
 
