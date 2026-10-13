@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .asr import ASREngine
 from .asr_corrections import router as asr_corrections_router
+from .client_ip import get_client_ip
 from .config import load_config
 from .db import Database
 from .diagnostics import create_upload_token, router as diagnostics_router
@@ -562,7 +563,7 @@ async def post_feedback(request: Request):
     # --- store ---
     db = database
     if db:
-        client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+        client_ip = get_client_ip(request)
         db.execute(
             "INSERT INTO feedback (machine_id, app_version, client_ip, feedback_text, transcript_json, context_json, created_at)"
             f" VALUES ({','.join([db.dialect.placeholder] * 7)})",

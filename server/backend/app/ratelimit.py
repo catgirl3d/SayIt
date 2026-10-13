@@ -8,6 +8,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .client_ip import get_client_ip
+
 _PRUNE_INTERVAL = 300  # prune stale buckets every 5 minutes
 _BUCKET_TTL = 600  # remove buckets idle for 10 minutes
 
@@ -30,12 +32,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._exclude = exclude_paths
         self._buckets: dict[str, list[float]] = defaultdict(lambda: [float(burst), time.monotonic()])
         self._last_prune = time.monotonic()
-
-    def _client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
 
     def _prune_stale(self) -> None:
         now = time.monotonic()
@@ -62,7 +58,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self._exclude):
             return await call_next(request)
         self._prune_stale()
-        ip = self._client_ip(request)
+        ip = get_client_ip(request)
         if not self._allow(ip):
             return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
         return await call_next(request)

@@ -27,6 +27,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from .client_ip import get_client_ip
 from .db import Database
 
 logger = logging.getLogger("sayit.asr_corrections")
@@ -78,13 +79,6 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 def _err(status: int, code: str, message: str) -> JSONResponse:
     """统一错误形状：code 给客户端做判断，message 只给排查用。"""
     return JSONResponse(status_code=status, content={"error": code, "message": message})
-
-
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _get_db(request: Request) -> Database | None:
@@ -322,7 +316,7 @@ async def post_asr_correction(
 
     p = db.dialect.placeholder
     now_ms = int(time.time() * 1000)
-    ip = _client_ip(request)
+    ip = get_client_ip(request)
 
     existing = db.fetch_one(
         f"SELECT correction_id, status FROM asr_corrections WHERE correction_id = {p}",

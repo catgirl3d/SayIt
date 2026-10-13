@@ -208,8 +208,9 @@ pip install -r backend/requirements.txt
 cd backend
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# Run tests
-python -m pytest tests/ -v
+# Run tests (from server/, where the backend package is importable)
+cd ..
+python -m pytest backend/tests/ -v
 ```
 
 ## API

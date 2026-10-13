@@ -14,6 +14,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from .client_ip import get_client_ip
+
 router = APIRouter()
 
 DIAGNOSTICS_DIR = Path(__file__).resolve().parents[2] / "runtime" / "diagnostics_reports"
@@ -36,13 +38,6 @@ _upload_tokens: dict[str, float] = {}  # token -> expiry timestamp
 _UPLOAD_TOKEN_TTL = 300  # 5 minutes
 
 _TICKET_ID_RE = re.compile(r"^[a-f0-9]{32}$")
-
-
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _check_upload_rate(ip: str) -> bool:
@@ -142,7 +137,7 @@ async def upload_diagnostics(request: Request, diagnostics: UploadFile = File(..
         return JSONResponse(status_code=401, content={"error": "Invalid or expired upload token"})
 
     # Rate limit by IP
-    ip = _client_ip(request)
+    ip = get_client_ip(request)
     if not _check_upload_rate(ip):
         return JSONResponse(status_code=429, content={"error": "Upload rate limit exceeded (max 5 per hour)"})
 
