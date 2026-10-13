@@ -4,7 +4,7 @@
 // single source of truth the settings screens use — so a renamed provider or a moved
 // console link updates the help dialog too. All sentences come from the locale files.
 
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { ChevronDown, Cloud, Cpu, Crown, ExternalLink, Server, type LucideIcon } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -14,6 +14,7 @@ import { useT } from '@/i18n/useT'
 import { aiProvidersForDisplay } from './aiProviderCatalog'
 import { ASR_PLATFORMS } from './asrProviderCatalog'
 import { linkClass } from './formStyles'
+import { HelpSection } from './HelpSection'
 
 interface ConsoleLinkItem {
   /** Catalog id of the provider/platform, used to look up recommendation notes. */
@@ -49,15 +50,6 @@ const ASR_RECOMMENDED_MODELS: Record<string, string[]> = {
 
 const AI_RECOMMENDED_MODELS: Record<string, string[]> = {
   groq: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
-}
-
-function HelpSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section>
-      <h4 className="mb-2 text-sm font-medium text-foreground">{title}</h4>
-      <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">{children}</div>
-    </section>
-  )
 }
 
 // Recommended entries come first; entries with an explicit helpRank follow in rank

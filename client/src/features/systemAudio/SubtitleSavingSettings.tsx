@@ -78,7 +78,7 @@ export default function SubtitleSavingSettings({ active, pending, onPendingChang
       await setSetting('systemAudio.transcriptDir', picked)
       setDir(picked)
       setDirDisplay(await bridge.resolveSubtitleTranscriptDir(picked))
-    } catch { setError(t('systemAudio.transcriptFolderFailed')) }
+    } catch { setError(t('systemAudio.transcriptChooseFailed')) }
   }
 
   const openFolder = async () => {

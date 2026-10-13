@@ -101,7 +101,7 @@ vi.mock('@/components/ui/modal', async () => {
 
 const CONFIGURE_SAVING = 'Configure saving subtitles'
 const journalLabel = 'Save a text journal of subtitles'
-const loadFailedMessage = 'Could not load the subtitle saving settings.'
+const loadFailedMessage = 'Could not load the subtitle journal settings.'
 const saveFailedMessage = 'Could not save the transcript setting.'
 
 const onPendingChange = vi.fn()
@@ -325,6 +325,18 @@ describe('saving dialog', () => {
     expect(mocks.setSetting).toHaveBeenCalledExactlyOnceWith('systemAudio.transcriptDir', 'E:/picked')
     const markup = render()
     expect(markup).toContain('E:/picked')
+  })
+
+  it('reports a failed folder choice with its own message, not the open-folder one', async () => {
+    await renderLoaded()
+    mocks.pickFolder.mockRejectedValueOnce(new Error('picker failed'))
+
+    mocks.buttonProps.find(({ children }) => children === 'Choose folder…')?.onClick?.()
+    await tick()
+
+    const markup = render()
+    expect(markup).toContain('Could not choose the transcript folder.')
+    expect(markup).not.toContain('Could not open the transcript folder.')
   })
 })
 
