@@ -109,9 +109,13 @@ export async function polishWithClientAi(
   if (!isCurrent()) return null
 
   const keyless = Boolean(findProvider(config.provider).keyless)
+  // A blank model is normalized to the empty string the native layer reads as
+  // "use this provider's default" (Ollama falls back to qwen2.5:7b), so only keyed
+  // providers treat it as a hard stop. The backend, not this check, owns the default.
+  const model = config.model.trim() ? config.model : ''
   const complete = Boolean(
     config.apiUrl.trim()
-    && config.model.trim()
+    && (model || keyless)
     && (config.apiKey.trim() || keyless),
   )
   if (!complete) {
@@ -119,7 +123,7 @@ export async function polishWithClientAi(
       provider: config.provider || undefined,
       hasUrl: Boolean(config.apiUrl.trim()),
       hasKey: Boolean(config.apiKey.trim()) || keyless,
-      hasModel: Boolean(config.model.trim()),
+      hasModel: Boolean(model) || keyless,
     })
     return {
       llmText: safeFallbackText(asrText, startOptions),
@@ -129,13 +133,13 @@ export async function polishWithClientAi(
       aiStatus: 'unavailable',
       aiFailureReason: 'incomplete_profile',
       aiProvider: config.provider || undefined,
-      aiModel: config.model || undefined,
+      aiModel: model || undefined,
     }
   }
 
   addRuntimeEvent('info', logSource, 'Custom AI cleanup started', {
     provider: config.provider,
-    model: config.model,
+    model,
   })
 
   const stream = Boolean(options.onPartial)
@@ -160,7 +164,7 @@ export async function polishWithClientAi(
     const request = invoke<AiResult>('cloud_polish', {
       request: {
         text: asrText,
-        ai_config: buildAiProviderConfig(config),
+        ai_config: buildAiProviderConfig({ ...config, model }),
         system_prompt: startOptions?.systemPrompt || null,
         text_context: startOptions?.textContext || null,
         stream,
@@ -193,14 +197,14 @@ export async function polishWithClientAi(
       aiStatus: succeeded ? 'applied' : 'failed',
       aiFailureReason: succeeded ? undefined : 'empty_result',
       aiProvider: config.provider,
-      aiModel: config.model,
+      aiModel: model || undefined,
     }
   } catch (error) {
     if (!isCurrent()) return null
     addRuntimeEvent('warn', logSource, 'Custom AI cleanup failed; using raw ASR text', {
       error: String(error),
       provider: config.provider,
-      model: config.model,
+      model,
       timedOut,
     })
     return {
@@ -211,7 +215,7 @@ export async function polishWithClientAi(
       aiStatus: 'failed',
       aiFailureReason: classifyPolishFailure(error, timedOut),
       aiProvider: config.provider,
-      aiModel: config.model,
+      aiModel: model || undefined,
     }
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId)
