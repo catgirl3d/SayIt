@@ -7,6 +7,7 @@ import { listen, emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 import type { DiagnosticOccurrence, DiagnosticsPreview, PublicDiagnosticsEnvironment } from '../types/appApi'
+import type { UsageEventInput, UsageSummary } from '@/types/usage'
 
 // Re-export for convenience
 export { invoke, listen, emit }
@@ -209,11 +210,16 @@ export function storeDelete(key: string) {
   return invoke('store_delete', { key })
 }
 
-export function recordStatsDelta(charCount: number, durationSec: number) {
-  return invoke<{ totalDurationSec: number; totalChars: number }>('record_stats_delta', {
-    charCount,
-    durationSec,
-  })
+export function usageRecord(event: UsageEventInput) {
+  return invoke<void>('usage_record', { event })
+}
+
+export function usageSummary(sinceMs: number | null) {
+  return invoke<UsageSummary>('usage_summary', { sinceMs })
+}
+
+export function usageClear() {
+  return invoke<void>('usage_clear')
 }
 
 // ─── History ───

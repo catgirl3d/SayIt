@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const bridge = vi.hoisted(() => ({
-  recordStatsDelta: vi.fn(),
+  usageRecord: vi.fn(),
+  usageSummary: vi.fn(),
+  usageClear: vi.fn(),
   storeGet: vi.fn(),
   storeSet: vi.fn(),
 }))
@@ -11,7 +13,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }))
 
 vi.mock('../bridge', () => bridge)
 
-import { clearStats, estimateTypingTimeSec, getSetting, recordStats, setSetting } from '../store'
+import { clearStats, EMPTY_USAGE_SUMMARY, estimateTypingTimeSec, getSetting, getStats, recordUsage, setSetting } from '../store'
 
 describe('native app settings batch', () => {
   it('uses the registered transaction command and propagates a failed commit', async () => {
@@ -26,35 +28,86 @@ describe('native app settings batch', () => {
   })
 })
 
-describe('recordStats', () => {
+describe('usage statistics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('delegates the increment to the atomic native command', async () => {
-    const committed = { totalDurationSec: 12.5, totalChars: 320 }
-    bridge.recordStatsDelta.mockResolvedValue(committed)
+  it('records a dictation through the native usage log only', async () => {
+    const event = { charCount: 40, durationSec: 2.5, appId: 'Code.exe', workMode: 'local', promptPresetId: 'intent' }
+    bridge.usageRecord.mockResolvedValue(undefined)
 
-    await expect(recordStats(40, 2.5)).resolves.toEqual(committed)
+    await recordUsage(event)
 
-    expect(bridge.recordStatsDelta).toHaveBeenCalledWith(40, 2.5)
+    expect(bridge.usageRecord).toHaveBeenCalledExactlyOnceWith(event)
     expect(bridge.storeGet).not.toHaveBeenCalled()
+    expect(bridge.storeSet).not.toHaveBeenCalled()
+  })
+
+  it('reads the home totals from the all-time usage summary', async () => {
+    bridge.usageSummary.mockResolvedValue({ ...EMPTY_USAGE_SUMMARY, totalChars: 320, totalDurationSec: 12.5 })
+
+    await expect(getStats()).resolves.toEqual({ totalDurationSec: 12.5, totalChars: 320 })
+
+    expect(bridge.usageSummary).toHaveBeenCalledExactlyOnceWith(null)
+    expect(bridge.storeGet).not.toHaveBeenCalled()
+  })
+
+  it('clears statistics by clearing the usage log', async () => {
+    bridge.usageClear.mockResolvedValue(undefined)
+
+    await clearStats()
+
+    expect(bridge.usageClear).toHaveBeenCalledTimes(1)
     expect(bridge.storeSet).not.toHaveBeenCalled()
   })
 })
 
-describe('clearStats', () => {
+describe('usage summary sharing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('resets only the aggregate usage counters', async () => {
-    await clearStats()
+  it('shares one all-time read between home totals and the personalization profile', async () => {
+    vi.resetModules()
+    const store = await import('../store')
+    bridge.usageSummary.mockResolvedValue({ ...store.EMPTY_USAGE_SUMMARY, totalChars: 120 })
 
-    expect(bridge.storeSet).toHaveBeenCalledTimes(1)
-    expect(bridge.storeSet).toHaveBeenCalledWith('stats', { totalDurationSec: 0, totalChars: 0 })
-    expect(bridge.storeGet).not.toHaveBeenCalled()
-    expect(bridge.recordStatsDelta).not.toHaveBeenCalled()
+    const [stats, profileSummary] = await Promise.all([store.getStats(), store.getUsageSummary(null)])
+
+    expect(stats).toEqual({ totalDurationSec: 0, totalChars: 120 })
+    expect(profileSummary.totalChars).toBe(120)
+    expect(bridge.usageSummary).toHaveBeenCalledExactlyOnceWith(null)
+  })
+
+  it('re-reads the all-time summary after a recorded dictation and after clearing statistics', async () => {
+    vi.resetModules()
+    const store = await import('../store')
+    bridge.usageSummary.mockResolvedValue(store.EMPTY_USAGE_SUMMARY)
+    bridge.usageRecord.mockResolvedValue(undefined)
+    bridge.usageClear.mockResolvedValue(undefined)
+
+    await store.getStats()
+    expect(bridge.usageSummary).toHaveBeenCalledTimes(1)
+
+    await store.recordUsage({ charCount: 8, durationSec: 1.5, appId: 'Code.exe', workMode: 'local', promptPresetId: 'intent' })
+    await store.getStats()
+    expect(bridge.usageSummary).toHaveBeenCalledTimes(2)
+
+    await store.clearStats()
+    await store.getStats()
+    expect(bridge.usageSummary).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps range reads live instead of caching them', async () => {
+    vi.resetModules()
+    const store = await import('../store')
+    bridge.usageSummary.mockResolvedValue(store.EMPTY_USAGE_SUMMARY)
+
+    await store.getUsageSummary(1_000)
+    await store.getUsageSummary(2_000)
+
+    expect(bridge.usageSummary).toHaveBeenCalledTimes(2)
   })
 })
 

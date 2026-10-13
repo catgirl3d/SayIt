@@ -6,6 +6,7 @@ import { Mic, Clock, Type, Zap } from 'lucide-react'
 import { clearStats, estimateTypingTimeSec, getStats, type Stats, getSetting } from '@/services/store'
 import * as bridge from '@/services/bridge'
 import { SHORTCUTS_CHANGED_EVENT } from '@/services/bridge'
+import { refreshRecorderSettings } from '@/services/recorder'
 import ReportIssueSection from '@/components/ReportIssueSection'
 import NoticeBanner from '@/components/NoticeBanner'
 import { resolveDictationTrigger } from '@/lib/shortcutKeys'
@@ -63,7 +64,6 @@ export default function Home() {
   useEffect(() => {
     refreshStats()
     const unlistenStats = bridge.listen('stats-updated', refreshStats)
-    const unlistenHistory = bridge.listen('history-updated', refreshStats)
 
     const loadShortcutKeys = () =>
       Promise.all([
@@ -78,8 +78,7 @@ export default function Home() {
     window.addEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
     return () => {
       window.removeEventListener(SHORTCUTS_CHANGED_EVENT, loadShortcutKeys)
-      unlistenStats.then((fn) => fn()).catch(() => {})
-      unlistenHistory.then((fn) => fn()).catch(() => {})
+      unlistenStats.then((fn) => fn()).catch((error) => console.error('[home] Failed to remove the stats-updated listener:', error))
     }
   }, [refreshStats])
 
@@ -129,13 +128,28 @@ export default function Home() {
     setClearStatsError(false)
     try {
       await clearStats()
-      refreshStats()
     } catch (error) {
       console.error('[home] Failed to clear usage stats:', error)
       setClearStatsError(true)
-    } finally {
       setIsClearingStats(false)
+      return
     }
+
+    // The deletion is committed. Refreshing the recorder's cached personalization profile
+    // only affects the next dictation, so a failure here is logged, not reported as a
+    // failed clear.
+    try {
+      await refreshRecorderSettings()
+    } catch (error) {
+      console.error('[home] Failed to refresh recorder settings after clearing usage stats:', error)
+    }
+    try {
+      await bridge.emit('stats-updated')
+    } catch (error) {
+      console.error('[home] Failed to emit stats-updated after clearing usage stats:', error)
+    }
+    refreshStats()
+    setIsClearingStats(false)
   }
 
   const dictation = resolveDictationTrigger(handsFreeKey, pttKey)
@@ -145,9 +159,6 @@ export default function Home() {
     : dictation.mode === 'ptt'
       ? t('home.subtitleHold')
       : t('shortcut.unsetHint')
-  const newUserHintTemplate = dictation.mode === 'handsFree'
-    ? t('home.newUserHint')
-    : t('home.newUserHintHold')
 
   const cards = [
     { icon: Clock, label: t('home.statTotalTime'), ...totalTime },
@@ -170,7 +181,6 @@ export default function Home() {
     },
   ]
 
-  const isNewUser = stats.totalDurationSec === 0 && stats.totalChars === 0
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -185,17 +195,6 @@ export default function Home() {
 
       <NoticeBanner />
 
-      {isNewUser && dictation.mode !== 'none' && (
-        <div className="mb-6 rounded-xl border border-border bg-muted/30 px-5 py-5 text-center">
-          <p className="text-sm text-muted-foreground">
-            <WithKeyChip
-              template={newUserHintTemplate}
-              keyLabel={dictationKeyLabel}
-              chipClassName="px-1.5 py-0.5 text-muted-foreground bg-secondary border border-border rounded text-xs"
-            />
-          </p>
-        </div>
-      )}
 
       <div className="grid grid-cols-2 gap-4">
         {cards.map(({ icon: Icon, label, value, extraValue, unit, extraUnit }) => (
@@ -244,17 +243,25 @@ export default function Home() {
           title={t('home.clearStatsTitle')}
           onClose={() => setIsClearStatsDialogOpen(false)}
           locked={isClearingStats}
-          panelClassName="w-[420px]"
+          panelClassName="w-[460px]"
         >
-          <div className="mt-3 space-y-4">
-            <p className="text-sm leading-relaxed text-muted-foreground">{t('home.clearStatsConfirm')}</p>
-            {clearStatsError && <p role="alert" className="text-sm text-destructive">{t('home.clearStatsError')}</p>}
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="outline" size="sm" disabled={isClearingStats} onClick={() => setIsClearStatsDialogOpen(false)}>
+          <div className="mt-3 space-y-3 text-sm leading-relaxed">
+            <p className="text-muted-foreground">{t('home.clearStatsIntro')}</p>
+            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+              <li>{t('home.clearStatsItemTotals')}</li>
+              <li>{t('home.clearStatsItemUsage')}</li>
+              <li>{t('home.clearStatsItemProfile')}</li>
+            </ul>
+            <p className="text-muted-foreground">{t('home.clearStatsKept')}</p>
+            <p className="font-medium text-destructive">{t('home.clearStatsIrreversible')}</p>
+            {clearStatsError && <p role="alert" className="text-destructive">{t('home.clearStatsError')}</p>}
+            <div className="flex items-center justify-end gap-2 pt-1">
+              {/* Focus lands on Cancel so Enter or Space right after opening cannot delete anything. */}
+              <Button data-modal-autofocus variant="outline" size="sm" disabled={isClearingStats} onClick={() => setIsClearStatsDialogOpen(false)}>
                 {t('common.cancel')}
               </Button>
               <Button type="button" variant="destructive" size="sm" disabled={isClearingStats} onClick={() => void handleClearStats()}>
-                {isClearingStats ? t('home.clearStatsLoading') : t('home.clearStats')}
+                {isClearingStats ? t('home.clearStatsLoading') : t('home.clearStatsConfirmButton')}
               </Button>
             </div>
           </div>

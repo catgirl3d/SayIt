@@ -1,5 +1,6 @@
-import { getSetting, setSetting } from '@/services/store'
-import { BUILTIN_APP_RULES, createDefaultUserStats } from './defaults'
+import { getSetting, getUsageSummary, setSetting } from '@/services/store'
+import { BUILTIN_APP_RULES } from './defaults'
+import type { UsageSummary } from '@/types/usage'
 import type {
   AppPromptMatcher,
   AppPromptRule,
@@ -7,7 +8,6 @@ import type {
 } from './types'
 
 const APP_PROMPT_RULES_KEY = 'appPromptRules'
-const USER_STATS_KEY = 'userStats'
 
 function normalizeMatcher(value: unknown): AppPromptMatcher {
   const matcher = value && typeof value === 'object' ? value as Record<string, unknown> : {}
@@ -40,49 +40,6 @@ function normalizeAppPromptRule(raw: unknown, fallback?: AppPromptRule): AppProm
     presetId: String(value.presetId ?? fallback?.presetId ?? '').trim() || undefined,
     promptAppend: String(value.promptAppend ?? fallback?.promptAppend ?? '').trim(),
     matcher: normalizeMatcher(value.matcher ?? fallback?.matcher ?? {}),
-  }
-}
-
-function normalizeUserStats(raw: unknown): UserStats {
-  const defaults = createDefaultUserStats()
-  if (!raw || typeof raw !== 'object') return defaults
-
-  const value = raw as Record<string, unknown>
-
-  const domainWordsRaw = value.domainWords && typeof value.domainWords === 'object'
-    ? value.domainWords as Record<string, unknown>
-    : {}
-  const domainWords: Record<string, number> = {}
-  for (const [appId, wordCount] of Object.entries(domainWordsRaw)) {
-    const normalizedAppId = String(appId || '').trim()
-    const count = Number(wordCount ?? 0)
-    if (!normalizedAppId || !Number.isFinite(count) || count <= 0) continue
-    domainWords[normalizedAppId] = Math.round(count)
-  }
-
-  const appUsageCountRaw = value.appUsageCount && typeof value.appUsageCount === 'object'
-    ? value.appUsageCount as Record<string, unknown>
-    : {}
-  const appUsageCount: Record<string, number> = {}
-  for (const [appId, count] of Object.entries(appUsageCountRaw)) {
-    const normalizedAppId = String(appId || '').trim()
-    const usageCount = Number(count ?? 0)
-    if (!normalizedAppId || !Number.isFinite(usageCount) || usageCount <= 0) continue
-    appUsageCount[normalizedAppId] = Math.round(usageCount)
-  }
-
-  const totalWords = Number(value.totalWords ?? defaults.totalWords)
-  const totalSessions = Number(value.totalSessions ?? defaults.totalSessions)
-  const firstUsedAt = Number(value.firstUsedAt ?? 0)
-  const lastUsedAt = Number(value.lastUsedAt ?? 0)
-
-  return {
-    totalWords: Number.isFinite(totalWords) ? Math.max(0, Math.round(totalWords)) : defaults.totalWords,
-    totalSessions: Number.isFinite(totalSessions) ? Math.max(0, Math.round(totalSessions)) : defaults.totalSessions,
-    domainWords,
-    appUsageCount,
-    firstUsedAt: firstUsedAt > 0 ? Math.round(firstUsedAt) : undefined,
-    lastUsedAt: lastUsedAt > 0 ? Math.round(lastUsedAt) : undefined,
   }
 }
 
@@ -125,40 +82,32 @@ export async function saveAppPromptRules(rules: AppPromptRule[]): Promise<void> 
   await setSetting(APP_PROMPT_RULES_KEY, rules)
 }
 
+/**
+ * Personalization stats are a view of the all-time usage log, not a stored
+ * counter. `totalWords` sums attributed characters only, as the old counter
+ * did (it always equalled the sum of `domainWords`): the undated legacy
+ * remainder has no app and would otherwise dilute the scene ratios that gate
+ * the identity prompt.
+ */
+export function userStatsFromUsageSummary(summary: UsageSummary): UserStats {
+  const domainWords: Record<string, number> = {}
+  const appUsageCount: Record<string, number> = {}
+  let attributedChars = 0
+  for (const app of summary.apps) {
+    if (app.chars > 0) domainWords[app.key] = app.chars
+    if (app.takes > 0) appUsageCount[app.key] = app.takes
+    attributedChars += Math.max(0, app.chars)
+  }
+  return {
+    totalWords: attributedChars,
+    totalSessions: summary.takes,
+    domainWords,
+    appUsageCount,
+    firstUsedAt: summary.firstUsedAt ?? undefined,
+    lastUsedAt: summary.lastUsedAt ?? undefined,
+  }
+}
+
 export async function getUserStats(): Promise<UserStats> {
-  return normalizeUserStats(await getSetting<unknown>(USER_STATS_KEY, createDefaultUserStats()))
-}
-
-export async function saveUserStats(stats: UserStats): Promise<void> {
-  await setSetting(USER_STATS_KEY, stats)
-}
-
-export async function recordSessionStats(appId: string, wordCount: number): Promise<UserStats> {
-  const normalizedAppId = String(appId || '').trim() || 'unknown'
-  const safeWordCount = Math.max(0, Math.round(wordCount))
-  const now = Date.now()
-
-  const nextStats = await getUserStats()
-  nextStats.totalWords += safeWordCount
-  nextStats.totalSessions += 1
-  nextStats.lastUsedAt = now
-
-  if (!nextStats.firstUsedAt) {
-    nextStats.firstUsedAt = now
-  }
-
-  if (safeWordCount > 0) {
-    nextStats.domainWords = {
-      ...nextStats.domainWords,
-      [normalizedAppId]: (nextStats.domainWords[normalizedAppId] || 0) + safeWordCount,
-    }
-  }
-
-  nextStats.appUsageCount = {
-    ...nextStats.appUsageCount,
-    [normalizedAppId]: (nextStats.appUsageCount[normalizedAppId] || 0) + 1,
-  }
-
-  await saveUserStats(nextStats)
-  return nextStats
+  return userStatsFromUsageSummary(await getUsageSummary(null))
 }

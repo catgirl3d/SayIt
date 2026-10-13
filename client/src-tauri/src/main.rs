@@ -601,7 +601,9 @@ fn main() {
             commands::storage::store_set,
             commands::storage::store_set_app_settings,
             commands::storage::store_delete,
-            commands::storage::record_stats_delta,
+            commands::storage::usage_record,
+            commands::storage::usage_summary,
+            commands::storage::usage_clear,
             // History
             commands::storage::history_list,
             commands::storage::history_count,

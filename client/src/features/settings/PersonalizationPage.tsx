@@ -1,15 +1,19 @@
-// 使用统计页面
+// Usage statistics page
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import { estimateTypingTimeSec, listHistory, type HistoryRecord } from '@/services/store'
-import { createDefaultUserStats } from '@/services/personalization/defaults'
-import { getUserStats } from '@/services/personalization/store'
-import type { UserStats } from '@/services/personalization/types'
-import { pickVoiceDurationSec } from '@/services/timeModel'
+import {
+  EMPTY_USAGE_SUMMARY,
+  estimateTypingTimeSec,
+  getPromptPresets,
+  getUsageSummary,
+  type PromptPreset,
+} from '@/services/store'
+import type { UsageBreakdown, UsageSummary } from '@/types/usage'
 import { getLocale, t, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { recordedAppDisplayName, recordedPromptPresetDisplayName } from '@/i18n/displayNames'
+import * as bridge from '@/services/bridge'
 
 type TimeRange = 'today' | '7d' | '30d' | 'all'
 
@@ -42,12 +46,12 @@ function formatDuration(sec: number) {
   return t('stats.durationHours', { hour: h, min: m })
 }
 
-function formatDate(ts: number | undefined) {
+function formatDate(ts: number | null | undefined) {
   if (!ts) return '-'
   return new Date(ts).toLocaleDateString(getLocale(), { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
-/** 计算两个时间戳之间的天数 */
+/** Whole days between two timestamps (at least 1). */
 function daysBetween(a: number, b: number) {
   return Math.max(1, Math.ceil(Math.abs(b - a) / 86400000))
 }
@@ -58,79 +62,60 @@ const WORK_MODE_LABEL_KEYS: Record<string, TranslationKey> = {
   local: 'record.modeLocal',
 }
 
-interface FullStats {
+interface PageStats {
   totalChars: number
   totalDurationSec: number
-  recordCount: number
-  avgCharsPerSession: number
+  takes: number
+  avgCharsPerTake: number
   avgSpeed: number
   savedTimeSec: number
   maxDurationSec: number
-  dailyAvgRecords: number
+  dailyAvgTakes: number
   dailyAvgChars: number
-  appUsage: Map<string, number>
-  hourBuckets: number[]
-  workModeCount: Map<string, number>
-  presetCount: Map<string, number>
 }
 
-function computeFullStats(records: HistoryRecord[], rangeDays: number): FullStats {
-  let totalChars = 0
-  let totalDurationSec = 0
-  let validCount = 0
-  let maxDurationSec = 0
-  const appUsage = new Map<string, number>()
-  const hourBuckets = new Array(24).fill(0)
-  const workModeCount = new Map<string, number>()
-  const presetCount = new Map<string, number>()
-  const daySet = new Set<string>()
-
-  for (const r of records) {
-    const d = new Date(r.timestamp)
-    daySet.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`)
-    hourBuckets[d.getHours()]++
-
-    if (r.workMode) workModeCount.set(r.workMode, (workModeCount.get(r.workMode) || 0) + 1)
-    if (r.promptPresetName) {
-      const presetName = recordedPromptPresetDisplayName(r.promptPresetId, r.promptPresetName)
-      presetCount.set(presetName, (presetCount.get(presetName) || 0) + 1)
-    }
-
-    // 应用统计放在 isEmpty 之前，确保所有记录都计入
-    if (r.appName || r.appId) {
-      const fallback = r.appName || r.appId || t('stats.unknown')
-      const name = recordedAppDisplayName(r.appId, fallback).replace(/\.exe$/i, '')
-      appUsage.set(name, (appUsage.get(name) || 0) + 1)
-    }
-
-    if (r.isEmpty) continue
-    validCount++
-    totalChars += r.charCount || 0
-    const dur = pickVoiceDurationSec({ holdSec: r.durationSec, audioSec: r.audioDurationSec, asrSec: r.asrDurationSec })
-    totalDurationSec += dur
-    if (dur > maxDurationSec) maxDurationSec = dur
-  }
-
-  const activeDays = Math.max(1, rangeDays > 0 ? Math.min(rangeDays, daySet.size || 1) : daySet.size || 1)
-
+/**
+ * Daily averages use dated events only: the undated baseline carried over
+ * from the old counters has no days to spread across.
+ */
+function computePageStats(summary: UsageSummary, rangeDays: number): PageStats {
+  const activeDays = Math.max(1, rangeDays > 0 ? Math.min(rangeDays, summary.activeDays || 1) : summary.activeDays || 1)
   return {
-    totalChars,
-    totalDurationSec: Math.round(totalDurationSec),
-    recordCount: records.length,
-    avgCharsPerSession: validCount > 0 ? Math.round(totalChars / validCount) : 0,
-    avgSpeed: totalDurationSec > 60 ? Math.round(totalChars / (totalDurationSec / 60)) : 0,
-    savedTimeSec: estimateTypingTimeSec(totalChars),
-    maxDurationSec: Math.round(maxDurationSec),
-    dailyAvgRecords: Math.round((records.length / activeDays) * 10) / 10,
-    dailyAvgChars: Math.round(totalChars / activeDays),
-    appUsage,
-    hourBuckets,
-    workModeCount,
-    presetCount,
+    totalChars: summary.totalChars,
+    totalDurationSec: Math.round(summary.totalDurationSec),
+    takes: summary.takes,
+    avgCharsPerTake: summary.takes > 0 ? Math.round(summary.totalChars / summary.takes) : 0,
+    avgSpeed: summary.totalDurationSec > 60 ? Math.round(summary.totalChars / (summary.totalDurationSec / 60)) : 0,
+    savedTimeSec: estimateTypingTimeSec(summary.totalChars),
+    maxDurationSec: Math.round(summary.maxDurationSec),
+    dailyAvgTakes: Math.round((summary.datedTakes / activeDays) * 10) / 10,
+    dailyAvgChars: Math.round(summary.datedChars / activeDays),
   }
 }
 
-/** 时段分布柱状图 */
+function appDisplayName(key: string): string {
+  if (key === 'unknown') return t('stats.unknown')
+  return recordedAppDisplayName(key, key.replace(/\.exe$/i, ''))
+}
+
+/** Usage stores preset ids only; names come from the presets that still exist. */
+function presetDisplayName(id: string, presets: PromptPreset[]): string {
+  const saved = presets.find((preset) => preset.id === id)
+  return recordedPromptPresetDisplayName(id, saved?.name || t('stats.unknown'))
+}
+
+/** Counts per display label, largest first; rows without takes are baseline characters only. */
+function toEntries(items: UsageBreakdown[], label: (key: string) => string): [string, number][] {
+  const merged = new Map<string, number>()
+  for (const item of items) {
+    if (item.takes <= 0) continue
+    const name = label(item.key)
+    merged.set(name, (merged.get(name) || 0) + item.takes)
+  }
+  return [...merged.entries()].sort(([, a], [, b]) => b - a)
+}
+
+/** Hour-of-day distribution bar chart. */
 function HourChart({ buckets }: { buckets: number[] }) {
   const max = Math.max(...buckets, 1)
   const periods = [
@@ -172,7 +157,7 @@ function HourChart({ buckets }: { buckets: number[] }) {
   )
 }
 
-/** 分布列表（统一柔和色调） */
+/** Distribution list (uniform muted tint). */
 function DistributionList({ entries }: { entries: [string, number][] }) {
   const maxCount = entries.length > 0 ? entries[0][1] : 1
 
@@ -199,44 +184,48 @@ function DistributionList({ entries }: { entries: [string, number][] }) {
 export default function PersonalizationPage() {
   useT()
   const [range, setRange] = useState<TimeRange>('all')
-  const [userStats, setUserStats] = useState<UserStats>(createDefaultUserStats())
-  const [records, setRecords] = useState<HistoryRecord[]>([])
+  const [summary, setSummary] = useState<UsageSummary>(EMPTY_USAGE_SUMMARY)
+  const [presets, setPresets] = useState<PromptPreset[]>([])
+  const [reloadNonce, setReloadNonce] = useState(0)
 
   useEffect(() => {
-    getUserStats().then(setUserStats)
-    listHistory({ limit: 10000 }).then(setRecords)
+    getPromptPresets()
+      .then(setPresets)
+      .catch((error) => console.error('[usage] Failed to load prompt presets:', error))
   }, [])
 
-  const filteredRecords = useMemo(() => {
-    if (range === 'all') return records
-    const cutoff = getRangeCutoff(range)
-    return records.filter((r) => r.timestamp >= cutoff)
-  }, [range, records])
+  useEffect(() => {
+    let cancelled = false
+    getUsageSummary(range === 'all' ? null : getRangeCutoff(range))
+      .then((next) => {
+        if (!cancelled) setSummary(next)
+      })
+      .catch((error) => console.error('[usage] Failed to load usage summary:', error))
+    return () => {
+      cancelled = true
+    }
+  }, [range, reloadNonce])
+
+  // Live refresh: the recorder emits stats-updated after every recorded dictation and after
+  // clearing statistics. The nonce re-runs the load effect for the currently selected range,
+  // and its cleanup keeps an older in-flight response from overwriting the newer one.
+  useEffect(() => {
+    const unlisten = bridge.listen('stats-updated', () => {
+      setReloadNonce((nonce) => nonce + 1)
+    })
+    return () => {
+      unlisten.then((fn) => fn()).catch((error) => console.error('[usage] Failed to remove the stats-updated listener:', error))
+    }
+  }, [])
 
   const rangeDays = range === 'today' ? 1 : range === '7d' ? 7 : range === '30d' ? 30 : 0
-  const stats = useMemo(() => computeFullStats(filteredRecords, rangeDays), [filteredRecords, rangeDays])
+  const stats = computePageStats(summary, rangeDays)
+  const appUsageEntries = toEntries(summary.apps, appDisplayName)
+  const workModeEntries = toEntries(summary.workModes, (key) => (WORK_MODE_LABEL_KEYS[key] ? t(WORK_MODE_LABEL_KEYS[key]) : key))
+  const presetEntries = toEntries(summary.promptPresets, (id) => presetDisplayName(id, presets))
 
-  // "全部"模式下合并 userStats 中的应用数据（历史记录可能缺少早期的 appName 字段）
-  const appUsageEntries = useMemo(() => {
-    const merged = new Map(stats.appUsage)
-    if (range === 'all') {
-      for (const [appId, count] of Object.entries(userStats.appUsageCount)) {
-        const name = appId.replace(/\.exe$/i, '')
-        const existing = merged.get(name) || 0
-        if (count > existing) merged.set(name, count)
-      }
-    }
-    return [...merged.entries()].sort(([, a], [, b]) => b - a)
-  }, [stats.appUsage, range, userStats.appUsageCount])
-
-  const workModeEntries: [string, number][] = [...stats.workModeCount.entries()]
-    .map(([k, v]) => [WORK_MODE_LABEL_KEYS[k] ? t(WORK_MODE_LABEL_KEYS[k]) : k, v] as [string, number])
-    .sort(([, a], [, b]) => b - a)
-
-  const presetEntries = [...stats.presetCount.entries()].sort(([, a], [, b]) => b - a)
-
-  // 首次使用距今天数
-  const usageDays = userStats.firstUsedAt ? daysBetween(userStats.firstUsedAt, Date.now()) : 0
+  // Days since first use
+  const usageDays = summary.firstUsedAt ? daysBetween(summary.firstUsedAt, Date.now()) : 0
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -259,13 +248,13 @@ export default function PersonalizationPage() {
       </div>
 
       <div className="space-y-5">
-        {/* 核心数据 4 列 */}
+        {/* Core metrics, four columns */}
         <Card>
           <CardContent className="p-6">
-            {/* 首次使用提示（仅全部模式，融入顶部） */}
-            {range === 'all' && userStats.firstUsedAt && (
+            {/* First-use hint (All time only, part of the header) */}
+            {range === 'all' && summary.firstUsedAt !== null && (
               <p className="mb-4 text-xs text-muted-foreground">
-                {t('stats.sinceHint', { date: formatDate(userStats.firstUsedAt), days: usageDays })}
+                {t('stats.sinceHint', { date: formatDate(summary.firstUsedAt), days: usageDays })}
               </p>
             )}
 
@@ -275,8 +264,8 @@ export default function PersonalizationPage() {
                 <p className="mt-0.5 text-xl font-semibold">{stats.totalChars.toLocaleString()}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">{t('stats.historyRecords')}</p>
-                <p className="mt-0.5 text-xl font-semibold">{t('stats.recordsValue', { count: stats.recordCount.toLocaleString() })}</p>
+                <p className="text-xs text-muted-foreground">{t('stats.takes')}</p>
+                <p className="mt-0.5 text-xl font-semibold">{t('stats.recordsValue', { count: stats.takes.toLocaleString() })}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">{t('stats.dictationTime')}</p>
@@ -291,7 +280,7 @@ export default function PersonalizationPage() {
             <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 border-t border-border pt-4 sm:grid-cols-4">
               <div>
                 <span className="text-xs text-muted-foreground">{t('stats.avgChars')}</span>
-                <p className="text-sm font-medium">{stats.avgCharsPerSession}</p>
+                <p className="text-sm font-medium">{stats.avgCharsPerTake}</p>
               </div>
               <div>
                 <span className="text-xs text-muted-foreground">{t('stats.avgSpeed')}</span>
@@ -303,23 +292,23 @@ export default function PersonalizationPage() {
               </div>
               <div>
                 <span className="text-xs text-muted-foreground">{t('stats.dailyAverage')}</span>
-                <p className="text-sm font-medium">{t('stats.dailyAverageValue', { records: stats.dailyAvgRecords, chars: stats.dailyAvgChars })}</p>
+                <p className="text-sm font-medium">{t('stats.dailyAverageValue', { records: stats.dailyAvgTakes, chars: stats.dailyAvgChars })}</p>
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* 使用时段分布 */}
-        {stats.recordCount > 0 && (
+        {/* Hour-of-day distribution */}
+        {summary.datedTakes > 0 && (
           <Card>
             <CardContent className="p-6">
               <h2 className="mb-4 text-lg font-semibold">{t('stats.timeOfDay')}</h2>
-              <HourChart buckets={stats.hourBuckets} />
+              <HourChart buckets={summary.hourBuckets} />
             </CardContent>
           </Card>
         )}
 
-        {/* 工作模式 & Prompt 预设 并排 */}
+        {/* Processing mode and prompt preset, side by side */}
         {(workModeEntries.length > 0 || presetEntries.length > 0) && (
           <div className="grid gap-5 sm:grid-cols-2">
             {workModeEntries.length > 0 && (
@@ -341,7 +330,7 @@ export default function PersonalizationPage() {
           </div>
         )}
 
-        {/* 应用使用次数 */}
+        {/* Per-app usage counts */}
         {appUsageEntries.length > 0 && (
           <Card>
             <CardContent className="p-6">
