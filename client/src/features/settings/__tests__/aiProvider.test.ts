@@ -520,14 +520,20 @@ describe('一行的标题与副标题', () => {
 })
 
 describe('isProfileComplete', () => {
-  it('免密钥的 Ollama 不要求密钥，其余都要', () => {
+  it('does not require a key from keyless Ollama, and requires it from everyone else', () => {
     expect(isProfileComplete(profile({ apiKey: '' }))).toBe(false)
     expect(isProfileComplete(profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434' }))).toBe(true)
   })
 
-  it('缺地址或缺模型都算没填完', () => {
+  it('lets a keyless provider run with a blank model, since the native layer substitutes its default', () => {
+    expect(isProfileComplete(profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434', model: '' }))).toBe(true)
+    expect(isProfileComplete(profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434', model: ' \t ' }))).toBe(true)
+  })
+
+  it('still treats a missing URL, model, or key as incomplete for keyed providers', () => {
     expect(isProfileComplete(profile({ apiUrl: '' }))).toBe(false)
     expect(isProfileComplete(profile({ model: ' ' }))).toBe(false)
+    expect(isProfileComplete(profile({ provider: 'ollama', apiUrl: '' }))).toBe(false)
     expect(isProfileComplete(profile())).toBe(true)
   })
 })

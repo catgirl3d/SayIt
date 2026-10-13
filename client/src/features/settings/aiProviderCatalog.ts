@@ -341,11 +341,17 @@ export function profileTitle(profile: AiProfile): string {
   return profile.model.trim() || t('aiProvider.noModel')
 }
 
-/** 一条服务是否填齐了能用的东西 */
+/**
+ * Whether a service has everything it needs to run.
+ *
+ * Keyless providers may omit the model: the native layer substitutes its own
+ * default (Ollama uses qwen2.5:7b), matching the runtime cleanup path in
+ * clientAiPolish.
+ */
 export function isProfileComplete(profile: AiProfile): boolean {
-  if (!profile.apiUrl.trim() || !profile.model.trim()) return false
-  if (!findProvider(profile.provider).keyless && !profile.apiKey.trim()) return false
-  return true
+  if (!profile.apiUrl.trim()) return false
+  if (findProvider(profile.provider).keyless) return true
+  return Boolean(profile.model.trim() && profile.apiKey.trim())
 }
 
 /**
