@@ -441,6 +441,7 @@
   "help.groq.free": "**Generous free tier** — covers everyday dictation and AI cleanup without payment.",
   "help.groq.fast": "**Fast** — both Whisper recognition and cleanup models respond quickly.",
   "help.groq.oneKey": "**One key for everything** — the same Groq key works for speech recognition and AI cleanup, so it is configured only once.",
+  "help.recommendedModels": "Recommended models",
   "help.deepgram.credit": "**$200 free credit** — enough to try the service for a long time before paying.",
   "help.deepgram.models": "**Strong models** — Nova-3 with live captions for Russian, Ukrainian, English, and Chinese.",
   "hotwordInject.title": "Send hotwords to the AI prompt",

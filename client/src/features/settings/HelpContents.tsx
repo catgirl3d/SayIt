@@ -43,6 +43,14 @@ const RECOMMENDED_NOTES: Record<string, TranslationKey[]> = {
   deepgram: ['help.deepgram.credit', 'help.deepgram.models'],
 }
 
+const ASR_RECOMMENDED_MODELS: Record<string, string[]> = {
+  groq: ['whisper-large-v3', 'whisper-large-v3-turbo'],
+}
+
+const AI_RECOMMENDED_MODELS: Record<string, string[]> = {
+  groq: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
+}
+
 function HelpSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
@@ -60,7 +68,13 @@ function helpOrder(items: ConsoleLinkItem[]): ConsoleLinkItem[] {
   return [...items].sort((a, b) => group(a) - group(b) || rank(a) - rank(b))
 }
 
-function ConsoleLinks({ items }: { items: ConsoleLinkItem[] }) {
+function ConsoleLinks({
+  items,
+  modelsMap,
+}: {
+  items: ConsoleLinkItem[]
+  modelsMap?: Record<string, string[]>
+}) {
   const t = useT()
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
@@ -68,7 +82,8 @@ function ConsoleLinks({ items }: { items: ConsoleLinkItem[] }) {
     <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70">
       {items.map((item) => {
         const notes = item.recommended ? RECOMMENDED_NOTES[item.id] ?? [] : []
-        const open = notes.length > 0 && expandedId === item.id
+        const models = item.recommended && modelsMap ? modelsMap[item.id] ?? [] : []
+        const open = (notes.length > 0 || models.length > 0) && expandedId === item.id
         // Same marker as recommended local models: an amber crown with a tooltip.
         // The word itself stays out of the row so two recommended entries do not
         // repeat an identical pill; the expandable notes carry the explanation.
@@ -85,7 +100,7 @@ function ConsoleLinks({ items }: { items: ConsoleLinkItem[] }) {
         return (
           <li key={item.id}>
             <div className="flex items-center gap-3 px-3 py-2">
-              {notes.length > 0 ? (
+              {notes.length > 0 || models.length > 0 ? (
                 <button
                   type="button"
                   aria-expanded={open}
@@ -116,11 +131,35 @@ function ConsoleLinks({ items }: { items: ConsoleLinkItem[] }) {
               </button>
             </div>
             {open && (
-              <ul className="space-y-1 bg-muted/20 py-2 pr-3 pl-[34px] text-xs leading-relaxed text-muted-foreground">
-                {notes.map((key) => (
-                  <li key={key}><RichText text={t(key)} /></li>
-                ))}
-              </ul>
+              <div className="space-y-2 bg-muted/20 py-2.5 pr-3 pl-[34px] text-xs leading-relaxed text-muted-foreground">
+                {notes.length > 0 && (
+                  <ul className="space-y-1">
+                    {notes.map((key) => (
+                      <li key={key}><RichText text={t(key)} /></li>
+                    ))}
+                  </ul>
+                )}
+                {models.length > 0 && (
+                  <div className="space-y-1.5 border-t border-border/50 pt-2">
+                    {/* A plain caption, not a pill: next to the model chips a pill reads as one more value. */}
+                    <p id={`recommended-models-${item.id}`} className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                      <Crown className="h-3 w-3 text-amber-500" aria-hidden />
+                      {t('help.recommendedModels')}
+                    </p>
+                    {/* Information only, so the chips are borderless tags instead of button-like boxes. */}
+                    <ul aria-labelledby={`recommended-models-${item.id}`} className="flex flex-wrap gap-1.5">
+                      {models.map((model) => (
+                        <li
+                          key={model}
+                          className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] text-foreground"
+                        >
+                          <span className="truncate" title={model}>{model}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
             )}
           </li>
         )
@@ -163,7 +202,7 @@ export function VoiceEngineHelpContent() {
       </HelpSection>
       <HelpSection title={t('help.voiceEngine.keysTitle')}>
         <p><RichText text={t('help.voiceEngine.pick')} /></p>
-        <ConsoleLinks items={platforms} />
+        <ConsoleLinks items={platforms} modelsMap={ASR_RECOMMENDED_MODELS} />
       </HelpSection>
     </>
   )
@@ -193,7 +232,7 @@ export function AiServiceHelpContent() {
         <RichText text={t('help.aiService.intro')} />
       </p>
       <HelpSection title={t('help.aiService.keysTitle')}>
-        <ConsoleLinks items={providers} />
+        <ConsoleLinks items={providers} modelsMap={AI_RECOMMENDED_MODELS} />
         <p className="text-xs text-muted-foreground/80">
           <RichText text={t('help.aiService.noKeyNote')} />
         </p>

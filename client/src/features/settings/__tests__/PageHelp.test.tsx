@@ -129,4 +129,35 @@ describe('help content console links', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Groq/ }))
     expect(screen.getByText(freeTier)).toBeTruthy()
   })
+
+  it('lists the recommended Groq speech models as plain tags once the row is expanded', () => {
+    render(<VoiceEngineHelpContent />)
+
+    expect(screen.queryByRole('list', { name: t('help.recommendedModels') })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^Groq/ }))
+
+    const list = screen.getByRole('list', { name: t('help.recommendedModels') })
+    expect(within(list).getAllByRole('listitem').length).toBeGreaterThan(1)
+    // The models are information only, not controls.
+    expect(within(list).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('shows no model list for a recommended provider that has no curated models', () => {
+    render(<VoiceEngineHelpContent />)
+    const credit = t('help.deepgram.credit').split('**')[1]
+
+    fireEvent.click(screen.getByRole('button', { name: /^Deepgram/ }))
+
+    expect(screen.getByText(credit)).toBeTruthy()
+    expect(screen.queryByRole('list', { name: t('help.recommendedModels') })).toBeNull()
+  })
+
+  it('lists the recommended Groq models in the AI providers help too', () => {
+    render(<AiServiceHelpContent />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Groq/ }))
+
+    const list = screen.getByRole('list', { name: t('help.recommendedModels') })
+    expect(within(list).getAllByRole('listitem').length).toBeGreaterThan(0)
+  })
 })
