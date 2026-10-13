@@ -37,6 +37,7 @@ This repository is a maintained fork of [crosswk/SayIt](https://github.com/cross
 Typing is often the slowest part of working with AI. SayIt turns speech into text you can use immediately, while keeping the important choices in your hands:
 
 - **Voice typing anywhere** — dictate into editors, chat apps, browsers, and other Windows software.
+- **Live computer subtitles & translation** — translate spoken audio from videos, calls (Zoom, Discord), and any app in real time via native Windows WASAPI loopback, with no extra drivers needed. Includes a click-through overlay, dual-subtitle display (original speech alongside translation), and independent language controls.
 - **Editable AI cleanup** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
 - **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped.
 - **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, connect to the public trial server, or host your own backend.
