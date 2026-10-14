@@ -418,6 +418,7 @@ export class FileTranscriptionService {
     }
     return {
       ...options,
+      language,
       engine: 'cloud',
       cloud,
     }

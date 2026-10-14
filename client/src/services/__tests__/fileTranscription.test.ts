@@ -166,6 +166,7 @@ describe('file transcription service', () => {
       ffmpegDirectory: null,
       audioStreamIndex: 2,
       engine: 'cloud',
+      language: 'uk',
       cloud: {
         label: 'Groq Whisper',
         config: {
@@ -177,7 +178,7 @@ describe('file transcription service', () => {
       },
     })
     expect(request).not.toHaveProperty('modelId')
-    expect(request).not.toHaveProperty('language')
+    expect(request).toHaveProperty('language', 'uk')
     expect(request).not.toHaveProperty('accelerator')
     expect(harness.admission.reserveFileTranscription).not.toHaveBeenCalled()
   })
