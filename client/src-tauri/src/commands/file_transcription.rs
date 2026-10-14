@@ -25,6 +25,9 @@ const STDERR_CAPTURE_LIMIT: usize = 256 * 1024;
 const FILE_STATE_EVENT: &str = "file-transcription-state";
 const TOOL_SCAN_MAX_DEPTH: u8 = 3;
 const TOOL_SCAN_MAX_ENTRIES_PER_DIRECTORY: usize = 256;
+const EMPTY_FRAGMENT_RETRY_COUNT: u8 = 1;
+const CLOUD_ERROR_RETRY_DELAYS: &[Duration] = &[Duration::from_secs(1), Duration::from_secs(2)];
+const CLOUD_ERROR_RETRY_COUNT: u8 = CLOUD_ERROR_RETRY_DELAYS.len() as u8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1272,21 +1275,17 @@ where
                     output = Some(result);
                     break;
                 }
-                Ok(_) if empty_attempt == 0 => {
-                    empty_attempt = 1;
+                Ok(_) if should_retry_empty_fragment(empty_attempt) => {
+                    empty_attempt = empty_attempt.saturating_add(1);
                 }
                 Ok(_) => {
                     empty_fragments = empty_fragments.saturating_add(1);
                     first_empty_position_samples.get_or_insert(step.position_samples);
                     break;
                 }
-                Err(_) if error_retries < 2 => {
-                    let delay = match error_retries {
-                        0 => Duration::from_secs(1),
-                        1 => Duration::from_secs(2),
-                        _ => unreachable!(),
-                    };
-                    error_retries += 1;
+                Err(_) if error_retries < CLOUD_ERROR_RETRY_COUNT => {
+                    let delay = CLOUD_ERROR_RETRY_DELAYS[error_retries as usize];
+                    error_retries = error_retries.saturating_add(1);
                     if cancel.is_cancelled() {
                         return Err(CloudWindowRunError::Cancelled);
                     }
@@ -1551,7 +1550,7 @@ fn all_cloud_windows_empty_error(label: &str, language: &str) -> String {
 }
 
 fn should_retry_empty_fragment(attempt: u8) -> bool {
-    attempt == 0
+    attempt < EMPTY_FRAGMENT_RETRY_COUNT
 }
 
 fn skipped_fragments_warning(count: u64, first_position_ms: Option<u64>) -> Option<String> {
@@ -1677,7 +1676,8 @@ fn process_pcm(
             }
             let position_ms = samples_to_ms(progress.processed_samples);
             let mut output = None;
-            for attempt in 0_u8..2 {
+            let mut empty_attempt = 0_u8;
+            loop {
                 if input.cancel.is_cancelled() {
                     return Err(WorkerOutcome::Cancelled);
                 }
@@ -1702,7 +1702,8 @@ fn process_pcm(
                     output = Some(candidate_output);
                     break;
                 }
-                if should_retry_empty_fragment(attempt) {
+                if should_retry_empty_fragment(empty_attempt) {
+                    empty_attempt = empty_attempt.saturating_add(1);
                     continue;
                 }
                 skipped_fragments += 1;
@@ -1712,6 +1713,7 @@ fn process_pcm(
                 let _ = update_active(&input.job_id, |snapshot| {
                     snapshot.warning = warning.clone();
                 });
+                break;
             }
             if let Some(output) = output {
                 append_transcript(&mut text, &output);
