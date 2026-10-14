@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   clearStats: vi.fn(),
   refreshRecorderSettings: vi.fn(),
   emit: vi.fn(),
+  statsListeners: [] as Array<() => void>,
+  unlistenStats: vi.fn(),
 }))
 
 vi.mock('@/services/store', async (importOriginal) => {
@@ -28,7 +30,10 @@ vi.mock('@/services/bridge', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/bridge')>()
   return {
     ...actual,
-    listen: vi.fn().mockResolvedValue(() => undefined),
+    listen: (event: string, handler: () => void) => {
+      if (event === 'stats-updated') mocks.statsListeners.push(handler)
+      return Promise.resolve(mocks.unlistenStats)
+    },
     emit: (...args: unknown[]) => mocks.emit(...args),
   }
 })
@@ -52,6 +57,13 @@ describe('clearing usage statistics', () => {
     mocks.clearStats.mockReset().mockResolvedValue(undefined)
     mocks.refreshRecorderSettings.mockReset().mockResolvedValue(undefined)
     mocks.emit.mockReset().mockResolvedValue(undefined)
+    mocks.statsListeners.length = 0
+    mocks.unlistenStats.mockReset()
+  })
+
+  afterEach(() => {
+    mocks.statsListeners.length = 0
+    vi.restoreAllMocks()
   })
 
   it('lists everything that will be deleted, what is kept, and that it cannot be undone', async () => {
@@ -100,6 +112,85 @@ describe('clearing usage statistics', () => {
     await waitFor(() => expect(mocks.emit).toHaveBeenCalledWith('stats-updated'))
     expect(mocks.refreshRecorderSettings.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.emit.mock.invocationCallOrder[0])
+  })
+
+  it('shows zero totals after a successful clear even when stats-updated emission fails', async () => {
+    let currentStats = { totalDurationSec: 120, totalChars: 12 }
+    mocks.getStats.mockImplementation(async () => currentStats)
+    mocks.clearStats.mockImplementation(async () => {
+      currentStats = { totalDurationSec: 0, totalChars: 0 }
+    })
+    mocks.emit.mockRejectedValue(new Error('event bridge unavailable'))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    render(<Home />)
+    const timeStats = screen.getByText(t('home.statTotalTime')).parentElement!
+    const charStats = screen.getByText(t('home.statChars')).parentElement!
+
+    await waitFor(() => {
+      expect(within(timeStats).getByText('2')).toBeTruthy()
+      expect(within(charStats).getByText('12')).toBeTruthy()
+    })
+
+    fireEvent.click(within(openClearDialog()).getByRole('button', { name: t('home.clearStatsConfirmButton') }))
+
+    await waitFor(() => {
+      expect(within(timeStats).getByText('0')).toBeTruthy()
+      expect(within(charStats).getByText('0')).toBeTruthy()
+    })
+    expect(mocks.emit).toHaveBeenCalledWith('stats-updated')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('updates visible totals when the stats-updated listener receives an event', async () => {
+    let currentStats = { totalDurationSec: 120, totalChars: 12 }
+    mocks.getStats.mockImplementation(async () => currentStats)
+
+    render(<Home />)
+    const charStats = screen.getByText(t('home.statChars')).parentElement!
+    await waitFor(() => expect(within(charStats).getByText('12')).toBeTruthy())
+    await waitFor(() => expect(mocks.statsListeners).toHaveLength(1))
+
+    currentStats = { totalDurationSec: 180, totalChars: 34 }
+    for (const listener of mocks.statsListeners) listener()
+
+    await waitFor(() => expect(within(charStats).getByText('34')).toBeTruthy())
+    expect(within(charStats).queryByText('12')).toBeNull()
+  })
+
+  it('does not let an older stats response overwrite a newer event refresh', async () => {
+    let resolveInitial!: (stats: { totalDurationSec: number; totalChars: number }) => void
+    let resolveNewer!: (stats: { totalDurationSec: number; totalChars: number }) => void
+    mocks.getStats
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewer = resolve }))
+
+    render(<Home />)
+    const charStats = screen.getByText(t('home.statChars')).parentElement!
+    await waitFor(() => expect(mocks.getStats).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mocks.statsListeners).toHaveLength(1))
+
+    for (const listener of mocks.statsListeners) listener()
+    await waitFor(() => expect(mocks.getStats).toHaveBeenCalledTimes(2))
+
+    resolveNewer({ totalDurationSec: 180, totalChars: 34 })
+    await waitFor(() => expect(within(charStats).getByText('34')).toBeTruthy())
+
+    await act(async () => {
+      resolveInitial({ totalDurationSec: 120, totalChars: 12 })
+      await Promise.resolve()
+    })
+    expect(within(charStats).getByText('34')).toBeTruthy()
+    expect(within(charStats).queryByText('12')).toBeNull()
+  })
+
+  it('removes the stats-updated listener when Home unmounts', async () => {
+    const { unmount } = render(<Home />)
+    await waitFor(() => expect(mocks.statsListeners).toHaveLength(1))
+
+    unmount()
+
+    await waitFor(() => expect(mocks.unlistenStats).toHaveBeenCalledTimes(1))
   })
 
   it('reports a failed clear and leaves the recorder cache alone', async () => {

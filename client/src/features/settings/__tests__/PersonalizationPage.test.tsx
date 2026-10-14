@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import { EMPTY_USAGE_SUMMARY, type PromptPreset } from '@/services/store'
 import type { UsageSummary } from '@/types/usage'
@@ -48,6 +48,14 @@ describe('usage page', () => {
     mocks.getPromptPresets.mockReset().mockResolvedValue([])
     mocks.statsListeners.length = 0
     mocks.unlistenStats.mockReset()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 1, 18, 14, 20))
+  })
+
+  afterEach(() => {
+    mocks.statsListeners.length = 0
+    vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('shows all-time totals from the usage log even without dated events', async () => {
@@ -84,13 +92,29 @@ describe('usage page', () => {
     render(<PersonalizationPage />)
     fireEvent.click(screen.getByText(t('range.today')))
 
-    const midnight = new Date()
-    midnight.setHours(0, 0, 0, 0)
-    await waitFor(() => expect(mocks.getUsageSummary).toHaveBeenLastCalledWith(midnight.getTime()))
+    await waitFor(() => expect(mocks.getUsageSummary).toHaveBeenLastCalledWith(new Date(2026, 1, 18, 0, 0, 0, 0).getTime()))
     await waitFor(() => expect(screen.getByText('Code')).toBeTruthy())
     expect(screen.getByText('Letters')).toBeTruthy()
     expect(screen.getByText(t('record.modeCloudApi'))).toBeTruthy()
     expect(screen.getByText(t('stats.timeOfDay'))).toBeTruthy()
+  })
+
+  it('uses exact local-midnight cutoffs for 7d and 30d, then null for all time', async () => {
+    render(<PersonalizationPage />)
+    await waitFor(() => expect(mocks.getUsageSummary).toHaveBeenLastCalledWith(null))
+
+    fireEvent.click(screen.getByRole('button', { name: t('range.7d') }))
+    await waitFor(() => expect(mocks.getUsageSummary).toHaveBeenLastCalledWith(new Date(2026, 1, 12, 0, 0, 0, 0).getTime()))
+
+    fireEvent.click(screen.getByRole('button', { name: t('range.30d') }))
+    await waitFor(() => expect(mocks.getUsageSummary).toHaveBeenLastCalledWith(new Date(2026, 0, 20, 0, 0, 0, 0).getTime()))
+
+    mocks.getUsageSummary.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: t('range.all') }))
+    await waitFor(() => {
+      expect(mocks.getUsageSummary).toHaveBeenCalledTimes(1)
+      expect(mocks.getUsageSummary).toHaveBeenCalledWith(null)
+    })
   })
 
   it('refreshes the visible totals when the recorder emits stats-updated', async () => {
@@ -121,11 +145,14 @@ describe('usage page', () => {
     fireEvent.click(screen.getByText(t('range.today')))
     await waitFor(() => expect(screen.getByText('2')).toBeTruthy())
 
-    resolveAll(summary({ takes: 933, totalChars: 25000, totalDurationSec: 7200 }))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(screen.queryByText('933')).toBeNull()
-    expect(screen.getByText('2')).toBeTruthy()
+    await act(async () => {
+      resolveAll(summary({ takes: 933, totalChars: 25000, totalDurationSec: 7200 }))
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('933')).toBeNull()
+      expect(screen.getByText('2')).toBeTruthy()
+    })
   })
 
   it('lets a stats-updated refresh win over a response still in flight', async () => {
@@ -141,11 +168,14 @@ describe('usage page', () => {
     emitStatsUpdated()
     await waitFor(() => expect(mocks.getUsageSummary).toHaveBeenCalledTimes(2))
 
-    resolveStale(summary({ takes: 933, totalChars: 25000 }))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(screen.queryByText('933')).toBeNull()
-    expect(screen.queryByText((25000).toLocaleString())).toBeNull()
+    await act(async () => {
+      resolveStale(summary({ takes: 933, totalChars: 25000 }))
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('933')).toBeNull()
+      expect(screen.queryByText((25000).toLocaleString())).toBeNull()
+    })
   })
 
   it('stops listening for stats-updated when the page unmounts', async () => {
