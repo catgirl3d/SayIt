@@ -121,6 +121,42 @@ interface ResetToIdleOptions {
   preserveLateFinalContext?: boolean
 }
 
+/** Test-only typed seam over the recorder internals that the recorder unit
+ *  tests seed and inspect. Every delegation in testSeam() is a real member
+ *  access, so renaming a private field or method breaks the build inside the
+ *  seam instead of letting the tests drift silently. Never use it in
+ *  production code. */
+export interface RecorderOrchestratorTestSeam {
+  state: RecorderState
+  activeRunId: number
+  audioSentSamples: number
+  wallTimeAtStopSec: number
+  recordedChunks: ArrayBuffer[]
+  finalHandledInCurrentRun: boolean
+  processingTimeoutId: ReturnType<typeof setTimeout> | null
+  cachedProbeResult: ProbeResult | null
+  currentActiveAppContext: ActiveAppContext | null
+  currentPromptResolution: PromptResolution | null
+  cachedPresets: PromptPreset[]
+  cachedUserStats: UserStats
+  finalizingLateRunId: number
+  timedOutProcessingContext: TimedOutProcessingContext | null
+  activeFallbackToken: number
+  osMicMuted: boolean
+  recordStartPerf: number
+  startRecordingLock: boolean
+  textInsertionInFlight: boolean
+  readonly cachedAiEnabled: boolean
+  readonly cachedMicId: string
+  readonly subtitleModeActive: boolean
+  readonly overlayService: OverlayService
+  buildProviderCallbacks(): TranscriptionCallbacks
+  startRecording(): Promise<void>
+  stopRecording(): Promise<void>
+  cancelRecording(token: number, options?: { showCanceled?: boolean; reason?: 'user' | 'mic_muted_timeout' }): Promise<void>
+  scheduleMicMutedAutoCancel(runId: number): void
+}
+
 export class RecorderOrchestrator {
   private state: RecorderState = 'idle'
   private onStateChange: ((s: RecorderState) => void) | null = null
@@ -261,6 +297,65 @@ export class RecorderOrchestrator {
 
   getState() {
     return this.state
+  }
+
+  /** Test-only seam used by the recorder unit tests; see RecorderOrchestratorTestSeam. */
+  testSeam(): RecorderOrchestratorTestSeam {
+    return RecorderOrchestrator.buildTestSeam(this)
+  }
+
+  /** Kept separate so the object-literal accessors close over the instance
+   *  parameter instead of an aliased `this`. */
+  private static buildTestSeam(recorder: RecorderOrchestrator): RecorderOrchestratorTestSeam {
+    return {
+      get state() { return recorder.state },
+      set state(value) { recorder.state = value },
+      get activeRunId() { return recorder.activeRunId },
+      set activeRunId(value) { recorder.activeRunId = value },
+      get audioSentSamples() { return recorder.audioSentSamples },
+      set audioSentSamples(value) { recorder.audioSentSamples = value },
+      get wallTimeAtStopSec() { return recorder.wallTimeAtStopSec },
+      set wallTimeAtStopSec(value) { recorder.wallTimeAtStopSec = value },
+      get recordedChunks() { return recorder.recordedChunks },
+      set recordedChunks(value) { recorder.recordedChunks = value },
+      get finalHandledInCurrentRun() { return recorder.finalHandledInCurrentRun },
+      set finalHandledInCurrentRun(value) { recorder.finalHandledInCurrentRun = value },
+      get processingTimeoutId() { return recorder.processingTimeoutId },
+      set processingTimeoutId(value) { recorder.processingTimeoutId = value },
+      get cachedProbeResult() { return recorder.cachedProbeResult },
+      set cachedProbeResult(value) { recorder.cachedProbeResult = value },
+      get currentActiveAppContext() { return recorder.currentActiveAppContext },
+      set currentActiveAppContext(value) { recorder.currentActiveAppContext = value },
+      get currentPromptResolution() { return recorder.currentPromptResolution },
+      set currentPromptResolution(value) { recorder.currentPromptResolution = value },
+      get cachedPresets() { return recorder.cachedPresets },
+      set cachedPresets(value) { recorder.cachedPresets = value },
+      get cachedUserStats() { return recorder.cachedUserStats },
+      set cachedUserStats(value) { recorder.cachedUserStats = value },
+      get finalizingLateRunId() { return recorder.finalizingLateRunId },
+      set finalizingLateRunId(value) { recorder.finalizingLateRunId = value },
+      get timedOutProcessingContext() { return recorder.timedOutProcessingContext },
+      set timedOutProcessingContext(value) { recorder.timedOutProcessingContext = value },
+      get activeFallbackToken() { return recorder.activeFallbackToken },
+      set activeFallbackToken(value) { recorder.activeFallbackToken = value },
+      get osMicMuted() { return recorder.osMicMuted },
+      set osMicMuted(value) { recorder.osMicMuted = value },
+      get recordStartPerf() { return recorder.recordStartPerf },
+      set recordStartPerf(value) { recorder.recordStartPerf = value },
+      get startRecordingLock() { return recorder.startRecordingLock },
+      set startRecordingLock(value) { recorder.startRecordingLock = value },
+      get textInsertionInFlight() { return recorder.textInsertionInFlight },
+      set textInsertionInFlight(value) { recorder.textInsertionInFlight = value },
+      get cachedAiEnabled() { return recorder.cachedAiEnabled },
+      get cachedMicId() { return recorder.cachedMicId },
+      get subtitleModeActive() { return recorder.subtitleModeActive },
+      get overlayService() { return recorder.overlayService },
+      buildProviderCallbacks: () => recorder.buildProviderCallbacks(),
+      startRecording: () => recorder.startRecording(),
+      stopRecording: () => recorder.stopRecording(),
+      cancelRecording: (token, options) => recorder.cancelRecording(token, options),
+      scheduleMicMutedAutoCancel: (runId) => recorder.scheduleMicMutedAutoCancel(runId),
+    }
   }
 
   private isRunCurrent(runId: number) {

@@ -66,7 +66,7 @@ import { DEFAULTS } from '@/services/defaults'
 import { setLocale, t } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
 import * as textPostProcess from '@/services/textPostProcess'
-import { RecorderOrchestrator } from '../RecorderOrchestrator'
+import { RecorderOrchestrator, type RecorderOrchestratorTestSeam } from '../RecorderOrchestrator'
 import { OverlayService } from '../OverlayService'
 import * as OverlayModule from '@/overlay/Overlay'
 import { switchProvider, type TranscriptionCallbacks, type FinalResult } from '@/services/transcription'
@@ -87,10 +87,7 @@ async function flushMicrotasks() {
 }
 
 function callbacksFor(recorder: RecorderOrchestrator): TranscriptionCallbacks {
-  const createCallbacks = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderCallbacks') as (
-    this: RecorderOrchestrator,
-  ) => TranscriptionCallbacks
-  return createCallbacks.call(recorder)
+  return recorder.testSeam().buildProviderCallbacks()
 }
 
 function prepareRun(
@@ -99,11 +96,12 @@ function prepareRun(
   audioDurationSec = 1,
   state: 'recording' | 'processing' = 'processing',
 ) {
-  Reflect.set(recorder, 'state', state)
-  Reflect.set(recorder, 'activeRunId', runId)
-  Reflect.set(recorder, 'audioSentSamples', Math.round(audioDurationSec * 16_000))
-  Reflect.set(recorder, 'wallTimeAtStopSec', audioDurationSec)
-  Reflect.set(recorder, 'recordedChunks', [new ArrayBuffer(Math.round(audioDurationSec * 32_000))])
+  const seam = recorder.testSeam()
+  seam.state = state
+  seam.activeRunId = runId
+  seam.audioSentSamples = Math.round(audioDurationSec * 16_000)
+  seam.wallTimeAtStopSec = audioDurationSec
+  seam.recordedChunks = [new ArrayBuffer(Math.round(audioDurationSec * 32_000))]
 }
 
 function overlayPayloads(command: 'present_overlay' | 'update_overlay_state') {
@@ -129,8 +127,7 @@ function makeFinal(overrides: Partial<FinalResult> = {}): FinalResult {
 }
 
 async function acquireSubtitles(recorder: RecorderOrchestrator) {
-  const acquire = Reflect.get(recorder, 'acquireSystemAudio') as (() => Promise<void>) | undefined
-  if (acquire) await acquire.call(recorder)
+  await recorder.acquireSystemAudio()
 }
 
 async function enterTimeoutGrace(recorder: RecorderOrchestrator, runId: number, refreshSettings = true) {
@@ -138,17 +135,15 @@ async function enterTimeoutGrace(recorder: RecorderOrchestrator, runId: number, 
   vi.spyOn(provider, 'stop').mockReturnValue(true)
   if (refreshSettings) await recorder.refreshRuntimeSettings()
   prepareRun(recorder, runId, 1, 'recording')
-  Reflect.set(recorder, 'recordStartPerf', performance.now() - 1_000)
-  Reflect.set(recorder, 'cachedProbeResult', {
+  const seam = recorder.testSeam()
+  seam.recordStartPerf = performance.now() - 1_000
+  seam.cachedProbeResult = {
     editable: true,
     hwnd: '0x1',
     process: 'Editor',
     detail: 'editable',
-  })
-  const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
-    this: RecorderOrchestrator,
-  ) => Promise<void>
-  await stopRecording.call(recorder)
+  }
+  await seam.stopRecording()
   await vi.advanceTimersByTimeAsync(30_500)
   return callbacksFor(recorder)
 }
@@ -366,7 +361,7 @@ describe('recorder failure cards', () => {
     callbacksFor(recorder).onError?.('HTTP 500 provider failure')
     await historyStarted.promise
 
-    const overlay = Reflect.get(recorder, 'overlayService') as OverlayService
+    const overlay = recorder.testSeam().overlayService
     overlay.showFallback('new run transcript', 'not_editable', 71)
     await vi.advanceTimersByTimeAsync(5_000)
     archive.resolve()
@@ -488,11 +483,7 @@ describe('recorder failure cards', () => {
     harness.invoke.mockClear()
     const canceledRecorder = new RecorderOrchestrator()
     prepareRun(canceledRecorder, 111, 1, 'recording')
-    const cancelRecording = Reflect.get(RecorderOrchestrator.prototype, 'cancelRecording') as (
-      this: RecorderOrchestrator,
-      token: number,
-    ) => Promise<void>
-    await cancelRecording.call(canceledRecorder, 111)
+    await canceledRecorder.testSeam().cancelRecording(111)
     expect(overlayPayloads('present_overlay').map((payload) => payload.state)).toContain('toast')
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
   })
@@ -500,20 +491,13 @@ describe('recorder failure cards', () => {
   it('keeps short recordings and mic-muted auto-cancel out of the failure-card path', async () => {
     const shortRecorder = new RecorderOrchestrator()
     prepareRun(shortRecorder, 120, 0.4, 'recording')
-    const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
-      this: RecorderOrchestrator,
-    ) => Promise<void>
-    await stopRecording.call(shortRecorder)
+    await shortRecorder.testSeam().stopRecording()
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
 
     const mutedRecorder = new RecorderOrchestrator()
     prepareRun(mutedRecorder, 121, 1, 'recording')
-    Reflect.set(mutedRecorder, 'osMicMuted', true)
-    const scheduleAutoCancel = Reflect.get(RecorderOrchestrator.prototype, 'scheduleMicMutedAutoCancel') as (
-      this: RecorderOrchestrator,
-      runId: number,
-    ) => void
-    scheduleAutoCancel.call(mutedRecorder, 121)
+    mutedRecorder.testSeam().osMicMuted = true
+    mutedRecorder.testSeam().scheduleMicMutedAutoCancel(121)
     await vi.advanceTimersByTimeAsync(3_000)
     await flushMicrotasks()
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
@@ -576,18 +560,18 @@ describe('recorder failure cards', () => {
       return Promise.resolve()
     })
     prepareRun(recorder, 43, 1, 'recording')
-    Reflect.set(recorder, 'cachedProbeResult', {
+    recorder.testSeam().cachedProbeResult = {
       editable: true,
       hwnd: '0x1',
       process: 'Editor',
       detail: 'editable',
-    })
+    }
     const callbacks = callbacksFor(recorder)
 
     callbacks.onWarning?.('deepgram_keyterm_limit')
 
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'toast')).toBe(false)
-    Reflect.set(recorder, 'state', 'processing')
+    recorder.testSeam().state = 'processing'
     callbacks.onFinal?.(makeFinal())
     await historyWritten.promise
     await flushMicrotasks()
@@ -620,14 +604,14 @@ describe('recorder failure cards', () => {
       return Promise.resolve()
     })
     prepareRun(recorder, 45, 1, 'recording')
-    Reflect.set(recorder, 'cachedProbeResult', {
+    recorder.testSeam().cachedProbeResult = {
       editable: true,
       hwnd: '0x1',
       process: 'Editor',
       detail: 'editable',
-    })
+    }
     const callbacks = callbacksFor(recorder)
-    Reflect.set(recorder, 'state', 'processing')
+    recorder.testSeam().state = 'processing'
     callbacks.onFinal?.(makeFinal({
       aiSource: 'custom',
       aiStatus: 'failed',
@@ -663,14 +647,14 @@ describe('recorder failure cards', () => {
       return Promise.resolve()
     })
     prepareRun(recorder, 46, 1, 'recording')
-    Reflect.set(recorder, 'cachedProbeResult', {
+    recorder.testSeam().cachedProbeResult = {
       editable: true,
       hwnd: '0x1',
       process: 'Editor',
       detail: 'editable',
-    })
+    }
     const callbacks = callbacksFor(recorder)
-    Reflect.set(recorder, 'state', 'processing')
+    recorder.testSeam().state = 'processing'
     callbacks.onFinal?.(makeFinal({
       llmText: 'polished words',
       llmMs: 25,
@@ -694,12 +678,12 @@ describe('recorder failure cards', () => {
       return Promise.resolve()
     })
     prepareRun(recorder, 44)
-    Reflect.set(recorder, 'cachedProbeResult', {
+    recorder.testSeam().cachedProbeResult = {
       editable: false,
       hwnd: '0x1',
       process: 'Editor',
       detail: 'not editable',
-    })
+    }
     const callbacks = callbacksFor(recorder)
     callbacks.onFinal?.(makeFinal({ asrWarning: 'deepgram_keyterm_limit' }))
     await historyWritten.promise
@@ -739,8 +723,8 @@ describe('recorder failure cards', () => {
     expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
   })
 
   it('continues initialization and fails closed only for late insertion when its setting read fails', async () => {
@@ -755,7 +739,7 @@ describe('recorder failure cards', () => {
 
     await expect(recorder.init()).resolves.toBeUndefined()
 
-    expect(Reflect.get(recorder, 'cachedMicId')).toBe('saved-mic')
+    expect(recorder.testSeam().cachedMicId).toBe('saved-mic')
     expect(connect).toHaveBeenCalledTimes(1)
     const callbacks = connect.mock.calls[0]?.[0]
     expect(callbacks?.onFinal).toBeTypeOf('function')
@@ -767,14 +751,11 @@ describe('recorder failure cards', () => {
     expect(JSON.stringify(harness.runtimeEvents.mock.calls)).not.toContain('private late-insertion setting detail')
 
     prepareRun(recorder, 190, 1, 'recording')
-    Reflect.set(recorder, 'recordStartPerf', performance.now() - 1_000)
-    Reflect.set(recorder, 'cachedProbeResult', { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' })
-    const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
-      this: RecorderOrchestrator,
-    ) => Promise<void>
-    await stopRecording.call(recorder)
+    recorder.testSeam().recordStartPerf = performance.now() - 1_000
+    recorder.testSeam().cachedProbeResult = { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
+    await recorder.testSeam().stopRecording()
     await vi.advanceTimersByTimeAsync(30_500)
-    expect(Reflect.get(recorder, 'timedOutProcessingContext')).toMatchObject({
+    expect(recorder.testSeam().timedOutProcessingContext).toMatchObject({
       runId: 190,
       suppressLateFinalInsertion: true,
     })
@@ -799,7 +780,7 @@ describe('recorder failure cards', () => {
 
     harness.invoke.mockClear()
     prepareRun(recorder, 191, 1, 'processing')
-    Reflect.set(recorder, 'cachedProbeResult', { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' })
+    recorder.testSeam().cachedProbeResult = { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
     const onTimeHistory = deferred<Record<string, unknown>>()
     harness.addHistory.mockClear()
     harness.addHistory.mockImplementation((record: Record<string, unknown>) => {
@@ -817,7 +798,7 @@ describe('recorder failure cards', () => {
 
     recorder.setSuppressLateFinalInsertionCache(true)
     const suppressedCallbacks = await enterTimeoutGrace(recorder, 192, false)
-    expect(Reflect.get(recorder, 'timedOutProcessingContext')).toMatchObject({
+    expect(recorder.testSeam().timedOutProcessingContext).toMatchObject({
       runId: 192,
       suppressLateFinalInsertion: true,
     })
@@ -886,25 +867,21 @@ describe('recorder failure cards', () => {
 
     expect(harness.addHistory).toHaveBeenCalledTimes(1)
     expect(harness.recordUsage).not.toHaveBeenCalled()
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
 
-    Reflect.set(recorder, 'cachedPresets', [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }])
+    recorder.testSeam().cachedPresets = [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }]
     vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
     vi.stubGlobal('HTMLElement', class { })
     const provider = await switchProvider('cloud_api')
     vi.spyOn(provider, 'isReady').mockReturnValue(true)
     vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
     vi.spyOn(provider, 'start').mockReturnValue(true)
-    const startRecording = Reflect.get(RecorderOrchestrator.prototype, 'startRecording') as (
-      this: RecorderOrchestrator,
-    ) => Promise<void>
-
-    await startRecording.call(recorder)
-    const newRunId = Reflect.get(recorder, 'activeRunId')
+    await recorder.testSeam().startRecording()
+    const newRunId = recorder.testSeam().activeRunId
     expect(recorder.getState()).toBe('recording')
     expect(newRunId).not.toBe(141)
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(newRunId)
+    expect(recorder.testSeam().activeRunId).toBe(newRunId)
     expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
   })
@@ -958,8 +935,8 @@ describe('recorder failure cards', () => {
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
   })
 
   it('does not insert or retain stats when saving an opted-in late final to History fails', async () => {
@@ -981,8 +958,8 @@ describe('recorder failure cards', () => {
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
   })
 
   it('does not show a fallback or insert when transforming an opted-in late final fails', async () => {
@@ -999,8 +976,8 @@ describe('recorder failure cards', () => {
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'fallback')).toBe(false)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
   })
 
   it.each([
@@ -1024,8 +1001,8 @@ describe('recorder failure cards', () => {
 
     expect(harness.addHistory).toHaveBeenCalledTimes(1)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(expectedPasteCount)
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(0)
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
   })
 
   it.each([
@@ -1053,26 +1030,22 @@ describe('recorder failure cards', () => {
     await flushMicrotasks()
 
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(expectedPasteCount)
-    expect(Reflect.get(recorder, 'finalizingLateRunId')).toBe(0)
+    expect(recorder.testSeam().finalizingLateRunId).toBe(0)
   })
 
   it('ignores a timed-out result after a new recording invalidates its grace context', async () => {
     harness.settings.set('suppressLateFinalInsertion', true)
     const recorder = new RecorderOrchestrator()
     const callbacks = await enterTimeoutGrace(recorder, 137)
-    Reflect.set(recorder, 'cachedPresets', [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }])
+    recorder.testSeam().cachedPresets = [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }]
     vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
     vi.stubGlobal('HTMLElement', class { })
     const provider = await switchProvider('cloud_api')
     vi.spyOn(provider, 'isReady').mockReturnValue(true)
     vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
     vi.spyOn(provider, 'start').mockReturnValue(true)
-    const startRecording = Reflect.get(RecorderOrchestrator.prototype, 'startRecording') as (
-      this: RecorderOrchestrator,
-    ) => Promise<void>
-
-    await startRecording.call(recorder)
-    const newRunId = Reflect.get(recorder, 'activeRunId')
+    await recorder.testSeam().startRecording()
+    const newRunId = recorder.testSeam().activeRunId
     expect(recorder.getState()).toBe('recording')
     expect(newRunId).not.toBe(137)
 
@@ -1080,7 +1053,7 @@ describe('recorder failure cards', () => {
     await flushMicrotasks()
 
     expect(recorder.getState()).toBe('recording')
-    expect(Reflect.get(recorder, 'activeRunId')).toBe(newRunId)
+    expect(recorder.testSeam().activeRunId).toBe(newRunId)
     expect(harness.addHistory).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
   })
@@ -1095,11 +1068,8 @@ describe('recorder failure cards', () => {
     })
     const recorder = new RecorderOrchestrator()
     prepareRun(recorder, 140, 1, 'recording')
-    Reflect.set(recorder, 'recordStartPerf', performance.now() - 1_000)
-    const stopRecording = Reflect.get(RecorderOrchestrator.prototype, 'stopRecording') as (
-      this: RecorderOrchestrator,
-    ) => Promise<void>
-    await stopRecording.call(recorder)
+    recorder.testSeam().recordStartPerf = performance.now() - 1_000
+    await recorder.testSeam().stopRecording()
 
     await vi.advanceTimersByTimeAsync(30_500)
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
@@ -1122,14 +1092,29 @@ describe('recorder failure cards', () => {
 
 describe('exclusive system-audio ownership', () => {
   it.each([
-    ['startRecordingLock', true],
-    ['activeRunId', 81],
-    ['finalizingLateRunId', 82],
-    ['textInsertionInFlight', true],
-    ['timedOutProcessingContext', { runId: 83 }],
-  ])('refuses subtitle acquisition while an idle recorder still owns %s', async (field, value) => {
+    { name: 'startRecordingLock', busy: (seam: RecorderOrchestratorTestSeam) => { seam.startRecordingLock = true } },
+    { name: 'activeRunId', busy: (seam: RecorderOrchestratorTestSeam) => { seam.activeRunId = 81 } },
+    { name: 'finalizingLateRunId', busy: (seam: RecorderOrchestratorTestSeam) => { seam.finalizingLateRunId = 82 } },
+    { name: 'textInsertionInFlight', busy: (seam: RecorderOrchestratorTestSeam) => { seam.textInsertionInFlight = true } },
+    {
+      name: 'timedOutProcessingContext',
+      busy: (seam: RecorderOrchestratorTestSeam) => {
+        seam.timedOutProcessingContext = {
+          runId: 83,
+          timedOutAt: 0,
+          audioDurationSec: 0,
+          wallTimeSec: 0,
+          suppressLateFinalInsertion: false,
+          promptResolution: null,
+          appContext: null,
+          audioChunks: [],
+          probeResult: null,
+        }
+      },
+    },
+  ])('refuses subtitle acquisition while an idle recorder still owns $name', async ({ busy }) => {
     const recorder = new RecorderOrchestrator()
-    Reflect.set(recorder, field, value)
+    busy(recorder.testSeam())
     await expect(acquireSubtitles(recorder)).rejects.toThrow(en['systemAudio.busy'])
     expect(harness.invoke.mock.calls.some(([command]) => command === 'hide_overlay')).toBe(false)
   })
@@ -1138,24 +1123,23 @@ describe('exclusive system-audio ownership', () => {
     vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
     vi.stubGlobal('HTMLElement', class {})
     const recorder = new RecorderOrchestrator()
-    Reflect.set(recorder, 'cachedPresets', [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }])
-    const overlay = Reflect.get(recorder, 'overlayService') as OverlayService
+    recorder.testSeam().cachedPresets = [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }]
+    const overlay = recorder.testSeam().overlayService
     overlay.showFailure({ cardToken: 84, failureTitle: 'Failed', failureDetail: 'Cause', failureRecovery: 'none' })
-    Reflect.set(recorder, 'activeFallbackToken', 84)
+    recorder.testSeam().activeFallbackToken = 84
     await acquireSubtitles(recorder)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toEqual([['hide_overlay']])
     const provider = await switchProvider('cloud_api')
     await provider.connect({})
     harness.invoke.mockClear()
     recorder.showAiEnabledToast(true)
-    const start = Reflect.get(recorder, 'startRecording') as () => Promise<void>
-    await start.call(recorder)
+    await recorder.testSeam().startRecording()
     await vi.advanceTimersByTimeAsync(10_000)
 
     expect(harness.startCapture).not.toHaveBeenCalled()
     expect(overlayPayloads('present_overlay')).toEqual([])
     expect(harness.invoke.mock.calls.some(([command]) => command === 'hide_overlay')).toBe(false)
-    expect(Reflect.get(recorder, 'activeFallbackToken')).toBe(0)
+    expect(recorder.testSeam().activeFallbackToken).toBe(0)
     recorder.cleanup()
   })
 
@@ -1208,8 +1192,7 @@ describe('exclusive system-audio ownership', () => {
     expect(dispatch()).toBeUndefined()
     expect(harness.runtimeEvents).not.toHaveBeenCalled()
 
-    const release = Reflect.get(recorder, 'releaseSystemAudio') as () => Promise<void>
-    await release.call(recorder)
+    await recorder.releaseSystemAudio()
     harness.runtimeEvents.mockClear()
     expect(dispatch()).toBeUndefined()
     expect(harness.runtimeEvents).toHaveBeenCalledWith(
@@ -1227,10 +1210,9 @@ describe('exclusive system-audio ownership', () => {
     const provider = await switchProvider('cloud_api')
     vi.spyOn(provider, 'connect').mockRejectedValue(new Error('server unreachable'))
 
-    const release = Reflect.get(recorder, 'releaseSystemAudio') as () => Promise<void>
-    await expect(release.call(recorder)).resolves.toBeUndefined()
+    await expect(recorder.releaseSystemAudio()).resolves.toBeUndefined()
 
-    expect(Reflect.get(recorder, 'subtitleModeActive')).toBe(false)
+    expect(recorder.testSeam().subtitleModeActive).toBe(false)
     expect(harness.runtimeEvents.mock.calls.some(([level, , message]) =>
       level === 'warn' && String(message).includes('reconnect after subtitles failed'))).toBe(true)
     recorder.cleanup()
@@ -1253,11 +1235,11 @@ describe('exclusive system-audio ownership', () => {
     await staleRelease
 
     expect(connect).toHaveBeenCalledTimes(1)
-    expect(Reflect.get(recorder, 'cachedMicId')).toBe('previous-device')
+    expect(recorder.testSeam().cachedMicId).toBe('previous-device')
     await recorder.acquireSystemAudio()
     harness.settings.set('selectedMic', 'device-1')
     await recorder.releaseSystemAudio()
-    expect(Reflect.get(recorder, 'cachedMicId')).toBe('device-1')
+    expect(recorder.testSeam().cachedMicId).toBe('device-1')
     recorder.cleanup()
   })
 
@@ -1300,7 +1282,7 @@ describe('exclusive system-audio ownership', () => {
     expect(connect).toHaveBeenCalledTimes(1)
     expect(harness.runtimeEvents.mock.calls.some(([, , message]) =>
       String(message).includes('reconnect after subtitles failed'))).toBe(true)
-    expect(Reflect.get(recorder, 'subtitleModeActive')).toBe(false)
+    expect(recorder.testSeam().subtitleModeActive).toBe(false)
     recorder.cleanup()
   })
 

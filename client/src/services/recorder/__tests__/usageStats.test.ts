@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { TranscriptionCallbacks, WorkMode } from '../../transcription'
 
 const bridge = vi.hoisted(() => ({
   appendDebugLog: vi.fn(),
   emit: vi.fn().mockResolvedValue(undefined),
+  hideOverlay: vi.fn().mockResolvedValue(undefined),
+  pasteText: vi.fn().mockResolvedValue({ ok: true, strategy: 'sendinput' }),
+  presentOverlay: vi.fn().mockResolvedValue(0),
+  setEscapeActionMode: vi.fn().mockResolvedValue(undefined),
+  updateOverlay: vi.fn().mockResolvedValue(undefined),
 }))
 
 const provider = vi.hoisted(() => ({
   cancel: vi.fn(),
-  mode: 'server',
+  mode: 'server' as WorkMode,
   stop: vi.fn(),
 }))
 
@@ -44,18 +50,13 @@ vi.mock('../../transcription', () => ({ getProvider: vi.fn(() => provider) }))
 
 import { RecorderOrchestrator } from '../RecorderOrchestrator'
 
-type FinalCallback = (result: {
-  asrText: string
-  llmText: string
-  asrMs: number
-  llmMs: number
-  durationSec: number
-}) => void
-
 type TestOrchestrator = Record<string, unknown> & {
   activeRunId: number
-  buildProviderCallbacks: () => { onFinal?: FinalCallback }
   overlayService: { showNoSpeech: ReturnType<typeof vi.fn> }
+}
+
+function callbacksFor(recorder: RecorderOrchestrator | TestOrchestrator): TranscriptionCallbacks {
+  return (recorder as RecorderOrchestrator).testSeam().buildProviderCallbacks()
 }
 
 function createOrchestrator() {
@@ -101,7 +102,7 @@ describe('usage recording', () => {
       const orchestrator = createOrchestrator()
       store.getSetting.mockResolvedValue(historyEnabled)
 
-      orchestrator.buildProviderCallbacks().onFinal?.(FINAL)
+      callbacksFor(orchestrator).onFinal?.(FINAL)
 
       await vi.waitFor(() => expect(store.recordUsage).toHaveBeenCalledWith(EXPECTED_EVENT))
       expect(store.recordUsage).toHaveBeenCalledTimes(1)
@@ -114,7 +115,7 @@ describe('usage recording', () => {
     const orchestrator = createOrchestrator()
     store.getSetting.mockResolvedValue(false)
 
-    orchestrator.buildProviderCallbacks().onFinal?.({ ...FINAL, asrText: '', llmText: '' })
+    callbacksFor(orchestrator).onFinal?.({ ...FINAL, asrText: '', llmText: '' })
 
     await vi.waitFor(() => expect(orchestrator.overlayService.showNoSpeech).toHaveBeenCalled())
     expect(store.recordUsage).not.toHaveBeenCalled()
@@ -125,7 +126,7 @@ describe('usage recording', () => {
     store.getSetting.mockResolvedValue(false)
     store.recordUsage.mockRejectedValue(new Error('db unavailable'))
 
-    orchestrator.buildProviderCallbacks().onFinal?.(FINAL)
+    callbacksFor(orchestrator).onFinal?.(FINAL)
 
     await vi.waitFor(() => expect(orchestrator.handleTextInsertion).toHaveBeenCalled())
     await vi.waitFor(() => expect(store.recordUsage).toHaveBeenCalledTimes(1))
