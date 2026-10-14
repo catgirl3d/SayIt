@@ -428,6 +428,50 @@ fn accept_cancellation(phase: &mut FilePhase, cancel: &CancelToken) -> bool {
     true
 }
 
+/// Publishes the terminal phase of a finished worker, letting an accepted
+/// cancellation win.
+///
+/// `execute_worker` checks the token in its loops, but a cancel can be accepted
+/// after the last check and before this publication, so the checks alone cannot
+/// keep "the cancel succeeded, but the job reported NoSpeech/Failed" from
+/// happening. Cancellation and publication therefore decide under the same
+/// controller lock: if the terminal phase is published first, the phase gate
+/// rejects later cancellations and the worker's own outcome stands; if the
+/// cancel was accepted first, its phase and token override the outcome here.
+fn publish_terminal_phase(job_id: &str, phase: FilePhase, error: Option<String>) {
+    let emitted = with_controller(|controller| {
+        let active = controller.active.as_mut()?;
+        if active.job_id != job_id {
+            return None;
+        }
+        let (phase, error) =
+            terminal_phase_after_cancellation(&active.snapshot.phase, &active.cancel, phase, error);
+        active.snapshot.phase = phase;
+        active.snapshot.error = error;
+        active.snapshot.sequence = next_sequence();
+        Some((active.app.clone(), active.snapshot.clone()))
+    });
+    if let Some((app, snapshot)) = emitted {
+        emit_snapshot(&app, &snapshot);
+    }
+}
+
+/// The decision half of the terminal publication, kept separate so tests drive
+/// the exact transition the worker performs under the controller lock.
+fn terminal_phase_after_cancellation(
+    current_phase: &FilePhase,
+    cancel: &CancelToken,
+    outcome_phase: FilePhase,
+    error: Option<String>,
+) -> (FilePhase, Option<String>) {
+    if cancel.is_cancelled()
+        || matches!(current_phase, FilePhase::Cancelling | FilePhase::Cancelled)
+    {
+        return (FilePhase::Cancelled, None);
+    }
+    (outcome_phase, error)
+}
+
 fn validate_source(path: &Path) -> Result<PathBuf, String> {
     let metadata = fs::metadata(path).map_err(|error| {
         format!(
@@ -2313,7 +2357,7 @@ fn finish_worker(input: WorkerInput, outcome: WorkerOutcome) {
             true,
         ),
     };
-    set_active_phase(&job_id, phase, error);
+    publish_terminal_phase(&job_id, phase, error);
     clear_process(&job_id);
     let cleanup_error = cleanup_temp_directory(&temp_dir).err();
     if let Some(error) = &cleanup_error {
@@ -3112,8 +3156,71 @@ mod tests {
     }
 
     #[test]
-    fn start_failure_marks_the_job_failed_and_released() {
-        let mut snapshot = FileTranscriptionSnapshot {
+    fn accepted_cancellation_overrides_a_terminal_no_speech_phase() {
+        let cancel = CancelToken::new();
+        let mut phase = FilePhase::Transcribing;
+
+        assert!(accept_cancellation(&mut phase, &cancel));
+
+        let (published, error) =
+            terminal_phase_after_cancellation(&phase, &cancel, FilePhase::NoSpeech, None);
+
+        assert!(matches!(published, FilePhase::Cancelled));
+        assert_eq!(error, None);
+    }
+
+    #[test]
+    fn accepted_cancellation_overrides_a_terminal_failure_and_clears_the_error() {
+        let cancel = CancelToken::new();
+        let mut phase = FilePhase::Transcribing;
+
+        assert!(accept_cancellation(&mut phase, &cancel));
+
+        let (published, error) = terminal_phase_after_cancellation(
+            &phase,
+            &cancel,
+            FilePhase::Failed,
+            Some("recognition failed".into()),
+        );
+
+        assert!(matches!(published, FilePhase::Cancelled));
+        assert_eq!(error, None);
+    }
+
+    #[test]
+    fn terminal_publication_keeps_the_worker_outcome_without_a_cancellation() {
+        let cancel = CancelToken::new();
+
+        let (published, error) = terminal_phase_after_cancellation(
+            &FilePhase::Transcribing,
+            &cancel,
+            FilePhase::NoSpeech,
+            None,
+        );
+        assert!(matches!(published, FilePhase::NoSpeech));
+        assert_eq!(error, None);
+
+        let (published, error) = terminal_phase_after_cancellation(
+            &FilePhase::Transcribing,
+            &cancel,
+            FilePhase::Failed,
+            Some("boom".into()),
+        );
+        assert!(matches!(published, FilePhase::Failed));
+        assert_eq!(error.as_deref(), Some("boom"));
+
+        let (published, error) = terminal_phase_after_cancellation(
+            &FilePhase::Finalizing,
+            &cancel,
+            FilePhase::Completed,
+            None,
+        );
+        assert!(matches!(published, FilePhase::Completed));
+        assert_eq!(error, None);
+    }
+
+    fn blank_snapshot() -> FileTranscriptionSnapshot {
+        FileTranscriptionSnapshot {
             job_id: "job-1".into(),
             sequence: 7,
             phase: FilePhase::Checking,
@@ -3130,7 +3237,12 @@ mod tests {
             warning: None,
             retryable_export: true,
             resources_released: false,
-        };
+        }
+    }
+
+    #[test]
+    fn start_failure_marks_the_job_failed_and_released() {
+        let mut snapshot = blank_snapshot();
 
         apply_start_failure(
             &mut snapshot,

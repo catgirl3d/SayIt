@@ -26,6 +26,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Live computer-audio captions no longer flicker by replacing the beginning of a phrase with its end: each piece of speech now settles as one whole caption once the recognition service confirms it, a fraction of a second later. Long speech is still divided by the caption length setting, but each piece appears whole; a lost service answer still settles the confirmed text.
 - Cloud file transcription now sends the selected speech language with cloud jobs, so the empty-result error names the language instead of an empty value.
 - Cloud file transcription now shows skipped-fragment warnings while a job runs, like the local engine, and a failed window reports the cloud profile and the position where it failed.
+- Cancelling a file transcription now always reports as cancelled, even when recognition happened to finish at the same moment.
 - File transcription now cuts continuous speech at the quietest moment in the window instead of cutting a word mid-utterance.
 
 ## v0.2.2 — 2026-10-12

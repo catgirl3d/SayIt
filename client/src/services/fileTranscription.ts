@@ -366,6 +366,9 @@ export class FileTranscriptionService {
   }
 
   private acceptSnapshot(next: FileTranscriptionSnapshot): boolean {
+    // Snapshots describe state, not events: a newer snapshot always supersedes
+    // an older one, so an out-of-order arrival (lower sequence) is dropped on
+    // purpose instead of being replayed.
     if (next.sequence <= this.lastSequence) return false
     const currentIsActive = this.snapshot !== null && !this.snapshot.resourcesReleased
     if (currentIsActive && this.snapshot?.jobId !== next.jobId) return false
