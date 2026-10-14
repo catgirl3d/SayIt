@@ -2705,11 +2705,14 @@ describe('system audio subtitle session', () => {
       emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 1_500, audioEndMs: 2_500, text: `Late old ${kind}`, isFinal })
       await settle()
 
-      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(session.getSnapshot().liveOriginal).toBe('Earlier phrase')
       expect(polishRequests().map((request) => request.text)).toEqual(['Earlier phrase'])
     })
 
-    it('does not publish a stable phrase into the unfinished live region when the same result commits it', async () => {
+    it('never blanks the live panel between phrases', async () => {
+      const pending = deferred<{ text: string; elapsed_ms: number }>()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : invoke(name, args))
       const harness = createLiveProviderHarness()
       await useLiveSession(harness)
       frames(1, 0.9)
@@ -2724,10 +2727,45 @@ describe('system audio subtitle session', () => {
       })
       await settle()
 
-      expect(session.getSnapshot().liveOriginal).toBe('')
-      expect(overlayCalls.filter((call) => call.method === 'update')
-        .some((call) => call.payload.subtitleLiveText === 'Committed immediately')).toBe(false)
       expect(polishRequests().map((request) => request.text)).toEqual(['Committed immediately'])
+      expect(session.getSnapshot().liveOriginal).toBe('Committed immediately')
+      const liveUpdates = () => overlayCalls.filter((call): call is Extract<OverlayCall, { method: 'update' }> => call.method === 'update')
+      const held = liveUpdates().filter((call) => call.payload.subtitleLiveText === 'Committed immediately')
+      expect(held).toHaveLength(1)
+      expect(held[0].payload.subtitleText).toBe('')
+
+      pending.resolve({ text: 'Translated speech', elapsed_ms: 5 })
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Translated speech', liveOriginal: 'Committed immediately' })
+      const settled = liveUpdates().filter((call) => call.payload.subtitleText === 'Translated speech')
+      expect(settled[settled.length - 1].payload.subtitleLiveText).toBe('Committed immediately')
+
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'Next phrase words' })
+      await settle()
+      expect(session.getSnapshot().liveOriginal).toBe('Next phrase words')
+    })
+
+    it('keeps the newer live phrase when an earlier phrase translation settles', async () => {
+      const pending = deferred<{ text: string; elapsed_ms: number }>()
+      const invoke = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : invoke(name, args))
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(2, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+      expect(session.getSnapshot().liveOriginal).toBe('Phrase A')
+
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Phrase B' })
+      await settle()
+      expect(session.getSnapshot().liveOriginal).toBe('Phrase B')
+
+      pending.resolve({ text: 'A translation', elapsed_ms: 5 })
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: 'A translation', liveOriginal: 'Phrase B' })
     })
 
     it('keeps a newer live phrase separate while the previous phrase translation streams', async () => {
@@ -2943,7 +2981,7 @@ describe('system audio subtitle session', () => {
       await settle()
 
       expect(polishRequests().map((request) => request.text)).toEqual(['Paused prefix tail'])
-      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(session.getSnapshot().liveOriginal).toBe('Paused prefix tail')
     })
 
     it('settles confirmed text when the flush answer is lost and ignores a late boundary answer', async () => {
@@ -2961,13 +2999,13 @@ describe('system audio subtitle session', () => {
       await settle()
 
       expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
-      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(session.getSnapshot().liveOriginal).toBe('Confirmed prefix')
 
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 640, audioEndMs: 640, text: '', isFinal: true, fromFinalize: true })
       await settle()
 
       expect(polishRequests()).toHaveLength(1)
-      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(session.getSnapshot().liveOriginal).toBe('Confirmed prefix')
     })
 
     it('anchors the fallback settlement to its flush window so the next target stays on grid', async () => {
@@ -3186,7 +3224,7 @@ describe('system audio subtitle session', () => {
       })
       await settle()
 
-      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(session.getSnapshot().liveOriginal).toBe('Late transcript')
       expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['gap'])
       expect(polishRequests().map((request) => request.text)).toEqual(['Late transcript'])
     })

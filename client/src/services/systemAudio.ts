@@ -256,6 +256,8 @@ export class SystemAudioSession {
   private liveSession: LiveAsrSession | null = null
   private liveSessionId: string | null = null
   private liveAccumulator: LiveSpeechAccumulator | null = null
+  /** The last non-empty original shown in the single-subtitle live panel; it stays until new speech replaces it. */
+  private lastLiveOriginal = ''
   private liveDiscontinuityWarning = ''
   private journal: SubtitleTranscriptJournal | null = null
   private journalSequence = 0
@@ -356,6 +358,16 @@ export class SystemAudioSession {
       extra,
     ].filter(Boolean)
     return warnings.join(' ')
+  }
+
+  // Single-subtitle live never blanks the live panel between phrases: while the service prepares the
+  // translation, and until the next phrase starts streaming, the last recognized original stays on
+  // screen. The panel clears only when the session resets (pause, stop, error), so it cannot flicker
+  // off at every commit. Dual and recognition-only modes show the settled original below instead.
+  private retainedLiveOriginal(text: string): string {
+    if (this.dual || this.options?.asrOnly) return text
+    if (text) this.lastLiveOriginal = text
+    return text || this.lastLiveOriginal
   }
 
   /** The journal stopped for this session; subtitles keep running without it. */
@@ -853,7 +865,7 @@ export class SystemAudioSession {
     }
     if (outcome.kind === 'ignored') return
     if (outcome.kind === 'updated') {
-      this.publish({ liveOriginal: outcome.liveOriginal })
+      this.publish({ liveOriginal: this.retainedLiveOriginal(outcome.liveOriginal) })
       return
     }
     if (outcome.matchedFinalizeRequest) accumulator.consumeFinalizeRequest(outcome.matchedFinalizeRequest)
@@ -965,8 +977,10 @@ export class SystemAudioSession {
         liveOriginal,
       }, recognitionOnlyResult.runId, recognitionOnlyResult.finishDetails)
       this.holdCaption(generation, recognitionOnlyResult.phraseId)
-    } else {
+    } else if (this.dual) {
       this.publish({ liveOriginal })
+    } else {
+      this.publish({ liveOriginal: this.retainedLiveOriginal(liveOriginal || prepared.text) })
     }
     if (job) {
       this.enqueueTranslation(job)
@@ -1315,6 +1329,7 @@ export class SystemAudioSession {
     this.queuedBytes = this.activeJob = 0
     this.publishedAsrJob = 0
     this.liveAccumulator?.reset()
+    this.lastLiveOriginal = ''
     setQueueDepth(0)
     setPipelineActivity({ phase: 'idle', segmentMs: 0, stageStartedAt: null })
     this.unlisteners.splice(0).forEach((unlisten) => unlisten())
