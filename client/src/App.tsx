@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
 import WelcomeGuide from './components/WelcomeGuide'
 import Home from './pages/Home'
+import FileTranscription from './pages/FileTranscription'
 import SystemAudio from './pages/SystemAudio'
 import History from './pages/History'
 import Dictionary from './pages/Dictionary'
@@ -28,6 +29,7 @@ import { startWebDavBackupService } from './features/backup/autoWebdavBackup'
 import UpdateDialog from './features/update/UpdateDialog'
 import * as bridge from './services/bridge'
 import { systemAudioSession } from './services/systemAudio'
+import { fileTranscriptionService } from './services/fileTranscription'
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(false)
@@ -37,16 +39,24 @@ export default function App() {
 
   // 初始化 + 清理：必须只在挂载/卸载各执行一次。
   useEffect(() => {
-    try {
-      void initTheme()
-      void initAiEnabled()
-      void initActivePreset()
-      initRecorder()
-      void startUpdateService()
-      void startWebDavBackupService()
-    } catch (err) {
-      console.error('[App] Init error:', err)
-    }
+    void initTheme().catch((error) => console.error('[App] Theme init error:', error))
+    void initAiEnabled().catch((error) => console.error('[App] AI state init error:', error))
+    void initActivePreset().catch((error) => console.error('[App] Preset init error:', error))
+    void (async () => {
+      try {
+        // Restore the native file job before registering local capture entry points.
+        await fileTranscriptionService.init()
+      } catch (error) {
+        console.error('[App] File transcription restore error:', error)
+      }
+      try {
+        await initRecorder()
+      } catch (error) {
+        console.error('[App] Recorder init error:', error)
+      }
+      void startUpdateService().catch((error) => console.error('[App] Update service error:', error))
+      void startWebDavBackupService().catch((error) => console.error('[App] WebDAV backup service error:', error))
+    })()
 
     // 检查是否需要显示欢迎向导（仅首次安装）
     ;(async () => {
@@ -96,6 +106,7 @@ export default function App() {
         <main className="custom-scrollbar flex-1 overflow-y-auto bg-background p-8">
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/files" element={<FileTranscription />} />
             <Route path="/system-audio" element={<SystemAudio />} />
             <Route path="/history" element={<History />} />
             <Route path="/favorites" element={<Navigate to="/history" replace />} />

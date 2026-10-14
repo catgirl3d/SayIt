@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Home,
+  FileText,
   Clock,
   BookOpen,
   AudioLines,
@@ -45,6 +46,7 @@ interface NavItemDef {
  */
 const workspaceNavItems: readonly NavItemDef[] = [
   { to: '/', icon: Home, labelKey: 'nav.home' },
+  { to: '/files', icon: FileText, labelKey: 'nav.files' },
   { to: '/system-audio', icon: Captions, labelKey: 'nav.systemAudio', beta: true },
   { to: '/history', icon: Clock, labelKey: 'nav.history' },
   { to: '/hotwords', icon: BookOpen, labelKey: 'nav.hotwords' },

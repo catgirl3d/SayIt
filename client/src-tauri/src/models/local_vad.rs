@@ -28,8 +28,33 @@ pub fn detect_speech_span(
     samples: &[f32],
     sample_rate: usize,
 ) -> Result<Option<Range<usize>>, String> {
-    if samples.is_empty() {
+    let intervals = detect_speech_intervals(samples, sample_rate)?;
+    let (Some(first), Some(last)) = (intervals.first(), intervals.last()) else {
         return Ok(None);
+    };
+    let start = first.start.min(samples.len());
+    let end = last.end.min(samples.len());
+    if start >= end {
+        return Ok(None);
+    }
+
+    log::debug!(
+        "Silero VAD: {:.2}s -> {:.2}s, speech_segments={}",
+        samples.len() as f64 / sample_rate as f64,
+        (end - start) as f64 / sample_rate as f64,
+        intervals.len(),
+    );
+    Ok(Some(start..end))
+}
+
+/// Return the VAD speech intervals while keeping `detect_speech_span` as the existing
+/// first-to-last-span API used by ordinary local dictation.
+pub fn detect_speech_intervals(
+    samples: &[f32],
+    sample_rate: usize,
+) -> Result<Vec<Range<usize>>, String> {
+    if samples.is_empty() {
+        return Ok(Vec::new());
     }
 
     let mut vad = SileroVad::with_sample_rate(sample_rate)
@@ -53,22 +78,14 @@ pub fn detect_speech_span(
         },
     );
 
-    let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
-        return Ok(None);
-    };
-    let start = first.start.min(samples.len());
-    let end = last.end.min(samples.len());
-    if start >= end {
-        return Ok(None);
-    }
-
-    log::debug!(
-        "Silero VAD: {:.2}s -> {:.2}s, speech_segments={}",
-        samples.len() as f64 / sample_rate as f64,
-        (end - start) as f64 / sample_rate as f64,
-        segments.len(),
-    );
-    Ok(Some(start..end))
+    Ok(segments
+        .into_iter()
+        .filter_map(|segment| {
+            let start = segment.start.min(samples.len());
+            let end = segment.end.min(samples.len());
+            (start < end).then_some(start..end)
+        })
+        .collect())
 }
 
 #[cfg(test)]

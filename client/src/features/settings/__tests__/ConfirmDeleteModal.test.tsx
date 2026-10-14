@@ -43,6 +43,14 @@ describe('ConfirmDeleteModal', () => {
     expect(props.onCancel).not.toHaveBeenCalled()
   })
 
+  it('renders a custom confirm label without changing the default label', () => {
+    const { props } = renderModal({ confirmLabel: 'Stop transcription' })
+
+    expect(screen.getByRole('button', { name: 'Stop transcription' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: t('common.delete') })).toBeNull()
+    expect(props.onConfirm).not.toHaveBeenCalled()
+  })
+
   it('shows the close button only when requested', () => {
     const { unmount } = renderModal()
     expect(screen.queryByLabelText(t('window.close'))).toBeNull()

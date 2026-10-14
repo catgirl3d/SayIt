@@ -141,9 +141,9 @@ pub async fn preload_local_model(
 /// 否则常驻的权重（几百 MB ~ 数 GB）会一直占用到应用退出。
 #[tauri::command]
 pub async fn unload_local_model() -> Result<(), String> {
-    tokio::task::spawn_blocking(gguf_asr::unload)
+    tokio::task::spawn_blocking(gguf_asr::try_unload)
         .await
-        .map_err(|e| format!("Release task failed: {}", e))
+        .map_err(|e| format!("Release task failed: {}", e))?
 }
 
 /// 动态调整本地模型的空闲卸载时间。0 = 常驻；其余值由设置页限制为

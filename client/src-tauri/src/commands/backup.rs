@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::commands::file_transcription;
 use crate::storage::{BUILTIN_PROMPT_IDS, Storage, parse_usage_backup};
 
 /// Plain configuration file format version; imports reject a file newer than
@@ -1408,7 +1409,7 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
 /// 导入完成后由前端调用，重启应用使内存中的设置/供应商状态全量重载。
 #[tauri::command]
 pub fn restart_app(app: tauri::AppHandle) {
-    app.restart();
+    file_transcription::restart_after_file_work(app);
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ pub mod audio_mute;
 pub mod backup;
 pub mod diagnostics;
 pub mod export;
+pub mod file_transcription;
 pub mod paste;
 pub mod shortcuts;
 pub mod storage;

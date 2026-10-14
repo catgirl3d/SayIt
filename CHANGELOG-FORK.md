@@ -7,6 +7,9 @@ Sections are ordered by version, newest first. For upstream history prior to the
 
 ### Features and Improvements
 
+- Added a Files page that transcribes one audio or video file into TXT and Markdown with the local speech engine: choose the file and an output folder, watch preparation and recognition progress, cancel (a running job asks for confirmation), and retry only a failed export. Recognition runs in bounded windows with pause-aware boundaries, already recognized text is checkpointed into a draft and survives cancel, errors, or a crash, and nothing is inserted into the active window.
+- File transcription uses FFmpeg and FFprobe that you install yourself; SayIt looks for them in PATH or in a folder you pick, and explains where to get them when they are missing. Nothing is downloaded or bundled.
+- While a file job runs, starting local dictation or local computer subtitles is refused with a busy notice instead of sharing the same engine, and a file job will not start while local dictation or local subtitles are active; cloud modes keep working. History, usage statistics, and the clipboard are not touched by file transcription.
 - AI cleanup failures are no longer silent: when the selected provider does not respond, returns an error or an empty result, or its profile is incomplete, the overlay shows a short reason notice after the recognized text is inserted, and History marks the record as "AI: not applied" instead of hiding the AI row.
 - The live original in Computer subtitles is now compact for a short phrase and grows up to three lines with the text, instead of occupying a fixed-height card.
 - In live computer-audio subtitles, the original panel no longer blanks out between phrases: the last recognized phrase stays on screen while its translation is prepared, until the next phrase replaces it. It clears only when the session pauses or stops.

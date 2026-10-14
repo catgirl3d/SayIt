@@ -1,6 +1,6 @@
 import * as bridge from '../bridge'
 import { startCapture, stopCapture } from '../audio'
-import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult } from '../transcription'
+import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult, type WorkMode } from '../transcription'
 import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode, type AiFailureReason } from '../transcription/types'
 import {
   CUSTOM_ASR_PROVIDER,
@@ -163,9 +163,13 @@ export class RecorderOrchestrator {
   private initialized = false
   /** Blocks dictation bridge events during subtitles; startRecording, ensureConnection, reconnectProvider, acquireSystemAudio, and toast/preset suppression retain their own checks. */
   private subtitleModeActive = false
+  private activeSubtitleMode: WorkMode | null = null
+  private fileTranscriptionReservation: { blockedMode: WorkMode } | null = null
+  private fileTranscriptionAdmissionReady = false
   private providerConnection: Promise<void> | null = null
   private runSequence = 0
   private activeRunId = 0
+  private activeRunMode: WorkMode | null = null
 
   private recordStartPerf = 0
   private audioSentSamples = 0
@@ -360,6 +364,35 @@ export class RecorderOrchestrator {
     }
   }
 
+  setFileTranscriptionAdmissionReady(ready: boolean) {
+    this.fileTranscriptionAdmissionReady = ready
+  }
+
+  reserveFileTranscription() {
+    if (this.fileTranscriptionReservation) throw new Error(t('filesBusy'))
+    const mode = this.provider.mode
+    const localDictationActive = this.activeRunMode === 'local'
+      || (this.activeRunMode === null && mode === 'local' && (
+        this.state !== 'idle'
+        || this.startRecordingLock
+        || this.activeRunId !== 0
+        || this.finalizingLateRunId !== 0
+        || this.timedOutProcessingContext !== null
+      ))
+    if (localDictationActive || this.activeSubtitleMode === 'local') throw new Error(t('filesBusy'))
+    this.fileTranscriptionReservation = { blockedMode: mode }
+  }
+
+  releaseFileTranscription() {
+    this.fileTranscriptionReservation = null
+  }
+
+  assertLocalSystemAudioAdmission() {
+    if (!this.fileTranscriptionAdmissionReady) throw new Error(t('filesUnavailable'))
+    if (this.subtitleModeActive && this.provider.mode === 'local') this.activeSubtitleMode = 'local'
+    if (this.fileTranscriptionReservation) throw new Error(t('filesBusy'))
+  }
+
   private isRunCurrent(runId: number) {
     return runId !== 0 && this.activeRunId === runId
   }
@@ -375,6 +408,7 @@ export class RecorderOrchestrator {
     }
     if (this.activeRunId === runId) {
       this.activeRunId = 0
+      this.activeRunMode = null
       this.processingCancelable = false
     }
   }
@@ -484,13 +518,17 @@ export class RecorderOrchestrator {
   }
 
   async acquireSystemAudio(): Promise<void> {
+    const mode = this.provider.mode
     if (this.subtitleModeActive || this.state !== 'idle' || this.startRecordingLock
       || this.textInsertionInFlight || this.finalizingLateRunId !== 0
       || this.activeRunId !== 0 || this.timedOutProcessingContext) {
       throw new Error(t('systemAudio.busy'))
     }
+    if (mode === 'local' && !this.fileTranscriptionAdmissionReady) throw new Error(t('filesUnavailable'))
+    if (mode === 'local' && this.fileTranscriptionReservation) throw new Error(t('filesBusy'))
     // Reserve shared provider/overlay ownership before any IPC can let a hotkey through.
     this.subtitleModeActive = true
+    this.activeSubtitleMode = mode
     this.activeFallbackToken = 0
     this.overlayService.stopListeningTicker()
     this.overlayService.resetStreamingText()
@@ -512,6 +550,7 @@ export class RecorderOrchestrator {
     } finally {
       // Keep ownership through refresh and reconnect; neither can affect a newer subtitle session.
       this.subtitleModeActive = false
+      this.activeSubtitleMode = null
     }
     if (reconnectFailed) this.ensureConnection()
   }
@@ -954,6 +993,7 @@ export class RecorderOrchestrator {
     // 安全网：若仍处于我们施加的系统静音中，确保恢复
     this.restoreSystemMuteIfNeeded()
     this.startRecordingLock = false
+    this.activeRunMode = null
     this.pendingStopWhileStarting = false
     this.handsFreeMode = false
     this.finalHandledInCurrentRun = false
@@ -1631,7 +1671,21 @@ export class RecorderOrchestrator {
 
   // ── Recording lifecycle ──
 
-  private async startRecording() {
+  async startRecording() {
+    const provider = this.provider
+    const providerMode = provider.mode
+    if (providerMode === 'local' && !this.fileTranscriptionAdmissionReady) {
+      addRuntimeEvent('info', 'recorder', 'Ignored local start while file transcription admission is restoring')
+      this.overlayService.showError(t('filesUnavailable'))
+      return
+    }
+    if (providerMode === 'local' && this.fileTranscriptionReservation) {
+      addRuntimeEvent('info', 'recorder', 'Ignored local start while file transcription owns local admission', {
+        blockedMode: this.fileTranscriptionReservation.blockedMode,
+      })
+      this.overlayService.showError(t('filesBusy'))
+      return
+    }
     if (
       this.subtitleModeActive
       || this.state !== 'idle'
@@ -1649,9 +1703,9 @@ export class RecorderOrchestrator {
     }
 
     // 未就绪（如 server 模式后端未连接）：给出告警，不进入录音，避免悬浮窗卡住关不掉
-    if (!this.provider.isReady()) {
+    if (!provider.isReady()) {
       this.handsFreeMode = false
-      addRuntimeEvent('warn', 'recorder', 'Provider not ready; ignored start-recording request', { mode: this.provider.mode })
+      addRuntimeEvent('warn', 'recorder', 'Provider not ready; ignored start-recording request', { mode: providerMode })
       this.overlayService.showError(this.notReadyMessage())
       this.ensureConnection()
       return
@@ -1662,12 +1716,13 @@ export class RecorderOrchestrator {
     const timedOutContext = this.timedOutProcessingContext
     if (timedOutContext) {
       this.timedOutProcessingContext = null
-      this.provider.cancel()
+      provider.cancel()
       this.finishRun(timedOutContext.runId)
     }
 
     const runId = ++this.runSequence
     this.activeRunId = runId
+    this.activeRunMode = providerMode
     this.activeAsrWarning = null
     this.activeFallbackToken = 0
     this.startRecordingLock = true
@@ -1840,7 +1895,7 @@ export class RecorderOrchestrator {
 
       // 并行执行 WebSocket 连接和麦克风采集，减少等待时间
       const [, captureResult] = await Promise.all([
-        this.provider.connect(this.buildProviderCallbacks()),
+        provider.connect(this.buildProviderCallbacks()),
         startCapture(
           this.cachedMicId || undefined,
           (buffer) => {
@@ -1852,7 +1907,7 @@ export class RecorderOrchestrator {
               })
             }
             this.recordedChunks.push(buffer.slice(0))
-            this.provider.sendAudio(buffer)
+            provider.sendAudio(buffer)
           },
           undefined,
           (pcmFrame) => {
@@ -1898,7 +1953,7 @@ export class RecorderOrchestrator {
       }
 
       // Both WebSocket and mic are ready — send start command
-      const started = this.provider.start(promptOpts)
+      const started = provider.start(promptOpts)
       if (!started) {
         throw new Error('sendStart failed')
       }
@@ -1908,10 +1963,10 @@ export class RecorderOrchestrator {
       this.recordStartPerf = performance.now()
       if (!this.transition('recording')) {
         this.startRecordingLock = false
-        this.provider.cancel()
+        provider.cancel()
         this.finishRun(runId)
         this.resetToIdle()
-        if (this.provider.mode === 'server') this.ensureConnection()
+        if (providerMode === 'server') this.ensureConnection()
         return
       }
       this.startRecordingLock = false
@@ -1956,7 +2011,7 @@ export class RecorderOrchestrator {
       addRuntimeEvent('error', 'recorder', 'Failed to start recording', { error: String(error) })
       try { await stopCapture() } catch { /* ignore */ }
       this.finishRun(runId)
-      this.provider.cancel()
+      provider.cancel()
       // 在悬浮窗显示错误信息，让用户知道发生了什么
       const errMsg = String(error)
       if (errMsg.includes('麦克风') || errMsg.includes('microphone') || errMsg.includes('audio')) { // i18n-allow: 匹配底层中文错误串
