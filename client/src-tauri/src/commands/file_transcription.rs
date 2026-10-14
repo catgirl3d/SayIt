@@ -1216,21 +1216,26 @@ struct CloudWindowRunResult {
 #[derive(Debug)]
 enum CloudWindowRunError {
     Cancelled,
-    Failed(String),
+    Failed {
+        position_samples: Option<u64>,
+        detail: String,
+    },
 }
 
-fn run_cloud_windowed_recognition<I, Recognize, Pause, Checkpoint>(
+fn run_cloud_windowed_recognition<I, Recognize, Pause, Checkpoint, Skipped>(
     windows: I,
     cancel: &CancelToken,
     mut recognize: Recognize,
     mut pause: Pause,
     mut checkpoint: Checkpoint,
+    mut on_skipped_fragment: Skipped,
 ) -> Result<CloudWindowRunResult, CloudWindowRunError>
 where
     I: IntoIterator<Item = Result<CloudWindowStep, String>>,
     Recognize: FnMut(&[f32]) -> Result<String, String>,
     Pause: FnMut(Duration),
     Checkpoint: FnMut(&str, u64, bool) -> Result<(), String>,
+    Skipped: FnMut(u64, Option<u64>),
 {
     let mut text = String::new();
     let mut has_speech = false;
@@ -1246,10 +1251,17 @@ where
         let Some(step) = windows.next() else {
             break;
         };
-        let step = step.map_err(CloudWindowRunError::Failed)?;
+        let step = step.map_err(|detail| CloudWindowRunError::Failed {
+            position_samples: None,
+            detail,
+        })?;
         let Some(speech_samples) = step.speech_samples.as_deref() else {
-            checkpoint(&text, step.processed_samples, has_checkpoint)
-                .map_err(CloudWindowRunError::Failed)?;
+            checkpoint(&text, step.processed_samples, has_checkpoint).map_err(|detail| {
+                CloudWindowRunError::Failed {
+                    position_samples: Some(step.position_samples),
+                    detail,
+                }
+            })?;
             if cancel.is_cancelled() {
                 return Err(CloudWindowRunError::Cancelled);
             }
@@ -1279,6 +1291,7 @@ where
                 Ok(_) => {
                     empty_fragments = empty_fragments.saturating_add(1);
                     first_empty_position_samples.get_or_insert(step.position_samples);
+                    on_skipped_fragment(empty_fragments, first_empty_position_samples);
                     break;
                 }
                 Err(_) if error_retries < CLOUD_ERROR_RETRY_COUNT => {
@@ -1289,15 +1302,23 @@ where
                     }
                     pause(delay);
                 }
-                Err(error) => return Err(CloudWindowRunError::Failed(error)),
+                Err(error) => {
+                    return Err(CloudWindowRunError::Failed {
+                        position_samples: Some(step.position_samples),
+                        detail: error,
+                    });
+                }
             }
         }
         if let Some(output) = output {
             append_transcript(&mut text, &output);
         }
-        let should_checkpoint = true;
-        checkpoint(&text, step.processed_samples, should_checkpoint)
-            .map_err(CloudWindowRunError::Failed)?;
+        checkpoint(&text, step.processed_samples, true).map_err(|detail| {
+            CloudWindowRunError::Failed {
+                position_samples: Some(step.position_samples),
+                detail,
+            }
+        })?;
         has_checkpoint = true;
         if cancel.is_cancelled() {
             return Err(CloudWindowRunError::Cancelled);
@@ -1522,6 +1543,16 @@ fn window_recognition_error(model: &str, language: &str, position_ms: u64, detai
         "Recognition failed with model \"{model}\" in language \"{language}\" at {}: {detail}",
         format_position_hms(position_ms)
     )
+}
+
+fn cloud_window_recognition_error(label: &str, position_ms: Option<u64>, detail: &str) -> String {
+    match position_ms {
+        Some(position_ms) => format!(
+            "Recognition failed with cloud ASR \"{label}\" at {}: {detail}",
+            format_position_hms(position_ms)
+        ),
+        None => format!("Recognition failed with cloud ASR \"{label}\": {detail}"),
+    }
 }
 
 fn empty_output_error(model: &str, language: &str, position_ms: u64) -> String {
@@ -1864,6 +1895,15 @@ fn process_cloud_pcm(
             });
             Ok(())
         },
+        |skipped_fragments, first_skipped_position_samples| {
+            let warning = skipped_fragments_warning(
+                skipped_fragments,
+                first_skipped_position_samples.map(samples_to_ms),
+            );
+            let _ = update_active(&input.job_id, |snapshot| {
+                snapshot.warning = warning.clone();
+            });
+        },
     );
     match result {
         Ok(result) => Ok((
@@ -1876,7 +1916,14 @@ fn process_cloud_pcm(
             ),
         )),
         Err(CloudWindowRunError::Cancelled) => Err(WorkerOutcome::Cancelled),
-        Err(CloudWindowRunError::Failed(error)) => Err(WorkerOutcome::Failed(error)),
+        Err(CloudWindowRunError::Failed {
+            position_samples,
+            detail,
+        }) => Err(WorkerOutcome::Failed(cloud_window_recognition_error(
+            &cloud.label,
+            position_samples.map(samples_to_ms),
+            &detail,
+        ))),
     }
 }
 
@@ -2609,6 +2656,7 @@ mod tests {
                 checkpoints.push(text.to_string());
                 Ok(())
             },
+            |_, _| panic!("no fragments are skipped in this test"),
         )
         .unwrap();
 
@@ -2634,6 +2682,7 @@ mod tests {
             },
             |_| panic!("empty results must not sleep"),
             |_, _, _| Ok(()),
+            |_, _| {},
         )
         .unwrap();
 
@@ -2641,6 +2690,28 @@ mod tests {
         assert!(result.has_speech);
         assert_eq!(result.empty_fragments, 1);
         assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn cloud_window_runner_reports_skipped_fragments_as_they_happen() {
+        let cancel = CancelToken::new();
+        let mut notifications = Vec::new();
+        let mut responses = ["", "", "", ""].into_iter();
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1)), Ok(speech_window(5))],
+            &cancel,
+            |_| Ok(responses.next().unwrap().to_string()),
+            |_| panic!("empty fragments must not sleep"),
+            |_, _, _| Ok(()),
+            |skipped_fragments, first_skipped_position_samples| {
+                notifications.push((skipped_fragments, first_skipped_position_samples));
+            },
+        )
+        .unwrap();
+
+        assert_eq!(notifications, vec![(1, Some(0)), (2, Some(0))]);
+        assert_eq!(result.empty_fragments, 2);
     }
 
     #[test]
@@ -2662,6 +2733,7 @@ mod tests {
             },
             |delay| pauses.push(delay),
             |_, _, _| Ok(()),
+            |_, _| panic!("no fragments are skipped in this test"),
         )
         .unwrap();
 
@@ -2685,11 +2757,13 @@ mod tests {
             },
             |delay| pauses.push(delay),
             |_, _, _| Ok(()),
+            |_, _| panic!("no fragments are skipped in this test"),
         );
 
         assert!(matches!(
             result,
-            Err(CloudWindowRunError::Failed(error)) if error == "failure 3"
+            Err(CloudWindowRunError::Failed { detail, position_samples })
+                if detail == "failure 3" && position_samples == Some(0)
         ));
         assert_eq!(attempts, 3);
         assert_eq!(pauses, [Duration::from_secs(1), Duration::from_secs(2)]);
@@ -2715,6 +2789,7 @@ mod tests {
                 checkpoints += 1;
                 Ok(())
             },
+            |_, _| panic!("no fragments are skipped in this test"),
         );
 
         assert!(matches!(result, Err(CloudWindowRunError::Cancelled)));
@@ -3189,6 +3264,22 @@ mod tests {
                 "Inference failed: native error"
             ),
             "Recognition failed with model \"SenseVoice Small (sensevoice-small-gguf)\" in language \"uk\" at 1:05:42: Inference failed: native error"
+        );
+    }
+
+    #[test]
+    fn cloud_window_recognition_error_contains_label_position_and_detail() {
+        assert_eq!(
+            cloud_window_recognition_error("Deepgram", Some(192_000), "Inference failed"),
+            "Recognition failed with cloud ASR \"Deepgram\" at 0:03:12: Inference failed"
+        );
+    }
+
+    #[test]
+    fn cloud_window_recognition_error_omits_the_position_when_unknown() {
+        assert_eq!(
+            cloud_window_recognition_error("Deepgram", None, "Inference failed"),
+            "Recognition failed with cloud ASR \"Deepgram\": Inference failed"
         );
     }
 
