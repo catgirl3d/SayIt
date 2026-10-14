@@ -276,6 +276,13 @@ fn file_work_blocks_transition(active: bool, retrying: bool, external_transition
     active || retrying || external_transition
 }
 
+/// A job that already released its resources no longer blocks a new start;
+/// only the final snapshot emission and the slot cleanup of that job are still
+/// pending at that point.
+fn active_job_blocks_new_start(snapshot: &FileTranscriptionSnapshot) -> bool {
+    !snapshot.resources_released
+}
+
 /// Cancellation is only meaningful while the worker can still stop early; the final
 /// export is short and must not be interrupted into half-written files, so the action
 /// closes as soon as the worker enters `finalizing`.
@@ -2407,8 +2414,12 @@ pub fn start_file_transcription(
     request: FileTranscriptionRequest,
 ) -> Result<FileTranscriptionSnapshot, String> {
     if with_controller(|controller| {
+        let active_blocks = controller
+            .active
+            .as_ref()
+            .is_some_and(|active| active_job_blocks_new_start(&active.snapshot));
         file_work_blocks_transition(
-            controller.active.is_some(),
+            active_blocks,
             controller.retrying_job.is_some(),
             controller.external_transition,
         )
@@ -2489,8 +2500,12 @@ pub fn start_file_transcription(
         _resource_lease: resource_lease,
     };
     let inserted = with_controller(|controller| {
+        let active_blocks = controller
+            .active
+            .as_ref()
+            .is_some_and(|active| active_job_blocks_new_start(&active.snapshot));
         if file_work_blocks_transition(
-            controller.active.is_some(),
+            active_blocks,
             controller.retrying_job.is_some(),
             controller.external_transition,
         ) {
@@ -3256,6 +3271,15 @@ mod tests {
         );
         assert!(snapshot.resources_released);
         assert!(!snapshot.retryable_export);
+    }
+
+    #[test]
+    fn released_jobs_do_not_block_the_next_start() {
+        let mut snapshot = blank_snapshot();
+        assert!(active_job_blocks_new_start(&snapshot));
+
+        snapshot.resources_released = true;
+        assert!(!active_job_blocks_new_start(&snapshot));
     }
 
     #[test]
