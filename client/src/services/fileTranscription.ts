@@ -2,6 +2,8 @@ import * as bridge from './bridge'
 import { getSetting } from './store'
 import { getSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
 import { localModelDisplayName } from '@/i18n/displayNames'
+import { loadAsrProfiles } from '@/features/settings/asrProfileStore'
+import { buildAsrProviderConfig, findAsrProvider, type AsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
 import { releaseFileTranscription, reserveFileTranscription, setFileTranscriptionAdmissionReady } from './recorder'
 
 export type FilePhase =
@@ -16,6 +18,8 @@ export type FilePhase =
   | 'cancelled'
   | 'failed'
 
+export type FileTranscriptionEngine = 'local' | 'cloud'
+
 export interface FileTranscriptionRequest {
   filePath: string
   outputDirectory: string
@@ -26,10 +30,31 @@ export interface FileTranscriptionRequest {
   audioStreamIndex: number | null
 }
 
+export interface FileTranscriptionEngineOptions {
+  engine?: FileTranscriptionEngine
+  cloudProfileId?: string | null
+}
+
+export interface FileTranscriptionCloudProfile {
+  id: string
+  label: string
+  provider: string
+  model: string
+}
+
+export interface FileTranscriptionCloudRequest {
+  provider: string
+  model: string
+  label: string
+  config: AsrProviderConfig
+}
+
 export interface FileTranscriptionSnapshot {
   jobId: string
   sequence: number
   phase: FilePhase
+  engine: FileTranscriptionEngine
+  cloudLabel: string | null
   durationMs: number | null
   processedMs: number
   savedMs: number
@@ -61,6 +86,8 @@ export interface FileTranscriptionStartOptions {
   outputDirectory: string
   ffmpegDirectory: string | null
   audioStreamIndex: number | null
+  engine?: FileTranscriptionEngine
+  cloudProfileId?: string | null
 }
 
 export interface FileTranscriptionBridge {
@@ -82,6 +109,18 @@ interface AvailableModel {
 interface DownloadedModel {
   id: string
   complete: boolean
+}
+
+interface FileTranscriptionIpcRequest {
+  filePath: string
+  outputDirectory: string
+  ffmpegDirectory: string | null
+  audioStreamIndex: number | null
+  engine: FileTranscriptionEngine
+  cloud: FileTranscriptionCloudRequest | null
+  modelId?: string
+  language?: SpeechInputLanguage
+  accelerator?: string
 }
 
 const defaultBridge: FileTranscriptionBridge = {
@@ -217,6 +256,11 @@ export class FileTranscriptionService {
     return this.ipc.invoke<string | null>('detect_ffmpeg_directory')
   }
 
+  async getCloudProfiles(): Promise<FileTranscriptionCloudProfile[]> {
+    const state = await loadAsrProfiles()
+    return state.profiles.map((profile) => this.cloudProfileMetadata(profile))
+  }
+
   async getLocalSettings(): Promise<LocalFileSettings> {
     const [modelIdValue, language, acceleratorValue, available, downloaded] = await Promise.all([
       getSetting('localAsr.modelId', 'sensevoice-small-gguf'),
@@ -236,34 +280,63 @@ export class FileTranscriptionService {
     }
   }
 
-  async start(request: FileTranscriptionRequest): Promise<FileTranscriptionSnapshot> {
-    return this.startReserved(async () => request)
-  }
-
-  async startWithCurrentSettings(options: FileTranscriptionStartOptions): Promise<FileTranscriptionSnapshot> {
-    return this.startReserved(async () => {
-      const settings = await this.getLocalSettings()
+  async start(request: FileTranscriptionRequest, options: FileTranscriptionEngineOptions = {}): Promise<FileTranscriptionSnapshot> {
+    const engine = options.engine ?? 'local'
+    return this.startReserved(engine, async () => {
+      if (engine === 'cloud') {
+        return this.buildCloudRequest({
+          filePath: request.filePath,
+          outputDirectory: request.outputDirectory,
+          ffmpegDirectory: request.ffmpegDirectory,
+          audioStreamIndex: request.audioStreamIndex,
+        }, options.cloudProfileId, request.language)
+      }
       return {
-        ...options,
-        ...settings,
+        ...request,
+        engine: 'local',
+        cloud: null,
       }
     })
   }
 
-  private async startReserved(loadRequest: () => Promise<FileTranscriptionRequest>): Promise<FileTranscriptionSnapshot> {
+  async startWithCurrentSettings(options: FileTranscriptionStartOptions): Promise<FileTranscriptionSnapshot> {
+    const { engine: requestedEngine, cloudProfileId, ...fileOptions } = options
+    const engine = requestedEngine ?? 'local'
+    return this.startReserved(engine, async () => {
+      if (engine === 'cloud') {
+        const language = await getSpeechInputLanguage()
+        return this.buildCloudRequest(fileOptions, cloudProfileId, language)
+      }
+      const settings = await this.getLocalSettings()
+      return {
+        ...fileOptions,
+        ...settings,
+        engine: 'local',
+        cloud: null,
+      }
+    })
+  }
+
+  private async startReserved(
+    engine: FileTranscriptionEngine,
+    loadRequest: () => Promise<FileTranscriptionIpcRequest>,
+  ): Promise<FileTranscriptionSnapshot> {
     await this.init()
-    this.admission.reserveFileTranscription()
-    this.reservationHeld = true
-    let pendingReservation = true
+    const needsReservation = engine === 'local'
+    if (needsReservation) {
+      this.admission.reserveFileTranscription()
+      this.reservationHeld = true
+    }
+    let pendingReservation = needsReservation
     try {
       const request = await loadRequest()
       const result = await this.ipc.invoke<FileTranscriptionSnapshot>('start_file_transcription', { request })
       const accepted = this.acceptSnapshot(result)
       if (accepted) {
-        if (result.resourcesReleased) this.releaseReservation()
-        else this.reservationJobId = result.jobId
+        if (result.resourcesReleased && needsReservation) this.releaseReservation()
+        else if (needsReservation) this.reservationJobId = result.jobId
       } else if (this.snapshot?.resourcesReleased) {
-        this.releaseReservation()
+        if (needsReservation) this.releaseReservation()
       }
       pendingReservation = false
       return accepted ? result : (this.snapshot ?? result)
@@ -309,7 +382,8 @@ export class FileTranscriptionService {
     const currentIsActive = this.snapshot !== null && !this.snapshot.resourcesReleased
     if (currentIsActive && this.snapshot?.jobId !== next.jobId) return false
 
-    if (!next.resourcesReleased && !this.reservationHeld) {
+    const needsReservation = next.engine === 'local' && !next.resourcesReleased
+    if (needsReservation && !this.reservationHeld) {
       this.admission.reserveFileTranscription()
       this.reservationHeld = true
     }
@@ -317,8 +391,10 @@ export class FileTranscriptionService {
     this.snapshot = next
     if (next.resourcesReleased) {
       if (this.reservationJobId === next.jobId) this.releaseReservation()
-    } else {
+    } else if (next.engine === 'local') {
       this.reservationJobId = next.jobId
+    } else if (this.reservationJobId === next.jobId) {
+      this.releaseReservation()
     }
     this.notify()
     return true
@@ -329,6 +405,41 @@ export class FileTranscriptionService {
     this.admission.releaseFileTranscription()
     this.reservationHeld = false
     this.reservationJobId = null
+  }
+
+  private cloudProfileMetadata(profile: AsrProfile): FileTranscriptionCloudProfile {
+    return {
+      id: profile.id,
+      label: findAsrProvider(profile.provider)?.label ?? profile.provider,
+      provider: profile.provider,
+      model: profile.model,
+    }
+  }
+
+  private async buildCloudRequest(
+    options: FileTranscriptionStartOptions,
+    cloudProfileId: string | null | undefined,
+    language: SpeechInputLanguage,
+  ): Promise<FileTranscriptionIpcRequest> {
+    if (!cloudProfileId) throw new Error('A cloud ASR profile must be selected')
+    const state = await loadAsrProfiles()
+    const profile = state.profiles.find(({ id }) => id === cloudProfileId)
+    if (!profile) throw new Error(`Cloud ASR profile not found: ${cloudProfileId}`)
+    const profileSnapshot = { ...profile }
+    const metadata = this.cloudProfileMetadata(profileSnapshot)
+    const cloud = {
+      provider: metadata.provider,
+      model: metadata.model,
+      label: metadata.label,
+    }
+    return {
+      ...options,
+      engine: 'cloud',
+      cloud: {
+        ...cloud,
+        config: buildAsrProviderConfig(profileSnapshot, language),
+      },
+    }
   }
 
   private notify(): void {

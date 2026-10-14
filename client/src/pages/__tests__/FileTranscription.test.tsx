@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
-import type { FileTranscriptionSnapshot } from '@/services/fileTranscription'
+import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { fileTranscriptionService, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
 
 const native = vi.hoisted(() => {
   const defaultInvoke = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
@@ -33,8 +35,10 @@ const native = vi.hoisted(() => {
 })
 
 const dialog = vi.hoisted(() => ({ open: vi.fn() }))
+const cloudProfiles = vi.hoisted(() => ({ loadAsrProfiles: vi.fn() }))
 let detectedFfmpegDirectory: string | null = null
 let stateListener: ((event: { payload: FileTranscriptionSnapshot }) => void) | null = null
+let snapshotSequenceBase = 0
 
 function nativeInvoke<T>(command: string, args?: Record<string, unknown>) {
   return native.invoke(command, args) as Promise<T>
@@ -56,11 +60,17 @@ vi.mock('@/services/bridge', async (importOriginal) => {
 vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }))
 vi.mock('@tauri-apps/plugin-dialog', () => dialog)
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }))
+vi.mock('@/features/settings/asrProfileStore', () => cloudProfiles)
+
+function renderPage() {
+  return render(<MemoryRouter><FileTranscription /></MemoryRouter>)
+}
 
 function fileSnapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileTranscriptionSnapshot {
+  const { sequence = 1, ...rest } = overrides
   return {
     jobId: 'job-1',
-    sequence: 1,
+    sequence: snapshotSequenceBase + sequence,
     phase: 'failed',
     durationMs: 12_000,
     processedMs: 12_000,
@@ -73,21 +83,37 @@ function fileSnapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileT
     warning: null,
     retryableExport: false,
     resourcesReleased: true,
+    engine: 'local',
+    cloudLabel: null,
+    ...rest,
+  }
+}
+
+function cloudProfile(overrides: Partial<AsrProfile> = {}): AsrProfile {
+  return {
+    ...emptyAsrProfile('deepgram'),
+    id: 'cloud-profile-1',
+    apiKey: 'test-key',
     ...overrides,
   }
 }
 
 describe('file transcription page', () => {
+  afterEach(() => vi.restoreAllMocks())
+
   beforeEach(() => {
     native.invoke.mockClear()
     native.invoke.mockImplementation(native.defaultInvoke)
     native.listen.mockClear()
     dialog.open.mockReset()
     detectedFfmpegDirectory = null
+    snapshotSequenceBase += 100
+    cloudProfiles.loadAsrProfiles.mockReset()
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({ profiles: [], activeId: '' })
   })
 
   it('shows the file picker workflow and existing local engine summary', async () => {
-    render(<FileTranscription />)
+    renderPage()
 
     expect(screen.getByRole('heading', { name: 'Transcribe a file' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Choose audio or video file' })).toBeTruthy()
@@ -96,13 +122,94 @@ describe('file transcription page', () => {
     expect(screen.getByText('Auto')).toBeTruthy()
   })
 
+  it('renders the cloud profile selector with provider, model, and label details', async () => {
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile()],
+      activeId: 'cloud-profile-1',
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+
+    expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy()
+    expect(screen.getByText('Deepgram')).toBeTruthy()
+    expect(screen.getByText('nova-3')).toBeTruthy()
+  })
+
+  it('allows cloud transcription without an installed local model and sends the selected cloud profile', async () => {
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile(),
+        cloudProfile({ id: 'cloud-profile-2', provider: 'openai_transcribe', model: 'whisper-1' }),
+      ],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4')
+      .mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({
+          phase: 'completed',
+          error: null,
+          resourcesReleased: true,
+          engine: 'cloud',
+          cloudLabel: 'Deepgram',
+        })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    expect((startButton as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'cloud',
+      cloudProfileId: 'cloud-profile-2',
+    })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({
+        engine: 'cloud',
+        cloud: expect.objectContaining({
+          provider: 'openai_transcribe',
+          model: 'whisper-1',
+          label: 'OpenAI transcription',
+        }),
+      }),
+    }))
+  })
+
+  it('shows a settings link instead of a selector when no cloud profiles exist', async () => {
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+
+    expect(screen.getByText('No cloud profiles are configured.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open Cloud API settings' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Cloud profile' })).toBeNull()
+  })
+
   it('retries local settings after a settings error', async () => {
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'list_available_models') throw new Error('engine offline')
       return native.defaultInvoke(command, args)
     })
 
-    render(<FileTranscription />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('Could not read local engine settings: engine offline')).toBeTruthy())
     expect(screen.queryByText('SenseVoice Small')).toBeNull()
@@ -116,7 +223,7 @@ describe('file transcription page', () => {
 
   it('preselects the default physical audio track instead of the first track', async () => {
     dialog.open.mockResolvedValue('C:/recording.mp4')
-    render(<FileTranscription />)
+    renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
 
@@ -127,7 +234,7 @@ describe('file transcription page', () => {
   })
 
   it('shows retry export only for a released retryable export failure', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -170,7 +277,7 @@ describe('file transcription page', () => {
   })
 
   it('opens cancellation confirmation without cancelling immediately', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -191,7 +298,7 @@ describe('file transcription page', () => {
   })
 
   it('cancels exactly once only after confirmation', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
     act(() => {
       stateListener?.({ payload: fileSnapshot({
@@ -211,7 +318,7 @@ describe('file transcription page', () => {
   })
 
   it('does not cancel when the confirmation is dismissed', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
     act(() => {
       stateListener?.({ payload: fileSnapshot({
@@ -230,7 +337,7 @@ describe('file transcription page', () => {
   })
 
   it('uses a destructive style for the cancellation confirmation', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
     act(() => {
       stateListener?.({ payload: fileSnapshot({
@@ -250,7 +357,7 @@ describe('file transcription page', () => {
   })
 
   it('shows truthful preparation progress and no progress for checking or loading', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -300,7 +407,7 @@ describe('file transcription page', () => {
   })
 
   it('shows saved progress while transcribing', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -323,7 +430,7 @@ describe('file transcription page', () => {
   })
 
   it('keeps saved progress visible while finalizing', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -345,7 +452,7 @@ describe('file transcription page', () => {
   })
 
   it('shows indeterminate saved progress when the duration is unknown', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -367,7 +474,7 @@ describe('file transcription page', () => {
   })
 
   it('closes cancellation once the job enters finalizing', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -399,7 +506,7 @@ describe('file transcription page', () => {
   it('offers a detected FFmpeg folder and re-inspects the selected file when used', async () => {
     detectedFfmpegDirectory = 'C:/tools/ffmpeg'
     dialog.open.mockResolvedValue('C:/recording.mp4')
-    render(<FileTranscription />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('C:/tools/ffmpeg')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
@@ -414,7 +521,7 @@ describe('file transcription page', () => {
 
   it('dismisses a detected FFmpeg folder suggestion for the session', async () => {
     detectedFfmpegDirectory = 'C:/tools/ffmpeg'
-    render(<FileTranscription />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('C:/tools/ffmpeg')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
@@ -425,7 +532,7 @@ describe('file transcription page', () => {
   it('hides the detected suggestion after the user chooses a folder manually', async () => {
     detectedFfmpegDirectory = 'C:/tools/ffmpeg'
     dialog.open.mockResolvedValue('C:/manual/ffmpeg')
-    render(<FileTranscription />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('C:/tools/ffmpeg')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
@@ -435,7 +542,7 @@ describe('file transcription page', () => {
   })
 
   it('shows no FFmpeg suggestion when detection returns no candidate', async () => {
-    render(<FileTranscription />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect(screen.queryByText('Use this folder')).toBeNull()
@@ -455,7 +562,7 @@ describe('file transcription page', () => {
       if (command === 'get_file_transcription_state') return null
       return undefined
     })
-    render(<FileTranscription />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect(screen.queryByRole('alert')).toBeNull()
@@ -463,7 +570,7 @@ describe('file transcription page', () => {
   })
 
   it('renders a backend warning as a separate non-error notice', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -482,7 +589,7 @@ describe('file transcription page', () => {
   })
 
   it('does not render an absent backend warning', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
@@ -498,7 +605,7 @@ describe('file transcription page', () => {
   })
 
   it('keeps a backend warning visible alongside an error', async () => {
-    render(<FileTranscription />)
+    renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {

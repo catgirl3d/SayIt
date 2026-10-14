@@ -1,4 +1,6 @@
 use crate::models::{downloader, gguf_asr, local_vad};
+use crate::providers::{registry, types::AsrProviderConfig};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
@@ -39,16 +41,40 @@ pub enum FilePhase {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FileTranscriptionEngine {
+    #[default]
+    Local,
+    Cloud,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileCloudJobRequest {
+    pub provider: String,
+    pub model: String,
+    pub label: String,
+    #[serde(alias = "config")]
+    pub asr_config: AsrProviderConfig,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTranscriptionRequest {
     pub file_path: String,
     pub output_directory: String,
+    #[serde(default)]
     pub model_id: String,
+    #[serde(default)]
     pub language: String,
+    #[serde(default)]
     pub accelerator: String,
     pub ffmpeg_directory: Option<String>,
     pub audio_stream_index: Option<usize>,
+    #[serde(default)]
+    pub engine: FileTranscriptionEngine,
+    #[serde(default)]
+    pub cloud: Option<FileCloudJobRequest>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,6 +98,8 @@ pub struct FileTranscriptionSnapshot {
     pub job_id: String,
     pub sequence: u64,
     pub phase: FilePhase,
+    pub engine: FileTranscriptionEngine,
+    pub cloud_label: Option<String>,
     pub duration_ms: Option<u64>,
     pub processed_ms: u64,
     pub saved_ms: u64,
@@ -822,8 +850,8 @@ struct WorkerInput {
     cancel: CancelToken,
     tools: ToolPaths,
     temp_dir: PathBuf,
-    _model_lease: downloader::ModelPathLease,
-    _resource_lease: gguf_asr::FileResourceLease,
+    _model_lease: Option<downloader::ModelPathLease>,
+    _resource_lease: Option<gguf_asr::FileResourceLease>,
 }
 
 enum WorkerOutcome {
@@ -974,6 +1002,43 @@ impl PcmWindowReader {
         combined.append(&mut self.pending_samples);
         self.pending_samples = combined;
     }
+}
+
+struct AnalyzedPcmWindow {
+    samples: Vec<f32>,
+    speech: Option<std::ops::Range<usize>>,
+    position_samples: u64,
+    processed_samples: u64,
+}
+
+fn read_analyzed_pcm_window(
+    reader: &mut PcmWindowReader,
+    window_samples: usize,
+    read_samples: usize,
+    position_samples: u64,
+) -> Result<Option<AnalyzedPcmWindow>, String> {
+    let Some(candidate) = reader.read_window(read_samples)? else {
+        return Ok(None);
+    };
+    let intervals = local_vad::detect_speech_intervals(&candidate, SAMPLE_RATE)
+        .map_err(|error| format!("Voice activity detection failed: {error}"))?;
+    let boundary = if candidate.len() <= window_samples {
+        candidate.len()
+    } else {
+        choose_window_boundary(&intervals, window_samples, candidate.len())
+    };
+    let boundary = boundary.max(1).min(candidate.len());
+    if boundary < candidate.len() {
+        reader.prepend(&candidate[boundary..]);
+    }
+    let speech = speech_span_from_intervals(&intervals, boundary);
+    let processed_samples = position_samples.saturating_add(boundary as u64);
+    Ok(Some(AnalyzedPcmWindow {
+        samples: candidate[..boundary].to_vec(),
+        speech,
+        position_samples,
+        processed_samples,
+    }))
 }
 
 fn speech_span_from_intervals(
@@ -1132,6 +1197,134 @@ fn append_transcript(existing: &mut String, next: &str) {
         existing.push_str("\n\n");
     }
     existing.push_str(next);
+}
+
+struct CloudWindowStep {
+    speech_samples: Option<Vec<f32>>,
+    position_samples: u64,
+    processed_samples: u64,
+}
+
+struct CloudWindowRunResult {
+    text: String,
+    has_speech: bool,
+    empty_fragments: u64,
+    first_empty_position_samples: Option<u64>,
+}
+
+#[derive(Debug)]
+enum CloudWindowRunError {
+    Cancelled,
+    Failed(String),
+}
+
+fn run_cloud_windowed_recognition<I, Recognize, Pause, Checkpoint>(
+    windows: I,
+    cancel: &CancelToken,
+    mut recognize: Recognize,
+    mut pause: Pause,
+    mut checkpoint: Checkpoint,
+) -> Result<CloudWindowRunResult, CloudWindowRunError>
+where
+    I: IntoIterator<Item = Result<CloudWindowStep, String>>,
+    Recognize: FnMut(&[f32]) -> Result<String, String>,
+    Pause: FnMut(Duration),
+    Checkpoint: FnMut(&str, u64, bool) -> Result<(), String>,
+{
+    let mut text = String::new();
+    let mut has_speech = false;
+    let mut has_checkpoint = false;
+    let mut empty_fragments = 0_u64;
+    let mut first_empty_position_samples = None;
+    let mut windows = windows.into_iter();
+
+    loop {
+        if cancel.is_cancelled() {
+            return Err(CloudWindowRunError::Cancelled);
+        }
+        let Some(step) = windows.next() else {
+            break;
+        };
+        let step = step.map_err(CloudWindowRunError::Failed)?;
+        let Some(speech_samples) = step.speech_samples.as_deref() else {
+            checkpoint(&text, step.processed_samples, has_checkpoint)
+                .map_err(CloudWindowRunError::Failed)?;
+            if cancel.is_cancelled() {
+                return Err(CloudWindowRunError::Cancelled);
+            }
+            continue;
+        };
+
+        has_speech = true;
+        let mut output = None;
+        let mut empty_attempt = 0_u8;
+        let mut error_retries = 0_u8;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(CloudWindowRunError::Cancelled);
+            }
+            let recognition = recognize(speech_samples);
+            if cancel.is_cancelled() {
+                return Err(CloudWindowRunError::Cancelled);
+            }
+            match recognition {
+                Ok(result) if !result.trim().is_empty() => {
+                    output = Some(result);
+                    break;
+                }
+                Ok(_) if empty_attempt == 0 => {
+                    empty_attempt = 1;
+                }
+                Ok(_) => {
+                    empty_fragments = empty_fragments.saturating_add(1);
+                    first_empty_position_samples.get_or_insert(step.position_samples);
+                    break;
+                }
+                Err(_) if error_retries < 2 => {
+                    let delay = match error_retries {
+                        0 => Duration::from_secs(1),
+                        1 => Duration::from_secs(2),
+                        _ => unreachable!(),
+                    };
+                    error_retries += 1;
+                    if cancel.is_cancelled() {
+                        return Err(CloudWindowRunError::Cancelled);
+                    }
+                    pause(delay);
+                }
+                Err(error) => return Err(CloudWindowRunError::Failed(error)),
+            }
+        }
+        if let Some(output) = output {
+            append_transcript(&mut text, &output);
+        }
+        let should_checkpoint = true;
+        checkpoint(&text, step.processed_samples, should_checkpoint)
+            .map_err(CloudWindowRunError::Failed)?;
+        has_checkpoint = true;
+        if cancel.is_cancelled() {
+            return Err(CloudWindowRunError::Cancelled);
+        }
+    }
+
+    if cancel.is_cancelled() {
+        return Err(CloudWindowRunError::Cancelled);
+    }
+    Ok(CloudWindowRunResult {
+        text,
+        has_speech,
+        empty_fragments,
+        first_empty_position_samples,
+    })
+}
+
+fn encode_pcm_i16_base64(samples: &[f32]) -> String {
+    let mut pcm = Vec::with_capacity(samples.len().saturating_mul(SAMPLE_BYTES));
+    for &sample in samples {
+        let value = (sample * 32_768.0).round().clamp(-32_768.0, 32_767.0) as i16;
+        pcm.extend_from_slice(&value.to_le_bytes());
+    }
+    base64::engine::general_purpose::STANDARD.encode(pcm)
 }
 
 fn safe_title(source: &Path) -> String {
@@ -1352,6 +1545,12 @@ fn model_load_error(model: &str, detail: &str) -> String {
 fn all_windows_empty_error(model: &str, language: &str) -> String {
     format!(
         "The local model \"{model}\" returned no text for speech detected audio (language \"{language}\")"
+    )
+}
+
+fn all_cloud_windows_empty_error(label: &str, language: &str) -> String {
+    format!(
+        "The cloud ASR service \"{label}\" returned no text for detected speech (language \"{language}\")"
     )
 }
 
@@ -1587,6 +1786,117 @@ fn process_pcm(
     ))
 }
 
+fn process_cloud_pcm(
+    input: &WorkerInput,
+    pcm_path: &Path,
+    duration_ms: u64,
+) -> Result<(bool, String, Option<PathBuf>, Option<String>), WorkerOutcome> {
+    let cloud = input.request.cloud.as_ref().ok_or_else(|| {
+        WorkerOutcome::Failed("Cloud transcription configuration is missing".into())
+    })?;
+    let mut reader = PcmWindowReader::open(pcm_path).map_err(WorkerOutcome::Failed)?;
+    let window_samples = TARGET_WINDOW_SAMPLES;
+    let read_samples = window_samples.saturating_add(LOOKAHEAD_SAMPLES);
+    let mut source_samples = 0_u64;
+    let windows = std::iter::from_fn(move || {
+        if source_samples == u64::MAX {
+            return None;
+        }
+        match read_analyzed_pcm_window(&mut reader, window_samples, read_samples, source_samples) {
+            Ok(Some(window)) => {
+                let AnalyzedPcmWindow {
+                    samples,
+                    speech,
+                    position_samples,
+                    processed_samples,
+                } = window;
+                source_samples = processed_samples;
+                Some(Ok(CloudWindowStep {
+                    speech_samples: speech.map(|span| samples[span].to_vec()),
+                    position_samples,
+                    processed_samples,
+                }))
+            }
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        }
+    });
+    let title = safe_title(Path::new(&input.request.file_path));
+    let config = cloud.asr_config.clone();
+    let mut progress = CheckpointProgress::default();
+    let mut draft = None;
+    let result = run_cloud_windowed_recognition(
+        windows,
+        &input.cancel,
+        |samples| {
+            let audio_b64 = encode_pcm_i16_base64(samples);
+            let response = tauri::async_runtime::block_on(registry::dispatch_cloud_transcribe(
+                &config,
+                &audio_b64,
+                SAMPLE_RATE as u32,
+                &[],
+            ))?;
+            Ok(response.result.text)
+        },
+        thread::sleep,
+        |text, processed_samples, should_checkpoint| {
+            progress.mark_processed(processed_samples);
+            if should_checkpoint {
+                let checkpoint = write_checkpoint(
+                    Path::new(&input.request.output_directory),
+                    &title,
+                    &input.job_id,
+                    draft.as_deref(),
+                    text,
+                    processed_samples,
+                    Some(duration_ms),
+                )
+                .map_err(|error| format!("Checkpoint failed: {error}"));
+                match checkpoint {
+                    Ok(checkpoint) => {
+                        draft = Some(checkpoint);
+                        progress.mark_checkpointed();
+                    }
+                    Err(error) => {
+                        let _ = update_active(&input.job_id, |snapshot| {
+                            preserve_unsaved_checkpoint(
+                                snapshot,
+                                text,
+                                processed_samples,
+                                progress.checkpointed_samples,
+                                &error,
+                            );
+                        });
+                        return Err(error);
+                    }
+                }
+            }
+            let _ = update_active(&input.job_id, |snapshot| {
+                snapshot.processed_ms = samples_to_ms(progress.processed_samples);
+                snapshot.saved_ms = samples_to_ms(progress.checkpointed_samples);
+                snapshot.text = text.to_string();
+                snapshot.draft_path = draft
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string());
+            });
+            Ok(())
+        },
+    );
+    match result {
+        Ok(result) => Ok((
+            result.has_speech,
+            result.text,
+            draft,
+            skipped_fragments_warning(
+                result.empty_fragments,
+                result.first_empty_position_samples.map(samples_to_ms),
+            ),
+        )),
+        Err(CloudWindowRunError::Cancelled) => Err(WorkerOutcome::Cancelled),
+        Err(CloudWindowRunError::Failed(error)) => Err(WorkerOutcome::Failed(error)),
+    }
+}
+
 fn unique_export_pair(
     output_directory: &Path,
     title: &str,
@@ -1657,7 +1967,15 @@ fn export_documents(
 }
 
 fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
-    let model_label = file_model_label(&input.request.model_id);
+    let model_label = match input.request.engine {
+        FileTranscriptionEngine::Local => file_model_label(&input.request.model_id),
+        FileTranscriptionEngine::Cloud => input
+            .request
+            .cloud
+            .as_ref()
+            .map(|cloud| cloud.label.clone())
+            .unwrap_or_else(|| "Cloud ASR".into()),
+    };
     set_active_phase(&input.job_id, FilePhase::Checking, None);
     let source = match validate_source(Path::new(&input.request.file_path)) {
         Ok(source) => source,
@@ -1704,28 +2022,39 @@ fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
         return WorkerOutcome::Cancelled;
     }
 
-    set_active_phase(&input.job_id, FilePhase::Loading, None);
-    let session = match gguf_asr::prepare_file_session(
-        &input.request.model_id,
-        &input.request.accelerator,
-        &input.cancel,
-    ) {
-        Ok(session) => session,
-        Err(error) => {
-            return WorkerOutcome::Failed(model_load_error(&model_label, &error));
+    let (has_speech, text, draft, warning) = match input.request.engine {
+        FileTranscriptionEngine::Local => {
+            set_active_phase(&input.job_id, FilePhase::Loading, None);
+            let session = match gguf_asr::prepare_file_session(
+                &input.request.model_id,
+                &input.request.accelerator,
+                &input.cancel,
+            ) {
+                Ok(session) => session,
+                Err(error) => {
+                    return WorkerOutcome::Failed(model_load_error(&model_label, &error));
+                }
+            };
+            if input.cancel.is_cancelled() {
+                drop(session);
+                return WorkerOutcome::Cancelled;
+            }
+            set_active_phase(&input.job_id, FilePhase::Transcribing, None);
+            let result = process_pcm(input, &pcm_path, duration_ms, &session, &model_label);
+            drop(session);
+            match result {
+                Ok(result) => result,
+                Err(outcome) => return outcome,
+            }
+        }
+        FileTranscriptionEngine::Cloud => {
+            set_active_phase(&input.job_id, FilePhase::Transcribing, None);
+            match process_cloud_pcm(input, &pcm_path, duration_ms) {
+                Ok(result) => result,
+                Err(outcome) => return outcome,
+            }
         }
     };
-    if input.cancel.is_cancelled() {
-        drop(session);
-        return WorkerOutcome::Cancelled;
-    }
-    set_active_phase(&input.job_id, FilePhase::Transcribing, None);
-    let (has_speech, text, draft, warning) =
-        match process_pcm(input, &pcm_path, duration_ms, &session, &model_label) {
-            Ok(result) => result,
-            Err(outcome) => return outcome,
-        };
-    drop(session);
     if let Some(warning) = warning {
         let _ = update_active(&input.job_id, |snapshot| {
             snapshot.warning = Some(warning.clone());
@@ -1735,10 +2064,14 @@ fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
         return WorkerOutcome::NoSpeech;
     }
     if text.trim().is_empty() {
-        return WorkerOutcome::Failed(all_windows_empty_error(
-            &model_label,
-            &input.request.language,
-        ));
+        return WorkerOutcome::Failed(match input.request.engine {
+            FileTranscriptionEngine::Local => {
+                all_windows_empty_error(&model_label, &input.request.language)
+            }
+            FileTranscriptionEngine::Cloud => {
+                all_cloud_windows_empty_error(&model_label, &input.request.language)
+            }
+        });
     }
     if input.cancel.is_cancelled() {
         return WorkerOutcome::Cancelled;
@@ -1857,17 +2190,47 @@ pub fn start_file_transcription(
     if !output_directory.is_dir() {
         return Err("The output directory is not an existing directory".into());
     }
-    validate_model_id(&request.model_id)?;
-    if !gguf_asr::model_is_downloaded(&request.model_id) {
-        return Err(
-            "The selected local ASR model is not downloaded; install it in Voice Engine first"
-                .into(),
-        );
+    match request.engine {
+        FileTranscriptionEngine::Local => {
+            validate_model_id(&request.model_id)?;
+            if !gguf_asr::model_is_downloaded(&request.model_id) {
+                return Err(
+                    "The selected local ASR model is not downloaded; install it in Voice Engine first"
+                        .into(),
+                );
+            }
+        }
+        FileTranscriptionEngine::Cloud => {
+            let cloud = request
+                .cloud
+                .as_ref()
+                .ok_or_else(|| "Cloud transcription configuration is missing".to_string())?;
+            if !registry::is_supported_asr_provider(&cloud.provider) {
+                return Err(format!(
+                    "The selected cloud ASR provider is not supported: {}",
+                    cloud.provider
+                ));
+            }
+            if !registry::is_supported_asr_provider(&cloud.asr_config.provider) {
+                return Err(format!(
+                    "The selected cloud ASR provider is not supported: {}",
+                    cloud.asr_config.provider
+                ));
+            }
+        }
     }
     let tools = resolve_tools(request.ffmpeg_directory.as_deref())?;
     let job_id = new_job_id();
-    let resource_lease = gguf_asr::acquire_file_resource(&job_id)?;
-    let model_lease = downloader::acquire_model_path(&downloader::model_dir(&request.model_id))?;
+    let resource_lease = match request.engine {
+        FileTranscriptionEngine::Local => Some(gguf_asr::acquire_file_resource(&job_id)?),
+        FileTranscriptionEngine::Cloud => None,
+    };
+    let model_lease = match request.engine {
+        FileTranscriptionEngine::Local => Some(downloader::acquire_model_path(
+            &downloader::model_dir(&request.model_id),
+        )?),
+        FileTranscriptionEngine::Cloud => None,
+    };
     let temp_dir = match create_job_temp_dir(&job_id) {
         Ok(directory) => directory,
         Err(error) => return Err(error),
@@ -1877,6 +2240,8 @@ pub fn start_file_transcription(
         job_id: job_id.clone(),
         sequence: next_sequence(),
         phase: FilePhase::Checking,
+        engine: request.engine,
+        cloud_label: request.cloud.as_ref().map(|cloud| cloud.label.clone()),
         duration_ms: None,
         processed_ms: 0,
         saved_ms: 0,
@@ -2008,7 +2373,7 @@ pub async fn retry_file_transcription_export(
             false,
             controller.external_transition,
         ) {
-            return Err("The local engine is busy with another file transcription".to_string());
+            return Err("A file transcription is already active".to_string());
         }
         if controller.retrying_job.is_some() {
             return Err("A file export retry is already in progress".to_string());
@@ -2132,6 +2497,8 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 7,
             phase: FilePhase::Transcribing,
+            engine: FileTranscriptionEngine::Local,
+            cloud_label: None,
             duration_ms: Some(12_000),
             processed_ms: 4_000,
             saved_ms: 3_000,
@@ -2149,6 +2516,8 @@ mod tests {
         assert_eq!(json["jobId"], "job-1");
         assert_eq!(json["processedMs"], 4_000);
         assert_eq!(json["savedMs"], 3_000);
+        assert_eq!(json["engine"], "local");
+        assert_eq!(json["cloudLabel"], serde_json::Value::Null);
         assert_eq!(json["resourcesReleased"], false);
         assert_eq!(json["retryableExport"], false);
         assert_eq!(json["warning"], serde_json::Value::Null);
@@ -2158,6 +2527,230 @@ mod tests {
             serde_json::to_value(FilePhase::NoSpeech).unwrap(),
             "no_speech"
         );
+    }
+
+    #[test]
+    fn transcription_request_defaults_to_the_local_engine() {
+        let request: FileTranscriptionRequest = serde_json::from_value(serde_json::json!({
+            "filePath": "C:/recording.wav",
+            "outputDirectory": "C:/output",
+            "modelId": "sensevoice-small-gguf",
+            "language": "en",
+            "accelerator": "auto",
+            "ffmpegDirectory": null,
+            "audioStreamIndex": null,
+        }))
+        .unwrap();
+
+        assert_eq!(request.engine, FileTranscriptionEngine::Local);
+        assert!(request.cloud.is_none());
+    }
+
+    #[test]
+    fn cloud_engine_round_trips_through_lowercase_serde() {
+        let encoded = serde_json::to_string(&FileTranscriptionEngine::Cloud).unwrap();
+        assert_eq!(encoded, "\"cloud\"");
+        assert_eq!(
+            serde_json::from_str::<FileTranscriptionEngine>(&encoded).unwrap(),
+            FileTranscriptionEngine::Cloud
+        );
+    }
+
+    #[test]
+    fn cloud_request_accepts_the_frontend_config_shape_without_local_fields() {
+        let request: FileTranscriptionRequest = serde_json::from_value(serde_json::json!({
+            "filePath": "C:/recording.wav",
+            "outputDirectory": "C:/output",
+            "ffmpegDirectory": null,
+            "audioStreamIndex": null,
+            "engine": "cloud",
+            "cloud": {
+                "provider": "deepgram",
+                "model": "nova-3",
+                "label": "Deepgram",
+                "config": {
+                    "provider": "deepgram",
+                    "api_key": "sentinel-key",
+                    "app_id": "",
+                    "extra": { "model": "nova-3", "language": "en" }
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(request.engine, FileTranscriptionEngine::Cloud);
+        let cloud = request.cloud.unwrap();
+        assert_eq!(cloud.provider, "deepgram");
+        assert_eq!(cloud.model, "nova-3");
+        assert_eq!(cloud.asr_config.api_key, "sentinel-key");
+        assert_eq!(request.model_id, "");
+        assert_eq!(request.language, "");
+        assert_eq!(request.accelerator, "");
+    }
+
+    #[test]
+    fn cloud_snapshot_does_not_serialize_the_asr_configuration() {
+        let snapshot = FileTranscriptionSnapshot {
+            job_id: "job-cloud".into(),
+            sequence: 1,
+            phase: FilePhase::Transcribing,
+            engine: FileTranscriptionEngine::Cloud,
+            cloud_label: Some("Deepgram".into()),
+            duration_ms: Some(1_000),
+            processed_ms: 500,
+            saved_ms: 500,
+            text: "recognized".into(),
+            draft_path: None,
+            txt_path: None,
+            markdown_path: None,
+            error: None,
+            warning: None,
+            retryable_export: false,
+            resources_released: false,
+        };
+
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(serialized.contains("\"engine\":\"cloud\""));
+        assert!(serialized.contains("\"cloudLabel\":\"Deepgram\""));
+        assert!(!serialized.contains("asr_config"));
+        assert!(!serialized.contains("api_key"));
+        assert!(!serialized.contains("secret"));
+    }
+
+    #[test]
+    fn cloud_window_runner_concatenates_non_empty_results() {
+        let cancel = CancelToken::new();
+        let mut responses = ["first", "second"].into_iter();
+        let mut checkpoints = Vec::new();
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1)), Ok(speech_window(2))],
+            &cancel,
+            |_| Ok(responses.next().unwrap().to_string()),
+            |_| panic!("successful windows must not sleep"),
+            |text, _, _| {
+                checkpoints.push(text.to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.text, "first\n\nsecond");
+        assert!(result.has_speech);
+        assert_eq!(
+            checkpoints,
+            vec!["first".to_string(), "first\n\nsecond".to_string()]
+        );
+    }
+
+    #[test]
+    fn cloud_window_runner_ignores_empty_results() {
+        let cancel = CancelToken::new();
+        let mut attempts = 0;
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1))],
+            &cancel,
+            |_| {
+                attempts += 1;
+                Ok(String::new())
+            },
+            |_| panic!("empty results must not sleep"),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(result.text, "");
+        assert!(result.has_speech);
+        assert_eq!(result.empty_fragments, 1);
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn cloud_window_runner_retries_errors_then_concatenates_success() {
+        let cancel = CancelToken::new();
+        let mut attempts = 0;
+        let mut pauses = Vec::new();
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1))],
+            &cancel,
+            |_| {
+                attempts += 1;
+                match attempts {
+                    1 | 2 => Err("temporary failure".into()),
+                    3 => Ok("recovered".into()),
+                    _ => unreachable!(),
+                }
+            },
+            |delay| pauses.push(delay),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(result.text, "recovered");
+        assert_eq!(attempts, 3);
+        assert_eq!(pauses, [Duration::from_secs(1), Duration::from_secs(2)]);
+    }
+
+    #[test]
+    fn cloud_window_runner_returns_the_last_error_after_two_retries() {
+        let cancel = CancelToken::new();
+        let mut attempts = 0;
+        let mut pauses = Vec::new();
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1))],
+            &cancel,
+            |_| {
+                attempts += 1;
+                Err(format!("failure {attempts}"))
+            },
+            |delay| pauses.push(delay),
+            |_, _, _| Ok(()),
+        );
+
+        assert!(matches!(
+            result,
+            Err(CloudWindowRunError::Failed(error)) if error == "failure 3"
+        ));
+        assert_eq!(attempts, 3);
+        assert_eq!(pauses, [Duration::from_secs(1), Duration::from_secs(2)]);
+    }
+
+    #[test]
+    fn cloud_window_runner_discards_an_in_flight_result_after_cancellation() {
+        let cancel = CancelToken::new();
+        let recognizer_cancel = cancel.clone();
+        let mut attempts = 0;
+        let mut checkpoints = 0;
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1)), Ok(speech_window(2))],
+            &cancel,
+            |_| {
+                attempts += 1;
+                recognizer_cancel.cancel();
+                Ok("discarded".into())
+            },
+            |_| panic!("cancellation must stop before retry or next window"),
+            |_, _, _| {
+                checkpoints += 1;
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Err(CloudWindowRunError::Cancelled)));
+        assert_eq!(attempts, 1);
+        assert_eq!(checkpoints, 0);
+    }
+
+    fn speech_window(id: u64) -> CloudWindowStep {
+        CloudWindowStep {
+            speech_samples: Some(vec![id as f32]),
+            position_samples: id.saturating_sub(1),
+            processed_samples: id,
+        }
     }
 
     #[test]
@@ -2207,6 +2800,8 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 1,
             phase: FilePhase::Preparing,
+            engine: FileTranscriptionEngine::Local,
+            cloud_label: None,
             duration_ms: None,
             processed_ms: 0,
             saved_ms: 0,
@@ -2274,6 +2869,8 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 1,
             phase: FilePhase::Transcribing,
+            engine: FileTranscriptionEngine::Local,
+            cloud_label: None,
             duration_ms: Some(5_000),
             processed_ms: 1_000,
             saved_ms: 1_000,
@@ -2306,6 +2903,8 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 1,
             phase: FilePhase::Completed,
+            engine: FileTranscriptionEngine::Local,
+            cloud_label: None,
             duration_ms: Some(5_000),
             processed_ms: 5_000,
             saved_ms: 5_000,

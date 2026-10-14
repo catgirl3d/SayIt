@@ -29,6 +29,8 @@ import {
   formatFilePathForDisplay,
   isRetryableExportFailure,
   type FileMediaInfo,
+  type FileTranscriptionCloudProfile,
+  type FileTranscriptionEngine,
   type FilePhase,
   type FileTranscriptionSnapshot,
   type LocalFileSettings,
@@ -106,6 +108,11 @@ export default function FileTranscription() {
   const [outputDirectory, setOutputDirectory] = useState('')
   const [ffmpegDirectory, setFfmpegDirectory] = useState<string | null>(null)
   const [localSettings, setLocalSettings] = useState<LocalFileSettings | null>(null)
+  const [engine, setEngine] = useState<FileTranscriptionEngine>('local')
+  const [cloudProfiles, setCloudProfiles] = useState<FileTranscriptionCloudProfile[]>([])
+  const [cloudProfileId, setCloudProfileId] = useState('')
+  const [cloudProfilesLoading, setCloudProfilesLoading] = useState(true)
+  const [cloudProfilesError, setCloudProfilesError] = useState('')
   const [ffmpegSuggestion, setFfmpegSuggestion] = useState<string | null>(null)
   const [inspecting, setInspecting] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
@@ -124,6 +131,28 @@ export default function FileTranscription() {
       .then((value) => { setSettingsError(''); setLocalSettings(value) })
       .catch((reason) => setSettingsError(`${t('files.settingsFailed')}: ${errorText(reason)}`))
   }, [t])
+
+  useEffect(() => {
+    let cancelled = false
+    setCloudProfilesLoading(true)
+    setCloudProfilesError('')
+    void fileTranscriptionService.getCloudProfiles()
+      .then((profiles) => {
+        if (cancelled) return
+        setCloudProfiles(profiles)
+        setCloudProfileId((current) => {
+          if (profiles.some((profile) => profile.id === current)) return current
+          return profiles[0]?.id ?? ''
+        })
+      })
+      .catch((reason) => {
+        if (!cancelled) setCloudProfilesError(errorText(reason))
+      })
+      .finally(() => {
+        if (!cancelled) setCloudProfilesLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     if (!snapshot || snapshot.resourcesReleased) setCancelRequested(false)
@@ -216,6 +245,8 @@ export default function FileTranscription() {
 
   const startTranscription = async () => {
     if (!filePath || !outputDirectory || !mediaInfo || actionBusy) return
+    const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId)
+    if (engine === 'cloud' && !selectedCloudProfile) return
     setActionBusy(true)
     setError('')
     try {
@@ -224,6 +255,8 @@ export default function FileTranscription() {
         outputDirectory,
         ffmpegDirectory,
         audioStreamIndex,
+        engine,
+        cloudProfileId: selectedCloudProfile ? selectedCloudProfile.id : undefined,
       })
     } catch (reason) {
       setError(`${t('files.startFailed')}: ${errorText(reason)}`)
@@ -299,7 +332,9 @@ export default function FileTranscription() {
   }
 
   const active = isActiveSnapshot(snapshot)
-  const canStart = Boolean(filePath && outputDirectory && mediaInfo && localSettings?.modelInstalled && !inspecting && !actionBusy && !active)
+  const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId) ?? null
+  const engineReady = engine === 'local' ? Boolean(localSettings?.modelInstalled) : Boolean(selectedCloudProfile)
+  const canStart = Boolean(filePath && outputDirectory && mediaInfo && engineReady && !inspecting && !actionBusy && !active)
   const hasMultipleTracks = Boolean(mediaInfo && mediaInfo.audioTracks.length > 1)
 
   return (
@@ -349,12 +384,19 @@ export default function FileTranscription() {
         </div>
 
         <div className="space-y-5">
-          <Card>
-            <CardHeader className="pb-4"><div className="flex items-center justify-between gap-3"><CardTitle className="text-lg">{t('files.engineTitle')}</CardTitle><Settings2 className="h-4 w-4 text-muted-foreground" /></div></CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {localSettings ? <><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{localSettings.modelName}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.language')}</span><span className="text-right font-medium">{languageLabel(localSettings.language)}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.accelerator')}</span><span className="text-right font-medium">{acceleratorLabel(localSettings.accelerator)}</span></div>{!localSettings.modelInstalled && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.modelMissing')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openVoiceEngine')}<ExternalLink className="h-3 w-3" /></Link></div>}</> : settingsError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{settingsError}</span></div><Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void retryLocalSettings()}>{t('common.retry')}</Button></div> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.settingsLoading')}</div>}
-            </CardContent>
-          </Card>
+           <Card>
+             <CardHeader className="pb-4"><div className="flex items-center justify-between gap-3"><CardTitle className="text-lg">{t('files.engineTitle')}</CardTitle><Settings2 className="h-4 w-4 text-muted-foreground" /></div></CardHeader>
+             <CardContent className="space-y-3 text-sm">
+               <div className="flex rounded-lg bg-muted/40 p-1" role="group" aria-label={t('files.engineTitle')}>
+                 <Button type="button" variant={engine === 'local' ? 'secondary' : 'ghost'} className="h-8 flex-1" aria-pressed={engine === 'local'} onClick={() => setEngine('local')} disabled={active || actionBusy}>{t('files.engineLocal')}</Button>
+                 <Button type="button" variant={engine === 'cloud' ? 'secondary' : 'ghost'} className="h-8 flex-1" aria-pressed={engine === 'cloud'} onClick={() => setEngine('cloud')} disabled={active || actionBusy}>{t('files.engineCloud')}</Button>
+               </div>
+               {engine === 'local' ? localSettings ? <><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{localSettings.modelName}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.language')}</span><span className="text-right font-medium">{languageLabel(localSettings.language)}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.accelerator')}</span><span className="text-right font-medium">{acceleratorLabel(localSettings.accelerator)}</span></div>{!localSettings.modelInstalled && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.modelMissing')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openVoiceEngine')}<ExternalLink className="h-3 w-3" /></Link></div>}</> : settingsError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{settingsError}</span></div><Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void retryLocalSettings()}>{t('common.retry')}</Button></div> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.settingsLoading')}</div> : cloudProfilesLoading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.cloudProfilesLoading')}</div> : cloudProfilesError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{t('files.cloudProfilesFailed')}: {cloudProfilesError}</span></div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div> : cloudProfiles.length === 0 ? <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.cloudNoProfiles')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div> : <>
+                 <div className="space-y-1.5"><span id="file-cloud-profile-label" className="text-xs font-medium text-foreground">{t('files.cloudProfile')}</span><Select labelledBy="file-cloud-profile-label" value={cloudProfileId} onChange={setCloudProfileId} placeholder={t('files.cloudSelectProfile')} disabled={active || actionBusy} options={cloudProfiles.map((profile) => ({ value: profile.id, label: `${profile.label} · ${profile.model}`, title: `${profile.provider} · ${profile.model}` }))} /></div>
+                 {selectedCloudProfile && <div className="space-y-2 rounded-lg bg-muted/30 px-3 py-2.5"><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudProvider')}</span><span className="text-right font-medium">{selectedCloudProfile.provider}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{selectedCloudProfile.model}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudLabel')}</span><span className="text-right font-medium">{selectedCloudProfile.label}</span></div></div>}
+               </>}
+             </CardContent>
+           </Card>
 
           {snapshot && <Card>
             <CardHeader className="pb-4"><div className="flex items-center justify-between gap-3"><CardTitle className="text-lg">{t('files.jobTitle')}</CardTitle><span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${statusTone(snapshot)}`}>{snapshot.phase === 'completed' ? <CheckCircle2 className="h-3.5 w-3.5" /> : snapshot.phase === 'failed' || snapshot.phase === 'no_speech' ? <AlertCircle className="h-3.5 w-3.5" /> : null}{phaseLabel(snapshot.phase)}</span></div></CardHeader>
