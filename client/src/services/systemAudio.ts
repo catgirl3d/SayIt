@@ -173,6 +173,11 @@ const CAPTION_HOLD_MS = 8_000
 const JOURNAL_FLUSH_TIMEOUT_MS = 3_000
 // Streamed translation text is repainted at most this often; the settled caption is always published.
 const PARTIAL_UPDATE_INTERVAL_MS = 100
+// Streamed partial translations are off. Repainting the settled caption with the growing prefix made the
+// bottom panel collapse to a short line and grow back on every phrase, which reads as the caption jumping.
+// This flag is the switch for that model streaming: when true, the native request streams partial text and
+// the caption repaints as it arrives; when false, the translation lands whole.
+const STREAM_SUBTITLE_TRANSLATIONS = false
 // A flush answer normally lands within a few hundred milliseconds. When it is lost, the confirmed
 // text is settled without it so captions keep moving; the advanced commit watermark keeps the late
 // answer from publishing a second caption.
@@ -1266,7 +1271,9 @@ export class SystemAudioSession {
         startOptions,
         logSource: this.provider?.mode ?? 'unknown',
         isCurrent: () => generation === this.generation && this.translating === job,
-        onPartial: (text) => this.publishPartialTranslation(job, text, generation),
+        onPartial: STREAM_SUBTITLE_TRANSLATIONS
+          ? (text) => this.publishPartialTranslation(job, text, generation)
+          : undefined,
       })
     } catch (error) {
       // polishWithClientAi can reject before its own request-error handling, for example when the AI settings

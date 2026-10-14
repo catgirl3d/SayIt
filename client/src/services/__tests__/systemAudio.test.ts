@@ -205,10 +205,6 @@ function polishRequests() {
   return native.invoke.mock.calls.filter(([name]) => name === 'cloud_polish').map(([, args]) => args.request)
 }
 
-function emitPolishDelta(requestId: unknown, text: string) {
-  native.listeners.get('cloud-polish-delta')?.({ payload: { requestId, text } })
-}
-
 function enableTranscriptJournal() {
   native.settings.set('systemAudio.transcriptEnabled', true)
   native.settings.set('systemAudio.transcriptDir', 'C:/transcripts')
@@ -2433,13 +2429,11 @@ describe('system audio subtitle session', () => {
     it('drops a translation that resolves after the session was restarted', async () => {
       numberRecognizedSpeech()
       const pendings: Array<ReturnType<typeof deferred<{ text: string; elapsed_ms: number }>>> = []
-      const requestIds: unknown[] = []
       const original = native.invoke.getMockImplementation()!
       native.invoke.mockImplementation((name, args) => {
         if (name === 'cloud_polish') {
           const pending = deferred<{ text: string; elapsed_ms: number }>()
           pendings.push(pending)
-          requestIds.push((args.request as { request_id?: string }).request_id)
           return pending.promise
         }
         return original(name, args)
@@ -2455,12 +2449,9 @@ describe('system audio subtitle session', () => {
       await settle()
       expect(pendings).toHaveLength(2)
 
-      emitPolishDelta(requestIds[0], 'Stale partial')
-      await settle()
       pendings[0].resolve({ text: 'Stale translation', elapsed_ms: 5 })
       await settle()
       expect(session.getSnapshot().caption).toBe('')
-      expect(overlayCalls.some((call) => call.method === 'update' && call.payload.subtitleText === 'Stale partial')).toBe(false)
       expect(overlayCalls.some((call) => call.method === 'update' && call.payload.subtitleText === 'Stale translation')).toBe(false)
 
       pendings[1].resolve({ text: 'Fresh translation', elapsed_ms: 5 })
@@ -2521,81 +2512,49 @@ describe('system audio subtitle session', () => {
       expect(session.getSnapshot().caption).toBe('Translated speech')
     })
 
-    it('shows the translation while the AI is still writing it', async () => {
-      let requestId: unknown
+    it('requests no model streaming and waits for the whole translation', async () => {
       const pending = deferred<{ text: string; elapsed_ms: number }>()
       const original = native.invoke.getMockImplementation()!
-      native.invoke.mockImplementation((name, args) => {
-        if (name === 'cloud_polish') {
-          requestId = (args.request as { request_id?: string }).request_id
-          emitPolishDelta(requestId, 'Translated')
-          return pending.promise
-        }
-        return original(name, args)
-      })
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : original(name, args))
       await session.start({ deviceId: '', targetLanguage: 'ru' })
       speak()
       await settle()
 
-      expect(session.getSnapshot().caption).toBe('Translated')
-
-      emitPolishDelta(requestId, 'Translated speech')
-      await settle()
-      expect(session.getSnapshot().caption).toBe('Translated')
-
-      await vi.advanceTimersByTimeAsync(120)
-      emitPolishDelta(requestId, 'Translated speech')
-      await settle()
-      expect(session.getSnapshot().caption).toBe('Translated speech')
+      const request = polishRequests()[0] as { stream?: boolean; request_id?: string | null }
+      expect(request.stream).toBe(false)
+      expect(request.request_id).toBeNull()
+      expect(session.getSnapshot().caption).toBe('')
 
       pending.resolve({ text: 'Translated speech', elapsed_ms: 5 })
       await settle()
       expect(session.getSnapshot().caption).toBe('Translated speech')
     })
 
-    it('streams the translation next to the recognized original in dual mode', async () => {
+    it('pairs the recognized original with its whole translation in dual mode', async () => {
       native.settings.set('systemAudio.dualSubtitles', true)
-      let requestId: unknown
       const pending = deferred<{ text: string; elapsed_ms: number }>()
       const original = native.invoke.getMockImplementation()!
-      native.invoke.mockImplementation((name, args) => {
-        if (name === 'cloud_polish') {
-          requestId = (args.request as { request_id?: string }).request_id
-          return pending.promise
-        }
-        return original(name, args)
-      })
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : original(name, args))
       await session.start({ deviceId: '', targetLanguage: 'ru' })
       speak()
       await settle()
 
-      emitPolishDelta(requestId, 'Partial translation')
-      await settle()
-      expect(session.getSnapshot()).toMatchObject({ caption: 'Partial translation', source: 'Original speech' })
+      expect(session.getSnapshot()).toMatchObject({ caption: '', source: 'Original speech' })
 
       pending.resolve({ text: 'Final translation', elapsed_ms: 5 })
       await settle()
       expect(session.getSnapshot()).toMatchObject({ caption: 'Final translation', source: 'Original speech' })
     })
 
-    it('replaces a partial translation with the recognized original when the stream fails', async () => {
-      let requestId: unknown
+    it('shows the recognized original when the translation returns no text', async () => {
       const pending = deferred<{ text: string; elapsed_ms: number }>()
       const original = native.invoke.getMockImplementation()!
-      native.invoke.mockImplementation((name, args) => {
-        if (name === 'cloud_polish') {
-          requestId = (args.request as { request_id?: string }).request_id
-          return pending.promise
-        }
-        return original(name, args)
-      })
+      native.invoke.mockImplementation((name, args) => name === 'cloud_polish' ? pending.promise : original(name, args))
       await session.start({ deviceId: '', targetLanguage: 'ru' })
       speak()
       await settle()
 
-      emitPolishDelta(requestId, 'Partial translation')
-      await settle()
-      expect(session.getSnapshot().caption).toBe('Partial translation')
+      expect(session.getSnapshot().caption).toBe('')
 
       pending.resolve({ text: '', elapsed_ms: 0 })
       await settle()
@@ -2768,7 +2727,7 @@ describe('system audio subtitle session', () => {
       expect(session.getSnapshot()).toMatchObject({ caption: 'A translation', liveOriginal: 'Phrase B' })
     })
 
-    it('keeps a newer live phrase separate while the previous phrase translation streams', async () => {
+    it('keeps a newer live phrase separate while the previous phrase translation is pending', async () => {
       native.settings.set('systemAudio.dualSubtitles', true)
       const pending = deferred<{ text: string; elapsed_ms: number }>()
       const original = native.invoke.getMockImplementation()!
@@ -2779,15 +2738,12 @@ describe('system audio subtitle session', () => {
       emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
       await settle()
-      const requestId = (polishRequests()[0] as { request_id: string }).request_id
-      emitPolishDelta(requestId, 'A translation')
-      await settle()
 
       emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Phrase B' })
       await settle()
 
       expect(session.getSnapshot()).toMatchObject({
-        caption: 'A translation',
+        caption: '',
         source: 'Phrase A',
         liveOriginal: 'Phrase B',
       })
@@ -2805,8 +2761,6 @@ describe('system audio subtitle session', () => {
       emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
       await settle()
-      const firstRequest = (polishRequests()[0] as { request_id: string }).request_id
-      emitPolishDelta(firstRequest, 'A translation')
       pendings[0].resolve({ text: 'A translation', elapsed_ms: 5 })
       await settle()
       expect(session.getSnapshot().caption).toBe('A translation')
@@ -2816,12 +2770,6 @@ describe('system audio subtitle session', () => {
       await settle()
       expect(polishRequests()).toHaveLength(2)
       expect(session.getSnapshot().caption).toBe('A translation')
-
-      await vi.advanceTimersByTimeAsync(120)
-      const secondRequest = (polishRequests()[1] as { request_id: string }).request_id
-      emitPolishDelta(secondRequest, 'B translation')
-      await settle()
-      expect(session.getSnapshot().caption).toBe('B translation')
 
       pendings[1].resolve({ text: 'B translation', elapsed_ms: 5 })
       await settle()
@@ -4272,30 +4220,26 @@ describe('system audio subtitle session', () => {
   describe('subtitle transcript journal', () => {
     function deferredPolish() {
       const pendings: Array<ReturnType<typeof deferred<{ text: string; elapsed_ms: number }>>> = []
-      const requestIds: unknown[] = []
       const original = native.invoke.getMockImplementation()!
       native.invoke.mockImplementation((name, args) => {
         if (name === 'cloud_polish') {
           const pending = deferred<{ text: string; elapsed_ms: number }>()
           pendings.push(pending)
-          requestIds.push((args.request as { request_id?: string }).request_id)
           return pending.promise
         }
         return original(name, args)
       })
-      return { pendings, requestIds }
+      return { pendings }
     }
 
-    it('writes a settled translated fragment as two lines and never records streamed partials', async () => {
+    it('writes a settled translated fragment as two lines', async () => {
       const { appends, creates } = enableTranscriptJournal()
-      const { pendings, requestIds } = deferredPolish()
+      const { pendings } = deferredPolish()
       await session.start({ deviceId: '', targetLanguage: 'uk' })
       speak()
       await settle()
       expect(polishRequests()).toHaveLength(1)
 
-      emitPolishDelta(requestIds[0], 'Streamed partial')
-      await settle()
       expect(appends).toHaveLength(0)
 
       pendings[0].resolve({ text: 'Translated speech', elapsed_ms: 5 })
