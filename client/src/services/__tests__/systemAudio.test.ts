@@ -2864,7 +2864,7 @@ describe('system audio subtitle session', () => {
       expect(session.getSnapshot().warning).toContain(t('systemAudio.discontinuity'))
     })
 
-    it('commits only confirmed prefixes at the source-audio target and ignores a delayed old boundary', async () => {
+    it('settles the target window once when its flush answers and keeps the following phrase live', async () => {
       native.settings.set('systemAudio.maxSegmentSec', 3)
       const harness = createLiveProviderHarness()
       await useLiveSession(harness)
@@ -2874,19 +2874,25 @@ describe('system audio subtitle session', () => {
       await settle()
 
       expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
-      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
-      expect(session.getSnapshot().liveOriginal).toBe('')
+      expect(polishRequests()).toHaveLength(0)
+      expect(session.getSnapshot().liveOriginal).toBe('Confirmed prefix')
 
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 640, audioEndMs: 704, text: 'Phrase B' })
-      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 0, audioEndMs: 640, text: '', speechFinal: true })
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 640, audioEndMs: 640, text: '', isFinal: true, fromFinalize: true })
       await settle()
 
-      expect(session.getSnapshot().liveOriginal).toBe('Phrase B')
       expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
+      expect(session.getSnapshot().liveOriginal).toBe('Phrase B')
+
+      emitLiveResult(harness, 0, { resultId: 4, audioStartMs: 0, audioEndMs: 640, text: '', speechFinal: true })
+      await settle()
+
+      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
+      expect(session.getSnapshot().liveOriginal).toBe('Phrase B')
       expect(harness.sessions).toHaveLength(1)
     })
 
-    it('measures target-committed ASR delay from the stable result arrival, not the target timer', async () => {
+    it('settles the target window only on its flush answer and measures ASR delay from the stable arrival', async () => {
       const trace = enablePipelineDebug()
       native.settings.set('systemAudio.maxSegmentSec', 3)
       vi.setSystemTime(new Date('2026-10-08T12:00:00.000Z'))
@@ -2901,7 +2907,90 @@ describe('system audio subtitle session', () => {
       frames(1, 0)
       await settle()
 
+      expect(trace.getPipelineSnapshot().runs).toHaveLength(0)
+      expect(polishRequests()).toHaveLength(0)
+
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 0, audioEndMs: 32, text: '', isFinal: true, fromFinalize: true })
+      await settle()
+
       expect(trace.getPipelineSnapshot().runs).toMatchObject([{ asrMs: 68, recognitionKind: 'live' }])
+      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed early'])
+    })
+
+    it('settles a paused phrase once when its flush answers instead of committing its prefix early', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(1, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Paused prefix', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'tail' })
+      const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
+      const gapFrame = captureFrame(captureId, 0)
+      deliverFrame(gapFrame)
+      emitLiveIdle({
+        sessionId: captureId,
+        frameSequence: gapFrame.frameSequence,
+        lastFrameCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        lastAudioCaptureEndUnixUs: gapFrame.captureEndUnixUs,
+        confirmedThroughUnixUs: gapFrame.captureEndUnixUs + 512_000,
+      })
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+      expect(polishRequests()).toHaveLength(0)
+      expect(session.getSnapshot().liveOriginal).toBe('Paused prefix tail')
+
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'tail', isFinal: true, fromFinalize: true })
+      await settle()
+
+      expect(polishRequests().map((request) => request.text)).toEqual(['Paused prefix tail'])
+      expect(session.getSnapshot().liveOriginal).toBe('')
+    })
+
+    it('settles confirmed text when the flush answer is lost and ignores a late boundary answer', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(20, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 640, text: 'Confirmed prefix', isFinal: true })
+      frames(74, 0)
+      await settle()
+
+      expect(polishRequests()).toHaveLength(0)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      await settle()
+
+      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
+      expect(session.getSnapshot().liveOriginal).toBe('')
+
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 640, audioEndMs: 640, text: '', isFinal: true, fromFinalize: true })
+      await settle()
+
+      expect(polishRequests()).toHaveLength(1)
+      expect(session.getSnapshot().liveOriginal).toBe('')
+    })
+
+    it('anchors the fallback settlement to its flush window so the next target stays on grid', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      frames(20, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 640, text: 'Confirmed prefix', isFinal: true })
+      frames(74, 0)
+      frames(31, 0.9)
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 640, audioEndMs: 4_000, text: 'Next phrase' })
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      await settle()
+      expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
+
+      frames(63, 0.9)
+      await settle()
+
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
     })
 
     it('requests finalization at the target without promoting an interim or waiting for an acknowledgement', async () => {
@@ -4118,6 +4207,26 @@ describe('system audio subtitle session', () => {
       expect(overlayCalls.filter((call) => call.method === 'update')
         .some((call) => call.payload.subtitleText === 'Settled original'
           && call.payload.subtitleLiveText === 'Settled original')).toBe(false)
+      expect(polishRequests()).toHaveLength(0)
+    })
+
+    it('settles a recognition-only window once when its flush answers', async () => {
+      native.settings.set('systemAudio.maxSegmentSec', 3)
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness, true)
+      frames(20, 0.9)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 640, text: 'Recognized start', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 640, audioEndMs: 896, text: 'and its tail' })
+      frames(74, 0)
+      await settle()
+
+      expect(session.getSnapshot().caption).toBe('')
+      expect(session.getSnapshot().liveOriginal).toBe('Recognized start and its tail')
+
+      emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 640, audioEndMs: 896, text: 'and its tail', isFinal: true, fromFinalize: true })
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ caption: 'Recognized start and its tail', liveOriginal: '' })
       expect(polishRequests()).toHaveLength(0)
     })
   })

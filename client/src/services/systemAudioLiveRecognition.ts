@@ -77,14 +77,7 @@ export type LiveIdleOutcome =
 
 export interface LiveFrameSendResult {
   readonly targetCrossed: boolean
-  readonly targetStartMs: number
   readonly pendingText: boolean
-  readonly confirmedBoundaryMs: number | null
-}
-
-export interface LiveGapCloseAction {
-  readonly confirmedBoundaryMs: number | null
-  readonly shouldFinalize: boolean
 }
 
 export type LiveResultOutcome =
@@ -261,19 +254,14 @@ export class LiveSpeechAccumulator {
     if (this.audioFrontierMs - this.targetStartMs < this.targetMs) {
       return {
         targetCrossed: false,
-        targetStartMs: this.targetStartMs,
         pendingText: false,
-        confirmedBoundaryMs: null,
       }
     }
 
     this.targetStartMs = this.audioFrontierMs
-    const pendingText = Boolean(this.confirmedText.trim() || this.interimText.trim())
     return {
       targetCrossed: true,
-      targetStartMs: this.targetStartMs,
-      pendingText,
-      confirmedBoundaryMs: pendingText && this.confirmedText.trim() ? this.confirmedEndMs : null,
+      pendingText: Boolean(this.confirmedText.trim() || this.interimText.trim()),
     }
   }
 
@@ -373,11 +361,14 @@ export class LiveSpeechAccumulator {
     return changed ? { kind: 'updated', liveOriginal: this.liveOriginal } : { kind: 'ignored' }
   }
 
-  prepareGapClose(): LiveGapCloseAction {
-    return {
-      confirmedBoundaryMs: this.confirmedText ? this.confirmedEndMs : null,
-      shouldFinalize: this.audioFrontierMs > this.finalizedFrontierMs,
-    }
+  /** Whether the paused stream moved past the last flush request, so a pause needs a finalize of its own. */
+  shouldFinalizeOnGap(): boolean {
+    return this.audioFrontierMs > this.finalizedFrontierMs
+  }
+
+  /** End of the confirmed text that a flush settles; null while nothing is confirmed yet. */
+  get confirmedBoundaryMs(): number | null {
+    return this.confirmedText ? this.confirmedEndMs : null
   }
 
   registerFinalize(closeReason: SegmentCloseReason): LiveFinalizeRequest | null {

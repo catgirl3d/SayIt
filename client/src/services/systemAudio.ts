@@ -15,6 +15,7 @@ import {
 } from './subtitleSegmentation'
 import {
   LiveSpeechAccumulator,
+  type LiveFinalizeRequest,
   type LiveFrameTiming,
   type LiveIdleTiming,
   type LiveRecognitionError,
@@ -172,6 +173,10 @@ const CAPTION_HOLD_MS = 8_000
 const JOURNAL_FLUSH_TIMEOUT_MS = 3_000
 // Streamed translation text is repainted at most this often; the settled caption is always published.
 const PARTIAL_UPDATE_INTERVAL_MS = 100
+// A flush answer normally lands within a few hundred milliseconds. When it is lost, the confirmed
+// text is settled without it so captions keep moving; the advanced commit watermark keeps the late
+// answer from publishing a second caption.
+const LIVE_SETTLE_FALLBACK_MS = 1_000
 // Every caption-bound field of the snapshot; reset together so a notice or original never outlives its caption.
 const NO_CAPTION = { caption: '', captionNotice: '', source: '', liveOriginal: '' } as const
 const NO_SETTLED_CAPTION = { caption: '', captionNotice: '', source: '' } as const
@@ -244,6 +249,7 @@ export class SystemAudioSession {
   private gapTimer: ReturnType<typeof setTimeout> | null = null
   private processingTimer: ReturnType<typeof setTimeout> | null = null
   private captionTimer: ReturnType<typeof setTimeout> | null = null
+  private liveSettleTimer: ReturnType<typeof setTimeout> | null = null
   private settledCaptionPhraseId: number | null = null
   private liveRequested = false
   private liveSelected = false
@@ -811,10 +817,9 @@ export class SystemAudioSession {
     const sendResult = accumulator.markFrameSent()
     // A target crossing during silence must not flush the stream: Deepgram would finalize a
     // stray word into a phrase of its own. Flush only while speech is actually pending.
+    // The flush answer confirms the whole window and commits it as one caption; committing a
+    // confirmed prefix here would make that answer publish the tail as a second, replacing caption.
     if (!sendResult.targetCrossed || !sendResult.pendingText) return
-    if (sendResult.confirmedBoundaryMs !== null) {
-      this.commitLivePhrase(sendResult.confirmedBoundaryMs, 'cap', sendResult.targetStartMs)
-    }
     this.requestLiveFinalize(generation, 'cap')
   }
 
@@ -950,6 +955,7 @@ export class SystemAudioSession {
     }
 
     const liveOriginal = accumulator.completeCommit(prepared).liveOriginal
+    this.clearLiveSettleFallback()
     if (recognitionOnlyResult) {
       this.publish({
         caption: recognitionOnlyResult.caption,
@@ -974,17 +980,43 @@ export class SystemAudioSession {
     if (!live || !accumulator) return
     const request = accumulator.registerFinalize(reason)
     if (!request) return
+    this.armLiveSettleFallback(generation, request)
     void live.finalize().catch((error: unknown) => {
       if (generation === this.generation && live === this.liveSession) this.fail(String(error))
     })
   }
 
+  // The provider's flush answer carries the whole phrase, and the regular result path publishes it.
+  // This fallback settles the confirmed text anyway when that answer is late or lost, so a stalled
+  // stream cannot freeze captions; it never promotes interim text.
+  private armLiveSettleFallback(generation: number, request: LiveFinalizeRequest) {
+    this.clearLiveSettleFallback()
+    this.liveSettleTimer = setTimeout(() => {
+      this.liveSettleTimer = null
+      if (generation !== this.generation) return
+      const accumulator = this.liveAccumulator
+      if (!accumulator || !this.liveSelected) return
+      const boundary = accumulator.confirmedBoundaryMs
+      if (boundary === null) return
+      // A cap flush settles on its window grid, exactly like its answer; a pause anchors at the
+      // current frontier, as its answer does.
+      const targetStartMs = request.closeReason === 'cap' ? request.targetStartMs : accumulator.audioMs
+      addRuntimeEvent('warn', 'system-audio', 'Live flush answer is late; settling confirmed speech', { reason: request.closeReason })
+      this.commitLivePhrase(boundary, request.closeReason, targetStartMs)
+    }, LIVE_SETTLE_FALLBACK_MS)
+  }
+
+  private clearLiveSettleFallback() {
+    if (this.liveSettleTimer) clearTimeout(this.liveSettleTimer)
+    this.liveSettleTimer = null
+  }
+
   private closeLiveGap() {
     const accumulator = this.liveAccumulator
     if (!this.liveSelected || !accumulator) return
-    const action = accumulator.prepareGapClose()
-    if (action.confirmedBoundaryMs !== null) this.commitLivePhrase(action.confirmedBoundaryMs, 'gap')
-    if (action.shouldFinalize) this.requestLiveFinalize(this.generation, 'gap')
+    // Like the target flush, a pause settles through the provider's answer: committing the
+    // confirmed prefix here would leave that answer to publish the tail as a second caption.
+    if (accumulator.shouldFinalizeOnGap()) this.requestLiveFinalize(this.generation, 'gap')
   }
 
   private recoverLiveAfterDiscontinuity() {
@@ -1254,8 +1286,8 @@ export class SystemAudioSession {
 
   private clearWork(preserveWarnings = false) {
     this.resetSegment()
-    for (const timer of [this.processingTimer, this.captionTimer]) if (timer) clearTimeout(timer)
-    this.processingTimer = this.captionTimer = null
+    for (const timer of [this.processingTimer, this.captionTimer, this.liveSettleTimer]) if (timer) clearTimeout(timer)
+    this.processingTimer = this.captionTimer = this.liveSettleTimer = null
     this.settledCaptionPhraseId = null
     if (this.activeRunId !== null) {
       failRun(this.activeRunId, 'cancelled')
