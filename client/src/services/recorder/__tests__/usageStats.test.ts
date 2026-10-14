@@ -70,6 +70,7 @@ function createOrchestrator() {
     processingTimeoutId: null,
     recordedChunks: [],
     state: 'processing',
+    userStatsRefreshVersion: 0,
     wallTimeAtStopSec: 2,
   })
   orchestrator.clearProcessingTimeout = vi.fn()
@@ -84,12 +85,44 @@ function createOrchestrator() {
   return orchestrator
 }
 
+function createRealFinalOrchestrator() {
+  const orchestrator = new RecorderOrchestrator()
+  const seam = orchestrator.testSeam()
+  seam.activeRunId = 7
+  seam.audioSentSamples = 32_000
+  seam.cachedProbeResult = {
+    editable: true,
+    hwnd: '0x1',
+    process: 'Code.exe',
+    detail: 'editable',
+  }
+  seam.currentActiveAppContext = {
+    processName: 'Code.exe',
+    windowTitle: 'SayIt.ts - Code',
+    windowClass: 'Chrome_WidgetWin_1',
+  }
+  seam.currentPromptResolution = {
+    appId: 'code',
+    appName: 'Code',
+    preset: { id: 'faithful', name: 'Faithful cleanup', systemPrompt: 'Faithful', builtin: true },
+    summary: 'Base preset id: faithful',
+    systemPrompt: 'Faithful',
+  }
+  seam.finalHandledInCurrentRun = false
+  seam.processingTimeoutId = null
+  seam.recordedChunks = []
+  seam.state = 'processing'
+  seam.wallTimeAtStopSec = 3.5
+  return orchestrator
+}
+
 const FINAL = { asrText: 'hello', llmText: 'hello', asrMs: 10, llmMs: 0, durationSec: 2 }
 const EXPECTED_EVENT = { charCount: 5, durationSec: 2, appId: 'unknown', workMode: 'server', promptPresetId: undefined }
 
 describe('usage recording', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    provider.mode = 'server'
     textPostProcess.applyTextTransforms.mockImplementation(async (text: string) => text)
     store.recordUsage.mockResolvedValue(undefined)
     store.addHistory.mockResolvedValue(undefined)
@@ -110,6 +143,32 @@ describe('usage recording', () => {
       await vi.waitFor(() => expect(bridge.emit).toHaveBeenCalledWith('stats-updated'))
     },
   )
+
+  it('records the known app, selected prompt preset, and hold duration from a real final callback', async () => {
+    const orchestrator = createRealFinalOrchestrator()
+    provider.mode = 'cloud_api'
+    store.getSetting.mockResolvedValue(false)
+
+    callbacksFor(orchestrator).onFinal?.({
+      asrText: 'hello',
+      llmText: 'hello',
+      asrMs: 10,
+      llmMs: 0,
+      durationSec: 0.75,
+    })
+
+    await vi.waitFor(() => expect(store.recordUsage).toHaveBeenCalledWith({
+      charCount: 5,
+      durationSec: 3.5,
+      appId: 'Code.exe',
+      workMode: 'cloud_api',
+      promptPresetId: 'faithful',
+    }))
+    expect(store.recordUsage).toHaveBeenCalledTimes(1)
+    expect(orchestrator.getState()).toBe('idle')
+    expect(orchestrator.testSeam().activeRunId).toBe(0)
+    expect(bridge.pasteText).toHaveBeenCalledWith('hello', '0x1', undefined, true)
+  })
 
   it('does not record usage when the final result has no text', async () => {
     const orchestrator = createOrchestrator()

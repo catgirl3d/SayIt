@@ -229,6 +229,8 @@ export class RecorderOrchestrator {
   private clientRuntimeInfoLoaded = false
   private cachedAppPromptRules: AppPromptRule[] = []
   private cachedUserStats: UserStats = createDefaultUserStats()
+  // Profile reads outlive dictations; the latest refresh owns the cache.
+  private userStatsRefreshVersion = 0
   private cachedHotwords: string[] = []
   /** 是否把热词注入 AI 提示词（默认关，用户可在热词页开启）。 */
   private cachedInjectHotwords = false
@@ -728,12 +730,39 @@ export class RecorderOrchestrator {
   }
 
   async refreshRuntimeSettings() {
+    const refreshVersion = ++this.userStatsRefreshVersion
     try {
       this.cachedSuppressLateFinalInsertion = Boolean(await getSetting('suppressLateFinalInsertion', false))
     } catch {
       addRuntimeEvent('warn', 'recorder', 'Late-insertion setting unavailable; suppressing late result insertion')
       this.cachedSuppressLateFinalInsertion = true
     }
+
+    let userStatsPromise!: Promise<UserStats>
+    const runtimeSettingsPromise = Promise.all([
+      getSetting('selectedMic', ''),
+      getSetting('muteSystemAudioWhileRecording', false),
+      getSetting('protectClipboard', true),
+      getPromptPresets(),
+      getActivePresetId(),
+      getSetting('aiEnabled', false),
+      getSetting('aiMinDurationSec', 0),
+      getSetting('contextAwareWritingEnabled', false),
+      getSetting(CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY, CONTEXT_SELECTION_EDIT_PROMPT),
+      getAppPromptRules(),
+      (userStatsPromise = getUserStats()),
+      getSetting('streamingDisplayEnabled', false),
+      getSetting('injectHotwordsToPrompt', false),
+      getSetting('micNoiseSuppression', true),
+    ])
+    const [runtimeSettingsResult, userStatsResult] = await Promise.allSettled([
+      runtimeSettingsPromise,
+      userStatsPromise,
+    ])
+    if (userStatsResult.status === 'fulfilled') {
+      this.applyUserStats(userStatsResult.value, refreshVersion)
+    }
+    if (runtimeSettingsResult.status === 'rejected') throw runtimeSettingsResult.reason
 
     const [
       micId,
@@ -746,26 +775,11 @@ export class RecorderOrchestrator {
       contextAwareWriting,
       contextSelectionEditPrompt,
       appPromptRules,
-      userStats,
+      ,
       streamingDisplay,
       injectHotwords,
       noiseSuppression,
-    ] = await Promise.all([
-      getSetting('selectedMic', ''),
-      getSetting('muteSystemAudioWhileRecording', false),
-      getSetting('protectClipboard', true),
-      getPromptPresets(),
-      getActivePresetId(),
-      getSetting('aiEnabled', false),
-      getSetting('aiMinDurationSec', 0),
-      getSetting('contextAwareWritingEnabled', false),
-      getSetting(CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY, CONTEXT_SELECTION_EDIT_PROMPT),
-      getAppPromptRules(),
-      getUserStats(),
-      getSetting('streamingDisplayEnabled', false),
-      getSetting('injectHotwordsToPrompt', false),
-      getSetting('micNoiseSuppression', true),
-    ])
+    ] = runtimeSettingsResult.value
 
     this.noiseSuppression = Boolean(noiseSuppression)
     this.cachedMicId = String(micId || '')
@@ -779,7 +793,6 @@ export class RecorderOrchestrator {
     this.cachedContextAwareWriting = Boolean(contextAwareWriting)
     this.cachedContextSelectionEditPrompt = normalizeContextSelectionEditPrompt(contextSelectionEditPrompt)
     this.cachedAppPromptRules = appPromptRules
-    this.cachedUserStats = userStats
     this.cachedStreamingDisplay = Boolean(streamingDisplay)
     await this.overlayService.refreshSettings()
 
@@ -796,6 +809,12 @@ export class RecorderOrchestrator {
 
     this.cachedHotwords = hotwordsResult.status === 'fulfilled' ? hotwordsResult.value : []
     this.cachedLanguage = languageResult.status === 'fulfilled' ? languageResult.value : 'auto'
+  }
+
+  private applyUserStats(stats: UserStats, refreshVersion: number): boolean {
+    if (refreshVersion !== this.userStatsRefreshVersion) return false
+    this.cachedUserStats = stats
+    return true
   }
 
   /** 采集一次客户端运行时信息并缓存。静态元数据，进程内只成功采集一次；
@@ -2779,10 +2798,10 @@ export class RecorderOrchestrator {
     }
     void bridge.emit('stats-updated')
 
+    const refreshVersion = ++this.userStatsRefreshVersion
     try {
       const nextStats = await getUserStats()
-      if (!this.isRunCurrent(runId)) return
-      this.cachedUserStats = nextStats
+      if (!this.applyUserStats(nextStats, refreshVersion)) return
       addRuntimeEvent('info', 'personalization', 'usage recorded', {
         appId,
         appName: promptResolution?.appName,
@@ -2791,7 +2810,7 @@ export class RecorderOrchestrator {
         totalSessions: nextStats.totalSessions,
       })
     } catch (error) {
-      if (!this.isRunCurrent(runId)) return
+      if (refreshVersion !== this.userStatsRefreshVersion) return
       addRuntimeEvent('warn', 'personalization', 'failed to refresh usage profile', { error: String(error) })
     }
   }

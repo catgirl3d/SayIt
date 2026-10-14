@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, type ComponentType } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { ActiveAppContext } from '@/types/appContext'
+import type { UserStats } from '@/services/personalization/types'
+import type { PromptPreset } from '@/services/store'
+import type { ProbeResult } from '../PasteService'
+
+type RecordingContextFixture = {
+  appContext: ActiveAppContext | null
+  probe: ProbeResult
+}
 
 const harness = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
@@ -15,6 +24,11 @@ const harness = vi.hoisted(() => ({
   addHistory: vi.fn(),
   recordUsage: vi.fn(),
   getUserStats: vi.fn(),
+  recordingContext: {
+    appContext: null,
+    probe: { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' },
+  } as RecordingContextFixture,
+  promptPresets: [] as PromptPreset[],
   startCapture: vi.fn(),
   saveRecordingAudio: vi.fn(),
   stopCapture: vi.fn(),
@@ -24,7 +38,7 @@ vi.mock('@/services/store', () => ({
   addHistory: (...args: unknown[]) => harness.addHistory(...args),
   deleteHistory: vi.fn(async () => undefined),
   getActivePresetId: vi.fn(async () => 'intent'),
-  getPromptPresets: vi.fn(async () => []),
+  getPromptPresets: vi.fn(async () => harness.promptPresets),
   getSetting: vi.fn(async (key: string, fallback: unknown) => {
     if (key === 'historyEnabled' && harness.historyReadError) throw new Error('history setting unavailable')
     if (key === 'suppressLateFinalInsertion') {
@@ -126,6 +140,62 @@ function makeFinal(overrides: Partial<FinalResult> = {}): FinalResult {
   }
 }
 
+const PROFILE_BEFORE_USAGE: UserStats = {
+  totalWords: 1000,
+  totalSessions: 30,
+  domainWords: { 'Code.exe': 1000 },
+  appUsageCount: { 'Code.exe': 30 },
+}
+
+const PROFILE_AFTER_USAGE: UserStats = {
+  totalWords: 1016,
+  totalSessions: 31,
+  domainWords: { 'Code.exe': 1016 },
+  appUsageCount: { 'Code.exe': 31 },
+}
+
+const CLEARED_PROFILE: UserStats = {
+  totalWords: 0,
+  totalSessions: 0,
+  domainWords: {},
+  appUsageCount: {},
+}
+
+function configureRealPromptFixture() {
+  harness.settings.set('historyEnabled', false)
+  harness.settings.set('aiEnabled', true)
+  harness.promptPresets = [{ id: 'intent', name: 'Intent', systemPrompt: 'Base', builtin: true }]
+  harness.recordingContext = {
+    appContext: { processName: 'Code.exe', windowTitle: 'SayIt.ts - Code', windowClass: 'Editor' },
+    probe: { editable: true, hwnd: '0x1', process: 'Code.exe', detail: 'editable' },
+  }
+}
+
+async function createRecorderWithProfile(profile: UserStats) {
+  configureRealPromptFixture()
+  harness.getUserStats.mockReset().mockResolvedValue(profile)
+  const recorder = new RecorderOrchestrator()
+  await recorder.refreshRuntimeSettings()
+  return recorder
+}
+
+async function startAndSeedFinal(recorder: RecorderOrchestrator) {
+  const recording = await startRealRecording(recorder)
+  prepareRun(recorder, recording.runId)
+  recorder.testSeam().cachedProbeResult = { ...harness.recordingContext.probe }
+  callbacksFor(recorder).onFinal?.(makeFinal())
+}
+
+async function waitForCompletedFinal(recorder: RecorderOrchestrator) {
+  await vi.waitFor(() => expect(harness.recordUsage).toHaveBeenCalledTimes(1))
+  await vi.waitFor(() => expect(harness.invoke).toHaveBeenCalledWith(
+    'paste_text',
+    expect.objectContaining({ text: 'recognized words' }),
+  ))
+  await flushMicrotasks()
+  expect(recorder.getState()).toBe('idle')
+}
+
 async function acquireSubtitles(recorder: RecorderOrchestrator) {
   await recorder.acquireSystemAudio()
 }
@@ -148,6 +218,22 @@ async function enterTimeoutGrace(recorder: RecorderOrchestrator, runId: number, 
   return callbacksFor(recorder)
 }
 
+async function startRealRecording(recorder: RecorderOrchestrator) {
+  vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
+  vi.stubGlobal('HTMLElement', class { })
+  const provider = await switchProvider('cloud_api')
+  vi.spyOn(provider, 'isReady').mockReturnValue(true)
+  vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+  const start = vi.spyOn(provider, 'start').mockReturnValue(true)
+  const seam = recorder.testSeam()
+  await seam.startRecording()
+  return { start, runId: seam.activeRunId }
+}
+
+async function cancelRealRecording(recorder: RecorderOrchestrator, runId: number) {
+  await recorder.testSeam().cancelRecording(runId)
+}
+
 beforeEach(async () => {
   vi.useFakeTimers()
   vi.stubGlobal('window', globalThis)
@@ -156,6 +242,11 @@ beforeEach(async () => {
   harness.suppressLateSettingReadError = false
   harness.suppressLateSettingReadCount = 0
   harness.unrelatedSettingsReadError = false
+  harness.recordingContext = {
+    appContext: null,
+    probe: { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' },
+  }
+  harness.promptPresets = []
   harness.settings.set('historyEnabled', true)
   harness.settings.set('audioRetentionEnabled', true)
   harness.listeners.clear()
@@ -164,6 +255,7 @@ beforeEach(async () => {
   })
   harness.invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === 'paste_text') return { ok: true, strategy: 'sendinput' }
+    if (command === 'get_recording_context') return harness.recordingContext
     if (command === 'get_probe_result') {
       return { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
     }
@@ -834,21 +926,221 @@ describe('recorder failure cards', () => {
   })
 
   it('refreshes the cached derived profile from the usage log after statistics are cleared', async () => {
-    const clearedProfile = { totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} }
-    harness.getUserStats.mockResolvedValue(clearedProfile)
+    harness.getUserStats.mockResolvedValue(CLEARED_PROFILE)
     const recorder = new RecorderOrchestrator()
-    Reflect.set(recorder, 'cachedUserStats', {
-      totalWords: 1800,
-      totalSessions: 60,
-      domainWords: { 'Code.exe': 1500 },
-      appUsageCount: { 'Code.exe': 30 },
-    })
+    recorder.testSeam().cachedUserStats = PROFILE_AFTER_USAGE
 
     await recorder.refreshRuntimeSettings()
 
-    // The next prompt must be built from the cleared usage, not the stale counters.
     expect(harness.getUserStats).toHaveBeenCalledTimes(1)
-    expect(Reflect.get(recorder, 'cachedUserStats')).toBe(clearedProfile)
+    expect(recorder.testSeam().cachedUserStats).toBe(CLEARED_PROFILE)
+  })
+
+  it('applies a cleared profile before returning an unrelated refresh error', async () => {
+    const recorder = await createRecorderWithProfile(PROFILE_AFTER_USAGE)
+    const clearedProfileRead = deferred<UserStats>()
+    harness.settings.set('aiEnabled', false)
+    harness.unrelatedSettingsReadError = true
+    harness.getUserStats.mockReset().mockImplementation(() => clearedProfileRead.promise)
+
+    let refreshSettled = false
+    const refreshResult = recorder.refreshRuntimeSettings().then(
+      () => {
+        refreshSettled = true
+        return { status: 'fulfilled' as const }
+      },
+      (error: unknown) => {
+        refreshSettled = true
+        return { status: 'rejected' as const, error }
+      },
+    )
+    await flushMicrotasks()
+
+    expect(refreshSettled).toBe(false)
+    expect(harness.getUserStats).toHaveBeenCalledTimes(1)
+
+    clearedProfileRead.resolve(CLEARED_PROFILE)
+    const result = await refreshResult
+    expect(result.status).toBe('rejected')
+    if (result.status === 'rejected') {
+      expect(result.error).toMatchObject({ message: 'microphone setting unavailable' })
+    }
+
+    harness.unrelatedSettingsReadError = false
+    const next = await startRealRecording(recorder)
+    const prompt = next.start.mock.calls[next.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+    await cancelRealRecording(recorder, next.runId)
+
+    expect(prompt.systemPrompt).toBe('Base')
+    expect(recorder.testSeam().cachedAiEnabled).toBe(true)
+    expect(harness.getUserStats).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the previous profile and does not wait for other reads when its refresh read fails', async () => {
+    const recorder = await createRecorderWithProfile(PROFILE_AFTER_USAGE)
+    const profileError = new Error('profile unavailable')
+    const settingRead = deferred<string>()
+    const profileRead = deferred<UserStats>()
+    harness.settings.set('aiEnabled', false)
+    harness.settings.set('selectedMic', settingRead.promise)
+    harness.getUserStats.mockReset().mockImplementation(() => profileRead.promise)
+
+    const refreshResult = recorder.refreshRuntimeSettings().then(
+      () => ({ status: 'fulfilled' as const }),
+      (error: unknown) => ({ status: 'rejected' as const, error }),
+    )
+    profileRead.reject(profileError)
+    const result = await refreshResult
+    settingRead.resolve('device')
+    await flushMicrotasks()
+
+    expect(result.status).toBe('rejected')
+    if (result.status === 'rejected') expect(result.error).toBe(profileError)
+    const next = await startRealRecording(recorder)
+    const prompt = next.start.mock.calls[next.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+    await cancelRealRecording(recorder, next.runId)
+
+    expect(prompt.systemPrompt).toContain('Base')
+    expect(prompt.systemPrompt).toContain('software development background')
+  })
+
+  it.each([
+    { name: 'the profile read rejects first', profileFirst: true },
+    { name: 'another setting rejects first', profileFirst: false },
+  ])('preserves Promise.all rejection order when $name', async ({ profileFirst }) => {
+    configureRealPromptFixture()
+    const settingRead = deferred<string>()
+    const profileRead = deferred<UserStats>()
+    const settingError = new Error('selected mic unavailable')
+    const profileError = new Error('profile unavailable')
+    harness.settings.set('selectedMic', settingRead.promise)
+    harness.getUserStats.mockReset().mockImplementation(() => profileRead.promise)
+    const recorder = new RecorderOrchestrator()
+    const refreshResult = recorder.refreshRuntimeSettings().then(
+      () => ({ status: 'fulfilled' as const }),
+      (error: unknown) => ({ status: 'rejected' as const, error }),
+    )
+
+    if (profileFirst) {
+      profileRead.reject(profileError)
+      await flushMicrotasks()
+      settingRead.reject(settingError)
+    } else {
+      settingRead.reject(settingError)
+      await flushMicrotasks()
+      profileRead.reject(profileError)
+    }
+    const result = await refreshResult
+
+    expect(result.status).toBe('rejected')
+    if (result.status === 'rejected') {
+      expect(result.error).toBe(profileFirst ? profileError : settingError)
+    }
+  })
+
+  it.each([
+    { name: 'normal runtime refresh', slowSettingRead: false },
+    { name: 'slow suppress-late-final setting read', slowSettingRead: true },
+  ])('does not resurrect an older usage profile after a clear refresh starts ($name)', async ({ slowSettingRead }) => {
+    const recorder = await createRecorderWithProfile(PROFILE_BEFORE_USAGE)
+    const oldUsageRead = deferred<UserStats>()
+    harness.getUserStats.mockReset()
+    harness.getUserStats.mockImplementationOnce(() => oldUsageRead.promise).mockResolvedValueOnce(CLEARED_PROFILE)
+
+    await startAndSeedFinal(recorder)
+    await waitForCompletedFinal(recorder)
+    await vi.waitFor(() => expect(harness.getUserStats).toHaveBeenCalledTimes(1))
+
+    if (slowSettingRead) {
+      const settingRead = deferred<boolean>()
+      harness.settings.set('suppressLateFinalInsertion', settingRead.promise)
+      const clearRefresh = recorder.refreshRuntimeSettings()
+      await flushMicrotasks()
+      expect(harness.getUserStats).toHaveBeenCalledTimes(1)
+
+      oldUsageRead.resolve(PROFILE_AFTER_USAGE)
+      await flushMicrotasks()
+      const duringRefresh = await startRealRecording(recorder)
+      const duringPrompt = duringRefresh.start.mock.calls[duringRefresh.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+      expect(duringPrompt.systemPrompt).not.toContain('software development background')
+      await cancelRealRecording(recorder, duringRefresh.runId)
+
+      settingRead.resolve(false)
+      await clearRefresh
+      const afterRefresh = await startRealRecording(recorder)
+      const afterPrompt = afterRefresh.start.mock.calls[afterRefresh.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+      expect(afterPrompt.systemPrompt).not.toContain('software development background')
+      await cancelRealRecording(recorder, afterRefresh.runId)
+    } else {
+      await recorder.refreshRuntimeSettings()
+      oldUsageRead.resolve(PROFILE_AFTER_USAGE)
+      await flushMicrotasks()
+      const afterRefresh = await startRealRecording(recorder)
+      const afterPrompt = afterRefresh.start.mock.calls[afterRefresh.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+      expect(afterPrompt.systemPrompt).not.toContain('software development background')
+      await cancelRealRecording(recorder, afterRefresh.runId)
+    }
+
+    expect(harness.recordUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a newer usage profile when an older runtime refresh finishes later', async () => {
+    const recorder = await createRecorderWithProfile(PROFILE_BEFORE_USAGE)
+    const oldRuntimeRead = deferred<UserStats>()
+    harness.getUserStats.mockReset()
+    harness.getUserStats.mockImplementationOnce(() => oldRuntimeRead.promise).mockResolvedValueOnce(PROFILE_AFTER_USAGE)
+
+    const oldRefresh = recorder.refreshRuntimeSettings()
+    await vi.waitFor(() => expect(harness.getUserStats).toHaveBeenCalledTimes(1))
+    await startAndSeedFinal(recorder)
+    await waitForCompletedFinal(recorder)
+    await vi.waitFor(() => expect(harness.getUserStats).toHaveBeenCalledTimes(2))
+
+    oldRuntimeRead.resolve(PROFILE_BEFORE_USAGE)
+    await oldRefresh
+    const next = await startRealRecording(recorder)
+    const prompt = next.start.mock.calls[next.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+    await cancelRealRecording(recorder, next.runId)
+
+    expect(prompt.systemPrompt).toContain('software development background')
+  })
+
+  it.each([
+    { name: 'without an intervening recording', intervene: false },
+    { name: 'with an intervening canceled recording', intervene: true },
+  ])('applies a completed dictation profile to the next prompt $name', async ({ intervene }) => {
+    const recorder = await createRecorderWithProfile(PROFILE_BEFORE_USAGE)
+    const usageWrite = deferred<void>()
+    harness.getUserStats.mockReset().mockResolvedValue(PROFILE_AFTER_USAGE)
+    harness.recordUsage.mockImplementation(() => usageWrite.promise)
+
+    await startAndSeedFinal(recorder)
+    await waitForCompletedFinal(recorder)
+
+    if (intervene) {
+      const intervening = await startRealRecording(recorder)
+      const interveningPrompt = intervening.start.mock.calls[intervening.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+      const startsBeforeUsageRefresh = intervening.start.mock.calls.length
+      expect(interveningPrompt.systemPrompt).not.toContain('software development background')
+
+      usageWrite.resolve()
+      await vi.waitFor(() => expect(harness.getUserStats).toHaveBeenCalledTimes(1))
+      await flushMicrotasks()
+      expect(interveningPrompt.systemPrompt).toBe('Base')
+      expect(intervening.start).toHaveBeenCalledTimes(startsBeforeUsageRefresh)
+      await cancelRealRecording(recorder, intervening.runId)
+    } else {
+      usageWrite.resolve()
+      await vi.waitFor(() => expect(harness.getUserStats).toHaveBeenCalledTimes(1))
+      await flushMicrotasks()
+    }
+
+    const next = await startRealRecording(recorder)
+    const prompt = next.start.mock.calls[next.start.mock.calls.length - 1]?.[0] as { systemPrompt?: string }
+    await cancelRealRecording(recorder, next.runId)
+
+    expect(prompt.systemPrompt).toContain('software development background')
+    expect(harness.recordUsage).toHaveBeenCalledTimes(1)
   })
 
   it('does not count a History-only late result and permits the next recording', async () => {
@@ -912,6 +1204,7 @@ describe('recorder failure cards', () => {
       failureDetail: en['recorder.emptyAfterProcessingDetail'],
       cardToken: 138,
     })
+    expect(harness.recordUsage).not.toHaveBeenCalled()
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
   })
 
@@ -960,6 +1253,23 @@ describe('recorder failure cards', () => {
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
     expect(recorder.testSeam().activeRunId).toBe(0)
     expect(recorder.testSeam().finalizingLateRunId).toBe(0)
+  })
+
+  it('records usage and inserts a normal final when History cannot be read', async () => {
+    harness.settings.set('historyEnabled', true)
+    harness.historyReadError = true
+    const recorder = new RecorderOrchestrator()
+    const callbacks = await enterTimeoutGrace(recorder, 136, false)
+
+    callbacks.onFinal?.(makeFinal())
+    await vi.waitFor(() => expect(harness.recordUsage).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(harness.invoke).toHaveBeenCalledWith(
+      'paste_text',
+      expect.objectContaining({ text: 'recognized words' }),
+    ))
+
+    expect(harness.recordUsage).toHaveBeenCalledTimes(1)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(1)
   })
 
   it('does not show a fallback or insert when transforming an opted-in late final fails', async () => {
