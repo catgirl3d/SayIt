@@ -357,6 +357,37 @@ describe('file transcription page', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('shows a failed worker start once when the terminal snapshot repeats the rejection', async () => {
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    const message = 'Failed to start file transcription worker: boom'
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'start_file_transcription') throw new Error(message)
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    await waitFor(() => expect(stateListener).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
+    await waitFor(() => expect(screen.getByText(`Could not start transcription: ${message}`)).toBeTruthy())
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        phase: 'failed',
+        error: message,
+        resourcesReleased: true,
+      }) })
+    })
+
+    expect(screen.getAllByText(message)).toHaveLength(1)
+    expect(screen.queryByText(/Could not start transcription/)).toBeNull()
+  })
+
   it('cancels exactly once only after confirmation', async () => {
     renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())

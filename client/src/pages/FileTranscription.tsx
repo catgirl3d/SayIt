@@ -338,6 +338,11 @@ export default function FileTranscription() {
   const engineReady = engine === 'local' ? Boolean(localSettings?.modelInstalled) : Boolean(selectedCloudProfile)
   const canStart = Boolean(filePath && outputDirectory && mediaInfo && engineReady && !inspecting && !actionBusy && !active)
   const hasMultipleTracks = Boolean(mediaInfo && mediaInfo.audioTracks.length > 1)
+  const snapshotError = snapshot?.error ?? null
+  // A failed worker start reports the same native text through the start rejection and
+  // the terminal snapshot. Native errors are shown as they come, so keep the snapshot
+  // copy and drop the duplicated page banner instead of translating either of them.
+  const pageError = error !== '' && !(snapshotError && error.endsWith(snapshotError)) ? error : ''
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -353,8 +358,8 @@ export default function FileTranscription() {
         </div>
       </header>
 
-      {error && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{error}</span>{fileTranscriptionService.getInitializationError() && <Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button>}</div>}
-      {snapshot?.error && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{snapshot.error}</div>}
+      {pageError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{pageError}</span>{fileTranscriptionService.getInitializationError() && <Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button>}</div>}
+      {snapshotError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{snapshotError}</div>}
       {snapshot?.warning != null && <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-warning-strong" role="status"><Info className="mt-0.5 h-4 w-4 shrink-0" />{snapshot.warning}</div>}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.8fr)]">
