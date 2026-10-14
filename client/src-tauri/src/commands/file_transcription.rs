@@ -20,6 +20,11 @@ const SAMPLE_RATE: usize = 16_000;
 const SAMPLE_BYTES: usize = 2;
 const TARGET_WINDOW_SAMPLES: usize = SAMPLE_RATE * 20;
 const LOOKAHEAD_SAMPLES: usize = SAMPLE_RATE * 2;
+/// When continuous speech forces a cut at the window edge, the boundary is
+/// moved back to the quietest 10 ms frame within this tail instead of cutting
+/// a word mid-utterance.
+const BOUNDARY_QUIET_TAIL_SAMPLES: usize = SAMPLE_RATE;
+const BOUNDARY_QUIET_FRAME_SAMPLES: usize = SAMPLE_RATE / 100;
 const PROBE_STDOUT_LIMIT: usize = 2 * 1024 * 1024;
 const STDERR_CAPTURE_LIMIT: usize = 256 * 1024;
 const FILE_STATE_EVENT: &str = "file-transcription-state";
@@ -1077,7 +1082,8 @@ fn read_analyzed_pcm_window(
     let boundary = if candidate.len() <= window_samples {
         candidate.len()
     } else {
-        choose_window_boundary(&intervals, window_samples, candidate.len())
+        let boundary = choose_window_boundary(&intervals, window_samples, candidate.len());
+        refine_continuous_boundary(&candidate, boundary, &intervals)
     };
     let boundary = boundary.max(1).min(candidate.len());
     if boundary < candidate.len() {
@@ -1138,6 +1144,44 @@ fn choose_window_boundary(
         };
     }
     target
+}
+
+/// Moves a boundary that falls inside a continuous speech interval back to the
+/// quietest short frame in the tail before it, so windowing does not cut a word
+/// when no pause is available. Gap-based boundaries are returned unchanged.
+fn refine_continuous_boundary(
+    samples: &[f32],
+    boundary: usize,
+    intervals: &[std::ops::Range<usize>],
+) -> usize {
+    let inside_speech = intervals
+        .iter()
+        .any(|interval| interval.start < boundary && boundary < interval.end);
+    if !inside_speech || boundary <= 1 {
+        return boundary;
+    }
+    let mut best_start = boundary - 1;
+    let mut best_energy = f32::MAX;
+    let mut start = boundary.saturating_sub(BOUNDARY_QUIET_TAIL_SAMPLES).max(1);
+    while start < boundary {
+        let end = start
+            .saturating_add(BOUNDARY_QUIET_FRAME_SAMPLES)
+            .min(boundary)
+            .min(samples.len());
+        if end <= start {
+            break;
+        }
+        let energy: f32 = samples[start..end]
+            .iter()
+            .map(|sample| sample * sample)
+            .sum();
+        if energy < best_energy {
+            best_energy = energy;
+            best_start = start;
+        }
+        start += BOUNDARY_QUIET_FRAME_SAMPLES;
+    }
+    best_start.max(1)
 }
 
 fn read_decoded_audio(
@@ -3075,6 +3119,36 @@ mod tests {
         );
         assert!(snapshot.resources_released);
         assert!(!snapshot.retryable_export);
+    }
+
+    #[test]
+    fn continuous_speech_cuts_at_the_quietest_frame_instead_of_the_edge() {
+        let mut samples = vec![0.5_f32; 4_000];
+        for sample in &mut samples[3_000..3_200] {
+            *sample = 0.0;
+        }
+        let intervals = [0..4_000];
+
+        let refined = refine_continuous_boundary(&samples, 3_800, &intervals);
+
+        assert!(refined < 3_800, "the cut must move off the window edge");
+        assert!(refined >= 3_000, "the cut must stay inside the planted dip");
+        let frame = &samples[refined..(refined + BOUNDARY_QUIET_FRAME_SAMPLES).min(samples.len())];
+        let energy: f32 = frame.iter().map(|sample| sample * sample).sum();
+        assert!(
+            energy < 1.0,
+            "the cut must land in the quiet frame, got {energy}"
+        );
+    }
+
+    #[test]
+    fn pause_boundaries_are_left_unchanged_by_the_refinement() {
+        let samples = vec![0.5_f32; 4_000];
+        let intervals = [0..3_000];
+
+        let refined = refine_continuous_boundary(&samples, 3_800, &intervals);
+
+        assert_eq!(refined, 3_800);
     }
 
     #[test]
