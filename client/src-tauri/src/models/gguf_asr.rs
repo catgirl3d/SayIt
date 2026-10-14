@@ -87,6 +87,10 @@ static NATIVE_ADMISSION: Mutex<NativeAdmission> = Mutex::new(NativeAdmission {
     local_operations: 0,
 });
 
+/// Set when an unload request arrives while a file job owns the engine; the
+/// file lease's drop then performs the unload instead of losing the request.
+static PENDING_UNLOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Admission held from file-job start until the worker has released its native resources.
 pub struct FileResourceLease {
     job_id: String,
@@ -94,10 +98,25 @@ pub struct FileResourceLease {
 
 impl Drop for FileResourceLease {
     fn drop(&mut self) {
-        let mut admission = NATIVE_ADMISSION
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        admission.release_file(&self.job_id);
+        {
+            let mut admission = NATIVE_ADMISSION
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            admission.release_file(&self.job_id);
+        }
+        run_pending_unload();
+    }
+}
+
+/// Runs a deferred unload once no file job owns the engine. If another file job
+/// grabbed the engine between the release and this call, the request is kept.
+fn run_pending_unload() {
+    if !PENDING_UNLOAD.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    match acquire_local_resource() {
+        Ok(_resource) => unload_unchecked(),
+        Err(_) => PENDING_UNLOAD.store(true, std::sync::atomic::Ordering::SeqCst),
     }
 }
 
@@ -628,16 +647,30 @@ pub fn preload(model_id: &str, accelerator: &str) -> Result<(), String> {
     ensure_loaded_unchecked(model_id, accelerator)
 }
 
-/// 释放常驻引擎，交还几百 MB ~ 数 GB 内存。
+/// Release the resident engine and return hundreds of MB to several GB of memory.
+/// Test-only convenience: production callers use the fallible `try_unload`.
+#[cfg(test)]
 pub fn unload() {
     let _ = try_unload();
 }
 
 /// Release the cached model unless a file transcription owns the native resource.
+/// A request refused by an active file job is remembered and runs when that
+/// job's lease is dropped, so switching away from local mode never leaves the
+/// model resident because of a transient file job.
 pub fn try_unload() -> Result<(), String> {
-    let _resource = acquire_local_resource()?;
-    unload_unchecked();
-    Ok(())
+    match acquire_local_resource() {
+        Ok(_resource) => {
+            PENDING_UNLOAD.store(false, std::sync::atomic::Ordering::SeqCst);
+            unload_unchecked();
+            Ok(())
+        }
+        Err(error) => {
+            // `reserve_local` only fails while a file job owns the engine.
+            PENDING_UNLOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(error)
+        }
+    }
 }
 
 fn unload_unchecked() {
@@ -880,6 +913,21 @@ mod tests {
         admission.release_file("test-file-job");
         admission.reserve_local().unwrap();
         admission.release_local();
+    }
+
+    #[test]
+    fn pending_unload_runs_once_the_file_lease_releases() {
+        let Ok(lease) = acquire_file_resource("pending-unload-test") else {
+            eprintln!("skip: the local engine is busy with a parallel test");
+            return;
+        };
+
+        assert!(try_unload().is_err());
+        assert!(PENDING_UNLOAD.load(std::sync::atomic::Ordering::SeqCst));
+
+        drop(lease);
+
+        assert!(!PENDING_UNLOAD.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
