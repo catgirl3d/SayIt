@@ -1469,7 +1469,9 @@ fn draft_path(output_directory: &Path, title: &str, job_id: &str) -> PathBuf {
     output_directory.join(format!("{title} - transcription - {job_id}.partial.txt"))
 }
 
-fn checkpoint_candidate(destination: &Path) -> PathBuf {
+/// Hidden same-directory temporary used to stage a replacement before it is
+/// published with `replace_file` (same volume, so the move stays atomic).
+fn temporary_sibling_path(destination: &Path) -> PathBuf {
     destination.with_file_name(format!(
         ".{}.tmp-{}",
         destination
@@ -1478,6 +1480,43 @@ fn checkpoint_candidate(destination: &Path) -> PathBuf {
             .to_string_lossy(),
         uuid::Uuid::new_v4()
     ))
+}
+
+/// Atomically replaces `destination` with the fully written `candidate`.
+/// On Windows `MoveFileExW` replaces in a single call, so a crash can never
+/// leave the destination missing the way the old two-rename dance could; on
+/// Unix a plain rename already replaces atomically.
+fn replace_file(candidate: &Path, destination: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+
+        let from: Vec<u16> = candidate
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let to: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            MoveFileExW(
+                windows::core::PCWSTR(from.as_ptr()),
+                windows::core::PCWSTR(to.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        }
+        .map_err(|error| error.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(candidate, destination).map_err(|error| error.to_string())
+    }
 }
 
 fn claim_new_file(path: &Path) -> Result<File, String> {
@@ -1498,49 +1537,8 @@ fn publish_checkpoint_candidate(candidate: &Path, destination: &Path) -> Result<
     if !candidate.is_file() {
         return Err("Failed to publish checkpoint: candidate is not a regular file".into());
     }
-    #[cfg(not(windows))]
-    {
-        fs::rename(candidate, destination)
-            .map_err(|error| format!("Failed to publish checkpoint: {error}"))
-    }
-    #[cfg(windows)]
-    {
-        let backup = destination.with_file_name(format!(
-            ".{}.previous-{}",
-            destination
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy(),
-            uuid::Uuid::new_v4()
-        ));
-        let had_previous = destination.exists();
-        if had_previous {
-            fs::rename(destination, &backup)
-                .map_err(|error| format!("Failed to stage the previous checkpoint: {error}"))?;
-        }
-        match fs::rename(candidate, destination) {
-            Ok(()) => {
-                if had_previous {
-                    // Best effort: the new checkpoint is already in place, so a transient
-                    // lock on the stale backup (antivirus, indexer, sync client) must not
-                    // fail the whole transcription.
-                    if let Err(error) = fs::remove_file(&backup) {
-                        log::warn!(
-                            "Failed to remove the previous checkpoint {}: {error}",
-                            backup.display()
-                        );
-                    }
-                }
-                Ok(())
-            }
-            Err(error) => {
-                if had_previous {
-                    let _ = fs::rename(&backup, destination);
-                }
-                Err(format!("Failed to publish checkpoint: {error}"))
-            }
-        }
-    }
+    replace_file(candidate, destination)
+        .map_err(|error| format!("Failed to publish checkpoint: {error}"))
 }
 
 fn write_checkpoint(
@@ -1560,7 +1558,7 @@ fn write_checkpoint(
             path
         }
     };
-    let candidate = checkpoint_candidate(&destination);
+    let candidate = temporary_sibling_path(&destination);
     let mut candidate_file = match claim_new_file(&candidate) {
         Ok(file) => file,
         Err(error) => {
@@ -2026,7 +2024,7 @@ fn unique_export_pair(
     output_directory: &Path,
     title: &str,
     job_id: &str,
-) -> Result<(PathBuf, PathBuf, File, File), String> {
+) -> Result<(PathBuf, PathBuf), String> {
     for index in 0..10_000_u32 {
         let suffix = if index == 0 {
             String::new()
@@ -2042,7 +2040,13 @@ fn unique_export_pair(
             Err(error) => return Err(error),
         };
         match claim_new_file(&markdown_path) {
-            Ok(markdown) => return Ok((txt_path, markdown_path, txt, markdown)),
+            Ok(markdown) => {
+                // The empty claimed files only reserve the names; the export
+                // writes hidden candidates and replaces them when complete.
+                drop(txt);
+                drop(markdown);
+                return Ok((txt_path, markdown_path));
+            }
             Err(_error) if markdown_path.exists() => {
                 drop(txt);
                 let _ = fs::remove_file(&txt_path);
@@ -2065,30 +2069,51 @@ fn export_documents(
     job_id: &str,
 ) -> Result<(PathBuf, PathBuf), String> {
     let title = safe_title(source);
-    let (txt_path, markdown_path, mut txt, mut markdown) =
-        unique_export_pair(output_directory, &title, job_id)?;
-    if let Err(error) = txt
-        .write_all(format!("{}\n", text.trim()).as_bytes())
-        .and_then(|_| txt.sync_all())
-    {
-        drop(txt);
-        drop(markdown);
-        let _ = fs::remove_file(&txt_path);
-        let _ = fs::remove_file(&markdown_path);
-        return Err(format!("Final TXT export failed: {error}"));
+    let (txt_path, markdown_path) = unique_export_pair(output_directory, &title, job_id)?;
+    let txt_candidate = temporary_sibling_path(&txt_path);
+    let markdown_candidate = temporary_sibling_path(&markdown_path);
+    let exported = write_export_candidates(&txt_candidate, &markdown_candidate, text, &title)
+        .and_then(|()| {
+            replace_file(&txt_candidate, &txt_path)
+                .map_err(|error| format!("Final TXT export failed: {error}"))
+        })
+        .and_then(|()| {
+            replace_file(&markdown_candidate, &markdown_path)
+                .map_err(|error| format!("Final Markdown export failed: {error}"))
+        });
+    if exported.is_err() {
+        // Never leave partial documents or claimed placeholders behind: the
+        // retry export command recreates the pair under the same names.
+        for path in [
+            &txt_candidate,
+            &markdown_candidate,
+            &txt_path,
+            &markdown_path,
+        ] {
+            let _ = fs::remove_file(path);
+        }
     }
+    exported.map(|()| (txt_path, markdown_path))
+}
+
+fn write_export_candidates(
+    txt_candidate: &Path,
+    markdown_candidate: &Path,
+    text: &str,
+    title: &str,
+) -> Result<(), String> {
+    let mut txt = claim_new_file(txt_candidate)?;
+    txt.write_all(format!("{}\n", text.trim()).as_bytes())
+        .and_then(|()| txt.sync_all())
+        .map_err(|error| format!("Final TXT export failed: {error}"))?;
     drop(txt);
-    let markdown_content = format!("# {title}\n\n{}\n", text.trim());
-    if let Err(error) = markdown
-        .write_all(markdown_content.as_bytes())
-        .and_then(|_| markdown.sync_all())
-    {
-        drop(markdown);
-        let _ = fs::remove_file(&markdown_path);
-        return Err(format!("Final Markdown export failed: {error}"));
-    }
+    let mut markdown = claim_new_file(markdown_candidate)?;
+    markdown
+        .write_all(format!("# {title}\n\n{}\n", text.trim()).as_bytes())
+        .and_then(|()| markdown.sync_all())
+        .map_err(|error| format!("Final Markdown export failed: {error}"))?;
     drop(markdown);
-    Ok((txt_path, markdown_path))
+    Ok(())
 }
 
 fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
@@ -3221,7 +3246,7 @@ mod tests {
     #[test]
     fn final_export_pair_contains_the_job_id() {
         let dir = test_dir("job-export-name");
-        let (txt, markdown, _, _) = unique_export_pair(&dir, "sample", "job-123").unwrap();
+        let (txt, markdown) = unique_export_pair(&dir, "sample", "job-123").unwrap();
         assert!(
             txt.file_name()
                 .unwrap()
