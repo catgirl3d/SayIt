@@ -1699,6 +1699,7 @@ fn cloud_window_recognition_error(label: &str, position_ms: Option<u64>, detail:
     }
 }
 
+#[cfg(test)]
 fn empty_output_error(model: &str, language: &str, position_ms: u64) -> String {
     format!(
         "The local model \"{model}\" returned no text for speech detected at {} (language \"{language}\")",
@@ -2730,6 +2731,7 @@ pub fn restart_after_file_work(app: AppHandle) {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3858,6 +3860,7 @@ fn append_winget_package_candidates(
     );
 }
 
+#[cfg(test)]
 fn scan_winget_packages(packages_directory: &Path) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     append_winget_package_candidates(packages_directory, &mut candidates);
