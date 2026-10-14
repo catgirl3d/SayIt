@@ -137,11 +137,12 @@ export default function FileTranscription() {
     setCloudProfilesLoading(true)
     setCloudProfilesError('')
     void fileTranscriptionService.getCloudProfiles()
-      .then((profiles) => {
+      .then(({ profiles, activeId }) => {
         if (cancelled) return
         setCloudProfiles(profiles)
         setCloudProfileId((current) => {
           if (profiles.some((profile) => profile.id === current)) return current
+          if (profiles.some((profile) => profile.id === activeId)) return activeId
           return profiles[0]?.id ?? ''
         })
       })

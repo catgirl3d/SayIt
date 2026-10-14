@@ -137,6 +137,24 @@ describe('file transcription page', () => {
     expect(screen.getByText('nova-3')).toBeTruthy()
   })
 
+  it('selects the active cloud profile instead of the first profile', async () => {
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile(),
+        cloudProfile({ id: 'cloud-profile-2', provider: 'openai_transcribe', model: 'whisper-1' }),
+      ],
+      activeId: 'cloud-profile-2',
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+
+    expect(screen.getByText('OpenAI transcription')).toBeTruthy()
+    expect(screen.getByText('whisper-1')).toBeTruthy()
+    expect(screen.getByText('openai_transcribe')).toBeTruthy()
+  })
+
   it('allows cloud transcription without an installed local model and sends the selected cloud profile', async () => {
     cloudProfiles.loadAsrProfiles.mockResolvedValue({
       profiles: [
@@ -183,11 +201,12 @@ describe('file transcription page', () => {
     await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
       request: expect.objectContaining({
         engine: 'cloud',
-        cloud: expect.objectContaining({
-          provider: 'openai_transcribe',
-          model: 'whisper-1',
+        cloud: {
           label: 'OpenAI transcription',
-        }),
+          config: expect.objectContaining({
+            provider: 'openai_transcribe',
+          }),
+        },
       }),
     }))
   })

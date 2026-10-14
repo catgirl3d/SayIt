@@ -96,12 +96,15 @@ describe('file transcription service', () => {
     const harness = createHarness()
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await expect(service.getCloudProfiles()).resolves.toEqual([{
-      id: 'cloud-a',
-      label: 'Groq Whisper',
-      provider: 'groq_whisper',
-      model: 'whisper-large-v3',
-    }])
+    await expect(service.getCloudProfiles()).resolves.toEqual({
+      profiles: [{
+        id: 'cloud-a',
+        label: 'Groq Whisper',
+        provider: 'groq_whisper',
+        model: 'whisper-large-v3',
+      }],
+      activeId: 'cloud-a',
+    })
   })
 
   it('keeps local request fields and marks the IPC request as local', async () => {
@@ -164,8 +167,6 @@ describe('file transcription service', () => {
       audioStreamIndex: 2,
       engine: 'cloud',
       cloud: {
-        provider: 'groq_whisper',
-        model: 'whisper-large-v3',
         label: 'Groq Whisper',
         config: {
           provider: 'groq_whisper',
@@ -307,15 +308,14 @@ describe('file transcription service', () => {
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await service.start({
+    await service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'unused-for-cloud',
-      language: 'en',
-      accelerator: 'auto',
-    }, { engine: 'cloud', cloudProfileId: 'cloud-a' })
+      engine: 'cloud',
+      cloudProfileId: 'cloud-a',
+    })
 
     stateHandler?.({ payload: snapshot({
       engine: 'cloud',

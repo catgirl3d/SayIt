@@ -30,11 +30,6 @@ export interface FileTranscriptionRequest {
   audioStreamIndex: number | null
 }
 
-export interface FileTranscriptionEngineOptions {
-  engine?: FileTranscriptionEngine
-  cloudProfileId?: string | null
-}
-
 export interface FileTranscriptionCloudProfile {
   id: string
   label: string
@@ -43,8 +38,6 @@ export interface FileTranscriptionCloudProfile {
 }
 
 export interface FileTranscriptionCloudRequest {
-  provider: string
-  model: string
   label: string
   config: AsrProviderConfig
 }
@@ -256,9 +249,12 @@ export class FileTranscriptionService {
     return this.ipc.invoke<string | null>('detect_ffmpeg_directory')
   }
 
-  async getCloudProfiles(): Promise<FileTranscriptionCloudProfile[]> {
+  async getCloudProfiles(): Promise<{ profiles: FileTranscriptionCloudProfile[]; activeId: string }> {
     const state = await loadAsrProfiles()
-    return state.profiles.map((profile) => this.cloudProfileMetadata(profile))
+    return {
+      profiles: state.profiles.map((profile) => this.cloudProfileMetadata(profile)),
+      activeId: state.activeId,
+    }
   }
 
   async getLocalSettings(): Promise<LocalFileSettings> {
@@ -280,23 +276,12 @@ export class FileTranscriptionService {
     }
   }
 
-  async start(request: FileTranscriptionRequest, options: FileTranscriptionEngineOptions = {}): Promise<FileTranscriptionSnapshot> {
-    const engine = options.engine ?? 'local'
-    return this.startReserved(engine, async () => {
-      if (engine === 'cloud') {
-        return this.buildCloudRequest({
-          filePath: request.filePath,
-          outputDirectory: request.outputDirectory,
-          ffmpegDirectory: request.ffmpegDirectory,
-          audioStreamIndex: request.audioStreamIndex,
-        }, options.cloudProfileId, request.language)
-      }
-      return {
-        ...request,
-        engine: 'local',
-        cloud: null,
-      }
-    })
+  async start(request: FileTranscriptionRequest): Promise<FileTranscriptionSnapshot> {
+    return this.startReserved('local', async () => ({
+      ...request,
+      engine: 'local',
+      cloud: null,
+    }))
   }
 
   async startWithCurrentSettings(options: FileTranscriptionStartOptions): Promise<FileTranscriptionSnapshot> {
@@ -428,17 +413,13 @@ export class FileTranscriptionService {
     const profileSnapshot = { ...profile }
     const metadata = this.cloudProfileMetadata(profileSnapshot)
     const cloud = {
-      provider: metadata.provider,
-      model: metadata.model,
       label: metadata.label,
+      config: buildAsrProviderConfig(profileSnapshot, language),
     }
     return {
       ...options,
       engine: 'cloud',
-      cloud: {
-        ...cloud,
-        config: buildAsrProviderConfig(profileSnapshot, language),
-      },
+      cloud,
     }
   }
 

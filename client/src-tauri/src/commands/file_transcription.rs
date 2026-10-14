@@ -54,8 +54,6 @@ pub enum FileTranscriptionEngine {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileCloudJobRequest {
-    pub provider: String,
-    pub model: String,
     pub label: String,
     #[serde(alias = "config")]
     pub asr_config: AsrProviderConfig,
@@ -2544,8 +2542,6 @@ mod tests {
             "audioStreamIndex": null,
             "engine": "cloud",
             "cloud": {
-                "provider": "deepgram",
-                "model": "nova-3",
                 "label": "Deepgram",
                 "config": {
                     "provider": "deepgram",
@@ -2559,8 +2555,8 @@ mod tests {
 
         assert_eq!(request.engine, FileTranscriptionEngine::Cloud);
         let cloud = request.cloud.unwrap();
-        assert_eq!(cloud.provider, "deepgram");
-        assert_eq!(cloud.model, "nova-3");
+        assert_eq!(cloud.label, "Deepgram");
+        assert_eq!(cloud.asr_config.provider, "deepgram");
         assert_eq!(cloud.asr_config.api_key, "sentinel-key");
         assert_eq!(request.model_id, "");
         assert_eq!(request.language, "");
@@ -2592,6 +2588,8 @@ mod tests {
         assert!(serialized.contains("\"engine\":\"cloud\""));
         assert!(serialized.contains("\"cloudLabel\":\"Deepgram\""));
         assert!(!serialized.contains("asr_config"));
+        assert!(!serialized.contains("\"provider\""));
+        assert!(!serialized.contains("\"model\""));
         assert!(!serialized.contains("api_key"));
         assert!(!serialized.contains("secret"));
     }
