@@ -230,20 +230,7 @@ fn decode_frames(
 }
 
 fn pcm16le_bytes(samples: &[f32; FRAME_SAMPLES]) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::with_capacity(FRAME_SAMPLES * 2);
-    for sample in samples {
-        if !sample.is_finite() {
-            return Err("Audio frame contains a non-finite sample".into());
-        }
-        let clamped = sample.clamp(-1.0, 1.0);
-        let scaled = if clamped < 0.0 {
-            clamped * 32_768.0
-        } else {
-            clamped * 32_767.0
-        };
-        bytes.extend_from_slice(&(scaled.round() as i16).to_le_bytes());
-    }
-    Ok(bytes)
+    crate::providers::wav::pcm16le_bytes(samples)
 }
 
 fn combine_results<T>(

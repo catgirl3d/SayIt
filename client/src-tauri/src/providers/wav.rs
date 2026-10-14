@@ -1,5 +1,23 @@
 // Shared WAV container encoder used by ASR providers.
 
+/// Encode normalized mono samples as signed little-endian 16-bit PCM.
+pub fn pcm16le_bytes(samples: &[f32]) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(samples.len().saturating_mul(2));
+    for sample in samples {
+        if !sample.is_finite() {
+            return Err("Audio frame contains a non-finite sample".into());
+        }
+        let clamped = sample.clamp(-1.0, 1.0);
+        let scaled = if clamped < 0.0 {
+            clamped * 32_768.0
+        } else {
+            clamped * 32_767.0
+        };
+        bytes.extend_from_slice(&(scaled.round() as i16).to_le_bytes());
+    }
+    Ok(bytes)
+}
+
 /// Wrap 16kHz mono 16-bit PCM (actually any sample rate, mono 16-bit) in a WAV container.
 ///
 /// The 44-byte header must exactly match the payload length; servers only return
@@ -50,5 +68,19 @@ mod tests {
         assert_eq!(data_size as usize, pcm.len());
         let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]);
         assert_eq!(sample_rate, 16000);
+    }
+
+    #[test]
+    fn pcm16le_encoding_preserves_signed_scaling_and_rejects_non_finite_samples() {
+        let pcm = pcm16le_bytes(&[-1.0, 1.0, -0.5, 0.5]).unwrap();
+
+        assert_eq!(&pcm[0..2], &i16::MIN.to_le_bytes());
+        assert_eq!(&pcm[2..4], &i16::MAX.to_le_bytes());
+        assert_eq!(&pcm[4..6], &(-16_384_i16).to_le_bytes());
+        assert_eq!(&pcm[6..8], &(16_384_i16).to_le_bytes());
+        assert_eq!(
+            pcm16le_bytes(&[f32::NAN]).unwrap_err(),
+            "Audio frame contains a non-finite sample"
+        );
     }
 }

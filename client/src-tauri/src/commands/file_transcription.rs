@@ -1318,13 +1318,9 @@ where
     })
 }
 
-fn encode_pcm_i16_base64(samples: &[f32]) -> String {
-    let mut pcm = Vec::with_capacity(samples.len().saturating_mul(SAMPLE_BYTES));
-    for &sample in samples {
-        let value = (sample * 32_768.0).round().clamp(-32_768.0, 32_767.0) as i16;
-        pcm.extend_from_slice(&value.to_le_bytes());
-    }
-    base64::engine::general_purpose::STANDARD.encode(pcm)
+fn encode_pcm_i16_base64(samples: &[f32]) -> Result<String, String> {
+    let pcm = crate::providers::wav::pcm16le_bytes(samples)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(pcm))
 }
 
 fn safe_title(source: &Path) -> String {
@@ -1829,7 +1825,7 @@ fn process_cloud_pcm(
         windows,
         &input.cancel,
         |samples| {
-            let audio_b64 = encode_pcm_i16_base64(samples);
+            let audio_b64 = encode_pcm_i16_base64(samples)?;
             let response = tauri::async_runtime::block_on(registry::dispatch_cloud_transcribe(
                 &config,
                 &audio_b64,
