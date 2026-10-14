@@ -1,5 +1,5 @@
 use crate::models::{downloader, gguf_asr, local_vad};
-use crate::providers::{registry, types::AsrProviderConfig};
+use crate::providers::{capabilities, registry, types::AsrProviderConfig};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -2201,13 +2201,7 @@ pub fn start_file_transcription(
                 .cloud
                 .as_ref()
                 .ok_or_else(|| "Cloud transcription configuration is missing".to_string())?;
-            if !registry::is_supported_asr_provider(&cloud.provider) {
-                return Err(format!(
-                    "The selected cloud ASR provider is not supported: {}",
-                    cloud.provider
-                ));
-            }
-            if !registry::is_supported_asr_provider(&cloud.asr_config.provider) {
+            if !capabilities::is_cloud_asr_provider(&cloud.asr_config.provider) {
                 return Err(format!(
                     "The selected cloud ASR provider is not supported: {}",
                     cloud.asr_config.provider

@@ -24,36 +24,6 @@ fn is_openai_compat_provider(provider: &str) -> bool {
     OPENAI_COMPAT_PROVIDERS.contains(&provider)
 }
 
-const ASR_DISPATCH_PROVIDERS: &[&str] = &[
-    "deepgram",
-    "doubao",
-    "doubao_v2",
-    "qwen",
-    "aliyun",
-    "qwen_realtime",
-    "qwen_audio_stream",
-    "qwen_omni",
-    "mimo",
-    "groq_whisper",
-    "openai_transcribe",
-    "gemini_transcribe",
-    "openrouter_transcribe",
-    "openai_compat",
-];
-
-pub(crate) fn is_supported_asr_provider(provider: &str) -> bool {
-    ASR_DISPATCH_PROVIDERS.contains(&provider)
-        || matches!(
-            provider,
-            "qwen_omni_plus"
-                | "qwen_omni_35_plus"
-                | "qwen_omni_35_flash"
-                | "qwen_omni_38_realtime"
-                | "qwen_omni_flash"
-                | "qwen_omni_turbo"
-        )
-}
-
 /// 云端 AI 校对（Tauri command）
 ///
 /// With `request.stream` set, the provider emits `cloud-polish-delta` events
