@@ -79,6 +79,7 @@ function createHarness() {
   const admission = {
     reserveFileTranscription: vi.fn(() => calls.push('reserve')),
     releaseFileTranscription: vi.fn(() => calls.push('release')),
+    setFileTranscriptionAdmissionReady: vi.fn(),
   }
   const bridge = { invoke, listen } as unknown as FileTranscriptionBridge
   return { calls, invoke, listen, admission, bridge }
@@ -230,7 +231,7 @@ describe('file transcription service', () => {
     expect(harness.admission.reserveFileTranscription).not.toHaveBeenCalled()
   })
 
-  it('keeps initialization failures visible instead of returning a fake ready state', async () => {
+  it('keeps initialization failures visible while re-opening admission for local capture', async () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'get_file_transcription_state') throw new Error('state query failed')
@@ -242,6 +243,8 @@ describe('file transcription service', () => {
 
     expect(service.getInitializationError()).toBe('state query failed')
     expect(harness.admission.reserveFileTranscription).not.toHaveBeenCalled()
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenNthCalledWith(1, false)
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenLastCalledWith(true)
   })
 
   it('reserves before start IPC and releases only when the start request fails', async () => {
@@ -294,6 +297,120 @@ describe('file transcription service', () => {
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
     stateHandler?.({ payload: snapshot({ sequence: 2, phase: 'failed', resourcesReleased: true }) })
     expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the reservation when a failed worker start publishes its terminal snapshot', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    let rejectStart: (error: Error) => void = () => undefined
+    let startInvoked: () => void = () => undefined
+    const startCalled = new Promise<void>((resolve) => { startInvoked = resolve })
+    harness.invoke.mockImplementation((command: string) => {
+      if (command === 'start_file_transcription') {
+        startInvoked()
+        return new Promise((_resolve, reject) => { rejectStart = reject })
+      }
+      return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    await service.init()
+
+    const startPromise = service.start({
+      filePath: 'C:/recording.mp4',
+      outputDirectory: 'C:/output',
+      ffmpegDirectory: null,
+      audioStreamIndex: null,
+      modelId: 'sensevoice-small-gguf',
+      language: 'en',
+      accelerator: 'auto',
+    })
+    await startCalled
+    stateHandler?.({ payload: snapshot({ sequence: 1 }) })
+    stateHandler?.({ payload: snapshot({ sequence: 2, phase: 'failed', resourcesReleased: true, error: 'Failed to start file transcription worker' }) })
+    rejectStart(new Error('Failed to start file transcription worker'))
+    await expect(startPromise).rejects.toThrow('Failed to start file transcription worker')
+
+    expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the reservation when the terminal snapshot arrives after the start rejection', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    let rejectStart: (error: Error) => void = () => undefined
+    let startInvoked: () => void = () => undefined
+    const startCalled = new Promise<void>((resolve) => { startInvoked = resolve })
+    harness.invoke.mockImplementation((command: string) => {
+      if (command === 'start_file_transcription') {
+        startInvoked()
+        return new Promise((_resolve, reject) => { rejectStart = reject })
+      }
+      return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    await service.init()
+
+    const startPromise = service.start({
+      filePath: 'C:/recording.mp4',
+      outputDirectory: 'C:/output',
+      ffmpegDirectory: null,
+      audioStreamIndex: null,
+      modelId: 'sensevoice-small-gguf',
+      language: 'en',
+      accelerator: 'auto',
+    })
+    await startCalled
+    stateHandler?.({ payload: snapshot({ sequence: 1 }) })
+    rejectStart(new Error('Failed to start file transcription worker'))
+    await expect(startPromise).rejects.toThrow('Failed to start file transcription worker')
+    expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
+
+    stateHandler?.({ payload: snapshot({ sequence: 2, phase: 'failed', resourcesReleased: true, error: 'Failed to start file transcription worker' }) })
+    expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the reservation when a rejected start never publishes a terminal snapshot', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    let rejectStart: (error: Error) => void = () => undefined
+    let startInvoked: () => void = () => undefined
+    const startCalled = new Promise<void>((resolve) => { startInvoked = resolve })
+    harness.invoke.mockImplementation((command: string) => {
+      if (command === 'start_file_transcription') {
+        startInvoked()
+        return new Promise((_resolve, reject) => { rejectStart = reject })
+      }
+      return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    await service.init()
+
+    const startPromise = service.start({
+      filePath: 'C:/recording.mp4',
+      outputDirectory: 'C:/output',
+      ffmpegDirectory: null,
+      audioStreamIndex: null,
+      modelId: 'sensevoice-small-gguf',
+      language: 'en',
+      accelerator: 'auto',
+    })
+    await startCalled
+    stateHandler?.({ payload: snapshot({ sequence: 1 }) })
+    rejectStart(new Error('Failed to start file transcription worker'))
+    await expect(startPromise).rejects.toThrow('Failed to start file transcription worker')
+
+    expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
   })
 
   it('accepts a terminal cloud snapshot without releasing local admission', async () => {

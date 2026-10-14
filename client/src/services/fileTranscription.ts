@@ -217,7 +217,10 @@ export class FileTranscriptionService {
       } catch (error) {
         if (generation !== this.epoch) return
         this.initializationError = errorMessage(error)
-        this.admission.setFileTranscriptionAdmissionReady?.(false)
+        // A failed restore must not lock local capture out forever: keep the
+        // admission open and surface the failure through the Files page retry.
+        // The native file/resource leases remain the conflict guard.
+        this.admission.setFileTranscriptionAdmissionReady?.(true)
         this.notify()
         throw error
       }

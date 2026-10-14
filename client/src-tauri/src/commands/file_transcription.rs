@@ -372,6 +372,57 @@ fn set_active_phase(job_id: &str, phase: FilePhase, error: Option<String>) {
     });
 }
 
+/// Atomically claims the Finalizing phase under the controller lock.
+///
+/// `request_cancel` cancels the token and moves the phase to `Cancelling` under
+/// the same lock, so exactly one side wins: an accepted cancellation makes this
+/// claim fail (the worker then publishes `Cancelled`), and a claim accepted
+/// first makes later cancellation attempts fail the phase gate. The worker must
+/// never publish `Completed` after a cancel was accepted.
+fn claim_finalizing(job_id: &str) -> bool {
+    let emitted = with_controller(|controller| {
+        let active = controller.active.as_mut()?;
+        if active.job_id != job_id {
+            return None;
+        }
+        if !claim_finalizing_phase(&mut active.snapshot.phase, &active.cancel) {
+            return None;
+        }
+        active.snapshot.error = None;
+        active.snapshot.sequence = next_sequence();
+        Some((active.app.clone(), active.snapshot.clone()))
+    });
+    match emitted {
+        Some((app, snapshot)) => {
+            emit_snapshot(&app, &snapshot);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The decision half of the finalizing claim, kept separate so tests drive the
+/// exact transition the worker performs under the controller lock.
+fn claim_finalizing_phase(phase: &mut FilePhase, cancel: &CancelToken) -> bool {
+    if cancel.is_cancelled() || !matches!(*phase, FilePhase::Transcribing) {
+        return false;
+    }
+    *phase = FilePhase::Finalizing;
+    true
+}
+
+/// The cancellation half of the same protocol: cancels the token and moves the
+/// phase to `Cancelling` in one step, so the phase gate and the token can never
+/// disagree about who won. Returns false when the run is no longer cancellable.
+fn accept_cancellation(phase: &mut FilePhase, cancel: &CancelToken) -> bool {
+    if !phase_allows_cancel(phase) {
+        return false;
+    }
+    cancel.cancel();
+    *phase = FilePhase::Cancelling;
+    true
+}
+
 fn validate_source(path: &Path) -> Result<PathBuf, String> {
     let metadata = fs::metadata(path).map_err(|error| {
         format!(
@@ -2103,11 +2154,9 @@ fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
             }
         });
     }
-    if input.cancel.is_cancelled() {
+    if !claim_finalizing(&input.job_id) {
         return WorkerOutcome::Cancelled;
     }
-
-    set_active_phase(&input.job_id, FilePhase::Finalizing, None);
     match export_documents(
         &source,
         Path::new(&input.request.output_directory),
@@ -2134,6 +2183,44 @@ fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
             WorkerOutcome::ExportFailed(error)
         }
     }
+}
+
+/// Terminal state for a job whose worker thread could not start: failed, no
+/// retryable artifacts, resources free again.
+fn apply_start_failure(snapshot: &mut FileTranscriptionSnapshot, error: &str) {
+    snapshot.phase = FilePhase::Failed;
+    snapshot.error = Some(error.to_string());
+    snapshot.resources_released = true;
+    snapshot.retryable_export = false;
+}
+
+/// Publishes the terminal state of a job whose worker never started and moves
+/// it from `active` to `last`, mirroring `finish_worker`'s active-to-last move.
+fn publish_start_failure(
+    job_id: &str,
+    source_path: PathBuf,
+    output_directory: PathBuf,
+    error: &str,
+) {
+    let Some(snapshot) = update_active(job_id, |snapshot| apply_start_failure(snapshot, error))
+    else {
+        return;
+    };
+    with_controller(|controller| {
+        if controller
+            .active
+            .as_ref()
+            .is_some_and(|active| active.job_id == job_id)
+        {
+            controller.active = None;
+            controller.last = Some(TerminalJob {
+                snapshot,
+                source_path,
+                output_directory,
+                retryable_export: false,
+            });
+        }
+    });
 }
 
 fn finish_worker(input: WorkerInput, outcome: WorkerOutcome) {
@@ -2311,24 +2398,22 @@ pub fn start_file_transcription(
     }
     emit_snapshot(&app, &snapshot);
     let temp_dir_for_error = input.temp_dir.clone();
+    let failure_source = PathBuf::from(&input.request.file_path);
+    let failure_output = PathBuf::from(&input.request.output_directory);
     if let Err(error) = thread::Builder::new()
         .name(format!("file-transcription-{job_id}"))
         .spawn(move || run_worker(input))
     {
-        with_controller(|controller| {
-            if controller
-                .active
-                .as_ref()
-                .is_some_and(|active| active.job_id == job_id)
-            {
-                controller.active = None;
-            }
-        });
+        let message = format!("Failed to start file transcription worker: {error}");
+        // Builder::spawn drops the moved worker input (and its leases) before
+        // it returns, so the native resources are already released here. The
+        // worker will never run, so this terminal snapshot is the only one the
+        // UI can observe for the job; without it the frontend reservation would
+        // stay held forever.
+        publish_start_failure(&job_id, failure_source, failure_output, &message);
         let _ = fs::remove_dir_all(temp_dir_for_error);
         STATE_CHANGED.notify_all();
-        return Err(format!(
-            "Failed to start file transcription worker: {error}"
-        ));
+        return Err(message);
     }
     let snapshot = with_controller(|controller| {
         controller
@@ -2360,21 +2445,26 @@ pub fn get_file_transcription_state() -> Option<FileTranscriptionSnapshot> {
 }
 
 fn request_cancel(job_id: &str) -> Result<(), String> {
-    let process = with_controller(|controller| {
+    let (process, app, snapshot) = with_controller(|controller| {
         let active = controller
             .active
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| "No file transcription is active".to_string())?;
         if active.job_id != job_id {
             return Err("The requested file transcription is no longer active".to_string());
         }
-        if !phase_allows_cancel(&active.snapshot.phase) {
+        if !accept_cancellation(&mut active.snapshot.phase, &active.cancel) {
             return Err("The file transcription can no longer be cancelled".into());
         }
-        active.cancel.cancel();
-        Ok(active.process.clone())
+        active.snapshot.error = None;
+        active.snapshot.sequence = next_sequence();
+        Ok((
+            active.process.clone(),
+            active.app.clone(),
+            active.snapshot.clone(),
+        ))
     })?;
-    set_active_phase(job_id, FilePhase::Cancelling, None);
+    emit_snapshot(&app, &snapshot);
     if let Some(process) = process {
         process.kill();
     }
@@ -2905,6 +2995,86 @@ mod tests {
         assert!(!phase_allows_cancel(&FilePhase::NoSpeech));
         assert!(!phase_allows_cancel(&FilePhase::Failed));
         assert!(!phase_allows_cancel(&FilePhase::Cancelled));
+    }
+
+    #[test]
+    fn accepted_cancellation_defeats_the_finalizing_claim() {
+        let cancel = CancelToken::new();
+        let mut phase = FilePhase::Transcribing;
+
+        assert!(accept_cancellation(&mut phase, &cancel));
+        assert!(matches!(phase, FilePhase::Cancelling));
+        assert!(cancel.is_cancelled());
+
+        assert!(!claim_finalizing_phase(&mut phase, &cancel));
+        assert!(matches!(phase, FilePhase::Cancelling));
+    }
+
+    #[test]
+    fn claimed_finalization_defeats_later_cancellation_attempts() {
+        let cancel = CancelToken::new();
+        let mut phase = FilePhase::Transcribing;
+
+        assert!(claim_finalizing_phase(&mut phase, &cancel));
+        assert!(matches!(phase, FilePhase::Finalizing));
+
+        assert!(!accept_cancellation(&mut phase, &cancel));
+        assert!(!cancel.is_cancelled());
+        assert!(matches!(phase, FilePhase::Finalizing));
+    }
+
+    #[test]
+    fn finalizing_claim_rejects_non_transcribing_phases() {
+        let cancel = CancelToken::new();
+        for phase in [
+            FilePhase::Checking,
+            FilePhase::Preparing,
+            FilePhase::Loading,
+            FilePhase::Finalizing,
+            FilePhase::Cancelling,
+            FilePhase::Completed,
+            FilePhase::NoSpeech,
+            FilePhase::Cancelled,
+            FilePhase::Failed,
+        ] {
+            let mut phase = phase;
+            assert!(!claim_finalizing_phase(&mut phase, &cancel));
+        }
+    }
+
+    #[test]
+    fn start_failure_marks_the_job_failed_and_released() {
+        let mut snapshot = FileTranscriptionSnapshot {
+            job_id: "job-1".into(),
+            sequence: 7,
+            phase: FilePhase::Checking,
+            engine: FileTranscriptionEngine::Local,
+            cloud_label: None,
+            duration_ms: None,
+            processed_ms: 0,
+            saved_ms: 0,
+            text: String::new(),
+            draft_path: None,
+            txt_path: None,
+            markdown_path: None,
+            error: None,
+            warning: None,
+            retryable_export: true,
+            resources_released: false,
+        };
+
+        apply_start_failure(
+            &mut snapshot,
+            "Failed to start file transcription worker: boom",
+        );
+
+        assert!(matches!(snapshot.phase, FilePhase::Failed));
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("Failed to start file transcription worker: boom")
+        );
+        assert!(snapshot.resources_released);
+        assert!(!snapshot.retryable_export);
     }
 
     #[test]
