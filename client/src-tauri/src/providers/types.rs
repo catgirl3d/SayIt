@@ -64,7 +64,7 @@ pub struct TestResult {
 }
 
 /// ASR 供应商配置（前端传入）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AsrProviderConfig {
     pub provider: String,
     #[serde(default)]
@@ -74,6 +74,19 @@ pub struct AsrProviderConfig {
     /// 供应商特定的额外配置
     #[serde(default)]
     pub extra: serde_json::Value,
+}
+
+// api_key is redacted so an accidental `{:?}` on a request can never leak credentials.
+impl std::fmt::Debug for AsrProviderConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AsrProviderConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"<redacted>")
+            .field("app_id", &self.app_id)
+            .field("extra", &self.extra)
+            .finish()
+    }
 }
 
 /// AI 供应商配置（前端传入）
@@ -171,5 +184,20 @@ mod tests {
                 "warning": "deepgram_keyterm_limit"
             })
         );
+    }
+
+    #[test]
+    fn debug_output_redacts_the_api_key() {
+        let config = AsrProviderConfig {
+            provider: "deepgram".to_string(),
+            api_key: "sentinel-secret".to_string(),
+            app_id: "app-id".to_string(),
+            extra: serde_json::json!({ "model": "nova-3" }),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("sentinel-secret"));
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("nova-3"));
     }
 }
