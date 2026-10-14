@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
 import type { FileTranscriptionSnapshot } from '@/services/fileTranscription'
 
-const native = vi.hoisted(() => ({
-  invoke: vi.fn(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
+const native = vi.hoisted(() => {
+  const defaultInvoke = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
     if (command === 'get_file_transcription_state') return null
     if (command === 'store_get') {
       if (args?.key === 'speechInput.language') return 'en'
@@ -24,9 +24,13 @@ const native = vi.hoisted(() => ({
       ],
     }
     return undefined
-  }),
-  listen: vi.fn(async (_event: string, _handler: (event: { payload: unknown }) => void): Promise<() => void> => () => undefined),
-}))
+  }
+  return {
+    defaultInvoke,
+    invoke: vi.fn(defaultInvoke),
+    listen: vi.fn(async (_event: string, _handler: (event: { payload: unknown }) => void): Promise<() => void> => () => undefined),
+  }
+})
 
 const dialog = vi.hoisted(() => ({ open: vi.fn() }))
 let detectedFfmpegDirectory: string | null = null
@@ -58,7 +62,6 @@ function fileSnapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileT
     jobId: 'job-1',
     sequence: 1,
     phase: 'failed',
-    filePath: 'C:/recording.mp4',
     durationMs: 12_000,
     processedMs: 12_000,
     savedMs: 12_000,
@@ -68,6 +71,7 @@ function fileSnapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileT
     markdownPath: null,
     error: 'Native transcription failed',
     warning: null,
+    retryableExport: false,
     resourcesReleased: true,
     ...overrides,
   }
@@ -76,6 +80,7 @@ function fileSnapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileT
 describe('file transcription page', () => {
   beforeEach(() => {
     native.invoke.mockClear()
+    native.invoke.mockImplementation(native.defaultInvoke)
     native.listen.mockClear()
     dialog.open.mockReset()
     detectedFfmpegDirectory = null
@@ -91,6 +96,24 @@ describe('file transcription page', () => {
     expect(screen.getByText('Auto')).toBeTruthy()
   })
 
+  it('retries local settings after a settings error', async () => {
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_available_models') throw new Error('engine offline')
+      return native.defaultInvoke(command, args)
+    })
+
+    render(<FileTranscription />)
+
+    await waitFor(() => expect(screen.getByText('Could not read local engine settings: engine offline')).toBeTruthy())
+    expect(screen.queryByText('SenseVoice Small')).toBeNull()
+
+    native.invoke.mockImplementation(native.defaultInvoke)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    expect(screen.queryByText('Could not read local engine settings: engine offline')).toBeNull()
+  })
+
   it('preselects the default physical audio track instead of the first track', async () => {
     dialog.open.mockResolvedValue('C:/recording.mp4')
     render(<FileTranscription />)
@@ -103,12 +126,12 @@ describe('file transcription page', () => {
     })
   })
 
-  it('shows retry export only for a released final-export failure', async () => {
+  it('shows retry export only for a released retryable export failure', async () => {
     render(<FileTranscription />)
     await waitFor(() => expect(stateListener).not.toBeNull())
 
     act(() => {
-      stateListener?.({ payload: fileSnapshot({ sequence: 1, error: 'Native transcription failed' }) })
+      stateListener?.({ payload: fileSnapshot({ sequence: 1, error: 'Native transcription failed', retryableExport: false }) })
     })
     expect(screen.getByText('Native transcription failed')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Retry export' })).toBeNull()
@@ -118,10 +141,32 @@ describe('file transcription page', () => {
       stateListener?.({ payload: fileSnapshot({
         jobId: 'job-2',
         sequence: 2,
-        error: 'Final export failed: disk full',
+        error: 'Native transcription failed',
+        retryableExport: true,
+        resourcesReleased: false,
+      }) })
+    })
+    expect(screen.queryByRole('button', { name: 'Retry export' })).toBeNull()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-2',
+        sequence: 3,
+        error: 'Native transcription failed',
+        retryableExport: true,
       }) })
     })
     expect(screen.getByRole('button', { name: 'Retry export' })).toBeTruthy()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-2',
+        sequence: 4,
+        error: 'Final export failed: disk full',
+        retryableExport: false,
+      }) })
+    })
+    expect(screen.queryByRole('button', { name: 'Retry export' })).toBeNull()
   })
 
   it('opens cancellation confirmation without cancelling immediately', async () => {
@@ -184,6 +229,26 @@ describe('file transcription page', () => {
     expect(native.invoke).not.toHaveBeenCalledWith('cancel_file_transcription', expect.anything())
   })
 
+  it('uses a destructive style for the cancellation confirmation', async () => {
+    render(<FileTranscription />)
+    await waitFor(() => expect(stateListener).not.toBeNull())
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 13,
+        phase: 'transcribing',
+        resourcesReleased: false,
+        error: null,
+      }) })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    const confirmButton = within(screen.getByRole('dialog')).getByRole('button', { name: 'Stop transcription' })
+
+    expect(confirmButton.className).toContain('destructive')
+    expect(confirmButton.className).not.toContain('bg-primary')
+  })
+
   it('shows truthful preparation progress and no progress for checking or loading', async () => {
     render(<FileTranscription />)
     await waitFor(() => expect(stateListener).not.toBeNull())
@@ -232,6 +297,103 @@ describe('file transcription page', () => {
     })
     expect(screen.queryByLabelText('Processed audio progress')).toBeNull()
     expect(screen.queryByText('Processed 0:05')).toBeNull()
+  })
+
+  it('shows saved progress while transcribing', async () => {
+    render(<FileTranscription />)
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 30,
+        phase: 'transcribing',
+        durationMs: 60_000,
+        processedMs: 25_000,
+        savedMs: 20_000,
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+
+    expect(screen.getByText('Saved 0:20 of 1:00')).toBeTruthy()
+    const progress = screen.getByLabelText('Saved audio progress') as HTMLProgressElement
+    expect(progress.value).toBe(20_000)
+    expect(progress.max).toBe(60_000)
+  })
+
+  it('keeps saved progress visible while finalizing', async () => {
+    render(<FileTranscription />)
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 40,
+        phase: 'finalizing',
+        durationMs: 60_000,
+        processedMs: 60_000,
+        savedMs: 60_000,
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+
+    const progress = screen.getByLabelText('Saved audio progress') as HTMLProgressElement
+    expect(progress.value).toBe(60_000)
+    expect(progress.max).toBe(60_000)
+  })
+
+  it('shows indeterminate saved progress when the duration is unknown', async () => {
+    render(<FileTranscription />)
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 50,
+        phase: 'cancelling',
+        durationMs: null,
+        processedMs: 30_000,
+        savedMs: 25_000,
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+
+    expect(screen.getByText('Saved 0:25')).toBeTruthy()
+    const progress = screen.getByLabelText('Saved audio progress') as HTMLProgressElement
+    expect(progress.hasAttribute('value')).toBe(false)
+  })
+
+  it('closes cancellation once the job enters finalizing', async () => {
+    render(<FileTranscription />)
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 60,
+        phase: 'finalizing',
+        durationMs: 60_000,
+        processedMs: 60_000,
+        savedMs: 60_000,
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 61,
+        phase: 'finalizing',
+        resourcesReleased: true,
+        error: null,
+      }) })
+    })
   })
 
   it('offers a detected FFmpeg folder and re-inspects the selected file when used', async () => {
@@ -306,7 +468,8 @@ describe('file transcription page', () => {
 
     act(() => {
       stateListener?.({ payload: fileSnapshot({
-        sequence: 30,
+        jobId: 'job-cancel-1',
+        sequence: 70,
         phase: 'transcribing',
         error: null,
         warning: '2 fragments without recognized text were skipped (first at 0:02:20)',
@@ -324,7 +487,8 @@ describe('file transcription page', () => {
 
     act(() => {
       stateListener?.({ payload: fileSnapshot({
-        sequence: 31,
+        jobId: 'job-cancel-1',
+        sequence: 71,
         warning: null,
         resourcesReleased: true,
       }) })
@@ -339,7 +503,8 @@ describe('file transcription page', () => {
 
     act(() => {
       stateListener?.({ payload: fileSnapshot({
-        sequence: 32,
+        jobId: 'job-cancel-1',
+        sequence: 72,
         error: 'Native transcription failed',
         warning: '1 fragment without recognized text was skipped',
         resourcesReleased: true,

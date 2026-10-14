@@ -260,6 +260,9 @@ fn main() {
     // Clean up expired log files on startup
     cleanup_expired_logs(&storage);
 
+    // Remove temp directories left by a file transcription that crashed before cleanup
+    commands::file_transcription::cleanup_stale_temp_directories();
+
     // Read PTT setting before moving storage into managed state
     let ptt_setting_val = storage.get("shortcutPTT", None);
     // 兜底键与 storage 种子、前端 defaults.ts 保持一致；绝不能是 Shift（会触发筛选键）

@@ -77,7 +77,7 @@ export default function App() {
     }
   }, [])
 
-  // 自动更新安装完成后，看门人进程会带 --open-about 重新拉起本程序
+  // After an auto-update install, the watchdog process relaunches this app with --open-about
   useEffect(() => {
     const unlistenOpenAbout = listen('open-about', () => {
       navigate('/about')

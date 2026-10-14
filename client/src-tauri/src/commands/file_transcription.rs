@@ -72,7 +72,6 @@ pub struct FileTranscriptionSnapshot {
     pub job_id: String,
     pub sequence: u64,
     pub phase: FilePhase,
-    pub file_path: String,
     pub duration_ms: Option<u64>,
     pub processed_ms: u64,
     pub saved_ms: u64,
@@ -82,6 +81,7 @@ pub struct FileTranscriptionSnapshot {
     pub markdown_path: Option<String>,
     pub error: Option<String>,
     pub warning: Option<String>,
+    pub retryable_export: bool,
     pub resources_released: bool,
 }
 
@@ -242,18 +242,14 @@ fn file_work_blocks_transition(active: bool, retrying: bool, external_transition
     active || retrying || external_transition
 }
 
+/// Cancellation is only meaningful while the worker can still stop early; the final
+/// export is short and must not be interrupted into half-written files, so the action
+/// closes as soon as the worker enters `finalizing`.
 fn phase_allows_cancel(phase: &FilePhase) -> bool {
-    !matches!(
+    matches!(
         phase,
-        FilePhase::Completed | FilePhase::NoSpeech | FilePhase::Cancelled | FilePhase::Failed
+        FilePhase::Checking | FilePhase::Preparing | FilePhase::Loading | FilePhase::Transcribing
     )
-}
-
-fn transition_requires_file_gate(code: Option<i32>, active: bool, retrying: bool) -> bool {
-    if code == Some(tauri::RESTART_EXIT_CODE) {
-        return active || retrying;
-    }
-    active || retrying
 }
 
 fn controller_has_file_work(controller: &Controller) -> bool {
@@ -363,6 +359,23 @@ fn validate_source(path: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(path).map_err(|error| {
         format!("The selected media file could not be resolved as a local file: {error}")
     })
+}
+
+/// Model ids address exactly one directory under the models root; anything with path
+/// syntax is rejected so a crafted setting cannot point the loader outside of it.
+fn validate_model_id(model_id: &str) -> Result<(), String> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return Err("A local ASR model must be selected".into());
+    }
+    if model_id.contains('/')
+        || model_id.contains('\\')
+        || model_id.contains(':')
+        || matches!(model_id, "." | "..")
+    {
+        return Err("The selected local ASR model id is not valid".into());
+    }
+    Ok(())
 }
 
 fn absolute_candidate(path: PathBuf) -> PathBuf {
@@ -524,20 +537,18 @@ fn parse_probe(stdout: &[u8]) -> Result<FileMediaInfo, String> {
     })
 }
 
+/// Both media tools may only open local files and pipes: the whitelist keeps a crafted
+/// container from making the demuxer resolve network protocols on its own.
+fn restrict_input_protocols(command: &mut Command) {
+    command.args(["-protocol_whitelist", "file,pipe"]);
+}
+
 fn ffprobe_command(tools: &ToolPaths, source: &Path) -> Command {
     let mut command = Command::new(&tools.ffprobe);
     // These ffprobe builds do not define -nostdin; cmdutils consumes the next token as its value.
-    command.args([
-        "-v",
-        "error",
-        "-protocol_whitelist",
-        "file,pipe",
-        "-show_streams",
-        "-show_format",
-        "-of",
-        "json",
-        "-i",
-    ]);
+    command.args(["-v", "error"]);
+    restrict_input_protocols(&mut command);
+    command.args(["-show_streams", "-show_format", "-of", "json", "-i"]);
     command.arg(source);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     command
@@ -545,17 +556,9 @@ fn ffprobe_command(tools: &ToolPaths, source: &Path) -> Command {
 
 fn ffmpeg_command(tools: &ToolPaths, source: &Path, audio_track: usize) -> Command {
     let mut command = Command::new(&tools.ffmpeg);
-    command.args([
-        "-nostdin",
-        "-nostats",
-        "-progress",
-        "pipe:2",
-        "-v",
-        "error",
-        "-protocol_whitelist",
-        "file,pipe",
-        "-i",
-    ]);
+    command.args(["-nostdin", "-nostats", "-progress", "pipe:2", "-v", "error"]);
+    restrict_input_protocols(&mut command);
+    command.args(["-i"]);
     command
         .arg(source)
         .args(["-map", &format!("0:a:{audio_track}"), "-vn", "-sn", "-dn"])
@@ -1216,9 +1219,15 @@ fn publish_checkpoint_candidate(candidate: &Path, destination: &Path) -> Result<
         match fs::rename(candidate, destination) {
             Ok(()) => {
                 if had_previous {
-                    fs::remove_file(&backup).map_err(|error| {
-                        format!("Failed to remove the previous checkpoint: {error}")
-                    })?;
+                    // Best effort: the new checkpoint is already in place, so a transient
+                    // lock on the stale backup (antivirus, indexer, sync client) must not
+                    // fail the whole transcription.
+                    if let Err(error) = fs::remove_file(&backup) {
+                        log::warn!(
+                            "Failed to remove the previous checkpoint {}: {error}",
+                            backup.display()
+                        );
+                    }
                 }
                 Ok(())
             }
@@ -1365,6 +1374,52 @@ fn skipped_fragments_warning(count: u64, first_position_ms: Option<u64>) -> Opti
             "{count} fragments without recognized text were skipped (first at {})",
             format_position_hms(first_position_ms)
         ))
+    }
+}
+
+/// Removes `sayit-file-*` directories left behind when a previous run crashed before
+/// the worker could clean up its decoded audio. Current directories are left alone by
+/// the age check so a concurrent instance can never lose its working files.
+pub fn cleanup_stale_temp_directories() {
+    cleanup_stale_temp_directories_older_than(
+        &std::env::temp_dir(),
+        std::time::Duration::from_secs(24 * 60 * 60),
+    );
+}
+
+fn cleanup_stale_temp_directories_older_than(root: &Path, max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(max_age) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("sayit-file-")
+        {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified >= cutoff {
+            continue;
+        }
+        if let Err(error) = std::fs::remove_dir_all(entry.path()) {
+            log::warn!(
+                "Failed to remove stale file transcription temp directory {}: {error}",
+                entry.path().display()
+            );
+        }
     }
 }
 
@@ -1751,6 +1806,7 @@ fn finish_worker(input: WorkerInput, outcome: WorkerOutcome) {
 
     let snapshot = update_active(&job_id, |snapshot| {
         snapshot.resources_released = true;
+        snapshot.retryable_export = retryable_export;
     });
     let Some(snapshot) = snapshot else {
         return;
@@ -1801,9 +1857,7 @@ pub fn start_file_transcription(
     if !output_directory.is_dir() {
         return Err("The output directory is not an existing directory".into());
     }
-    if request.model_id.trim().is_empty() {
-        return Err("A local ASR model must be selected".into());
-    }
+    validate_model_id(&request.model_id)?;
     if !gguf_asr::model_is_downloaded(&request.model_id) {
         return Err(
             "The selected local ASR model is not downloaded; install it in Voice Engine first"
@@ -1823,7 +1877,6 @@ pub fn start_file_transcription(
         job_id: job_id.clone(),
         sequence: next_sequence(),
         phase: FilePhase::Checking,
-        file_path: request.file_path.clone(),
         duration_ms: None,
         processed_ms: 0,
         saved_ms: 0,
@@ -1833,6 +1886,7 @@ pub fn start_file_transcription(
         markdown_path: None,
         error: None,
         warning: None,
+        retryable_export: false,
         resources_released: false,
     };
     let worker_cancel = cancel.clone();
@@ -1926,7 +1980,7 @@ fn request_cancel(job_id: &str) -> Result<(), String> {
             return Err("The requested file transcription is no longer active".to_string());
         }
         if !phase_allows_cancel(&active.snapshot.phase) {
-            return Err("The file transcription has already reached a terminal phase".into());
+            return Err("The file transcription can no longer be cancelled".into());
         }
         active.cancel.cancel();
         Ok(active.process.clone())
@@ -1991,6 +2045,7 @@ pub async fn retry_file_transcription_export(
             snapshot.sequence = next_sequence();
             snapshot.phase = FilePhase::Completed;
             snapshot.error = None;
+            snapshot.retryable_export = false;
             snapshot.txt_path = Some(txt.to_string_lossy().to_string());
             snapshot.markdown_path = Some(markdown.to_string_lossy().to_string());
             with_controller(|controller| {
@@ -2021,11 +2076,7 @@ pub fn handle_exit_requested(app: &AppHandle, api: &tauri::ExitRequestApi, code:
     let restart = code == Some(tauri::RESTART_EXIT_CODE);
     let (has_work, job_id) = with_controller(|controller| {
         (
-            transition_requires_file_gate(
-                code,
-                controller.active.is_some(),
-                controller.retrying_job.is_some(),
-            ),
+            controller_has_file_work(controller),
             controller
                 .active
                 .as_ref()
@@ -2081,7 +2132,6 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 7,
             phase: FilePhase::Transcribing,
-            file_path: "C:/input/sample.mp4".into(),
             duration_ms: Some(12_000),
             processed_ms: 4_000,
             saved_ms: 3_000,
@@ -2091,6 +2141,7 @@ mod tests {
             markdown_path: None,
             error: None,
             warning: None,
+            retryable_export: false,
             resources_released: false,
         };
 
@@ -2099,7 +2150,9 @@ mod tests {
         assert_eq!(json["processedMs"], 4_000);
         assert_eq!(json["savedMs"], 3_000);
         assert_eq!(json["resourcesReleased"], false);
+        assert_eq!(json["retryableExport"], false);
         assert_eq!(json["warning"], serde_json::Value::Null);
+        assert!(json.get("filePath").is_none());
         assert!(json.get("job_id").is_none());
         assert_eq!(
             serde_json::to_value(FilePhase::NoSpeech).unwrap(),
@@ -2154,7 +2207,6 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 1,
             phase: FilePhase::Preparing,
-            file_path: "sample.mp4".into(),
             duration_ms: None,
             processed_ms: 0,
             saved_ms: 0,
@@ -2164,6 +2216,7 @@ mod tests {
             markdown_path: None,
             error: None,
             warning: None,
+            retryable_export: false,
             resources_released: false,
         };
 
@@ -2195,31 +2248,16 @@ mod tests {
     }
 
     #[test]
-    fn terminal_phases_cannot_be_cancelled_again() {
+    fn cancellation_closes_once_finalizing_starts() {
+        assert!(phase_allows_cancel(&FilePhase::Checking));
+        assert!(phase_allows_cancel(&FilePhase::Preparing));
+        assert!(phase_allows_cancel(&FilePhase::Loading));
+        assert!(phase_allows_cancel(&FilePhase::Transcribing));
+        assert!(!phase_allows_cancel(&FilePhase::Finalizing));
         assert!(!phase_allows_cancel(&FilePhase::Completed));
         assert!(!phase_allows_cancel(&FilePhase::NoSpeech));
         assert!(!phase_allows_cancel(&FilePhase::Failed));
         assert!(!phase_allows_cancel(&FilePhase::Cancelled));
-        assert!(phase_allows_cancel(&FilePhase::Transcribing));
-    }
-
-    #[test]
-    fn restart_exit_code_waits_for_active_and_retrying_jobs() {
-        assert!(transition_requires_file_gate(
-            Some(tauri::RESTART_EXIT_CODE),
-            true,
-            false
-        ));
-        assert!(transition_requires_file_gate(
-            Some(tauri::RESTART_EXIT_CODE),
-            false,
-            true
-        ));
-        assert!(!transition_requires_file_gate(
-            Some(tauri::RESTART_EXIT_CODE),
-            false,
-            false
-        ));
     }
 
     #[test]
@@ -2236,7 +2274,6 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 1,
             phase: FilePhase::Transcribing,
-            file_path: "sample.wav".into(),
             duration_ms: Some(5_000),
             processed_ms: 1_000,
             saved_ms: 1_000,
@@ -2246,6 +2283,7 @@ mod tests {
             markdown_path: None,
             error: None,
             warning: None,
+            retryable_export: false,
             resources_released: false,
         };
         preserve_unsaved_checkpoint(
@@ -2268,7 +2306,6 @@ mod tests {
             job_id: "job-1".into(),
             sequence: 1,
             phase: FilePhase::Completed,
-            file_path: "sample.wav".into(),
             duration_ms: Some(5_000),
             processed_ms: 5_000,
             saved_ms: 5_000,
@@ -2278,6 +2315,7 @@ mod tests {
             markdown_path: Some("sample.md".into()),
             error: None,
             warning: None,
+            retryable_export: false,
             resources_released: false,
         };
         append_cleanup_error(&mut snapshot, "cleanup failed");
@@ -2421,6 +2459,43 @@ mod tests {
         let second = new_job_id();
         assert_ne!(first, second);
         assert!(next_sequence() < next_sequence());
+    }
+
+    #[test]
+    fn stale_temp_sweep_removes_only_aged_job_directories() {
+        let root = test_dir("sweep-root");
+        let aged = root.join("sayit-file-aged");
+        std::fs::create_dir_all(&aged).unwrap();
+        std::fs::write(aged.join("decoded.pcm"), b"pcm").unwrap();
+        let foreign = root.join("sayit-foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+
+        cleanup_stale_temp_directories_older_than(
+            &root,
+            std::time::Duration::from_secs(365 * 24 * 60 * 60),
+        );
+        assert!(
+            aged.exists(),
+            "a fresh job directory must survive the sweep"
+        );
+        assert!(foreign.exists());
+
+        cleanup_stale_temp_directories_older_than(&root, std::time::Duration::ZERO);
+        assert!(!aged.exists(), "an aged job directory must be swept");
+        assert!(
+            foreign.exists(),
+            "directories outside the sayit-file prefix must survive"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn model_ids_cannot_escape_the_models_directory() {
+        assert!(validate_model_id("sensevoice-small-gguf").is_ok());
+        assert!(validate_model_id("  qwen3-asr-0.6b-gguf  ").is_ok());
+        for id in ["", "   ", ".", "..", "../evil", "..\\evil", "a/b", "C:evil"] {
+            assert!(validate_model_id(id).is_err(), "{id:?} must be rejected");
+        }
     }
 
     fn test_dir(name: &str) -> std::path::PathBuf {

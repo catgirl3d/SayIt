@@ -10,7 +10,6 @@ function snapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileTrans
     jobId: 'job-1',
     sequence: 1,
     phase: 'transcribing',
-    filePath: 'C:/recording.mp4',
     durationMs: 120_000,
     processedMs: 60_000,
     savedMs: 60_000,
@@ -20,6 +19,7 @@ function snapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileTrans
     markdownPath: null,
     error: null,
     warning: null,
+    retryableExport: false,
     resourcesReleased: false,
     ...overrides,
   }
@@ -187,5 +187,55 @@ describe('file transcription service', () => {
     stateHandler?.({ payload: snapshot({ jobId: 'job-1', sequence: 4, resourcesReleased: true, phase: 'failed' }) })
     expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
     expect(service.getSnapshot()?.jobId).toBe('job-2')
+  })
+
+  it('dispose releases the state listener and reservation for a hot-replaced instance', async () => {
+    const harness = createHarness()
+    const unlisten = vi.fn()
+    harness.listen.mockImplementation(async () => {
+      harness.calls.push('listen:file-transcription-state')
+      return unlisten
+    })
+    harness.invoke.mockImplementation(async (command: string) => {
+      harness.calls.push(`invoke:${command}`)
+      return command === 'get_file_transcription_state' ? snapshot() : undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.init()
+    expect(harness.admission.reserveFileTranscription).toHaveBeenCalledTimes(1)
+
+    service.dispose()
+
+    expect(unlisten).toHaveBeenCalledTimes(1)
+    expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
+
+    const reloaded = new FileTranscriptionService(harness.bridge, harness.admission)
+    await reloaded.init()
+    expect(reloaded.getSnapshot()).toEqual(snapshot())
+    expect(harness.admission.reserveFileTranscription).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not resurrect the service when disposed during a pending init', async () => {
+    const harness = createHarness()
+    let resolveListen: (unlisten: () => void) => void = () => undefined
+    const unlisten = vi.fn()
+    harness.listen.mockImplementation(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveListen = resolve
+        }),
+    )
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    const initPromise = service.init()
+    service.dispose()
+    resolveListen(unlisten)
+    await initPromise
+
+    expect(unlisten).toHaveBeenCalledTimes(1)
+    expect(harness.admission.reserveFileTranscription).not.toHaveBeenCalled()
+    expect(service.getSnapshot()).toBeNull()
+    expect(service.getInitializationError()).toBeNull()
   })
 })

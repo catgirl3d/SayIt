@@ -30,7 +30,6 @@ export interface FileTranscriptionSnapshot {
   jobId: string
   sequence: number
   phase: FilePhase
-  filePath: string
   durationMs: number | null
   processedMs: number
   savedMs: number
@@ -40,6 +39,7 @@ export interface FileTranscriptionSnapshot {
   markdownPath: string | null
   error: string | null
   warning: string | null
+  retryableExport: boolean
   resourcesReleased: boolean
 }
 
@@ -115,12 +115,8 @@ export function formatFilePathForDisplay(path: string): string {
   return `${trimmed.slice(0, 40)}...${trimmed.slice(-45)}`
 }
 
-const FINAL_EXPORT_FAILURE_PREFIX = 'Final export failed:'
-
-export function isRetryableExportFailure(snapshot: Pick<FileTranscriptionSnapshot, 'phase' | 'error' | 'resourcesReleased'>): boolean {
-  return snapshot.phase === 'failed'
-    && snapshot.resourcesReleased
-    && snapshot.error?.startsWith(FINAL_EXPORT_FAILURE_PREFIX) === true
+export function isRetryableExportFailure(snapshot: Pick<FileTranscriptionSnapshot, 'phase' | 'resourcesReleased' | 'retryableExport'>): boolean {
+  return snapshot.phase === 'failed' && snapshot.resourcesReleased && snapshot.retryableExport
 }
 
 export class FileTranscriptionService {
@@ -130,6 +126,7 @@ export class FileTranscriptionService {
   private initialized = false
   private initPromise: Promise<void> | null = null
   private initializationError: string | null = null
+  private epoch = 0
   private lastSequence = 0
   private reservationHeld = false
   private reservationJobId: string | null = null
@@ -149,27 +146,44 @@ export class FileTranscriptionService {
 
   getInitializationError = (): string | null => this.initializationError
 
+  dispose = (): void => {
+    this.epoch += 1
+    this.unlisten?.()
+    this.unlisten = null
+    this.initialized = false
+    this.initializationError = null
+    this.releaseReservation()
+  }
+
   async init(): Promise<void> {
     if (this.initialized && !this.initializationError) return
     if (this.initialized) this.initialized = false
     if (this.initPromise) return this.initPromise
 
+    const generation = this.epoch
     this.admission.setFileTranscriptionAdmissionReady?.(false)
     const operation = (async () => {
       try {
         if (!this.unlisten) {
-          this.unlisten = await this.ipc.listen<FileTranscriptionSnapshot>(
+          const unlisten = await this.ipc.listen<FileTranscriptionSnapshot>(
             'file-transcription-state',
             (event) => this.receiveSnapshot(event.payload),
           )
+          if (generation !== this.epoch) {
+            unlisten()
+            return
+          }
+          this.unlisten = unlisten
         }
         const current = await this.ipc.invoke<FileTranscriptionSnapshot | null>('get_file_transcription_state')
+        if (generation !== this.epoch) return
         if (current) this.acceptSnapshot(current)
         this.initialized = true
         this.initializationError = null
         this.admission.setFileTranscriptionAdmissionReady?.(true)
         this.notify()
       } catch (error) {
+        if (generation !== this.epoch) return
         this.initializationError = errorMessage(error)
         this.admission.setFileTranscriptionAdmissionReady?.(false)
         this.notify()
@@ -323,3 +337,12 @@ export class FileTranscriptionService {
 }
 
 export const fileTranscriptionService = new FileTranscriptionService()
+
+// HMR cleanup: release the Tauri listener and file reservation so a hot-replaced module cannot double-consume state events
+if ((import.meta as unknown as Record<string, unknown>).hot) {
+  const hot = (import.meta as unknown as Record<string, unknown>).hot as { dispose: (cb: () => void) => void }
+  hot.dispose(() => {
+    console.log('[fileTranscription] HMR dispose: unsubscribing state listener')
+    fileTranscriptionService.dispose()
+  })
+}

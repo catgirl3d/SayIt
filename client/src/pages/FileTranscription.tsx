@@ -87,6 +87,12 @@ function isActiveSnapshot(snapshot: FileTranscriptionSnapshot | null): boolean {
   return Boolean(snapshot && !snapshot.resourcesReleased)
 }
 
+// Cancellation stays possible exactly while the backend worker can still stop early;
+// the final export runs to completion once it starts, so the action closes with it.
+function isCancellablePhase(phase: FilePhase): boolean {
+  return phase === 'checking' || phase === 'preparing' || phase === 'loading' || phase === 'transcribing'
+}
+
 export default function FileTranscription() {
   const t = useT()
   const snapshot = useSyncExternalStore(
@@ -104,6 +110,7 @@ export default function FileTranscription() {
   const [inspecting, setInspecting] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   const [error, setError] = useState('')
+  const [settingsError, setSettingsError] = useState('')
   const [copied, setCopied] = useState(false)
   const [cancelRequested, setCancelRequested] = useState(false)
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false)
@@ -114,8 +121,8 @@ export default function FileTranscription() {
   useEffect(() => {
     void fileTranscriptionService.init().catch((reason) => setError(`${t('files.restoreFailed')}: ${errorText(reason)}`))
     void fileTranscriptionService.getLocalSettings()
-      .then(setLocalSettings)
-      .catch((reason) => setError(`${t('files.settingsFailed')}: ${errorText(reason)}`))
+      .then((value) => { setSettingsError(''); setLocalSettings(value) })
+      .catch((reason) => setSettingsError(`${t('files.settingsFailed')}: ${errorText(reason)}`))
   }, [t])
 
   useEffect(() => {
@@ -248,6 +255,15 @@ export default function FileTranscription() {
     }
   }
 
+  const retryLocalSettings = async () => {
+    try {
+      setLocalSettings(await fileTranscriptionService.getLocalSettings())
+      setSettingsError('')
+    } catch (reason) {
+      setSettingsError(`${t('files.settingsFailed')}: ${errorText(reason)}`)
+    }
+  }
+
   const retryExport = async () => {
     if (!snapshot) return
     setActionBusy(true)
@@ -336,7 +352,7 @@ export default function FileTranscription() {
           <Card>
             <CardHeader className="pb-4"><div className="flex items-center justify-between gap-3"><CardTitle className="text-lg">{t('files.engineTitle')}</CardTitle><Settings2 className="h-4 w-4 text-muted-foreground" /></div></CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {localSettings ? <><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{localSettings.modelName}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.language')}</span><span className="text-right font-medium">{languageLabel(localSettings.language)}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.accelerator')}</span><span className="text-right font-medium">{acceleratorLabel(localSettings.accelerator)}</span></div>{!localSettings.modelInstalled && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.modelMissing')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openVoiceEngine')}<ExternalLink className="h-3 w-3" /></Link></div>}</> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.settingsLoading')}</div>}
+              {localSettings ? <><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{localSettings.modelName}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.language')}</span><span className="text-right font-medium">{languageLabel(localSettings.language)}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.accelerator')}</span><span className="text-right font-medium">{acceleratorLabel(localSettings.accelerator)}</span></div>{!localSettings.modelInstalled && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.modelMissing')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openVoiceEngine')}<ExternalLink className="h-3 w-3" /></Link></div>}</> : settingsError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{settingsError}</span></div><Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void retryLocalSettings()}>{t('common.retry')}</Button></div> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.settingsLoading')}</div>}
             </CardContent>
           </Card>
 
@@ -345,16 +361,18 @@ export default function FileTranscription() {
             <CardContent className="space-y-4">
               {snapshot.phase === 'preparing' && snapshot.durationMs !== null && snapshot.durationMs > 0 && <progress className="h-2 w-full accent-primary" value={Math.min(snapshot.processedMs, snapshot.durationMs)} max={snapshot.durationMs} aria-label={t('files.processedProgress')} />}
               {snapshot.phase === 'preparing' && (snapshot.durationMs === null || snapshot.durationMs <= 0) && <progress className="h-2 w-full accent-primary" aria-label={t('files.processedProgress')} />}
+              {(snapshot.phase === 'transcribing' || snapshot.phase === 'finalizing' || snapshot.phase === 'cancelling') && snapshot.durationMs !== null && snapshot.durationMs > 0 && <progress className="h-2 w-full accent-primary" value={Math.min(snapshot.savedMs, snapshot.durationMs)} max={snapshot.durationMs} aria-label={t('files.savedProgress')} />}
+              {(snapshot.phase === 'transcribing' || snapshot.phase === 'finalizing' || snapshot.phase === 'cancelling') && (snapshot.durationMs === null || snapshot.durationMs <= 0) && <progress className="h-2 w-full accent-primary" aria-label={t('files.savedProgress')} />}
               {(snapshot.phase === 'preparing' || snapshot.phase === 'transcribing' || snapshot.phase === 'finalizing' || snapshot.phase === 'cancelling') && <p className="text-sm text-muted-foreground">{snapshot.phase === 'preparing' ? snapshot.durationMs !== null && snapshot.durationMs > 0 ? t('files.processedProgressText', { processed: formatFileDuration(snapshot.processedMs), duration: formatFileDuration(snapshot.durationMs) }) : t('files.processedSoFar', { processed: formatFileDuration(snapshot.processedMs) }) : snapshot.durationMs ? t('files.savedProgressText', { saved: formatFileDuration(snapshot.savedMs), duration: formatFileDuration(snapshot.durationMs) }) : t('files.savedSoFar', { saved: formatFileDuration(snapshot.savedMs) })}</p>}
               {snapshot.text && <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/20 p-3 text-sm leading-relaxed">{snapshot.text}</pre>}
               {snapshot.draftPath && snapshot.phase !== 'completed' && <div className="text-xs text-muted-foreground">{t('files.draftSaved')} <code className="break-all">{snapshot.draftPath}</code></div>}
               {snapshot.phase === 'completed' && <div className="space-y-2 text-sm text-success-strong"><div>{snapshot.txtPath && <code className="block break-all">{t('files.txtPath')}: {snapshot.txtPath}</code>}</div><div>{snapshot.markdownPath && <code className="block break-all">{t('files.markdownPath')}: {snapshot.markdownPath}</code>}</div></div>}
-              <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => void openResultFolder()} disabled={!snapshot.txtPath && !snapshot.markdownPath && !snapshot.draftPath}><FolderOpen className="h-3.5 w-3.5" />{t('files.openFolder')}</Button><Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => void copyText()} disabled={!snapshot.text}>{copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? t('files.copied') : t('files.copyText')}</Button>{isRetryableExportFailure(snapshot) && <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => void retryExport()} disabled={actionBusy}><RotateCcw className="h-3.5 w-3.5" />{t('files.retryExport')}</Button>}{active && snapshot.phase !== 'cancelling' && <Button type="button" variant="destructive" size="sm" className="gap-1.5" onClick={() => setShowCancelConfirmation(true)} disabled={actionBusy || cancelRequested}><Square className="h-3.5 w-3.5" />{cancelRequested || actionBusy ? t('files.cancelling') : t('files.cancel')}</Button>}</div>
+              <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => void openResultFolder()} disabled={!snapshot.txtPath && !snapshot.markdownPath && !snapshot.draftPath}><FolderOpen className="h-3.5 w-3.5" />{t('files.openFolder')}</Button><Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => void copyText()} disabled={!snapshot.text}>{copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? t('files.copied') : t('files.copyText')}</Button>{isRetryableExportFailure(snapshot) && <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => void retryExport()} disabled={actionBusy}><RotateCcw className="h-3.5 w-3.5" />{t('files.retryExport')}</Button>}{active && isCancellablePhase(snapshot.phase) && <Button type="button" variant="destructive" size="sm" className="gap-1.5" onClick={() => setShowCancelConfirmation(true)} disabled={actionBusy || cancelRequested}><Square className="h-3.5 w-3.5" />{cancelRequested || actionBusy ? t('files.cancelling') : t('files.cancel')}</Button>}</div>
             </CardContent>
           </Card>}
         </div>
       </div>
-      {showCancelConfirmation && snapshot && active && snapshot.phase !== 'cancelling' && <ConfirmDeleteModal
+      {showCancelConfirmation && snapshot && active && isCancellablePhase(snapshot.phase) && <ConfirmDeleteModal
         title={t('files.cancelTitle')}
         body={t('files.cancelBody')}
         confirmLabel={t('files.confirmCancel')}
@@ -363,6 +381,7 @@ export default function FileTranscription() {
           setShowCancelConfirmation(false)
           void cancelTranscription()
         }}
+        danger
         showCloseButton
       />}
     </div>

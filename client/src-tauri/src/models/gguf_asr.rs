@@ -364,13 +364,25 @@ fn resolve_backend(pref: &str) -> Backend {
     }
 }
 
-/// 加载模型（若 key 未变则复用）。`accelerator` 取 "auto" | "cpu" | "gpu"。
-/// 换加速器要重建：后端是 Model::load_with 时绑定的，之后改不了。
+/// Load the model, reusing it when the key is unchanged. `accelerator` is
+/// "auto" | "cpu" | "gpu"; changing it forces a reload because the backend is
+/// bound when Model::load_with runs and cannot change afterwards.
 fn ensure_loaded_unchecked(model_id: &str, accelerator: &str) -> Result<(), String> {
     let mut cache = CACHE
         .lock()
         .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    ensure_loaded_locked(&mut cache, model_id, accelerator)
+}
 
+/// Load the model unless the cached key (model_id, accelerator) already matches.
+/// The caller must already hold the CACHE lock: `transcribe` keeps one continuous
+/// hold across this call and the following inference so a concurrent caller cannot
+/// replace the cached model in between.
+fn ensure_loaded_locked(
+    cache: &mut Option<Loaded>,
+    model_id: &str,
+    accelerator: &str,
+) -> Result<(), String> {
     if let Some(ref c) = *cache {
         if c.model_id == model_id && c.accelerator == accelerator {
             // 与空闲卸载共用同一把锁更新时间，保证守护线程拿到锁后不会
@@ -551,18 +563,16 @@ fn run_options(
     }
 }
 
-/// 用常驻 session 转写。超过 session 上限的音频按上限切段顺序解码。
-/// `language` 是每次转写传入的运行时参数，不影响模型缓存。
-fn transcribe_with_cache(
+/// Decode on the resident session. Audio above the session limit is cut into
+/// segments and decoded in order. `language` is a per-run parameter and does not
+/// affect the model cache. The caller holds the CACHE lock; the activity guard
+/// refreshes the last-activity time on every return path before the lock is released.
+fn transcribe_locked(
+    entry: &mut Loaded,
     samples: &[f32],
     sample_rate: usize,
     language: &str,
 ) -> Result<String, String> {
-    let mut cache = CACHE
-        .lock()
-        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
-    let entry = cache.as_mut().ok_or("Model is not loaded")?;
-    // 守卫会在所有成功/错误返回路径上、释放 CACHE 锁之前刷新最后活动时间。
     let _activity_guard = ActivityGuard;
     touch_activity();
     let opts = run_options(
@@ -586,7 +596,7 @@ fn transcribe_with_cache(
             .map_err(|e| format!("Inference failed: {}", e));
     }
 
-    // 极长音频（超过模型上下文）才走分段。日常口述不会走到这里。
+    // Only extremely long audio (beyond the model context) is decoded in segments; everyday dictation never reaches this path.
     log::warn!(
         "Audio length {:.1}s exceeds the model limit {:.1}s; decoding in segments",
         samples.len() as f64 / sample_rate as f64,
@@ -653,7 +663,7 @@ pub fn loading_model() -> Option<String> {
     STATUS.lock().ok().and_then(|s| s.loading_model.clone())
 }
 
-/// 转写一段 16 kHz mono f32 PCM。
+/// Transcribe one chunk of 16 kHz mono f32 PCM.
 pub fn transcribe(
     model_id: &str,
     language: &str,
@@ -662,8 +672,15 @@ pub fn transcribe(
     sample_rate: usize,
 ) -> Result<String, String> {
     let _resource = acquire_local_resource()?;
-    ensure_loaded_unchecked(model_id, accelerator)?;
-    transcribe_with_cache(samples, sample_rate, language)
+    // Load and decode under one continuous CACHE lock: releasing it in between let a
+    // concurrent call (dictation, History reprocessing, preload) replace the cached
+    // model before inference started, so the wrong model could run.
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    ensure_loaded_locked(&mut cache, model_id, accelerator)?;
+    let entry = cache.as_mut().ok_or("Model is not loaded")?;
+    transcribe_locked(entry, samples, sample_rate, language)
 }
 
 /// A file job's exclusive binding to the cached session. Dropping it clears the native abort
