@@ -1590,6 +1590,91 @@ mod tests {
     }
 
     #[test]
+    fn usage_summary_range_includes_cutoff_and_excludes_undated_baseline() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let cutoff = 1_000_000;
+        let baseline = UsageEventRow {
+            ts: None,
+            takes: 7,
+            char_count: 700,
+            duration_sec: 70.0,
+            app_id: None,
+            work_mode: None,
+            prompt_preset_id: None,
+            legacy_profile_chars: None,
+        };
+
+        storage
+            .usage_restore(Some(&backup_of(
+                vec![
+                    baseline,
+                    dated_row(cutoff - 1, 11),
+                    dated_row(cutoff, 23),
+                    dated_row(cutoff + 1, 37),
+                ],
+                Some(111),
+            )))
+            .unwrap();
+
+        let summary = storage.usage_summary(Some(cutoff)).unwrap();
+        assert_eq!((summary.takes, summary.total_chars), (2, 60));
+        assert_eq!((summary.dated_takes, summary.dated_chars), (2, 60));
+        assert_eq!(summary.total_duration_sec, 2.0);
+        assert_eq!(summary.last_used_at, Some(cutoff + 1));
+    }
+
+    #[test]
+    fn usage_summary_uses_local_midnight_and_rounded_last_use() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let before_midnight = local_ms(2026, 1, 15, 23, 59);
+        let after_midnight = local_ms(2026, 1, 16, 0, 1);
+        let rounded_before = local_ms(2026, 1, 15, 23, 45);
+        let rounded_after = local_ms(2026, 1, 16, 0, 0);
+
+        storage
+            .usage_record(before_midnight, &event(11, 2.0, "Code.exe"))
+            .unwrap();
+        storage
+            .usage_record(after_midnight, &event(22, 3.0, "Code.exe"))
+            .unwrap();
+
+        let mut timestamps: Vec<i64> = storage
+            .usage_backup()
+            .unwrap()
+            .events
+            .into_iter()
+            .filter_map(|row| row.ts)
+            .collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![rounded_before, rounded_after]);
+
+        let all = storage.usage_summary(None).unwrap();
+        assert_eq!((all.takes, all.total_chars, all.active_days), (2, 33, 2));
+        assert_eq!(all.first_used_at, Some(rounded_before));
+        assert_eq!(all.last_used_at, Some(rounded_after));
+        let mut expected_all_hours = vec![0; 24];
+        expected_all_hours[23] = 1;
+        expected_all_hours[0] = 1;
+        assert_eq!(all.hour_buckets, expected_all_hours);
+
+        let today = storage
+            .usage_summary(Some(local_ms(2026, 1, 16, 0, 0)))
+            .unwrap();
+        assert_eq!(
+            (
+                today.takes,
+                today.total_chars,
+                today.active_days,
+                today.last_used_at
+            ),
+            (1, 22, 1, Some(rounded_after))
+        );
+        let mut expected_today_hours = vec![0; 24];
+        expected_today_hours[0] = 1;
+        assert_eq!(today.hour_buckets, expected_today_hours);
+    }
+
+    #[test]
     fn record_floors_timestamp_trims_blank_fields_and_keeps_first_use_date() {
         let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
         let blank_app = UsageEventInput {

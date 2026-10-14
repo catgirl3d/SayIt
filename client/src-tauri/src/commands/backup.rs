@@ -1653,6 +1653,211 @@ mod tests {
     }
 
     #[test]
+    fn written_full_backup_restores_usage_into_independent_fresh_database() {
+        let (source, source_dir) = temp_storage("archive-source");
+        source
+            .set(
+                "history",
+                &json!([{
+                    "id": "synthetic-history",
+                    "timestamp": 1_800_000,
+                    "charCount": 29,
+                    "durationSec": 4.0,
+                }]),
+            )
+            .unwrap();
+        source
+            .usage_record(
+                900_000,
+                &crate::storage::UsageEventInput {
+                    char_count: 17,
+                    duration_sec: 2.5,
+                    app_id: Some("Code.exe".to_string()),
+                    work_mode: Some("local".to_string()),
+                    prompt_preset_id: Some("intent".to_string()),
+                },
+            )
+            .unwrap();
+        source
+            .usage_record(
+                1_800_000,
+                &crate::storage::UsageEventInput {
+                    char_count: 29,
+                    duration_sec: 4.0,
+                    app_id: Some("Telegram.exe".to_string()),
+                    work_mode: Some("cloud_api".to_string()),
+                    prompt_preset_id: Some("faithful".to_string()),
+                },
+            )
+            .unwrap();
+
+        let mut source_usage = source.usage_backup().unwrap();
+        assert_eq!(source_usage.events.len(), 2);
+        let mut legacy_row = source_usage
+            .events
+            .iter()
+            .find(|row| row.app_id.as_deref() == Some("Code.exe"))
+            .cloned()
+            .expect("the synthetic Code.exe event must exist");
+        legacy_row.ts = None;
+        legacy_row.takes = 0;
+        legacy_row.char_count = 0;
+        legacy_row.duration_sec = 0.0;
+        legacy_row.app_id = Some("Code.exe".to_string());
+        legacy_row.work_mode = None;
+        legacy_row.prompt_preset_id = None;
+        legacy_row.legacy_profile_chars = Some(20);
+        source_usage.events.push(legacy_row);
+        source.usage_restore(Some(&source_usage)).unwrap();
+        assert_eq!(source.usage_backup().unwrap().events.len(), 3);
+
+        for include_history in [false, true] {
+            let archive_path = source_dir.join(format!("archive-{include_history}.zip"));
+            write_backup_archive(
+                &source,
+                BackupScope {
+                    include_history,
+                    include_audio: false,
+                },
+                &archive_path,
+                &mut |_| {},
+            )
+            .unwrap();
+
+            let file = fs::File::open(&archive_path).unwrap();
+            let mut archive = zip::ZipArchive::new(file).unwrap();
+            assert_eq!(archive.len(), 1);
+            let mut json_str = String::new();
+            archive
+                .by_name("backup.json")
+                .unwrap()
+                .read_to_string(&mut json_str)
+                .unwrap();
+            let payload: Value = serde_json::from_str(&json_str).unwrap();
+            assert_eq!(payload["scope"]["includeHistory"], json!(include_history));
+            assert_eq!(payload["scope"]["includeAudio"], json!(false));
+            assert_eq!(payload["usage"]["firstUsedAt"], json!(900_000));
+            assert_eq!(payload["usage"]["events"].as_array().unwrap().len(), 3);
+            for (ts, char_count, duration_sec, app_id, work_mode, prompt_preset_id) in [
+                (900_000_i64, 17_i64, 2.5_f64, "Code.exe", "local", "intent"),
+                (
+                    1_800_000_i64,
+                    29_i64,
+                    4.0_f64,
+                    "Telegram.exe",
+                    "cloud_api",
+                    "faithful",
+                ),
+            ] {
+                assert!(
+                    payload["usage"]["events"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|event| {
+                            event["ts"] == json!(ts)
+                                && event["charCount"] == json!(char_count)
+                                && event["durationSec"] == json!(duration_sec)
+                                && event["appId"] == json!(app_id)
+                                && event["workMode"] == json!(work_mode)
+                                && event["promptPresetId"] == json!(prompt_preset_id)
+                        })
+                );
+            }
+            assert!(
+                payload["usage"]["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|event| {
+                        event["ts"].is_null()
+                            && event["charCount"] == json!(0)
+                            && event["legacyProfileChars"] == json!(20)
+                            && event["appId"] == json!("Code.exe")
+                    })
+            );
+            if include_history {
+                assert_eq!(
+                    payload["history"],
+                    json!([{
+                        "id": "synthetic-history",
+                        "timestamp": 1_800_000,
+                        "charCount": 29,
+                        "durationSec": 4.0,
+                    }])
+                );
+            } else {
+                assert!(payload.get("history").is_none());
+            }
+            drop(archive);
+
+            let (destination, destination_dir) = temp_storage("archive-destination");
+            let before = destination.usage_summary(None).unwrap();
+            assert_eq!(
+                (
+                    before.takes,
+                    before.total_chars,
+                    before.total_duration_sec,
+                    before.first_used_at,
+                ),
+                (0, 0, 0.0, None)
+            );
+            assert!(before.apps.is_empty());
+            assert_eq!(destination.history_count(None, false), 0);
+
+            apply_full_backup(&destination, &archive_path.to_string_lossy()).unwrap();
+
+            let restored = destination.usage_summary(None).unwrap();
+            assert_eq!(
+                (
+                    restored.takes,
+                    restored.total_chars,
+                    restored.total_duration_sec,
+                    restored.first_used_at,
+                    restored.last_used_at,
+                ),
+                (2, 46, 6.5, Some(900_000), Some(1_800_000))
+            );
+            assert_eq!(restored.apps.iter().map(|item| item.chars).sum::<i64>(), 66);
+            for (actual, expected) in [
+                (
+                    &restored.apps,
+                    vec![("Code.exe", 1_i64, 37_i64), ("Telegram.exe", 1_i64, 29_i64)],
+                ),
+                (
+                    &restored.work_modes,
+                    vec![("local", 1_i64, 17_i64), ("cloud_api", 1_i64, 29_i64)],
+                ),
+                (
+                    &restored.prompt_presets,
+                    vec![("intent", 1_i64, 17_i64), ("faithful", 1_i64, 29_i64)],
+                ),
+            ] {
+                assert_eq!(actual.len(), expected.len());
+                for (key, takes, chars) in expected {
+                    assert_eq!(
+                        actual
+                            .iter()
+                            .find(|item| item.key == key)
+                            .map(|item| (item.takes, item.chars)),
+                        Some((takes, chars))
+                    );
+                }
+            }
+            assert_eq!(
+                destination.history_count(None, false),
+                if include_history { 1 } else { 0 }
+            );
+
+            drop(destination);
+            let _ = fs::remove_dir_all(destination_dir);
+        }
+
+        drop(source);
+        let _ = fs::remove_dir_all(source_dir);
+    }
+
+    #[test]
     fn full_restore_of_a_format_two_backup_keeps_legacy_profile_chars() {
         let (storage, dir) = temp_storage("format-two-restore");
 
