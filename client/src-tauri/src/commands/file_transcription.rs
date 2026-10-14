@@ -1656,28 +1656,18 @@ fn process_pcm(
         if input.cancel.is_cancelled() {
             return Err(WorkerOutcome::Cancelled);
         }
-        let Some(candidate) = reader
-            .read_window(read_samples)
-            .map_err(WorkerOutcome::Failed)?
+        let Some(analyzed) =
+            read_analyzed_pcm_window(&mut reader, window_samples, read_samples, source_samples)
+                .map_err(WorkerOutcome::Failed)?
         else {
             break;
         };
-        let intervals =
-            local_vad::detect_speech_intervals(&candidate, SAMPLE_RATE).map_err(|error| {
-                WorkerOutcome::Failed(format!("Voice activity detection failed: {error}"))
-            })?;
-        let boundary = if candidate.len() <= window_samples {
-            candidate.len()
-        } else {
-            choose_window_boundary(&intervals, window_samples, candidate.len())
-        };
-        let boundary = boundary.max(1).min(candidate.len());
-        if boundary < candidate.len() {
-            reader.prepend(&candidate[boundary..]);
-        }
-        let window = &candidate[..boundary];
-        let speech = speech_span_from_intervals(&intervals, boundary);
-        let window_end = source_samples.saturating_add(window.len() as u64);
+        let AnalyzedPcmWindow {
+            samples: window,
+            speech,
+            processed_samples: window_end,
+            ..
+        } = analyzed;
         let mut window_had_speech = false;
         if let Some(span) = speech {
             window_had_speech = true;
@@ -1795,9 +1785,6 @@ fn process_cloud_pcm(
     let read_samples = window_samples.saturating_add(LOOKAHEAD_SAMPLES);
     let mut source_samples = 0_u64;
     let windows = std::iter::from_fn(move || {
-        if source_samples == u64::MAX {
-            return None;
-        }
         match read_analyzed_pcm_window(&mut reader, window_samples, read_samples, source_samples) {
             Ok(Some(window)) => {
                 let AnalyzedPcmWindow {
