@@ -154,10 +154,14 @@ describe('live subtitle layout', () => {
     expect(empty).toContain('h-[384px]')
     const populatedRegionOpeningTag = regionOpeningTag(populated)
     expect(populatedRegionOpeningTag).toBeDefined()
-    expect(populatedRegionOpeningTag).toContain('h-[120px]')
+    expect(populatedRegionOpeningTag).toContain('max-h-[30vh]')
+    expect(populatedRegionOpeningTag).not.toMatch(/[\s"]h-\[/)
     expect(populatedRegionOpeningTag).toContain('shrink-0')
     expect(populated).toContain('overflow-hidden')
     expect(populated).toContain('line-clamp-3')
+    const liveTextClasses = populated.match(/<p class="([^"]+)">A long provisional/)
+    expect(liveTextClasses?.[1]).toContain('max-h-[calc(30vh-48px)]')
+    expect(liveTextClasses?.[1]).not.toMatch(/[\s"]h-\[/)
   })
 
   it('keeps single-caption translation visually separate from the current original', () => {
@@ -260,7 +264,6 @@ describe('live subtitle layout', () => {
     expect(captionsAndWarnings).toContain('max-h-[calc(100vh-16px)]')
     expect(captionsAndWarnings).toContain('gap-2')
     expect(captionsAndWarnings).toContain('justify-end')
-    expect(captionsAndWarnings).toContain('h-[120px]')
     expect(captionsAndWarnings).toContain('max-h-[30vh]')
     expect(captionsAndWarnings).toContain('max-h-[calc(30vh-48px)]')
     expect(captionsAndWarnings).toContain('[@media(max-height:399px)]:leading-4')

@@ -64,8 +64,8 @@ const PLACEHOLDER_CAPTION_BASE_CLASS = 'text-xl font-medium leading-8'
 const LIVE_PLACEHOLDER_CAPTION_CLASS = ' max-h-[64px] overflow-hidden [@media(max-height:399px)]:leading-6'
 const LIVE_OVERLAY_CONTENT_CLASS = 'pointer-events-none flex h-[384px] max-h-[calc(100vh-16px)] w-full max-w-[700px] flex-col items-center justify-end gap-2 overflow-hidden'
 const BATCH_OVERLAY_CONTENT_CLASS = 'pointer-events-none w-full max-w-[700px] rounded-2xl border px-6 py-4 text-center'
-const LIVE_ORIGINAL_REGION_CLASS = 'h-[120px] max-h-[30vh] w-full max-w-[700px] shrink-0 rounded-2xl border px-6 py-3 text-center'
-const LIVE_ORIGINAL_TEXT_CLASS = 'h-[72px] max-h-[calc(30vh-48px)] overflow-hidden break-words whitespace-pre-wrap text-left text-sm leading-6 line-clamp-3 [@media(max-height:399px)]:line-clamp-1 [@media(max-height:360px)_and_(min-height:261px)]:leading-4 [@media(max-height:260px)]:leading-3'
+const LIVE_ORIGINAL_REGION_CLASS = 'max-h-[30vh] w-full max-w-[700px] shrink-0 rounded-2xl border px-6 py-3 text-center'
+const LIVE_ORIGINAL_TEXT_CLASS = 'max-h-[calc(30vh-48px)] overflow-hidden break-words whitespace-pre-wrap text-left text-sm leading-6 line-clamp-3 [@media(max-height:399px)]:line-clamp-1 [@media(max-height:360px)_and_(min-height:261px)]:leading-4 [@media(max-height:260px)]:leading-3'
 const LIVE_SETTLED_REGION_CLASS = 'min-h-0 max-h-[calc(70vh-24px)] w-full shrink-0 overflow-hidden rounded-2xl border px-6 py-4 text-center'
 
 /**
