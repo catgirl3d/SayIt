@@ -99,7 +99,10 @@ function cloudProfile(overrides: Partial<AsrProfile> = {}): AsrProfile {
 }
 
 describe('file transcription page', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    fileTranscriptionService.dispose()
+    vi.restoreAllMocks()
+  })
 
   beforeEach(() => {
     native.invoke.mockClear()
@@ -314,6 +317,44 @@ describe('file transcription page', () => {
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(screen.getByText('Stop transcription?')).toBeTruthy()
     expect(native.invoke).not.toHaveBeenCalledWith('cancel_file_transcription', expect.anything())
+  })
+
+  it('does not reopen the cancellation confirmation for the next job', async () => {
+    renderPage()
+    await waitFor(() => expect(stateListener).not.toBeNull())
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 12,
+        phase: 'transcribing',
+        resourcesReleased: false,
+        error: null,
+      }) })
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('dialog')).toBeTruthy()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-cancel-1',
+        sequence: 13,
+        phase: 'completed',
+        resourcesReleased: true,
+        error: null,
+      }) })
+    })
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-2',
+        sequence: 14,
+        phase: 'preparing',
+        resourcesReleased: false,
+        error: null,
+      }) })
+    })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('cancels exactly once only after confirmation', async () => {

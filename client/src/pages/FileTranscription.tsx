@@ -157,6 +157,7 @@ export default function FileTranscription() {
 
   useEffect(() => {
     if (!snapshot || snapshot.resourcesReleased) setCancelRequested(false)
+    if (!snapshot || !isCancellablePhase(snapshot.phase)) setShowCancelConfirmation(false)
   }, [snapshot])
 
   useEffect(() => {
