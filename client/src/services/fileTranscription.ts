@@ -184,6 +184,8 @@ export class FileTranscriptionService {
     this.unlisten = null
     this.initialized = false
     this.initializationError = null
+    this.snapshot = null
+    this.lastSequence = 0
     this.releaseReservation()
   }
 

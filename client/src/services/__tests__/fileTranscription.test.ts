@@ -510,6 +510,7 @@ describe('file transcription service', () => {
     service.dispose()
 
     expect(unlisten).toHaveBeenCalledTimes(1)
+    expect(service.getSnapshot()).toBeNull()
     expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
 
     const reloaded = new FileTranscriptionService(harness.bridge, harness.admission)
