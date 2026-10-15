@@ -318,12 +318,16 @@ fn wait_for_file_work() {
     }
 }
 
-pub(super) fn spawn_transition_after_file_work(app: AppHandle, restart: bool, code: Option<i32>) {
+pub(super) fn spawn_transition_after_file_work(
+    app: AppHandle,
+    restart: bool,
+    code: Option<i32>,
+) -> Result<(), String> {
     if EXIT_WAITING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return;
+        return Ok(());
     }
     let spawn_result = thread::Builder::new()
         .name("file-transcription-transition-wait".into())
@@ -336,11 +340,15 @@ pub(super) fn spawn_transition_after_file_work(app: AppHandle, restart: bool, co
                 app.exit(code.unwrap_or(0));
             }
         });
-    if spawn_result.is_err() {
+    if let Err(error) = spawn_result {
         EXIT_WAITING.store(false, Ordering::SeqCst);
         release_external_transition();
-        log::error!("Failed to start the file transition wait thread");
+        log::error!("Failed to start the file transition wait thread: {error}");
+        return Err(format!(
+            "Failed to start the process transition wait thread: {error}"
+        ));
     }
+    Ok(())
 }
 
 pub(super) fn update_active(

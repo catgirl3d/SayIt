@@ -1131,6 +1131,7 @@
   "backup.unknownError": "unknown error",
   "backup.exportFailed": "Export failed: {message}",
   "backup.importFailed": "Import failed: {message}",
+  "backup.restartFailed": "Could not schedule the restart: {message}. The app stays open — restart it manually to apply the changes.",
   "backup.configTitle": "Settings",
   "backup.configDesc": "Export everything, or just your hotwords, text replacements or cleanup presets",
   "backup.exporting": "Exporting",

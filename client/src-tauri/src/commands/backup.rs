@@ -1406,10 +1406,11 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
     Ok(())
 }
 
-/// 导入完成后由前端调用，重启应用使内存中的设置/供应商状态全量重载。
+/// Called by the frontend after the import completes; restarts the app so
+/// in-memory settings and provider state are fully reloaded.
 #[tauri::command]
-pub fn restart_app(app: tauri::AppHandle) {
-    file_transcription::restart_after_file_work(app);
+pub fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
+    file_transcription::restart_after_file_work(app)
 }
 
 #[cfg(test)]

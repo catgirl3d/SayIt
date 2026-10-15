@@ -1124,6 +1124,7 @@
   "backup.unknownError": "невідома помилка",
   "backup.exportFailed": "Помилка експорту: {message}",
   "backup.importFailed": "Помилка імпорту: {message}",
+  "backup.restartFailed": "Не вдалося запланувати перезапуск: {message}. Застосунок залишився відкритим — перезапустіть його вручну, щоб застосувати зміни.",
   "backup.configTitle": "Налаштування",
   "backup.configDesc": "Експорт усіх налаштувань або окремих термінів зі словника, правил автозаміни та пресетів очищення",
   "backup.exporting": "Експорт",

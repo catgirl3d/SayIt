@@ -264,8 +264,17 @@ export default function WebDavSection() {
     try {
       await restoreWebDavBackup(name)
       setRestoreDone(true)
-      // 与本地导入一致：略作停留让用户看到提示，再重启使更改生效。
-      setTimeout(() => { void restartApp() }, 1500)
+      // Same as the local import: hold the notice briefly so the user can see
+      // it, then restart so the restored data is applied.
+      setTimeout(() => {
+        void restartApp().catch((error) => {
+          // The restore itself succeeded; only the restart could not be
+          // scheduled, so surface that without reopening the restore flow.
+          setRestoreDone(false)
+          setBusy(null)
+          setActionError(t('backup.restartFailed', { message: String(error) }))
+        })
+      }, 1500)
     } catch (error) {
       setActionError(describeWebDavError(error))
       setBusy(null)

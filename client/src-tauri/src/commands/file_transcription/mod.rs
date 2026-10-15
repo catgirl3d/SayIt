@@ -328,11 +328,13 @@ pub fn handle_exit_requested(app: &AppHandle, api: &tauri::ExitRequestApi, code:
     if let Some(job_id) = job_id {
         let _ = request_cancel(&job_id);
     }
-    spawn_transition_after_file_work(app.clone(), restart, code);
+    let _ = spawn_transition_after_file_work(app.clone(), restart, code);
 }
 
 /// Route the owned backup restart through the same non-blocking file-work gate.
-pub fn restart_after_file_work(app: AppHandle) {
+/// The returned error only reports that the transition could not be scheduled;
+/// the imported data is already applied and a manual restart still picks it up.
+pub fn restart_after_file_work(app: AppHandle) -> Result<(), String> {
     let (accepted, has_work, job_id) = with_controller(|controller| {
         if controller.external_transition {
             return (false, false, None);
@@ -348,14 +350,14 @@ pub fn restart_after_file_work(app: AppHandle) {
         )
     });
     if !accepted {
-        return;
+        return Ok(());
     }
     if let Some(job_id) = job_id {
         let _ = request_cancel(&job_id);
     }
     if has_work {
-        spawn_transition_after_file_work(app, true, None);
+        spawn_transition_after_file_work(app, true, None)
     } else {
-        app.restart();
+        app.restart()
     }
 }
