@@ -1,3 +1,5 @@
+use crate::error_protocol;
+
 fn format_position_hms(milliseconds: u64) -> String {
     let total_seconds = milliseconds / 1000;
     let hours = total_seconds / 3600;
@@ -26,17 +28,28 @@ pub(super) fn window_recognition_error(
     )
 }
 
+/// Builds the final cloud-window failure message. An enveloped `sayit_error` code must stay at
+/// the start of the message because the web UI classifies by code only there; the window
+/// position context is wrapped around the detail text without pushing the code out.
 pub(super) fn cloud_window_recognition_error(
     label: &str,
     position_ms: Option<u64>,
     detail: &str,
 ) -> String {
-    match position_ms {
+    let (code, detail) = match error_protocol::decode(detail) {
+        Some((code, text)) => (Some(code), text),
+        None => (None, detail),
+    };
+    let message = match position_ms {
         Some(position_ms) => format!(
             "Recognition failed with cloud ASR \"{label}\" at {}: {detail}",
             format_position_hms(position_ms)
         ),
         None => format!("Recognition failed with cloud ASR \"{label}\": {detail}"),
+    };
+    match code {
+        Some(code) => error_protocol::encode(code, message),
+        None => message,
     }
 }
 
@@ -123,6 +136,58 @@ mod tests {
         assert_eq!(
             cloud_window_recognition_error("Deepgram", None, "Inference failed"),
             "Recognition failed with cloud ASR \"Deepgram\": Inference failed"
+        );
+    }
+
+    #[test]
+    fn cloud_window_recognition_error_keeps_the_sayit_error_code_at_the_prefix() {
+        let message = cloud_window_recognition_error(
+            "OpenRouter",
+            Some(192_000),
+            "sayit_error:provider_bad_key:HTTP 401: 密钥无效",
+        );
+        assert_eq!(
+            message,
+            "sayit_error:provider_bad_key:Recognition failed with cloud ASR \"OpenRouter\" at 0:03:12: HTTP 401: 密钥无效"
+        );
+        assert_eq!(
+            error_protocol::decode(&message),
+            Some((
+                "provider_bad_key",
+                "Recognition failed with cloud ASR \"OpenRouter\" at 0:03:12: HTTP 401: 密钥无效"
+            ))
+        );
+    }
+
+    #[test]
+    fn cloud_window_recognition_error_keeps_the_code_without_a_position() {
+        assert_eq!(
+            cloud_window_recognition_error(
+                "Deepgram",
+                None,
+                "sayit_error:provider_insufficient_balance:HTTP 402"
+            ),
+            "sayit_error:provider_insufficient_balance:Recognition failed with cloud ASR \"Deepgram\": HTTP 402"
+        );
+    }
+
+    #[test]
+    fn cloud_window_recognition_error_leaves_a_malformed_envelope_untouched() {
+        assert_eq!(
+            cloud_window_recognition_error("Deepgram", Some(0), "sayit_error:missing-separator"),
+            "Recognition failed with cloud ASR \"Deepgram\" at 0:00:00: sayit_error:missing-separator"
+        );
+    }
+
+    #[test]
+    fn cloud_window_recognition_error_does_not_unwrap_a_nested_envelope() {
+        assert_eq!(
+            cloud_window_recognition_error(
+                "Deepgram",
+                None,
+                "sayit_error:outer:sayit_error:inner:payload"
+            ),
+            "sayit_error:outer:Recognition failed with cloud ASR \"Deepgram\": sayit_error:inner:payload"
         );
     }
 
