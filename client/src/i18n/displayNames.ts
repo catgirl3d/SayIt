@@ -152,12 +152,22 @@ interface LocalModelDisplaySource {
   languages_label?: string
 }
 
+function localModelNameKey(modelId: string): TranslationKey | undefined {
+  return LOCAL_MODEL_KEYS[modelId]?.name
+}
+
+/** Localized name for a mapped model id, or null when the id is not in the built-in map. */
+export function builtinLocalModelName(modelId: string): string | null {
+  const key = localModelNameKey(modelId)
+  return key ? t(key) : null
+}
+
 /**
  * Resolves localized model name. When locale is supplied, resolves strictly for
  * that locale without reading currentLocale; otherwise falls back to active UI locale.
  */
 export function localModelDisplayName(model: LocalModelDisplaySource, locale?: string): string {
-  const key = LOCAL_MODEL_KEYS[model.id]?.name
+  const key = localModelNameKey(model.id)
   return key ? (locale ? tForLocale(key, locale) : t(key)) : model.name
 }
 
