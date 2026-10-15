@@ -9,15 +9,41 @@ use super::pcm::{
 };
 use super::state::update_active;
 use super::transcript::{append_transcript, should_retry_empty_fragment};
+use crate::error_protocol;
 use crate::providers::registry;
 use base64::Engine as _;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use transcribe_cpp::CancelToken;
 
 const CLOUD_ERROR_RETRY_DELAYS: &[Duration] = &[Duration::from_secs(1), Duration::from_secs(2)];
 const CLOUD_ERROR_RETRY_COUNT: u8 = CLOUD_ERROR_RETRY_DELAYS.len() as u8;
+
+/// How often the worker polls the cancellation flag while it waits inside the
+/// async cloud boundary or inside the retry backoff. `CancelToken` is a plain
+/// atomic without an async notification, so polling is the only way to observe
+/// it from another task.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Error codes that describe conditions a retry cannot fix: rejected
+/// credentials, missing permissions, an unavailable model, an empty balance.
+/// Every other message — including ones without a `sayit_error` code — keeps
+/// the historical retry behavior.
+const CLOUD_PERMANENT_ERROR_CODES: &[&str] = &[
+    "provider_bad_key",
+    "provider_forbidden",
+    "provider_no_model",
+    "provider_insufficient_balance",
+];
+
+fn cloud_error_is_retryable(error: &str) -> bool {
+    match error_protocol::decode(error) {
+        Some((code, _)) => !CLOUD_PERMANENT_ERROR_CODES.contains(&code),
+        None => true,
+    }
+}
 
 struct CloudWindowStep {
     speech_samples: Option<Vec<f32>>,
@@ -113,7 +139,10 @@ where
                     on_skipped_fragment(empty_fragments, first_empty_position_samples);
                     break;
                 }
-                Err(_) if error_retries < CLOUD_ERROR_RETRY_COUNT => {
+                Err(error)
+                    if error_retries < CLOUD_ERROR_RETRY_COUNT
+                        && cloud_error_is_retryable(&error) =>
+                {
                     let delay = CLOUD_ERROR_RETRY_DELAYS[error_retries as usize];
                     error_retries = error_retries.saturating_add(1);
                     if cancel.is_cancelled() {
@@ -160,6 +189,41 @@ fn encode_pcm_i16_base64(samples: &[f32]) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(pcm))
 }
 
+/// Resolves when the job's cancellation token is set.
+async fn wait_for_cancellation(cancel: &CancelToken) {
+    while !cancel.is_cancelled() {
+        tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
+    }
+}
+
+/// Drives `future` to completion unless the job is cancelled first.
+///
+/// `None` means the future was dropped mid-flight. The cloud dispatch futures
+/// own their sockets and HTTP requests directly, so dropping one aborts the
+/// in-flight call instead of making the worker sit out the provider timeout.
+async fn cancellable<T>(cancel: &CancelToken, future: impl Future<Output = T>) -> Option<T> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    tokio::select! {
+        output = future => Some(output),
+        _ = wait_for_cancellation(cancel) => None,
+    }
+}
+
+/// Sleeps up to `delay`, waking early when the job is cancelled so the retry
+/// backoff cannot hold up an accepted cancellation.
+fn sleep_unless_cancelled(cancel: &CancelToken, delay: Duration) {
+    let deadline = Instant::now() + delay;
+    while !cancel.is_cancelled() {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        thread::sleep((deadline - now).min(CANCEL_POLL_INTERVAL));
+    }
+}
+
 pub(super) fn process_cloud_pcm(
     input: &WorkerInput,
     pcm_path: &Path,
@@ -201,15 +265,20 @@ pub(super) fn process_cloud_pcm(
         &input.cancel,
         |samples| {
             let audio_b64 = encode_pcm_i16_base64(samples)?;
-            let response = tauri::async_runtime::block_on(registry::dispatch_cloud_transcribe(
-                &config,
-                &audio_b64,
-                SAMPLE_RATE as u32,
-                &[],
-            ))?;
+            let recognition = tauri::async_runtime::block_on(cancellable(
+                &input.cancel,
+                registry::dispatch_cloud_transcribe(&config, &audio_b64, SAMPLE_RATE as u32, &[]),
+            ));
+            // Cancelled mid-flight: the runner re-checks the token right after
+            // this closure returns, so the sentinel is reported as
+            // `CloudWindowRunError::Cancelled` and never surfaces as a failure.
+            let Some(recognition) = recognition else {
+                return Err("Cloud recognition aborted by cancellation".to_string());
+            };
+            let response = recognition?;
             Ok(response.result.text)
         },
-        thread::sleep,
+        |delay| sleep_unless_cancelled(&input.cancel, delay),
         |text, processed_samples, should_checkpoint| {
             progress.mark_processed(processed_samples);
             if should_checkpoint {
@@ -287,6 +356,8 @@ pub(super) fn process_cloud_pcm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn cloud_window_runner_concatenates_non_empty_results() {
@@ -442,6 +513,178 @@ mod tests {
         assert!(matches!(result, Err(CloudWindowRunError::Cancelled)));
         assert_eq!(attempts, 1);
         assert_eq!(checkpoints, 0);
+    }
+
+    #[test]
+    fn cloud_retry_policy_only_stops_on_permanent_codes() {
+        for code in CLOUD_PERMANENT_ERROR_CODES {
+            assert!(
+                !cloud_error_is_retryable(&error_protocol::encode(code, "detail")),
+                "{code} must not be retried"
+            );
+        }
+        for error in [
+            error_protocol::encode("provider_timeout", "request timed out"),
+            error_protocol::encode("provider_rate_limit", "HTTP 429"),
+            error_protocol::encode("provider_unreachable", "connection reset"),
+            error_protocol::encode("connect_failed", "HTTP 500"),
+            error_protocol::encode("unknown_future_code", "detail"),
+            "plain failure without a code".to_string(),
+        ] {
+            assert!(
+                cloud_error_is_retryable(&error),
+                "{error} must stay retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_window_runner_does_not_retry_permanent_errors() {
+        let cancel = CancelToken::new();
+        let mut attempts = 0;
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1))],
+            &cancel,
+            |_| {
+                attempts += 1;
+                Err(error_protocol::encode(
+                    "provider_bad_key",
+                    "HTTP 401: invalid api key",
+                ))
+            },
+            |_| panic!("permanent errors must not sleep"),
+            |_, _, _| Ok(()),
+            |_, _| panic!("no fragments are skipped in this test"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(CloudWindowRunError::Failed { detail, position_samples })
+                if detail.starts_with("sayit_error:provider_bad_key:")
+                    && position_samples == Some(0)
+        ));
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn cloud_window_runner_reports_cancellation_when_the_aborted_recognizer_fails() {
+        let cancel = CancelToken::new();
+        let recognizer_cancel = cancel.clone();
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1))],
+            &cancel,
+            |_| {
+                recognizer_cancel.cancel();
+                Err("Cloud recognition aborted by cancellation".into())
+            },
+            |_| panic!("cancellation must stop before retry"),
+            |_, _, _| panic!("an aborted recognizer must not checkpoint"),
+            |_, _| panic!("no fragments are skipped in this test"),
+        );
+
+        assert!(matches!(result, Err(CloudWindowRunError::Cancelled)));
+    }
+
+    /// Sets a flag when dropped, so a test can prove an aborted future was
+    /// destroyed instead of left running.
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellable_returns_the_result_when_not_cancelled() {
+        let cancel = CancelToken::new();
+
+        assert_eq!(cancellable(&cancel, async { 42 }).await, Some(42));
+    }
+
+    #[tokio::test]
+    async fn cancellable_skips_the_future_when_already_cancelled() {
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let mut started = false;
+
+        let result = cancellable(&cancel, async {
+            started = true;
+            7
+        })
+        .await;
+
+        assert_eq!(result, None);
+        assert!(
+            !started,
+            "an already-cancelled job must not start the request"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellable_drops_the_in_flight_future_on_cancellation() {
+        let cancel = CancelToken::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let probe = DropFlag(Arc::clone(&dropped));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let future = async move {
+            let _probe = probe;
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        };
+
+        let canceller = cancel.clone();
+        let canceller_task = tokio::spawn(async move {
+            let _ = started_rx.await;
+            canceller.cancel();
+        });
+
+        assert!(cancellable(&cancel, future).await.is_none());
+        canceller_task.await.unwrap();
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the aborted future must be dropped, not left running"
+        );
+    }
+
+    #[test]
+    fn cancellable_aborts_under_the_tauri_runtime() {
+        let cancel = CancelToken::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let probe = DropFlag(Arc::clone(&dropped));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let future = async move {
+            let _probe = probe;
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        };
+
+        let canceller = cancel.clone();
+        let canceller_thread = std::thread::spawn(move || {
+            started_rx.recv().expect("the recognizer must start");
+            canceller.cancel();
+        });
+
+        let worker_cancel = cancel.clone();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker_thread = std::thread::spawn(move || {
+            let aborted =
+                tauri::async_runtime::block_on(cancellable(&worker_cancel, future)).is_none();
+            let _ = result_tx.send(aborted);
+        });
+
+        let aborted = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("cancellation must not hang under the tauri runtime");
+        assert!(aborted);
+        worker_thread.join().unwrap();
+        canceller_thread.join().unwrap();
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the aborted future must be dropped, not left running"
+        );
     }
 
     fn speech_window(id: u64) -> CloudWindowStep {
