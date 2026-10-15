@@ -183,6 +183,9 @@ export class FileTranscriptionService {
     this.unlisten?.()
     this.unlisten = null
     this.initialized = false
+    // The in-flight operation is invalidated by the epoch bump; a later init()
+    // must start a fresh operation instead of adopting the abandoned one.
+    this.initPromise = null
     this.initializationError = null
     this.snapshot = null
     this.lastSequence = 0
@@ -201,7 +204,7 @@ export class FileTranscriptionService {
         if (!this.unlisten) {
           const unlisten = await this.ipc.listen<FileTranscriptionSnapshot>(
             'file-transcription-state',
-            (event) => this.receiveSnapshot(event.payload),
+            (event) => this.receiveSnapshot(event.payload, generation),
           )
           if (generation !== this.epoch) {
             unlisten()
@@ -357,7 +360,11 @@ export class FileTranscriptionService {
     await bridge.copyText(text)
   }
 
-  private receiveSnapshot(next: FileTranscriptionSnapshot): void {
+  private receiveSnapshot(next: FileTranscriptionSnapshot, generation: number): void {
+    // An event that was already queued when dispose() ran the unlisten may
+    // arrive through the outlived listener; it must not revive the instance or
+    // re-claim the admission the disposal just released.
+    if (generation !== this.epoch) return
     try {
       this.acceptSnapshot(next)
     } catch (error) {

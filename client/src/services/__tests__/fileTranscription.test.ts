@@ -541,4 +541,76 @@ describe('file transcription service', () => {
     expect(service.getSnapshot()).toBeNull()
     expect(service.getInitializationError()).toBeNull()
   })
+
+  it('drops a late state event after dispose instead of reviving the instance', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    harness.invoke.mockImplementation(async (command: string) =>
+      command === 'get_file_transcription_state' ? snapshot({ sequence: 3 }) : undefined,
+    )
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.init()
+    expect(harness.admission.reserveFileTranscription).toHaveBeenCalledTimes(1)
+    service.dispose()
+    expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
+
+    // The sequence is higher than the restored one, so only the epoch guard
+    // can keep this snapshot from reviving the disposed instance.
+    stateHandler?.({ payload: snapshot({ sequence: 9 }) })
+
+    expect(service.getSnapshot()).toBeNull()
+    expect(harness.admission.reserveFileTranscription).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts a fresh init after dispose and does not adopt the abandoned operation', async () => {
+    const harness = createHarness()
+    let secondHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    let resolveFirstListen: (unlisten: () => void) => void = () => undefined
+    const firstUnlisten = vi.fn(() => undefined)
+    let resolveState: (value: FileTranscriptionSnapshot | null) => void = () => undefined
+    const stateQuery = new Promise<FileTranscriptionSnapshot | null>((resolve) => {
+      resolveState = resolve
+    })
+    harness.listen
+      .mockImplementationOnce(
+        async () =>
+          new Promise<() => void>((resolve) => {
+            resolveFirstListen = resolve
+          }),
+      )
+      .mockImplementationOnce(async (_event, handler) => {
+        secondHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+        return () => undefined
+      })
+    harness.invoke.mockImplementation(async (command: string) =>
+      command === 'get_file_transcription_state' ? stateQuery : undefined,
+    )
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    const firstInit = service.init()
+    service.dispose()
+    const secondInit = service.init()
+    resolveFirstListen(firstUnlisten)
+    await firstInit
+
+    expect(firstUnlisten).toHaveBeenCalledTimes(1)
+    expect(harness.listen).toHaveBeenCalledTimes(2)
+
+    const pendingInit = service.init()
+    expect(harness.listen).toHaveBeenCalledTimes(2)
+
+    resolveState(snapshot({ sequence: 5 }))
+    await Promise.all([secondInit, pendingInit])
+
+    expect(service.getSnapshot()?.sequence).toBe(5)
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenLastCalledWith(true)
+
+    secondHandler?.({ payload: snapshot({ sequence: 7 }) })
+    expect(service.getSnapshot()?.sequence).toBe(7)
+  })
 })
