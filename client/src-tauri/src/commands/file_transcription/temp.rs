@@ -1,5 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Directories older than this are treated as leftovers of a crashed run and
+/// may be swept by `cleanup_stale_temp_directories`.
+const STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub(super) fn create_job_temp_dir(job_id: &str) -> Result<PathBuf, String> {
     let directory = std::env::temp_dir().join(format!("sayit-file-{job_id}"));
@@ -13,16 +18,15 @@ pub(super) fn create_job_temp_dir(job_id: &str) -> Result<PathBuf, String> {
 }
 
 /// Removes `sayit-file-*` directories left behind when a previous run crashed before
-/// the worker could clean up its decoded audio. Current directories are left alone by
-/// the age check so a concurrent instance can never lose its working files.
+/// the worker could clean up its decoded audio. The age check leaves recently modified
+/// directories alone — a concurrently running instance keeps its working files while
+/// its job directory is younger than the limit — and only treats aged directories as
+/// leftovers.
 pub fn cleanup_stale_temp_directories() {
-    cleanup_stale_temp_directories_older_than(
-        &std::env::temp_dir(),
-        std::time::Duration::from_secs(24 * 60 * 60),
-    );
+    cleanup_stale_temp_directories_older_than(&std::env::temp_dir(), STALE_TEMP_DIR_MAX_AGE);
 }
 
-fn cleanup_stale_temp_directories_older_than(root: &Path, max_age: std::time::Duration) {
+fn cleanup_stale_temp_directories_older_than(root: &Path, max_age: Duration) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -88,17 +92,14 @@ mod tests {
         let foreign = root.join("sayit-foreign");
         std::fs::create_dir_all(&foreign).unwrap();
 
-        cleanup_stale_temp_directories_older_than(
-            &root,
-            std::time::Duration::from_secs(365 * 24 * 60 * 60),
-        );
+        cleanup_stale_temp_directories_older_than(&root, Duration::from_secs(365 * 24 * 60 * 60));
         assert!(
             aged.exists(),
             "a fresh job directory must survive the sweep"
         );
         assert!(foreign.exists());
 
-        cleanup_stale_temp_directories_older_than(&root, std::time::Duration::ZERO);
+        cleanup_stale_temp_directories_older_than(&root, Duration::ZERO);
         assert!(!aged.exists(), "an aged job directory must be swept");
         assert!(
             foreign.exists(),

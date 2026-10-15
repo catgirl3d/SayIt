@@ -4,6 +4,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// How many numbered variants of the title-based export name are tried before
+/// the search gives up.
+const EXPORT_PAIR_ATTEMPTS: u32 = 10_000;
+
 #[derive(Default)]
 pub(super) struct CheckpointProgress {
     pub(super) processed_samples: u64,
@@ -79,10 +83,10 @@ fn temporary_sibling_path(destination: &Path) -> PathBuf {
     ))
 }
 
-/// Atomically replaces `destination` with the fully written `candidate`.
-/// On Windows `MoveFileExW` replaces in a single call, so a crash can never
-/// leave the destination missing the way the old two-rename dance could; on
-/// Unix a plain rename already replaces atomically.
+/// Replaces `destination` with the fully written `candidate` in a single call:
+/// Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, a plain `rename` on
+/// Unix. Unlike the old two-rename dance, there is no moment in which the
+/// destination is missing.
 fn replace_file(candidate: &Path, destination: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -117,17 +121,56 @@ fn replace_file(candidate: &Path, destination: &Path) -> Result<(), String> {
 }
 
 fn claim_new_file(path: &Path) -> Result<File, String> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                format!("Output file already exists: {}", path.display())
-            } else {
-                format!("Failed to claim output file {}: {error}", path.display())
-            }
-        })
+    claim_new_file_io(path).map_err(|error| claim_failure_message(path, &error))
+}
+
+fn claim_new_file_io(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+fn claim_failure_message(path: &Path, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        format!("Output file already exists: {}", path.display())
+    } else {
+        format!("Failed to claim output file {}: {error}", path.display())
+    }
+}
+
+/// Keeps the first claim failure that is not a plain name collision so an
+/// exhausted name search can explain itself. A failure while the path exists is
+/// otherwise skipped exactly like a collision; `AlreadyExists` alone is the
+/// expected kind, anything else is logged once and remembered with its path
+/// and OS error.
+fn record_masked_claim_failure(
+    first_masked_failure: &mut Option<String>,
+    path: &Path,
+    error: &std::io::Error,
+) {
+    if first_masked_failure.is_some() || error.kind() == std::io::ErrorKind::AlreadyExists {
+        return;
+    }
+    let message = format!(
+        "{} (kind {:?}, os error {:?})",
+        claim_failure_message(path, error),
+        error.kind(),
+        error.raw_os_error()
+    );
+    log::warn!("Skipping an export file name whose claim failed unexpectedly: {message}");
+    *first_masked_failure = Some(message);
+}
+
+/// Removes a file during rollback or cleanup. The primary failure that caused
+/// the cleanup must stay the reported one, so a failed removal is logged
+/// instead of propagated; a file that is already gone is not worth a warning.
+fn remove_best_effort(path: &Path) {
+    if let Err(error) = fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            log::warn!(
+                "Failed to remove {} during cleanup: {error}",
+                path.display()
+            );
+        }
+    }
 }
 
 fn publish_checkpoint_candidate(candidate: &Path, destination: &Path) -> Result<(), String> {
@@ -160,7 +203,7 @@ pub(super) fn write_checkpoint(
         Ok(file) => file,
         Err(error) => {
             if previous.is_none() {
-                let _ = fs::remove_file(&destination);
+                remove_best_effort(&destination);
             }
             return Err(error);
         }
@@ -184,16 +227,16 @@ pub(super) fn write_checkpoint(
         });
     drop(candidate_file);
     if let Err(error) = result {
-        let _ = fs::remove_file(&candidate);
+        remove_best_effort(&candidate);
         if previous.is_none() {
-            let _ = fs::remove_file(&destination);
+            remove_best_effort(&destination);
         }
         return Err(error);
     }
     if let Err(error) = publish_checkpoint_candidate(&candidate, &destination) {
-        let _ = fs::remove_file(&candidate);
+        remove_best_effort(&candidate);
         if previous.is_none() {
-            let _ = fs::remove_file(&destination);
+            remove_best_effort(&destination);
         }
         return Err(error);
     }
@@ -217,7 +260,8 @@ fn unique_export_pair(
     title: &str,
     job_id: &str,
 ) -> Result<(PathBuf, PathBuf), String> {
-    for index in 0..10_000_u32 {
+    let mut first_masked_failure = None;
+    for index in 0..EXPORT_PAIR_ATTEMPTS {
         let suffix = if index == 0 {
             String::new()
         } else {
@@ -226,12 +270,17 @@ fn unique_export_pair(
         let base = output_directory.join(format!("{title} - transcription - {job_id}{suffix}"));
         let txt_path = base.with_extension("txt");
         let markdown_path = base.with_extension("md");
-        let txt = match claim_new_file(&txt_path) {
+        let txt = match claim_new_file_io(&txt_path) {
             Ok(file) => file,
-            Err(_error) if txt_path.exists() => continue,
-            Err(error) => return Err(error),
+            Err(error) => {
+                if !txt_path.exists() {
+                    return Err(claim_failure_message(&txt_path, &error));
+                }
+                record_masked_claim_failure(&mut first_masked_failure, &txt_path, &error);
+                continue;
+            }
         };
-        match claim_new_file(&markdown_path) {
+        match claim_new_file_io(&markdown_path) {
             Ok(markdown) => {
                 // The empty claimed files only reserve the names; the export
                 // writes hidden candidates and replaces them when complete.
@@ -239,19 +288,23 @@ fn unique_export_pair(
                 drop(markdown);
                 return Ok((txt_path, markdown_path));
             }
-            Err(_error) if markdown_path.exists() => {
-                drop(txt);
-                let _ = fs::remove_file(&txt_path);
-                continue;
-            }
             Err(error) => {
                 drop(txt);
-                let _ = fs::remove_file(&txt_path);
-                return Err(error);
+                remove_best_effort(&txt_path);
+                if !markdown_path.exists() {
+                    return Err(claim_failure_message(&markdown_path, &error));
+                }
+                record_masked_claim_failure(&mut first_masked_failure, &markdown_path, &error);
+                continue;
             }
         }
     }
-    Err("Could not find an unused pair of final export filenames".into())
+    Err(match first_masked_failure {
+        Some(failure) => format!(
+            "Could not find an unused pair of final export filenames; the first unexpected claim failure was: {failure}"
+        ),
+        None => "Could not find an unused pair of final export filenames".into(),
+    })
 }
 
 pub(super) fn export_documents(
@@ -276,10 +329,12 @@ pub(super) fn export_documents(
 }
 
 /// Writes the candidate documents and publishes them over the reserved final
-/// paths. Any failure rolls the pair back: the candidates and the final paths
-/// reserved by this export are removed so no partial documents or claimed
-/// placeholders survive, and the retry export command recreates the pair under
-/// the same names. Paths are only ever removed after this call reserved them.
+/// paths. Any failure rolls the pair back by attempting to remove the
+/// candidates and the final paths reserved by this export; the retry export
+/// command recreates the pair under the same names. Paths are only ever
+/// removed after this call reserved them. Cleanup is best-effort: removal
+/// failures are logged and may leave partial documents or claimed placeholders
+/// behind.
 fn publish_export_pair(
     text: &str,
     title: &str,
@@ -299,7 +354,7 @@ fn publish_export_pair(
         });
     if exported.is_err() {
         for path in [txt_candidate, markdown_candidate, txt_path, markdown_path] {
-            let _ = fs::remove_file(path);
+            remove_best_effort(path);
         }
     }
     exported
@@ -444,6 +499,64 @@ mod tests {
         assert!(
             sentinel.exists(),
             "foreign content at the reserved path must survive the rollback"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// On Windows an occupied directory maps to `PermissionDenied` while
+    /// `Path::exists` stays true, so this exercises the masked-claim branch:
+    /// the name is skipped like a collision instead of failing the export.
+    #[cfg(windows)]
+    #[test]
+    fn an_occupied_directory_name_falls_through_to_the_next_pair() {
+        let dir = test_dir("occupied-directory-name");
+        let occupied = dir.join("sample - transcription - job-dir.txt");
+        std::fs::create_dir(&occupied).unwrap();
+        std::fs::create_dir(occupied.join("sentinel")).unwrap();
+
+        let (txt, markdown) =
+            export_documents(&dir.join("sample.mp4"), &dir, "text", "job-dir").unwrap();
+
+        assert_ne!(txt, occupied);
+        assert!(
+            txt.to_string_lossy().contains("(1)"),
+            "unexpected name: {}",
+            txt.display()
+        );
+        assert!(
+            markdown.to_string_lossy().contains("(1)"),
+            "unexpected name: {}",
+            markdown.display()
+        );
+        assert!(occupied.is_dir());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The markdown counterpart: the already claimed TXT placeholder of the
+    /// rejected pair must be released before the search continues, otherwise
+    /// an empty file would be left behind at the failing name.
+    #[cfg(windows)]
+    #[test]
+    fn an_occupied_directory_markdown_name_releases_the_claimed_txt() {
+        let dir = test_dir("occupied-directory-md");
+        std::fs::create_dir(dir.join("sample - transcription - job-md.md")).unwrap();
+
+        let (txt, markdown) =
+            export_documents(&dir.join("sample.mp4"), &dir, "text", "job-md").unwrap();
+
+        assert!(
+            txt.to_string_lossy().contains("(1)"),
+            "unexpected name: {}",
+            txt.display()
+        );
+        assert!(
+            markdown.to_string_lossy().contains("(1)"),
+            "unexpected name: {}",
+            markdown.display()
+        );
+        assert!(
+            !dir.join("sample - transcription - job-md.txt").exists(),
+            "the claimed TXT placeholder must be released when the markdown name fails"
         );
         std::fs::remove_dir_all(dir).ok();
     }
