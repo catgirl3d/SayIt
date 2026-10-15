@@ -1,3 +1,4 @@
+use crate::providers::wav::pcm_to_wav;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::fs;
 use std::path::PathBuf;
@@ -19,8 +20,8 @@ pub fn save_audio_file(id: String, wav_base64: String) -> Result<String, String>
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 接收 PCM Int16 LE 原始数据（base64），在 Rust 侧编码 WAV header 并写入文件。
-/// 避免前端拼 WAV + base64 编码的开销。
+/// Receives raw PCM Int16 LE data (base64), builds the WAV header on the Rust
+/// side and writes the file, sparing the frontend the WAV plus base64 assembly.
 #[tauri::command]
 pub fn save_pcm_as_wav(
     id: String,
@@ -31,25 +32,7 @@ pub fn save_pcm_as_wav(
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let pcm = STANDARD.decode(&pcm_base64).map_err(|e| e.to_string())?;
-    let sr = sample_rate.unwrap_or(16000);
-    let data_len = pcm.len() as u32;
-
-    // Build 44-byte WAV header + PCM data
-    let mut wav = Vec::with_capacity(44 + pcm.len());
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
-    wav.extend_from_slice(b"WAVE");
-    wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
-    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
-    wav.extend_from_slice(&sr.to_le_bytes()); // sample rate
-    wav.extend_from_slice(&(sr * 2).to_le_bytes()); // byte rate
-    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
-    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_len.to_le_bytes());
-    wav.extend_from_slice(&pcm);
+    let wav = pcm_to_wav(&pcm, sample_rate.unwrap_or(16000));
 
     let path = dir.join(format!("{}.wav", id));
     fs::write(&path, &wav).map_err(|e| e.to_string())?;
@@ -57,11 +40,12 @@ pub fn save_pcm_as_wav(
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 录音文件还在不在。
+/// Whether the recording file still exists.
 ///
-/// 单独一个命令而不是复用 `read_audio_file`：后者会把整份 WAV 读出来再 base64
-/// （五分钟录音约 13MB 的字符串），只为判断"文件存不存在"的话代价太大 ——
-/// 历史列表里每条记录都要判一次。
+/// A separate command instead of reusing `read_audio_file`: that one reads the
+/// whole WAV and base64-encodes it (a five-minute recording becomes a ~13 MB
+/// string), which is far too expensive when the only question is whether the
+/// file exists — the history list asks it for every entry.
 #[tauri::command]
 pub fn audio_file_exists(file_path: String) -> bool {
     !file_path.is_empty() && PathBuf::from(&file_path).is_file()

@@ -5,7 +5,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 pub(super) const SAMPLE_RATE: usize = 16_000;
-const SAMPLE_BYTES: usize = 2;
+pub(super) const SAMPLE_BYTES: usize = 2;
 pub(super) const TARGET_WINDOW_SAMPLES: usize = SAMPLE_RATE * 20;
 pub(super) const LOOKAHEAD_SAMPLES: usize = SAMPLE_RATE * 2;
 /// When continuous speech forces a cut at the window edge, the boundary is
@@ -274,6 +274,25 @@ mod tests {
         assert_eq!(reader.read_window(1).unwrap().unwrap().len(), 1);
         assert_eq!(reader.read_window(1).unwrap().unwrap().len(), 1);
         assert!(reader.read_window(1).unwrap().is_none());
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn pcm_reader_normalizes_full_scale_samples_to_the_unit_range() {
+        let path = test_path("pcm-unit-range");
+        let bytes = [i16::MIN, 0, i16::MAX]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<u8>>();
+        std::fs::write(&path, bytes).unwrap();
+        let mut reader = PcmWindowReader::open(&path).unwrap();
+
+        let window = reader.read_window(3).unwrap().unwrap();
+
+        assert_eq!(
+            window.as_slice(),
+            &[-1.0_f32, 0.0, 32_767.0_f32 / 32_768.0_f32]
+        );
         std::fs::remove_file(path).ok();
     }
 }

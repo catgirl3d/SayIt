@@ -248,4 +248,31 @@ mod tests {
         assert_eq!(read_capped(&b"1234"[..], 4, None).unwrap(), b"1234");
         assert!(read_capped(&b"12345"[..], 4, None).is_err());
     }
+
+    #[test]
+    #[cfg(windows)]
+    fn probe_command_reports_missing_output_pipes() {
+        use std::process::Stdio;
+
+        // Only the error branches are observable here: the kill/wait fallback
+        // cannot be distinguished from reaping a child that already exited.
+        let mut command = Command::new("cmd");
+        command.args(["/D", "/C", "exit 0"]).stdout(Stdio::null());
+        let error = run_probe_command(command, None).unwrap_err();
+        assert!(
+            error.contains("stdout was not available"),
+            "unexpected error: {error}"
+        );
+
+        let mut command = Command::new("cmd");
+        command
+            .args(["/D", "/C", "exit 0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let error = run_probe_command(command, None).unwrap_err();
+        assert!(
+            error.contains("stderr was not available"),
+            "unexpected error: {error}"
+        );
+    }
 }

@@ -426,4 +426,35 @@ mod tests {
 
         assert!(args.iter().any(|arg| arg == "-nostdin"));
     }
+
+    #[test]
+    fn ffmpeg_output_matches_the_pcm_reader_contract() {
+        use super::super::pcm::{SAMPLE_BYTES, SAMPLE_RATE};
+
+        let tools = ToolPaths {
+            ffmpeg: PathBuf::from("ffmpeg.exe"),
+            ffprobe: PathBuf::from("ffprobe.exe"),
+        };
+        let command = ffmpeg_command(&tools, Path::new("sample.wav"), 0);
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let values_after = |flag: &str| {
+            args.iter()
+                .enumerate()
+                .filter(|(_, arg)| arg.as_str() == flag)
+                .map(|(index, _)| args[index + 1].clone())
+                .collect::<Vec<_>>()
+        };
+
+        let format_bits = SAMPLE_BYTES * 8;
+        assert_eq!(values_after("-f"), vec![format!("s{format_bits}le")]);
+        assert_eq!(
+            values_after("-acodec"),
+            vec![format!("pcm_s{format_bits}le")]
+        );
+        assert_eq!(values_after("-ac"), vec!["1".to_string()]);
+        assert_eq!(values_after("-ar"), vec![SAMPLE_RATE.to_string()]);
+    }
 }

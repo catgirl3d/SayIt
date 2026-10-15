@@ -916,6 +916,12 @@ mod tests {
     }
 
     #[test]
+    fn file_window_rejects_non_16k_sample_rate() {
+        let error = transcribe_file_window(&[], 8_000, "auto").unwrap_err();
+        assert!(error.contains("16 kHz"), "unexpected error: {error}");
+    }
+
+    #[test]
     fn pending_unload_runs_once_the_file_lease_releases() {
         let Ok(lease) = acquire_file_resource("pending-unload-test") else {
             eprintln!("skip: the local engine is busy with a parallel test");
