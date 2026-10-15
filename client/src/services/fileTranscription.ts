@@ -3,7 +3,7 @@ import { getSetting } from './store'
 import { getSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
 import { localModelDisplayName } from '@/i18n/displayNames'
 import { loadAsrProfiles } from '@/features/settings/asrProfileStore'
-import { buildAsrProviderConfig, findAsrProvider, type AsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { buildAsrProviderConfig, describeAsrMissing, findAsrProvider, type AsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
 import { releaseFileTranscription, reserveFileTranscription, setFileTranscriptionAdmissionReady } from './recorder'
 
 export type FilePhase =
@@ -35,6 +35,8 @@ export interface FileTranscriptionCloudProfile {
   label: string
   provider: string
   model: string
+  /** Configuration-readiness verdict from describeAsrMissing; '' means ready. */
+  missing: string
 }
 
 export interface FileTranscriptionCloudRequest {
@@ -368,8 +370,11 @@ export class FileTranscriptionService {
     try {
       this.acceptSnapshot(next)
     } catch (error) {
+      // A rejected reservation (the local engine is busy) is transient and
+      // re-syncs on the next accepted snapshot; it must not latch the
+      // initialization readiness closed, or the next local capture would stay
+      // blocked for the session with no automatic recovery.
       this.initializationError = errorMessage(error)
-      this.admission.setFileTranscriptionAdmissionReady?.(false)
       this.notify()
     }
   }
@@ -413,6 +418,9 @@ export class FileTranscriptionService {
       label: findAsrProvider(profile.provider)?.label ?? profile.provider,
       provider: profile.provider,
       model: profile.model,
+      // The canonical readiness predicate shared with the settings cards and
+      // mode status; the page needs the verdict, never the credentials.
+      missing: describeAsrMissing(profile),
     }
   }
 

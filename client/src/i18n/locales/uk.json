@@ -1628,6 +1628,7 @@
   "files.openCloudSettings": "Відкрити налаштування Cloud API",
   "files.cloudProfilesLoading": "Читання хмарних профілів…",
   "files.cloudProfilesFailed": "Не вдалося прочитати хмарні профілі",
+  "files.cloudProfileMissing": "Вибраний хмарний профіль не готовий",
   "files.model": "Модель",
   "files.language": "Мова",
   "files.accelerator": "Прискорення",

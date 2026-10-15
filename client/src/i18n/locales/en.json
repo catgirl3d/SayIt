@@ -1628,6 +1628,7 @@
   "files.openCloudSettings": "Open Cloud API settings",
   "files.cloudProfilesLoading": "Reading cloud profiles…",
   "files.cloudProfilesFailed": "Could not read cloud profiles",
+  "files.cloudProfileMissing": "The selected cloud profile is not ready",
   "files.model": "Model",
   "files.language": "Language",
   "files.accelerator": "Accelerator",

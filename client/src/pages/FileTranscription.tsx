@@ -89,6 +89,12 @@ function isActiveSnapshot(snapshot: FileTranscriptionSnapshot | null): boolean {
   return Boolean(snapshot && !snapshot.resourcesReleased)
 }
 
+// Cloud readiness comes from the canonical describeAsrMissing verdict carried
+// in the profile metadata, never from mere profile selection.
+function isCloudProfileReady(profile: FileTranscriptionCloudProfile | null | undefined): boolean {
+  return profile !== null && profile !== undefined && profile.missing === ''
+}
+
 // Cancellation stays possible exactly while the backend worker can still stop early;
 // the final export runs to completion once it starts, so the action closes with it.
 function isCancellablePhase(phase: FilePhase): boolean {
@@ -101,6 +107,11 @@ export default function FileTranscription() {
     fileTranscriptionService.subscribe,
     fileTranscriptionService.getSnapshot,
     fileTranscriptionService.getSnapshot,
+  )
+  const initializationError = useSyncExternalStore(
+    fileTranscriptionService.subscribe,
+    fileTranscriptionService.getInitializationError,
+    fileTranscriptionService.getInitializationError,
   )
   const [filePath, setFilePath] = useState('')
   const [mediaInfo, setMediaInfo] = useState<FileMediaInfo | null>(null)
@@ -248,7 +259,7 @@ export default function FileTranscription() {
   const startTranscription = async () => {
     if (!filePath || !outputDirectory || !mediaInfo || actionBusy) return
     const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId)
-    if (engine === 'cloud' && !selectedCloudProfile) return
+    if (engine === 'cloud' && !isCloudProfileReady(selectedCloudProfile)) return
     setActionBusy(true)
     setError('')
     try {
@@ -335,7 +346,7 @@ export default function FileTranscription() {
 
   const active = isActiveSnapshot(snapshot)
   const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId) ?? null
-  const engineReady = engine === 'local' ? Boolean(localSettings?.modelInstalled) : Boolean(selectedCloudProfile)
+  const engineReady = engine === 'local' ? Boolean(localSettings?.modelInstalled) : isCloudProfileReady(selectedCloudProfile)
   const canStart = Boolean(filePath && outputDirectory && mediaInfo && engineReady && !inspecting && !actionBusy && !active)
   const hasMultipleTracks = Boolean(mediaInfo && mediaInfo.audioTracks.length > 1)
   const snapshotError = snapshot?.error ?? null
@@ -343,6 +354,10 @@ export default function FileTranscription() {
   // the terminal snapshot. Native errors are shown as they come, so keep the snapshot
   // copy and drop the duplicated page banner instead of translating either of them.
   const pageError = error !== '' && !(snapshotError && error.endsWith(snapshotError)) ? error : ''
+  const restoreError = initializationError === null ? null : `${t('files.restoreFailed')}: ${initializationError}`
+  // The mount failure already shows this exact text through pageError; the
+  // dedicated alert covers failures that would otherwise stay invisible.
+  const showRestoreError = restoreError !== null && restoreError !== pageError
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -358,7 +373,8 @@ export default function FileTranscription() {
         </div>
       </header>
 
-      {pageError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{pageError}</span>{fileTranscriptionService.getInitializationError() && <Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button>}</div>}
+      {pageError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{pageError}</span>{initializationError !== null && !showRestoreError && <Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button>}</div>}
+      {showRestoreError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{restoreError}</span><Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button></div>}
       {snapshotError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{snapshotError}</div>}
       {snapshot?.warning != null && <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-warning-strong" role="status"><Info className="mt-0.5 h-4 w-4 shrink-0" />{snapshot.warning}</div>}
 
@@ -400,7 +416,8 @@ export default function FileTranscription() {
                </div>
                {engine === 'local' ? localSettings ? <><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{localSettings.modelName}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.language')}</span><span className="text-right font-medium">{languageLabel(localSettings.language)}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.accelerator')}</span><span className="text-right font-medium">{acceleratorLabel(localSettings.accelerator)}</span></div>{!localSettings.modelInstalled && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.modelMissing')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openVoiceEngine')}<ExternalLink className="h-3 w-3" /></Link></div>}</> : settingsError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{settingsError}</span></div><Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void retryLocalSettings()}>{t('common.retry')}</Button></div> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.settingsLoading')}</div> : cloudProfilesLoading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.cloudProfilesLoading')}</div> : cloudProfilesError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{t('files.cloudProfilesFailed')}: {cloudProfilesError}</span></div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div> : cloudProfiles.length === 0 ? <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.cloudNoProfiles')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div> : <>
                  <div className="space-y-1.5"><span id="file-cloud-profile-label" className="text-xs font-medium text-foreground">{t('files.cloudProfile')}</span><Select labelledBy="file-cloud-profile-label" value={cloudProfileId} onChange={setCloudProfileId} placeholder={t('files.cloudSelectProfile')} disabled={active || actionBusy} options={cloudProfiles.map((profile) => ({ value: profile.id, label: `${profile.label} · ${profile.model}`, title: `${profile.provider} · ${profile.model}` }))} /></div>
-                 {selectedCloudProfile && <div className="space-y-2 rounded-lg bg-muted/30 px-3 py-2.5"><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudProvider')}</span><span className="text-right font-medium">{selectedCloudProfile.provider}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{selectedCloudProfile.model}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudLabel')}</span><span className="text-right font-medium">{selectedCloudProfile.label}</span></div></div>}
+                  {selectedCloudProfile && <div className="space-y-2 rounded-lg bg-muted/30 px-3 py-2.5"><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudProvider')}</span><span className="text-right font-medium">{selectedCloudProfile.provider}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{selectedCloudProfile.model}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudLabel')}</span><span className="text-right font-medium">{selectedCloudProfile.label}</span></div></div>}
+                  {selectedCloudProfile && !isCloudProfileReady(selectedCloudProfile) && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.cloudProfileMissing')}: {selectedCloudProfile.missing}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div>}
                </>}
              </CardContent>
            </Card>

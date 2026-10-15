@@ -103,9 +103,37 @@ describe('file transcription service', () => {
         label: 'Groq Whisper',
         provider: 'groq_whisper',
         model: 'whisper-large-v3',
+        missing: '',
       }],
       activeId: 'cloud-a',
     })
+  })
+
+  it('marks unconfigured cloud profiles as missing and configured ones as ready', async () => {
+    profileStoreMocks.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile,
+        { ...cloudProfile, id: 'cloud-b', apiKey: '' },
+        {
+          ...cloudProfile,
+          id: 'cloud-c',
+          provider: 'openai_compat',
+          baseUrl: 'ftp://asr.example.test/v1',
+          model: 'local-model',
+        },
+      ],
+      activeId: cloudProfile.id,
+    })
+    const harness = createHarness()
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    const { profiles } = await service.getCloudProfiles()
+
+    expect(profiles.map(({ id, missing }) => ({ id, missing }))).toEqual([
+      { id: 'cloud-a', missing: '' },
+      { id: 'cloud-b', missing: 'no API key yet' },
+      { id: 'cloud-c', missing: 'base URL must be a valid HTTP(S) URL without username or password, query, or fragment' },
+    ])
   })
 
   it('keeps local request fields and marks the IPC request as local', async () => {
@@ -565,6 +593,76 @@ describe('file transcription service', () => {
 
     expect(service.getSnapshot()).toBeNull()
     expect(harness.admission.reserveFileTranscription).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps initialization readiness untouched when a state event is rejected', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    harness.invoke.mockImplementation(async (command: string) =>
+      command === 'get_file_transcription_state' ? null : undefined,
+    )
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.init()
+    harness.admission.setFileTranscriptionAdmissionReady.mockClear()
+    harness.admission.reserveFileTranscription.mockImplementationOnce(() => {
+      throw new Error('The local engine is busy')
+    })
+
+    stateHandler?.({ payload: snapshot({ sequence: 5 }) })
+
+    expect(service.getInitializationError()).toBe('The local engine is busy')
+    expect(service.getSnapshot()).toBeNull()
+    expect(harness.admission.setFileTranscriptionAdmissionReady).not.toHaveBeenCalled()
+
+    // The rejected snapshot was not consumed, so a retry accepts it unchanged.
+    harness.invoke.mockImplementation(async (command: string) =>
+      command === 'get_file_transcription_state' ? snapshot({ sequence: 5 }) : undefined,
+    )
+    await service.init()
+
+    expect(service.getInitializationError()).toBeNull()
+    expect(service.getSnapshot()?.sequence).toBe(5)
+    expect(harness.admission.reserveFileTranscription).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps readiness closed during a pending init when an event is rejected', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    let resolveState: (value: FileTranscriptionSnapshot | null) => void = () => undefined
+    const stateQuery = new Promise<FileTranscriptionSnapshot | null>((resolve) => {
+      resolveState = resolve
+    })
+    harness.invoke.mockImplementation(async (command: string) =>
+      command === 'get_file_transcription_state' ? stateQuery : undefined,
+    )
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    harness.admission.reserveFileTranscription.mockImplementationOnce(() => {
+      throw new Error('busy during init')
+    })
+
+    const initPromise = service.init()
+    await vi.waitFor(() => expect(stateHandler).toBeDefined())
+    stateHandler?.({ payload: snapshot({ sequence: 5 }) })
+
+    expect(service.getInitializationError()).toBe('busy during init')
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenCalledTimes(1)
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenCalledWith(false)
+
+    resolveState(null)
+    await initPromise
+
+    expect(service.getInitializationError()).toBeNull()
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenNthCalledWith(2, true)
+    expect(harness.admission.setFileTranscriptionAdmissionReady).toHaveBeenCalledTimes(2)
   })
 
   it('starts a fresh init after dispose and does not adopt the abandoned operation', async () => {

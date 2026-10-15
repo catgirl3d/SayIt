@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
 import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
 import { fileTranscriptionService, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
+import { releaseFileTranscription, reserveFileTranscription } from '@/services/recorder'
 
 const native = vi.hoisted(() => {
   const defaultInvoke = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
@@ -101,6 +102,7 @@ function cloudProfile(overrides: Partial<AsrProfile> = {}): AsrProfile {
 describe('file transcription page', () => {
   afterEach(() => {
     fileTranscriptionService.dispose()
+    releaseFileTranscription()
     vi.restoreAllMocks()
   })
 
@@ -712,5 +714,107 @@ describe('file transcription page', () => {
     expect(screen.getByText('1 fragment without recognized text was skipped')).toBeTruthy()
     expect(screen.getByText('Native transcription failed')).toBeTruthy()
     expect(screen.getByRole('alert')).toBeTruthy()
+  })
+
+  it('surfaces a rejected state event with a retry instead of silently blocking local capture', async () => {
+    renderPage()
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    reserveFileTranscription()
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({ sequence: 1, phase: 'transcribing', resourcesReleased: false, error: null }) })
+    })
+
+    expect(screen.getByText('Could not restore file transcription state: The local engine is busy. Finish the current local recording or subtitles first.')).toBeTruthy()
+    expect(screen.queryByText('Draft text')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+
+    releaseFileTranscription()
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'get_file_transcription_state'
+        ? fileSnapshot({ sequence: 1, phase: 'transcribing', resourcesReleased: false, error: null, text: '' })
+        : native.defaultInvoke(command, args),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Retry restore' }))
+
+    await waitFor(() => expect(screen.queryByText(/Could not restore file transcription state/)).toBeNull())
+    expect(screen.getByText('Transcribing')).toBeTruthy()
+  })
+
+  it('keeps the restore failure visible when the retry is rejected again', async () => {
+    renderPage()
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    reserveFileTranscription()
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({ sequence: 1, phase: 'transcribing', resourcesReleased: false, error: null }) })
+    })
+    expect(screen.getByText('Could not restore file transcription state: The local engine is busy. Finish the current local recording or subtitles first.')).toBeTruthy()
+
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'get_file_transcription_state'
+        ? fileSnapshot({ sequence: 1, phase: 'transcribing', resourcesReleased: false, error: null })
+        : native.defaultInvoke(command, args),
+    )
+    const queriesBefore = native.invoke.mock.calls.filter(([command]) => command === 'get_file_transcription_state').length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry restore' }))
+
+    await waitFor(() => expect(
+      native.invoke.mock.calls.filter(([command]) => command === 'get_file_transcription_state').length,
+    ).toBeGreaterThan(queriesBefore))
+    expect(screen.getByText('Could not restore file transcription state: The local engine is busy. Finish the current local recording or subtitles first.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry restore' })).toBeTruthy()
+
+    releaseFileTranscription()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry restore' }))
+    await waitFor(() => {
+      expect(screen.queryByText(/Could not restore file transcription state/)).toBeNull()
+      expect(screen.getByText('Transcribing')).toBeTruthy()
+    })
+  })
+
+  it('does not suppress the restore failure behind an unrelated page error', async () => {
+    renderPage()
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    dialog.open.mockResolvedValue('C:/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') throw new Error('probe failed')
+      return native.defaultInvoke(command, args)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('Could not inspect this file: probe failed')).toBeTruthy())
+
+    reserveFileTranscription()
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({ sequence: 1, phase: 'transcribing', resourcesReleased: false, error: null }) })
+    })
+
+    expect(screen.getByText('Could not inspect this file: probe failed')).toBeTruthy()
+    expect(screen.getByText('Could not restore file transcription state: The local engine is busy. Finish the current local recording or subtitles first.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry restore' })).toBeTruthy()
+    releaseFileTranscription()
+  })
+
+  it('keeps Start disabled and explains why when the selected cloud profile is not configured', async () => {
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ apiKey: '' })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+
+    await waitFor(() => expect(screen.getByText('The selected cloud profile is not ready: no API key yet')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    expect((startButton as HTMLButtonElement).disabled).toBe(true)
   })
 })
