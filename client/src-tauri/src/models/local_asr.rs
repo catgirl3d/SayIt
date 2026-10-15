@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use super::downloader::{model_dir, models_dir};
 use super::gguf_asr;
+use crate::providers::wav::pcm16le_to_f32;
 
 /// 采样率固定 16 kHz —— 前端采集就重采样到这个值，引擎也只接受这个值。
 const SR: usize = 16000;
@@ -34,10 +35,7 @@ fn decode_pcm(audio_b64: &str) -> Result<Vec<f32>, String> {
         ));
     }
 
-    Ok(pcm_bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-        .collect())
+    Ok(pcm16le_to_f32(&pcm_bytes).collect())
 }
 
 #[tauri::command]

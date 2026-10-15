@@ -1,4 +1,4 @@
-// Shared WAV container encoder used by ASR providers.
+// Shared WAV container encoder and PCM sample conversions.
 
 /// Encode normalized mono samples as signed little-endian 16-bit PCM.
 pub fn pcm16le_bytes(samples: &[f32]) -> Result<Vec<u8>, String> {
@@ -49,6 +49,14 @@ pub fn pcm_to_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
+/// Decode signed little-endian 16-bit PCM bytes into normalized mono f32
+/// samples, the inverse of `pcm16le_bytes`. Only complete pairs are decoded:
+/// a trailing odd byte is ignored and no remainder is carried between calls.
+pub(crate) fn pcm16le_to_f32(pcm: &[u8]) -> impl Iterator<Item = f32> + '_ {
+    pcm.chunks_exact(2)
+        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as f32 / 32_768.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +90,15 @@ mod tests {
             pcm16le_bytes(&[f32::NAN]).unwrap_err(),
             "Audio frame contains a non-finite sample"
         );
+    }
+
+    #[test]
+    fn pcm16le_decoding_matches_the_signed_full_scale_and_ignores_a_trailing_byte() {
+        assert_eq!(pcm16le_to_f32(&[]).count(), 0);
+
+        let decoded =
+            pcm16le_to_f32(&[0x00, 0x80, 0x00, 0x00, 0xFF, 0x7F, 0x2A]).collect::<Vec<f32>>();
+
+        assert_eq!(decoded, [-1.0, 0.0, 32_767.0 / 32_768.0]);
     }
 }

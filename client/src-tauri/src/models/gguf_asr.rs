@@ -22,6 +22,7 @@ use transcribe_cpp::{
 };
 
 use super::downloader::model_dir;
+use crate::providers::wav::pcm16le_to_f32;
 
 /// 已加载的引擎。Session 内部持有 Model 的 Arc，所以重复推理不会重新加载权重。
 ///
@@ -500,12 +501,9 @@ const WARMUP_SEC: usize = 2;
 /// 返回耗时（毫秒）。失败不算错误：预热只是优化，失败了顶多第一次慢一点。
 fn warmup(entry: &mut Loaded) -> u128 {
     let t0 = Instant::now();
-    let pcm: Vec<f32> = WARMUP_WAV
-        .get(44..) // 跳过 WAV header
-        .unwrap_or(&[])
-        .chunks_exact(2)
+    // Skip the WAV header.
+    let pcm: Vec<f32> = pcm16le_to_f32(WARMUP_WAV.get(44..).unwrap_or(&[]))
         .take(WARMUP_SEC * 16000)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
         .collect();
     if pcm.is_empty() {
         return 0;
@@ -964,10 +962,7 @@ mod tests {
             .join(name);
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("resources/{name}: {e}"));
         assert_eq!(&bytes[0..4], b"RIFF");
-        bytes[44..]
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-            .collect()
+        pcm16le_to_f32(&bytes[44..]).collect()
     }
 
     fn read_test_wav() -> Vec<f32> {

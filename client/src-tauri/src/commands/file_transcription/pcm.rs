@@ -1,4 +1,5 @@
 use crate::models::local_vad;
+use crate::providers::wav::pcm16le_to_f32;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -76,10 +77,8 @@ impl PcmWindowReader {
             }
             self.pending_bytes.extend_from_slice(&buffer[..count]);
             let complete_bytes = self.pending_bytes.len() / SAMPLE_BYTES * SAMPLE_BYTES;
-            for sample in self.pending_bytes[..complete_bytes].chunks_exact(SAMPLE_BYTES) {
-                self.pending_samples
-                    .push(i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0);
-            }
+            self.pending_samples
+                .extend(pcm16le_to_f32(&self.pending_bytes[..complete_bytes]));
             self.pending_bytes.drain(..complete_bytes);
         }
         if self.pending_samples.is_empty() {

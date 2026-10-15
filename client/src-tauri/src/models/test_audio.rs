@@ -8,6 +8,7 @@
 // the catalog recognizes English, and Deepgram's multilingual mode includes it,
 // unlike Chinese.
 
+use crate::providers::wav::pcm16le_to_f32;
 use serde::Serialize;
 use tauri::Manager;
 
@@ -77,10 +78,7 @@ pub async fn run_asr_benchmark(
 
     let audio_duration_sec = (pcm_bytes.len() as f64) / 2.0 / 16000.0;
 
-    let samples: Vec<f32> = pcm_bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-        .collect();
+    let samples: Vec<f32> = pcm16le_to_f32(&pcm_bytes).collect();
 
     let lang = language;
 

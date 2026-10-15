@@ -1885,7 +1885,7 @@ mod wasapi {
                                 );
                             }
                             captured_pcm.extend_from_slice(&pcm);
-                            for sample in pcm.chunks_exact(2).map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as f32 / 32768.0) {
+                            for sample in crate::providers::wav::pcm16le_to_f32(&pcm) {
                                 observed_audio.push(sample);
                                 sample_peak = sample_peak.max(sample.abs());
                                 sample_square_sum += (sample as f64).powi(2);

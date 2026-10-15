@@ -189,13 +189,11 @@ fn run_local_windows(
 mod tests {
     use super::*;
     use crate::commands::file_transcription::test_support::{test_dir, test_path, worker_input};
+    use crate::providers::wav::pcm16le_to_f32;
 
     fn speech_audio() -> Vec<f32> {
         let bytes = include_bytes!("../../../resources/test_zh.wav");
-        bytes[44..]
-            .chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
-            .collect()
+        pcm16le_to_f32(&bytes[44..]).collect()
     }
 
     fn write_pcm(path: &Path, samples: &[f32]) {

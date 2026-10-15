@@ -91,15 +91,13 @@ pub fn detect_speech_intervals(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::wav::pcm16le_to_f32;
 
     const SR: usize = 16_000;
 
     fn read_test_speech() -> Vec<f32> {
         let bytes = include_bytes!("../../resources/test_zh.wav");
-        bytes[44..]
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-            .collect()
+        pcm16le_to_f32(&bytes[44..]).collect()
     }
 
     #[test]
