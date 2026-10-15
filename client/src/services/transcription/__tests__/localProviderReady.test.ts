@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // 这些依赖都会走 Tauri IPC，测试里替换掉
 const invokeMock = vi.fn()
 const getSettingMock = vi.fn()
+const runtimeEvents = vi.hoisted(() => ({ addRuntimeEvent: vi.fn() }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }))
 vi.mock('../../store', () => ({ getSetting: (...args: unknown[]) => getSettingMock(...args) }))
-vi.mock('../../debugLog', () => ({ addRuntimeEvent: () => {} }))
+vi.mock('../../debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => runtimeEvents.addRuntimeEvent(...args) }))
 
 import { LocalProvider } from '../LocalProvider'
 
@@ -21,6 +22,7 @@ describe('LocalProvider 的就绪判定', () => {
   beforeEach(() => {
     invokeMock.mockReset()
     getSettingMock.mockReset()
+    runtimeEvents.addRuntimeEvent.mockReset()
   })
 
   it('选中的模型已完整下载 → 就绪', async () => {
@@ -77,6 +79,12 @@ describe('LocalProvider 的就绪判定', () => {
     const provider = new LocalProvider()
     await provider.connect({})
     expect(provider.isReady()).toBe(false)
+    expect(runtimeEvents.addRuntimeEvent).toHaveBeenCalledWith(
+      'warn', 'local', 'Could not read local model list; provider is not ready', { error: 'Error: ipc boom' },
+    )
+    expect(runtimeEvents.addRuntimeEvent).not.toHaveBeenCalledWith(
+      'warn', 'local', 'Selected local model is not downloaded; provider is not ready', expect.anything(),
+    )
   })
 
   it('已下载但预加载失败 → 仍算就绪（真正原因留给识别阶段报，不谎称"没下载"）', async () => {
@@ -92,5 +100,52 @@ describe('LocalProvider 的就绪判定', () => {
     const provider = new LocalProvider()
     await provider.connect({})
     expect(provider.isReady()).toBe(true)
+  })
+
+  it('treats an empty stored id as the default model', async () => {
+    settings('')
+    invokeMock.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'list_downloaded_models' ? [{ id: 'sensevoice-small-gguf', complete: true }] : ''),
+    )
+
+    const provider = new LocalProvider()
+    await provider.connect({})
+    expect(provider.isReady()).toBe(true)
+  })
+
+  it('preloads the same model id it checked', async () => {
+    settings('qwen3-asr-1.7b-gguf')
+    invokeMock.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'list_downloaded_models' ? [{ id: 'qwen3-asr-1.7b-gguf', complete: true }] : ''),
+    )
+
+    const provider = new LocalProvider()
+    await provider.connect({})
+    expect(invokeMock).toHaveBeenCalledWith('preload_local_model', { modelId: 'qwen3-asr-1.7b-gguf', accelerator: 'auto' })
+  })
+
+  it('transcribes with the same normalized id it checked when the stored id is empty', async () => {
+    settings('')
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'list_downloaded_models') return Promise.resolve([{ id: 'sensevoice-small-gguf', complete: true }])
+      if (cmd === 'local_transcribe') return Promise.resolve({ text: '', elapsed_ms: 5 })
+      return Promise.resolve('')
+    })
+
+    const provider = new LocalProvider()
+    await provider.connect({})
+    expect(provider.isReady()).toBe(true)
+    provider.start({ runId: 1 })
+    provider.sendAudio(new ArrayBuffer(16_000))
+    provider.stop()
+
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('local_transcribe', {
+        audioB64: expect.any(String),
+        modelId: 'sensevoice-small-gguf',
+        language: 'auto',
+        accelerator: 'auto',
+      })
+    })
   })
 })
