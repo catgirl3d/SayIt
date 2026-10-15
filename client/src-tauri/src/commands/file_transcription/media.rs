@@ -151,9 +151,30 @@ fn run_probe_command(
         register_process(context.job_id, &control);
     }
     let stdout_control = Some(control.clone());
-    let stdout_thread =
-        thread::spawn(move || read_capped(stdout, PROBE_STDOUT_LIMIT, stdout_control));
-    let stderr_thread = thread::spawn(move || read_capped(stderr, STDERR_CAPTURE_LIMIT, None));
+    let stdout_thread = match thread::Builder::new()
+        .name("ffprobe-stdout".into())
+        .spawn(move || read_capped(stdout, PROBE_STDOUT_LIMIT, stdout_control))
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            control.kill();
+            return Err(format!(
+                "Failed to start the FFprobe stdout reader: {error}"
+            ));
+        }
+    };
+    let stderr_thread = match thread::Builder::new()
+        .name("ffprobe-stderr".into())
+        .spawn(move || read_capped(stderr, STDERR_CAPTURE_LIMIT, None))
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            control.kill();
+            return Err(format!(
+                "Failed to start the FFprobe stderr reader: {error}"
+            ));
+        }
+    };
     let status = control.wait();
     let output = stdout_thread
         .join()

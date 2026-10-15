@@ -133,7 +133,18 @@ fn supervise_decoded_audio(
     let control = ChildControl::new(child);
     register_process(job_id, &control);
     let (progress_sender, progress_receiver) = mpsc::channel();
-    let stderr_thread = thread::spawn(move || read_ffmpeg_progress(stderr, progress_sender));
+    let stderr_thread = match thread::Builder::new()
+        .name("ffmpeg-stderr".into())
+        .spawn(move || read_ffmpeg_progress(stderr, progress_sender))
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            control.kill();
+            return Err(WorkerOutcome::Failed(format!(
+                "Failed to start the FFmpeg stderr reader: {error}"
+            )));
+        }
+    };
     let result = (|| -> Result<(), WorkerOutcome> {
         let mut output = OpenOptions::new()
             .write(true)
