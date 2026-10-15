@@ -4,7 +4,7 @@ use std::process::{Child, ChildStderr, ChildStdout, ExitStatus};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use transcribe_cpp::CancelToken;
 
@@ -47,27 +47,104 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 static EXIT_WAITING: AtomicBool = AtomicBool::new(false);
 
+/// A media process may not stay alive past this budget while its worker waits
+/// for the exit status; a probe or decoder that misses it is treated as stuck.
+const CHILD_EXIT_BUDGET: Duration = Duration::from_secs(30);
+/// How long a process gets to actually exit after a termination request that
+/// was issued by the wait budget or by the final cleanup.
+const CHILD_EXIT_GRACE: Duration = Duration::from_secs(5);
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Best-effort kill that keeps the normal path quiet: a failed kill on an
+/// already-exited process is a routine race (the wait loop reaps it), while a
+/// child that is still running or cannot be polled is worth a warning.
+fn kill_child(child: &mut Child) {
+    if let Err(error) = child.kill() {
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                log::warn!("Failed to kill a media process that is still running: {error}")
+            }
+            Err(poll_error) => log::warn!(
+                "Failed to kill a media process and failed to poll it: {error}; {poll_error}"
+            ),
+        }
+    }
+}
+
+/// Polls a child after a termination request until it is reaped or the grace
+/// expires. A child that outlives the grace is logged and left without a reap:
+/// dropping the handle still releases it, but the process may stay alive.
+fn reap_child_with_grace(child: &mut Child) {
+    let deadline = Instant::now() + CHILD_EXIT_GRACE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => {
+                log::error!(
+                    "A media process did not exit within {CHILD_EXIT_GRACE:?} after a termination request"
+                );
+                return;
+            }
+            Ok(None) => thread::sleep(CHILD_POLL_INTERVAL),
+        }
+    }
+}
+
+/// Owns the optional child and performs the final kill and reap exactly once,
+/// when the last handle disappears. The cleanup lives on the `Arc` payload on
+/// purpose: with a `strong_count` check on the wrapper, two concurrent drops
+/// could both decide they are not the last one and skip the reap.
+struct ChildSlot(Mutex<Option<Child>>);
+
+impl Drop for ChildSlot {
+    fn drop(&mut self) {
+        let mut child = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(mut child) = child.take() {
+            kill_child(&mut child);
+            reap_child_with_grace(&mut child);
+        }
+    }
+}
+
 #[derive(Clone)]
-pub(super) struct ChildControl(Arc<Mutex<Option<Child>>>);
+pub(super) struct ChildControl(Arc<ChildSlot>);
 
 impl ChildControl {
     pub(super) fn new(child: Child) -> Self {
-        Self(Arc::new(Mutex::new(Some(child))))
+        Self(Arc::new(ChildSlot(Mutex::new(Some(child)))))
     }
 
     pub(super) fn kill(&self) {
         let mut child = self
             .0
+            .0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(child) = child.as_mut() {
-            let _ = child.kill();
+            kill_child(child);
         }
     }
 
     pub(super) fn wait(&self) -> Result<ExitStatus, String> {
+        self.wait_with_budget(CHILD_EXIT_BUDGET)
+    }
+
+    /// Waits for the exit status within `budget`. Once the budget is exceeded
+    /// this call can no longer succeed: it requests termination, gives the
+    /// process a short grace to be reaped, and then reports the overrun as an
+    /// error. That holds even when the process exits during the grace — the
+    /// exit status alone would not tell whether the work actually finished.
+    fn wait_with_budget(&self, budget: Duration) -> Result<ExitStatus, String> {
+        let deadline = Instant::now() + budget;
+        let mut termination_requested = false;
+        let mut grace_deadline = deadline;
         loop {
             let mut child_slot = self
+                .0
                 .0
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -82,11 +159,31 @@ impl ChildControl {
                     let _child = child_slot.take().ok_or_else(|| {
                         "FFmpeg process ownership was lost after wait".to_string()
                     })?;
+                    if termination_requested {
+                        return Err(
+                            "Media process exceeded its exit-wait budget; termination was requested"
+                                .to_string(),
+                        );
+                    }
                     return Ok(status);
                 }
                 None => {
                     drop(child_slot);
-                    thread::sleep(Duration::from_millis(10));
+                    let now = Instant::now();
+                    if !termination_requested && now >= deadline {
+                        log::warn!(
+                            "Media process did not exit within {budget:?}; requesting termination"
+                        );
+                        self.kill();
+                        termination_requested = true;
+                        grace_deadline = now + CHILD_EXIT_GRACE;
+                    } else if termination_requested && now >= grace_deadline {
+                        return Err(
+                            "Media process did not exit even after a termination request"
+                                .to_string(),
+                        );
+                    }
+                    thread::sleep(CHILD_POLL_INTERVAL);
                 }
             }
         }
@@ -104,36 +201,20 @@ pub(super) fn take_child_pipes(
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_child(child);
+            reap_child_with_grace(child);
             return Err(stdout_error.to_string());
         }
     };
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_child(child);
+            reap_child_with_grace(child);
             return Err(stderr_error.to_string());
         }
     };
     Ok((stdout, stderr))
-}
-
-impl Drop for ChildControl {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.0) != 1 {
-            return;
-        }
-        let mut child = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(mut child) = child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
 }
 
 pub(super) fn next_sequence() -> u64 {
@@ -387,29 +468,35 @@ pub(super) struct JobProcessContext<'a> {
 }
 
 pub(super) fn register_process(job_id: &str, control: &ChildControl) {
-    let should_kill = with_controller(|controller| {
+    let (should_kill, replaced) = with_controller(|controller| {
         let Some(active) = controller.active.as_mut() else {
-            return false;
+            return (false, None);
         };
         if active.job_id != job_id {
-            return false;
+            return (false, None);
         }
-        active.process = Some(control.clone());
-        active.cancel.is_cancelled()
+        let replaced = active.process.replace(control.clone());
+        (active.cancel.is_cancelled(), replaced)
     });
+    // One live process per job is today's invariant, not a code-enforced one;
+    // a displaced handle runs its destructor here, outside the global lock.
+    drop(replaced);
     if should_kill {
         control.kill();
     }
 }
 
 pub(super) fn clear_process(job_id: &str) {
-    with_controller(|controller| {
-        if let Some(active) = controller.active.as_mut() {
-            if active.job_id == job_id {
-                active.process = None;
-            }
+    let retired = with_controller(|controller| {
+        let active = controller.active.as_mut()?;
+        if active.job_id != job_id {
+            return None;
         }
+        active.process.take()
     });
+    // The last process handle performs kill and reap in its destructor; that
+    // must never run while the global controller lock is held.
+    drop(retired);
 }
 
 pub(super) fn request_cancel(job_id: &str) -> Result<(), String> {
@@ -601,6 +688,67 @@ mod tests {
         let result = thread.join().unwrap().unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
         assert!(!result.success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wait_reports_a_child_that_overran_the_exit_budget() {
+        let child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let control = ChildControl::new(child);
+        let started = std::time::Instant::now();
+        let error = control
+            .wait_with_budget(Duration::from_millis(200))
+            .unwrap_err();
+        // The dedicated message proves the child was terminated within the
+        // grace: the other timeout message means it survived the kill request.
+        assert!(
+            error.contains("exceeded its exit-wait budget"),
+            "the child must be terminated and reported, got: {error}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(15));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wait_reports_a_normal_exit_within_the_budget() {
+        let child = Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        let status = ChildControl::new(child).wait().unwrap();
+        assert!(status.success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wait_reports_a_nonzero_exit_within_the_budget() {
+        let child = Command::new("cmd")
+            .args(["/C", "exit", "7"])
+            .spawn()
+            .unwrap();
+        let status = ChildControl::new(child).wait().unwrap();
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kill_after_exit_keeps_the_reaped_status() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "exit", "7"])
+            .spawn()
+            .unwrap();
+        // The child is already reaped before it is wrapped: kill() then hits
+        // the benign "already exited" error branch and must stay silent while
+        // the cached status survives.
+        let _ = child.wait().unwrap();
+        let control = ChildControl::new(child);
+        control.kill();
+        let status = control.wait().unwrap();
+        assert_eq!(status.code(), Some(7));
     }
 
     #[test]

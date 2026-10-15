@@ -235,21 +235,25 @@ pub(super) fn publish_start_failure(
     else {
         return;
     };
-    with_controller(|controller| {
-        if controller
+    let retired = with_controller(|controller| {
+        if !controller
             .active
             .as_ref()
             .is_some_and(|active| active.job_id == job_id)
         {
-            controller.active = None;
-            controller.last = Some(TerminalJob {
-                snapshot,
-                source_path,
-                output_directory,
-                retryable_export: false,
-            });
+            return None;
         }
+        controller.last = Some(TerminalJob {
+            snapshot,
+            source_path,
+            output_directory,
+            retryable_export: false,
+        });
+        controller.active.take()
     });
+    // The retired job may own the last process handle; its destructor must
+    // not run while the global controller lock is held.
+    drop(retired);
 }
 
 fn finish_worker(input: WorkerInput, outcome: WorkerOutcome) {
@@ -296,16 +300,20 @@ fn finish_worker(input: WorkerInput, outcome: WorkerOutcome) {
         output_directory: PathBuf::from(request.output_directory),
         retryable_export,
     };
-    with_controller(|controller| {
-        if controller
+    let retired = with_controller(|controller| {
+        if !controller
             .active
             .as_ref()
             .is_some_and(|active| active.job_id == job_id)
         {
-            controller.active = None;
-            controller.last = Some(terminal);
+            return None;
         }
+        controller.last = Some(terminal);
+        controller.active.take()
     });
+    // The retired job may own the last process handle; its destructor must
+    // not run while the global controller lock is held.
+    drop(retired);
     STATE_CHANGED.notify_all();
 }
 
