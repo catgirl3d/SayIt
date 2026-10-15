@@ -1,6 +1,8 @@
 use super::contract::{FileAudioTrack, FileMediaInfo};
 use super::ffmpeg::{STDERR_CAPTURE_LIMIT, ToolPaths, ffprobe_command};
-use super::state::{ChildControl, JobProcessContext, clear_process, register_process};
+use super::state::{
+    ChildControl, JobProcessContext, clear_process, register_process, take_child_pipes,
+};
 use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
@@ -139,22 +141,11 @@ fn run_probe_command(
     let mut child = command
         .spawn()
         .map_err(|error| format!("Failed to start FFprobe: {error}"))?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("FFprobe stdout was not available".into());
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("FFprobe stderr was not available".into());
-        }
-    };
+    let (stdout, stderr) = take_child_pipes(
+        &mut child,
+        "FFprobe stdout was not available",
+        "FFprobe stderr was not available",
+    )?;
     let control = ChildControl::new(child);
     if let Some(context) = context.as_ref() {
         register_process(context.job_id, &control);

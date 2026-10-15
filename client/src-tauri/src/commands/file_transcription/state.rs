@@ -1,6 +1,6 @@
 use super::contract::{FilePhase, FileTranscriptionSnapshot};
 use std::path::PathBuf;
-use std::process::{Child, ExitStatus};
+use std::process::{Child, ChildStderr, ChildStdout, ExitStatus};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::thread;
@@ -91,6 +91,33 @@ impl ChildControl {
             }
         }
     }
+}
+
+/// Takes both child pipes, killing and reaping the process when either pipe is
+/// unavailable so a partially created child never leaks. Callers pass their own
+/// error messages to keep the tool-specific context.
+pub(super) fn take_child_pipes(
+    child: &mut Child,
+    stdout_error: &str,
+    stderr_error: &str,
+) -> Result<(ChildStdout, ChildStderr), String> {
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(stdout_error.to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(stderr_error.to_string());
+        }
+    };
+    Ok((stdout, stderr))
 }
 
 impl Drop for ChildControl {

@@ -1,7 +1,9 @@
 use super::ffmpeg::{STDERR_CAPTURE_LIMIT, ffmpeg_command};
 use super::job::{WorkerInput, WorkerOutcome};
 use super::pcm::decoded_pcm_sample_count;
-use super::state::{ChildControl, clear_process, register_process, update_active};
+use super::state::{
+    ChildControl, clear_process, register_process, take_child_pipes, update_active,
+};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -122,26 +124,12 @@ fn supervise_decoded_audio(
     mut child: Child,
     pcm_path: &Path,
 ) -> Result<(), WorkerOutcome> {
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(WorkerOutcome::Failed(
-                "FFmpeg stdout was not available for PCM decoding".into(),
-            ));
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(WorkerOutcome::Failed(
-                "FFmpeg stderr was not available for PCM decoding".into(),
-            ));
-        }
-    };
+    let (stdout, stderr) = take_child_pipes(
+        &mut child,
+        "FFmpeg stdout was not available for PCM decoding",
+        "FFmpeg stderr was not available for PCM decoding",
+    )
+    .map_err(WorkerOutcome::Failed)?;
     let control = ChildControl::new(child);
     register_process(job_id, &control);
     let (progress_sender, progress_receiver) = mpsc::channel();
@@ -542,6 +530,35 @@ mod tests {
             !decoded.is_empty(),
             "the bytes read before the kill must stay in the PCM file"
         );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn supervise_reports_missing_pipes_with_exact_messages() {
+        let dir = test_dir("decode-missing-pipes");
+        let pcm_path = dir.join("decoded.pcm");
+        let cancel = CancelToken::new();
+
+        let child = Command::new("cmd")
+            .args(["/D", "/C", "exit 0"])
+            .spawn()
+            .unwrap();
+        let outcome = supervise_decoded_audio("job-missing-stdout", &cancel, child, &pcm_path);
+        let Err(WorkerOutcome::Failed(message)) = outcome else {
+            panic!("expected a stdout pipe failure");
+        };
+        assert_eq!(message, "FFmpeg stdout was not available for PCM decoding");
+
+        let mut command = Command::new("cmd");
+        command.args(["/D", "/C", "exit 0"]).stdout(Stdio::piped());
+        let child = command.spawn().unwrap();
+        let outcome = supervise_decoded_audio("job-missing-stderr", &cancel, child, &pcm_path);
+        let Err(WorkerOutcome::Failed(message)) = outcome else {
+            panic!("expected a stderr pipe failure");
+        };
+        assert_eq!(message, "FFmpeg stderr was not available for PCM decoding");
+
         std::fs::remove_dir_all(dir).ok();
     }
 }
