@@ -28,9 +28,9 @@ use self::job::WorkerInput;
 use self::media::probe_media;
 use self::output::export_documents;
 use self::state::{
-    ActiveJob, STATE_CHANGED, TerminalJob, active_job_blocks_new_start, controller_has_file_work,
-    emit_snapshot, file_work_blocks_transition, new_job_id, next_sequence, request_cancel,
-    spawn_transition_after_file_work, with_controller,
+    ActiveJob, STATE_CHANGED, TerminalJob, active_job_blocks_new_start, app_snapshot_emitter,
+    controller_has_file_work, emit_snapshot, file_work_blocks_transition, new_job_id,
+    next_sequence, request_cancel, spawn_transition_after_file_work, with_controller,
 };
 use self::temp::create_job_temp_dir;
 use self::worker::{publish_start_failure, run_worker, validate_model_id, validate_source};
@@ -173,7 +173,7 @@ pub fn start_file_transcription(
             cancel,
             process: None,
             snapshot: snapshot.clone(),
-            app: app.clone(),
+            emit: app_snapshot_emitter(app.clone()),
         });
         true
     });

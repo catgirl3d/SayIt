@@ -53,14 +53,6 @@ pub(super) fn cloud_window_recognition_error(
     }
 }
 
-#[cfg(test)]
-fn empty_output_error(model: &str, language: &str, position_ms: u64) -> String {
-    format!(
-        "The local model \"{model}\" returned no text for speech detected at {} (language \"{language}\")",
-        format_position_hms(position_ms)
-    )
-}
-
 pub(super) fn model_load_error(model: &str, detail: &str) -> String {
     format!("Failed to load the local model \"{model}\": {detail}")
 }
@@ -188,14 +180,6 @@ mod tests {
                 "sayit_error:outer:sayit_error:inner:payload"
             ),
             "sayit_error:outer:Recognition failed with cloud ASR \"Deepgram\": sayit_error:inner:payload"
-        );
-    }
-
-    #[test]
-    fn empty_output_error_contains_model_language_and_position() {
-        assert_eq!(
-            empty_output_error("sensevoice-small-gguf", "en", 59_000),
-            "The local model \"sensevoice-small-gguf\" returned no text for speech detected at 0:00:59 (language \"en\")"
         );
     }
 

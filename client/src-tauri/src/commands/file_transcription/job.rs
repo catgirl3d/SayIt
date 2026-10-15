@@ -14,6 +14,7 @@ pub(super) struct WorkerInput {
     pub(super) _resource_lease: Option<gguf_asr::FileResourceLease>,
 }
 
+#[derive(Debug)]
 pub(super) enum WorkerOutcome {
     Completed,
     NoSpeech,

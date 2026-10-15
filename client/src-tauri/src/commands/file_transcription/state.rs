@@ -10,12 +10,16 @@ use transcribe_cpp::CancelToken;
 
 const FILE_STATE_EVENT: &str = "file-transcription-state";
 
+/// Publishes a snapshot to the UI. Production uses the app handle behind this
+/// seam; tests record the emitted snapshots without a real Tauri app.
+pub(super) type SnapshotEmitter = Arc<dyn Fn(&FileTranscriptionSnapshot) + Send + Sync>;
+
 pub(super) struct ActiveJob {
     pub(super) job_id: String,
     pub(super) cancel: CancelToken,
     pub(super) process: Option<ChildControl>,
     pub(super) snapshot: FileTranscriptionSnapshot,
-    pub(super) app: AppHandle,
+    pub(super) emit: SnapshotEmitter,
 }
 
 #[derive(Clone)]
@@ -128,6 +132,10 @@ pub(super) fn emit_snapshot(app: &AppHandle, snapshot: &FileTranscriptionSnapsho
     }
 }
 
+pub(super) fn app_snapshot_emitter(app: AppHandle) -> SnapshotEmitter {
+    Arc::new(move |snapshot| emit_snapshot(&app, snapshot))
+}
+
 pub(super) fn with_controller<T>(operation: impl FnOnce(&mut Controller) -> T) -> T {
     let mut controller = CONTROLLER
         .lock()
@@ -231,16 +239,16 @@ pub(super) fn update_active(
     job_id: &str,
     update: impl FnOnce(&mut FileTranscriptionSnapshot),
 ) -> Option<FileTranscriptionSnapshot> {
-    let (app, snapshot) = with_controller(|controller| {
+    let (emit, snapshot) = with_controller(|controller| {
         let active = controller.active.as_mut()?;
         if active.job_id != job_id {
             return None;
         }
         update(&mut active.snapshot);
         active.snapshot.sequence = next_sequence();
-        Some((active.app.clone(), active.snapshot.clone()))
+        Some((active.emit.clone(), active.snapshot.clone()))
     })?;
-    emit_snapshot(&app, &snapshot);
+    emit(&snapshot);
     Some(snapshot)
 }
 
@@ -269,11 +277,11 @@ pub(super) fn claim_finalizing(job_id: &str) -> bool {
         }
         active.snapshot.error = None;
         active.snapshot.sequence = next_sequence();
-        Some((active.app.clone(), active.snapshot.clone()))
+        Some((active.emit.clone(), active.snapshot.clone()))
     });
     match emitted {
-        Some((app, snapshot)) => {
-            emit_snapshot(&app, &snapshot);
+        Some((emit, snapshot)) => {
+            emit(&snapshot);
             true
         }
         None => false,
@@ -323,10 +331,10 @@ pub(super) fn publish_terminal_phase(job_id: &str, phase: FilePhase, error: Opti
         active.snapshot.phase = phase;
         active.snapshot.error = error;
         active.snapshot.sequence = next_sequence();
-        Some((active.app.clone(), active.snapshot.clone()))
+        Some((active.emit.clone(), active.snapshot.clone()))
     });
-    if let Some((app, snapshot)) = emitted {
-        emit_snapshot(&app, &snapshot);
+    if let Some((emit, snapshot)) = emitted {
+        emit(&snapshot);
     }
 }
 
@@ -378,7 +386,7 @@ pub(super) fn clear_process(job_id: &str) {
 }
 
 pub(super) fn request_cancel(job_id: &str) -> Result<(), String> {
-    let (process, app, snapshot) = with_controller(|controller| {
+    let (process, emit, snapshot) = with_controller(|controller| {
         let active = controller
             .active
             .as_mut()
@@ -393,11 +401,11 @@ pub(super) fn request_cancel(job_id: &str) -> Result<(), String> {
         active.snapshot.sequence = next_sequence();
         Ok((
             active.process.clone(),
-            active.app.clone(),
+            active.emit.clone(),
             active.snapshot.clone(),
         ))
     })?;
-    emit_snapshot(&app, &snapshot);
+    emit(&snapshot);
     if let Some(process) = process {
         process.kill();
     }

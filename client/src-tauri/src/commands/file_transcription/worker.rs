@@ -320,7 +320,12 @@ pub(super) fn run_worker(input: WorkerInput) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::file_transcription::test_support::blank_snapshot;
+    use crate::commands::file_transcription::state::{ActiveJob, Controller, SnapshotEmitter};
+    use crate::commands::file_transcription::test_support::{
+        blank_snapshot, test_dir, worker_input,
+    };
+    use std::sync::{Arc, Mutex};
+    use transcribe_cpp::CancelToken;
 
     #[test]
     fn preparing_shows_positive_metadata_duration_then_exact_pcm_duration_replaces_it() {
@@ -404,5 +409,236 @@ mod tests {
         for id in ["", "   ", ".", "..", "../evil", "..\\evil", "a/b", "C:evil"] {
             assert!(validate_model_id(id).is_err(), "{id:?} must be rejected");
         }
+    }
+
+    static CONTROLLER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Serializes tests that publish or reset the global controller state, and
+    /// starts each of them from a clean controller.
+    fn lock_controller() -> std::sync::MutexGuard<'static, ()> {
+        let guard = CONTROLLER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        with_controller(|controller| *controller = Controller::default());
+        guard
+    }
+
+    fn recording_emitter() -> (SnapshotEmitter, Arc<Mutex<Vec<FileTranscriptionSnapshot>>>) {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let emitter: SnapshotEmitter = Arc::new({
+            let recorded = Arc::clone(&recorded);
+            move |snapshot: &FileTranscriptionSnapshot| {
+                recorded
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(snapshot.clone())
+            }
+        });
+        (emitter, recorded)
+    }
+
+    fn register_active_job(job_id: &str, cancel: CancelToken, emit: SnapshotEmitter) {
+        let mut snapshot = blank_snapshot();
+        snapshot.job_id = job_id.into();
+        snapshot.phase = FilePhase::Transcribing;
+        snapshot.retryable_export = false;
+        with_controller(|controller| {
+            controller.active = Some(ActiveJob {
+                job_id: job_id.into(),
+                cancel,
+                process: None,
+                snapshot,
+                emit,
+            });
+        });
+    }
+
+    #[test]
+    fn finish_worker_completes_the_job_and_removes_the_temp_directory() {
+        let _guard = lock_controller();
+        let dir = test_dir("finish-completed");
+        let temp_dir = dir.join("temp");
+        std::fs::create_dir(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("decoded.pcm"), b"pcm").unwrap();
+        let cancel = CancelToken::new();
+        let (emit, recorded) = recording_emitter();
+        register_active_job("job-finish-completed", cancel.clone(), emit);
+        let mut input = worker_input(
+            "job-finish-completed",
+            &dir.join("movie.mp4"),
+            &dir,
+            temp_dir.clone(),
+        );
+        input.cancel = cancel;
+
+        finish_worker(input, WorkerOutcome::Completed);
+
+        assert!(
+            !temp_dir.exists(),
+            "the worker temp directory must be removed"
+        );
+        assert!(with_controller(|controller| controller.active.is_none()));
+        let last = with_controller(|controller| controller.last.clone())
+            .expect("the finished job must move from active to last");
+        assert!(matches!(last.snapshot.phase, FilePhase::Completed));
+        assert!(last.snapshot.resources_released);
+        assert!(!last.snapshot.retryable_export);
+        assert_eq!(last.source_path, dir.join("movie.mp4"));
+        assert_eq!(last.output_directory, dir);
+        let recorded = recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            recorded
+                .iter()
+                .any(|snapshot| matches!(snapshot.phase, FilePhase::Completed)),
+            "the terminal snapshot must be emitted"
+        );
+        drop(recorded);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finish_worker_marks_a_failed_export_as_retryable() {
+        let _guard = lock_controller();
+        let dir = test_dir("finish-export-failed");
+        let (emit, _recorded) = recording_emitter();
+        register_active_job("job-export-failed", CancelToken::new(), emit);
+        let input = worker_input(
+            "job-export-failed",
+            &dir.join("movie.mp4"),
+            &dir,
+            dir.join("temp"),
+        );
+
+        finish_worker(input, WorkerOutcome::ExportFailed("disk full".into()));
+
+        let last = with_controller(|controller| controller.last.clone())
+            .expect("the failed export must move the job to last");
+        assert!(matches!(last.snapshot.phase, FilePhase::Failed));
+        assert!(last.retryable_export);
+        assert!(last.snapshot.retryable_export);
+        assert_eq!(
+            last.snapshot.error.as_deref(),
+            Some("Final export failed: disk full")
+        );
+        assert!(last.snapshot.resources_released);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finish_worker_reports_a_cleanup_failure_next_to_the_terminal_phase() {
+        let _guard = lock_controller();
+        let dir = test_dir("finish-cleanup-failed");
+        let temp_path = dir.join("not-a-directory");
+        std::fs::write(&temp_path, b"file").unwrap();
+        let (emit, _recorded) = recording_emitter();
+        register_active_job("job-cleanup-failed", CancelToken::new(), emit);
+        let input = worker_input(
+            "job-cleanup-failed",
+            &dir.join("movie.mp4"),
+            &dir,
+            temp_path.clone(),
+        );
+
+        finish_worker(input, WorkerOutcome::Completed);
+
+        let last = with_controller(|controller| controller.last.clone())
+            .expect("the finished job must move to last");
+        assert!(matches!(last.snapshot.phase, FilePhase::Completed));
+        let error = last
+            .snapshot
+            .error
+            .as_deref()
+            .expect("the cleanup failure must be reported");
+        assert!(
+            error.contains("Failed to remove temporary decoded audio"),
+            "unexpected error: {error}"
+        );
+        assert!(last.snapshot.resources_released);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finish_worker_leaves_a_newer_active_job_untouched() {
+        let _guard = lock_controller();
+        let dir = test_dir("finish-stale");
+        let temp_dir = dir.join("temp-stale");
+        std::fs::create_dir(&temp_dir).unwrap();
+        let (emit, recorded) = recording_emitter();
+        register_active_job("job-new", CancelToken::new(), emit);
+        let before = with_controller(|controller| {
+            controller
+                .active
+                .as_ref()
+                .map(|active| active.snapshot.sequence)
+        });
+
+        let input = worker_input("job-stale", &dir.join("old.mp4"), &dir, temp_dir.clone());
+        finish_worker(input, WorkerOutcome::Completed);
+
+        assert!(
+            !temp_dir.exists(),
+            "the stale worker still cleans its own temp directory"
+        );
+        let after_job = with_controller(|controller| {
+            controller
+                .active
+                .as_ref()
+                .map(|active| active.job_id.clone())
+        });
+        assert_eq!(after_job.as_deref(), Some("job-new"));
+        let after = with_controller(|controller| {
+            controller
+                .active
+                .as_ref()
+                .map(|active| active.snapshot.sequence)
+        });
+        assert_eq!(after, before);
+        assert!(with_controller(|controller| controller.last.is_none()));
+        assert!(
+            recorded
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn finish_worker_lets_an_accepted_cancellation_override_the_outcome() {
+        let _guard = lock_controller();
+        let dir = test_dir("finish-cancelled");
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let (emit, recorded) = recording_emitter();
+        register_active_job("job-cancelled", cancel.clone(), emit);
+        let temp_dir = dir.join("temp");
+        std::fs::create_dir(&temp_dir).unwrap();
+        let mut input = worker_input(
+            "job-cancelled",
+            &dir.join("movie.mp4"),
+            &dir,
+            temp_dir.clone(),
+        );
+        input.cancel = cancel.clone();
+
+        finish_worker(input, WorkerOutcome::Failed("boom".into()));
+
+        let last = with_controller(|controller| controller.last.clone())
+            .expect("the cancelled job must move to last");
+        assert!(matches!(last.snapshot.phase, FilePhase::Cancelled));
+        assert_eq!(last.snapshot.error, None);
+        assert!(last.snapshot.resources_released);
+        let recorded = recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            recorded
+                .iter()
+                .any(|snapshot| matches!(snapshot.phase, FilePhase::Cancelled))
+        );
+        drop(recorded);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

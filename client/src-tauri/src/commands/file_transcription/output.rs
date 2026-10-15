@@ -264,28 +264,45 @@ pub(super) fn export_documents(
     let (txt_path, markdown_path) = unique_export_pair(output_directory, &title, job_id)?;
     let txt_candidate = temporary_sibling_path(&txt_path);
     let markdown_candidate = temporary_sibling_path(&markdown_path);
-    let exported = write_export_candidates(&txt_candidate, &markdown_candidate, text, &title)
+    publish_export_pair(
+        text,
+        &title,
+        &txt_candidate,
+        &markdown_candidate,
+        &txt_path,
+        &markdown_path,
+    )?;
+    Ok((txt_path, markdown_path))
+}
+
+/// Writes the candidate documents and publishes them over the reserved final
+/// paths. Any failure rolls the pair back: the candidates and the final paths
+/// reserved by this export are removed so no partial documents or claimed
+/// placeholders survive, and the retry export command recreates the pair under
+/// the same names. Paths are only ever removed after this call reserved them.
+fn publish_export_pair(
+    text: &str,
+    title: &str,
+    txt_candidate: &Path,
+    markdown_candidate: &Path,
+    txt_path: &Path,
+    markdown_path: &Path,
+) -> Result<(), String> {
+    let exported = write_export_candidates(txt_candidate, markdown_candidate, text, title)
         .and_then(|()| {
-            replace_file(&txt_candidate, &txt_path)
+            replace_file(txt_candidate, txt_path)
                 .map_err(|error| format!("Final TXT export failed: {error}"))
         })
         .and_then(|()| {
-            replace_file(&markdown_candidate, &markdown_path)
+            replace_file(markdown_candidate, markdown_path)
                 .map_err(|error| format!("Final Markdown export failed: {error}"))
         });
     if exported.is_err() {
-        // Never leave partial documents or claimed placeholders behind: the
-        // retry export command recreates the pair under the same names.
-        for path in [
-            &txt_candidate,
-            &markdown_candidate,
-            &txt_path,
-            &markdown_path,
-        ] {
+        for path in [txt_candidate, markdown_candidate, txt_path, markdown_path] {
             let _ = fs::remove_file(path);
         }
     }
-    exported.map(|()| (txt_path, markdown_path))
+    exported
 }
 
 fn write_export_candidates(
@@ -390,6 +407,44 @@ mod tests {
         assert!(new_markdown.to_string_lossy().contains("job-456"));
         assert_eq!(std::fs::read(&txt).unwrap(), b"foreign txt");
         assert_eq!(std::fs::read(&markdown).unwrap(), b"foreign markdown");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn partial_export_failure_rolls_back_the_pair_without_touching_foreign_paths() {
+        let dir = test_dir("partial-export-failure");
+        let txt_path = dir.join("sample - transcription - job-789.txt");
+        let markdown_path = dir.join("sample - transcription - job-789.md");
+        std::fs::create_dir(&markdown_path).unwrap();
+        let sentinel = markdown_path.join("sentinel.txt");
+        std::fs::write(&sentinel, b"foreign").unwrap();
+        let txt_candidate = dir.join(".sample.txt.tmp-test");
+        let markdown_candidate = dir.join(".sample.md.tmp-test");
+
+        let error = publish_export_pair(
+            "new text",
+            "sample",
+            &txt_candidate,
+            &markdown_candidate,
+            &txt_path,
+            &markdown_path,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("Final Markdown export failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !txt_path.exists(),
+            "the already published TXT must be rolled back"
+        );
+        assert!(!txt_candidate.exists());
+        assert!(!markdown_candidate.exists());
+        assert!(
+            sentinel.exists(),
+            "foreign content at the reserved path must survive the rollback"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
     #[test]
