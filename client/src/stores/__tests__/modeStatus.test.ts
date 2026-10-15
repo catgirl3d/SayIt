@@ -97,6 +97,24 @@ describe('mode status local readiness', () => {
     expect(getModeStatus().ready).toBe(true)
   })
 
+  it('drops readiness and keeps the display name when the downloaded list stops working', async () => {
+    configureLocal({ modelId: 'qwen3-asr-1.7b-gguf' })
+    await refreshModeStatus()
+    expect(getModeStatus().ready).toBe(true)
+
+    state.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_downloaded_models') throw new Error('ipc boom')
+      throw new Error(`Unexpected command: ${command}`)
+    })
+    await refreshModeStatus()
+
+    expect(getModeStatus()).toMatchObject({
+      ready: false,
+      blockedReason: 'modeStatus.modelListUnavailable',
+      detail: 'localModel.qwen17Accurate.name',
+    })
+  })
+
   it('updates readiness when switching modes', async () => {
     configureLocal()
     await refreshModeStatus()

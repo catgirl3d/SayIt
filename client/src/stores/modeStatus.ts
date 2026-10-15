@@ -10,6 +10,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { getSetting } from '../services/store'
+import { checkLocalModelInstalled, getSelectedLocalModelId, resolveLocalModelName } from '../services/localModelStatus'
 import { loadAsrProfiles } from '../features/settings/asrProfileStore'
 import {
   describeAsrMissing,
@@ -17,7 +18,6 @@ import {
   resolveActiveAsrProfile,
 } from '../features/settings/asrProviderCatalog'
 import { subscribeLocale, t } from '@/i18n'
-import { localModelDisplayName } from '@/i18n/displayNames'
 import { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 
 export type ModeStatusMode = 'server' | 'cloud_api' | 'local'
@@ -91,21 +91,15 @@ export async function refreshModeStatus(): Promise<void> {
   let blockedReason = ''
 
   if (mode === 'local') {
-    const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
+    const modelId = await getSelectedLocalModelId()
+    detail = await resolveLocalModelName(invoke, modelId)
+    // Local readiness = the selected model is completely downloaded.
     try {
-      const models = await invoke<{ id: string; name: string }[]>('list_available_models')
-      const selectedModel = models.find((m) => m.id === modelId)
-      detail = selectedModel ? localModelDisplayName(selectedModel) : modelId
-    } catch {
-      detail = modelId
-    }
-    // 本地模式就绪 = 选中的模型已完整下载到本地
-    try {
-      const downloaded = await invoke<{ id: string; complete: boolean }[]>('list_downloaded_models')
-      ready = downloaded.some((m) => m.id === modelId && m.complete)
+      ready = await checkLocalModelInstalled(invoke, modelId)
       if (!ready) blockedReason = t('modeStatus.modelNotDownloaded')
     } catch {
-      // 读不到本地模型列表时不敢断言就绪，按未就绪处理并说明原因
+      // Do not claim readiness when the model list cannot be read: fail closed
+      // and report the specific reason instead of guessing.
       ready = false
       blockedReason = t('modeStatus.modelListUnavailable')
     }
