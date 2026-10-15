@@ -6,6 +6,13 @@ use std::path::Path;
 
 pub(super) const SAMPLE_RATE: usize = 16_000;
 pub(super) const SAMPLE_BYTES: usize = 2;
+pub(super) const CHANNELS: usize = 1;
+/// The reader and the FFmpeg argv both assume this layout; changing either
+/// constant fails the build until the supporting code changes with it.
+const _: () = assert!(
+    SAMPLE_BYTES == std::mem::size_of::<i16>() && CHANNELS == 1,
+    "the file-transcription PCM reader supports only 16-bit mono samples"
+);
 pub(super) const TARGET_WINDOW_SAMPLES: usize = SAMPLE_RATE * 20;
 pub(super) const LOOKAHEAD_SAMPLES: usize = SAMPLE_RATE * 2;
 /// When continuous speech forces a cut at the window edge, the boundary is

@@ -1,3 +1,4 @@
+use super::pcm::{CHANNELS, SAMPLE_BYTES, SAMPLE_RATE};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -128,18 +129,22 @@ pub(super) fn ffmpeg_command(tools: &ToolPaths, source: &Path, audio_track: usiz
     command.args(["-nostdin", "-nostats", "-progress", "pipe:2", "-v", "error"]);
     restrict_input_protocols(&mut command);
     command.args(["-i"]);
+    let pcm_format = format!("s{}le", SAMPLE_BYTES * 8);
+    let pcm_codec = format!("pcm_{pcm_format}");
+    let channels = CHANNELS.to_string();
+    let sample_rate = SAMPLE_RATE.to_string();
     command
         .arg(source)
         .args(["-map", &format!("0:a:{audio_track}"), "-vn", "-sn", "-dn"])
         .args([
             "-f",
-            "s16le",
+            pcm_format.as_str(),
             "-acodec",
-            "pcm_s16le",
+            pcm_codec.as_str(),
             "-ac",
-            "1",
+            channels.as_str(),
             "-ar",
-            "16000",
+            sample_rate.as_str(),
             "pipe:1",
         ])
         .stdout(Stdio::piped())
@@ -429,7 +434,7 @@ mod tests {
 
     #[test]
     fn ffmpeg_output_matches_the_pcm_reader_contract() {
-        use super::super::pcm::{SAMPLE_BYTES, SAMPLE_RATE};
+        use super::super::pcm::SAMPLE_RATE;
 
         let tools = ToolPaths {
             ffmpeg: PathBuf::from("ffmpeg.exe"),
@@ -448,12 +453,9 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        let format_bits = SAMPLE_BYTES * 8;
-        assert_eq!(values_after("-f"), vec![format!("s{format_bits}le")]);
-        assert_eq!(
-            values_after("-acodec"),
-            vec![format!("pcm_s{format_bits}le")]
-        );
+        // Literals pin the wire format; the rate is tied to the reader constant.
+        assert_eq!(values_after("-f"), vec!["s16le".to_string()]);
+        assert_eq!(values_after("-acodec"), vec!["pcm_s16le".to_string()]);
         assert_eq!(values_after("-ac"), vec!["1".to_string()]);
         assert_eq!(values_after("-ar"), vec![SAMPLE_RATE.to_string()]);
     }
