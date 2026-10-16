@@ -47,6 +47,16 @@ test('fails strict check on placeholder mismatch between en and uk', () => {
   assert.match(result.stdout, /placeholder mismatch: home\.title/)
 })
 
+test('fails strict check when duplicate placeholder occurrences differ', () => {
+  const root = makeFixture({
+    en: { 'plain.key': 'Value {count} {count}' },
+    uk: { 'plain.key': 'Значення {count}' },
+  })
+  const result = runChecker(root, ['--strict', '--all'])
+  assert.equal(result.status, 1)
+  assert.match(result.stdout, /placeholder mismatch: plain\.key/)
+})
+
 test('detects Chinese inside nested locale values', () => {
   const root = makeFixture({
     en: { nested: { inner: ['ok', { deep: 'Fine' }] } },

@@ -18,7 +18,7 @@
  * searched.
  *
  * It also validates the active locales (en/uk): no Chinese in values, the
- * same leaf keys on both sides, and identical {placeholder} sets per key.
+ * same leaf keys on both sides, and identical sorted lists of placeholder occurrences per key.
  *
  * Usage:
  *   node scripts/check-i18n.mjs            # summary of files not yet migrated
@@ -154,7 +154,7 @@ function isAllowed(relPath) {
 
 const LOCALE_DIR = 'src/i18n/locales'
 const LOCALE_NAMES = ['en.json', 'uk.json']
-const PLACEHOLDER = /\{[^}]*\}/g
+const PLACEHOLDER = /\{(\w+)\}/g
 
 /** Collect every leaf of a locale table as `path -> value`; objects join with '.', array items get `[index]` suffixes. */
 function collectLeaves(value, path, out) {
@@ -181,10 +181,10 @@ function locateKeyLine(source, path) {
   return 1
 }
 
-/** Sorted, de-duplicated placeholder tokens of a string value; null for non-string leaves. */
+/** Uses the same grammar and occurrence-exact sorted list as runtime interpolation in src/i18n/index.ts and src/i18n/__tests__/locales.test.ts; null for non-string leaves. */
 function placeholders(value) {
   if (typeof value !== 'string') return null
-  return [...new Set(value.match(PLACEHOLDER) ?? [])].sort()
+  return (value.match(PLACEHOLDER) ?? []).sort()
 }
 
 const localeFindings = []
@@ -207,42 +207,40 @@ for (const name of LOCALE_NAMES) {
   }
 }
 
-// The active locales must stay aligned: identical leaf keys and identical
-// placeholder sets. A renamed or dropped {placeholder} silently breaks the UI,
+// The active locales must stay aligned: identical leaf keys and identical sorted
+// lists of placeholder occurrences. A renamed or dropped {placeholder} silently breaks the UI,
 // and a key present on one side only means a missing or orphaned string.
 const enTable = localeTables.get('en.json')
 const ukTable = localeTables.get('uk.json')
-if (enTable && ukTable) {
-  for (const key of enTable.leaves.keys()) {
-    if (!ukTable.leaves.has(key)) {
-      localeFindings.push({
-        file: enTable.relPath,
-        line: locateKeyLine(enTable.source, key),
-        text: `missing in uk.json: ${key}`,
-      })
-    }
+for (const key of enTable.leaves.keys()) {
+  if (!ukTable.leaves.has(key)) {
+    localeFindings.push({
+      file: enTable.relPath,
+      line: locateKeyLine(enTable.source, key),
+      text: `missing in uk.json: ${key}`,
+    })
   }
-  for (const key of ukTable.leaves.keys()) {
-    if (!enTable.leaves.has(key)) {
-      localeFindings.push({
-        file: ukTable.relPath,
-        line: locateKeyLine(ukTable.source, key),
-        text: `missing in en.json: ${key}`,
-      })
-    }
-  }
-  for (const [key, enValue] of enTable.leaves) {
-    if (!ukTable.leaves.has(key)) continue
-    const enPlaceholders = placeholders(enValue)
-    const ukPlaceholders = placeholders(ukTable.leaves.get(key))
-    if (enPlaceholders === null || ukPlaceholders === null) continue
-    if (enPlaceholders.join(' ') === ukPlaceholders.join(' ')) continue
+}
+for (const key of ukTable.leaves.keys()) {
+  if (!enTable.leaves.has(key)) {
     localeFindings.push({
       file: ukTable.relPath,
       line: locateKeyLine(ukTable.source, key),
-      text: `placeholder mismatch: ${key} (en: ${enPlaceholders.join(', ') || 'none'} | uk: ${ukPlaceholders.join(', ') || 'none'})`,
+      text: `missing in en.json: ${key}`,
     })
   }
+}
+for (const [key, enValue] of enTable.leaves) {
+  if (!ukTable.leaves.has(key)) continue
+  const enPlaceholders = placeholders(enValue)
+  const ukPlaceholders = placeholders(ukTable.leaves.get(key))
+  if (enPlaceholders === null || ukPlaceholders === null) continue
+  if (enPlaceholders.join(' ') === ukPlaceholders.join(' ')) continue
+  localeFindings.push({
+    file: ukTable.relPath,
+    line: locateKeyLine(ukTable.source, key),
+    text: `placeholder mismatch: ${key} (en: ${enPlaceholders.join(', ') || 'none'} | uk: ${ukPlaceholders.join(', ') || 'none'})`,
+  })
 }
 
 const findings = []
