@@ -101,7 +101,7 @@ fn execute_worker(input: &WorkerInput) -> WorkerOutcome {
     ) {
         Ok(media) => media,
         Err(_error) if input.cancel.is_cancelled() => return WorkerOutcome::Cancelled,
-        Err(error) => return WorkerOutcome::Failed(error),
+        Err(error) => return WorkerOutcome::Failed(error.message().to_string()),
     };
     let track = match select_audio_track(&media.audio_tracks, input.request.audio_stream_index) {
         Ok(track) => track,
