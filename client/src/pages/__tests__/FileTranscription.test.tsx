@@ -240,7 +240,7 @@ describe('file transcription page', () => {
 
   it('retries local settings after a settings error', async () => {
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      if (command === 'list_available_models') throw new Error('engine offline')
+      if (command === 'list_downloaded_models') throw new Error('engine offline')
       return native.defaultInvoke(command, args)
     })
 
@@ -254,6 +254,22 @@ describe('file transcription page', () => {
 
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect(screen.queryByText('Could not read local engine settings: engine offline')).toBeNull()
+  })
+
+  it('keeps the local settings readable and fail-closed when the catalog fails', async () => {
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_available_models') throw new Error('catalog offline')
+      if (command === 'list_downloaded_models') return []
+      return native.defaultInvoke(command, args)
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    expect(screen.getByText('The selected local model is not installed.')).toBeTruthy()
+    expect(screen.queryByText(/Could not read local engine settings/)).toBeNull()
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    expect((startButton as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('preselects the default physical audio track instead of the first track', async () => {

@@ -1,7 +1,7 @@
 import * as bridge from './bridge'
 import { getSetting } from './store'
 import { getSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
-import { localModelDisplayName } from '@/i18n/displayNames'
+import { checkLocalModelInstalled, getSelectedLocalModelId, resolveLocalModelName, type LocalModelIpc } from './localModelStatus'
 import { loadAsrProfiles } from '@/features/settings/asrProfileStore'
 import { buildAsrProviderConfig, describeAsrMissing, findAsrProvider, type AsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
 import { releaseFileTranscription, reserveFileTranscription, setFileTranscriptionAdmissionReady } from './recorder'
@@ -85,16 +85,6 @@ export interface FileTranscriptionAdmission {
   reserveFileTranscription(): void
   releaseFileTranscription(): void
   setFileTranscriptionAdmissionReady?(ready: boolean): void
-}
-
-interface AvailableModel {
-  id: string
-  name: string
-}
-
-interface DownloadedModel {
-  id: string
-  complete: boolean
 }
 
 interface FileTranscriptionIpcRequest {
@@ -259,23 +249,28 @@ export class FileTranscriptionService {
     }
   }
 
-  async getLocalSettings(): Promise<LocalFileSettings> {
-    const [modelIdValue, language, acceleratorValue, available, downloaded] = await Promise.all([
-      getSetting('localAsr.modelId', 'sensevoice-small-gguf'),
+  /** Local model/language/accelerator with the single normalization rule for their defaults. */
+  private async loadLocalBaseSettings(): Promise<{
+    modelId: string
+    language: SpeechInputLanguage
+    accelerator: string
+  }> {
+    const modelId = await getSelectedLocalModelId()
+    const [language, acceleratorValue] = await Promise.all([
       getSpeechInputLanguage(),
       getSetting('localAsr.accelerator', 'auto'),
-      this.ipc.invoke<AvailableModel[]>('list_available_models'),
-      this.ipc.invoke<DownloadedModel[]>('list_downloaded_models'),
     ])
-    const modelId = String(modelIdValue || 'sensevoice-small-gguf')
-    const catalogModel = available.find((model) => model.id === modelId)
-    return {
-      modelId,
-      modelName: catalogModel ? localModelDisplayName(catalogModel) : modelId,
-      modelInstalled: downloaded.some((model) => model.id === modelId && model.complete),
-      language,
-      accelerator: String(acceleratorValue || 'auto'),
-    }
+    return { modelId, language, accelerator: String(acceleratorValue || 'auto') }
+  }
+
+  async getLocalSettings(): Promise<LocalFileSettings> {
+    const base = await this.loadLocalBaseSettings()
+    const invokeIpc: LocalModelIpc = (command, args) => this.ipc.invoke(command, args)
+    const [modelName, modelInstalled] = await Promise.all([
+      resolveLocalModelName(invokeIpc, base.modelId),
+      checkLocalModelInstalled(invokeIpc, base.modelId),
+    ])
+    return { ...base, modelName, modelInstalled }
   }
 
   async startWithCurrentSettings(options: FileTranscriptionStartOptions): Promise<FileTranscriptionSnapshot> {
@@ -286,12 +281,16 @@ export class FileTranscriptionService {
         const language = await getSpeechInputLanguage()
         return this.buildCloudRequest(fileOptions, cloudProfileId, language)
       }
-      const { modelId, language, accelerator } = await this.getLocalSettings()
+      const base = await this.loadLocalBaseSettings()
+      const invokeIpc: LocalModelIpc = (command, args) => this.ipc.invoke(command, args)
+      // Keep the settings-load contract here as well: an unreadable downloaded
+      // list must stop the start before the worker is invoked. The panel gates
+      // Start on modelInstalled; a readable list that lacks the model still
+      // reaches the worker, which reports the real reason.
+      await checkLocalModelInstalled(invokeIpc, base.modelId)
       return {
         ...fileOptions,
-        modelId,
-        language,
-        accelerator,
+        ...base,
         engine: 'local',
         cloud: null,
       }

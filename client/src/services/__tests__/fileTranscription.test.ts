@@ -171,6 +171,56 @@ describe('file transcription service', () => {
     })
   })
 
+  it('refuses to start a local run when the downloaded model list cannot be read', async () => {
+    const harness = createHarness()
+    harness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_downloaded_models') throw new Error('ipc boom')
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await expect(service.startWithCurrentSettings({
+      filePath: 'C:/recording.mp4',
+      outputDirectory: 'C:/output',
+      ffmpegDirectory: null,
+      audioStreamIndex: null,
+    })).rejects.toThrow('ipc boom')
+
+    expect(harness.invoke).not.toHaveBeenCalledWith('start_file_transcription', expect.anything())
+  })
+
+  it('starts a local run even when the model catalog is down', async () => {
+    const harness = createHarness()
+    harness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_available_models') throw new Error('catalog offline')
+      if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', complete: true }]
+      if (command === 'start_file_transcription') return snapshot({ resourcesReleased: true })
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.startWithCurrentSettings({
+      filePath: 'C:/recordings/voice.mp4',
+      outputDirectory: 'C:/output',
+      ffmpegDirectory: null,
+      audioStreamIndex: null,
+    })
+
+    expect(harness.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: {
+        filePath: 'C:/recordings/voice.mp4',
+        outputDirectory: 'C:/output',
+        ffmpegDirectory: null,
+        audioStreamIndex: null,
+        modelId: 'sensevoice-small-gguf',
+        language: 'uk',
+        accelerator: 'auto',
+        engine: 'local',
+        cloud: null,
+      },
+    })
+  })
+
   it('builds a cloud request from a fixed profile snapshot and does not reserve local admission', async () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
