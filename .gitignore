@@ -26,6 +26,8 @@ server/mytestwav.txt
 client/dist/
 # DLLs copied into place by build.rs from transcribe-cpp build outputs; pure generated files
 client/src-tauri/transcribe-libs/
+client/src-tauri/resources/ffmpeg/*
+!client/src-tauri/resources/ffmpeg/README.md
 
 # ── Kiro IDE ──
 .kiro/

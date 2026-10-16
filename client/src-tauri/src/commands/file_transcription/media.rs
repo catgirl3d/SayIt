@@ -4,12 +4,35 @@ use super::state::{
     ChildControl, JobProcessContext, clear_process, register_process, take_child_pipes,
 };
 use serde_json::Value;
+use std::fmt;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 use std::thread;
 
 const PROBE_STDOUT_LIMIT: usize = 2 * 1024 * 1024;
+
+#[derive(Debug)]
+pub(super) enum ProbeMediaError {
+    FfmpegTools(String),
+    Media(String),
+}
+
+impl ProbeMediaError {
+    pub(super) fn message(&self) -> &str {
+        match self {
+            Self::FfmpegTools(message) | Self::Media(message) => message,
+        }
+    }
+}
+
+impl fmt::Display for ProbeMediaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl std::error::Error for ProbeMediaError {}
 
 fn parse_duration_ms(value: Option<&Value>) -> Option<u64> {
     let seconds = value.and_then(|value| {
@@ -137,15 +160,16 @@ fn read_capped<R: Read>(
 fn run_probe_command(
     mut command: Command,
     context: Option<JobProcessContext<'_>>,
-) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), String> {
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Failed to start FFprobe: {error}"))?;
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), ProbeMediaError> {
+    let mut child = command.spawn().map_err(|error| {
+        ProbeMediaError::FfmpegTools(format!("Failed to start FFprobe: {error}"))
+    })?;
     let (stdout, stderr) = take_child_pipes(
         &mut child,
         "FFprobe stdout was not available",
         "FFprobe stderr was not available",
-    )?;
+    )
+    .map_err(ProbeMediaError::FfmpegTools)?;
     let control = ChildControl::new(child);
     if let Some(context) = context.as_ref() {
         register_process(context.job_id, &control);
@@ -158,9 +182,9 @@ fn run_probe_command(
         Ok(handle) => handle,
         Err(error) => {
             control.kill();
-            return Err(format!(
+            return Err(ProbeMediaError::FfmpegTools(format!(
                 "Failed to start the FFprobe stdout reader: {error}"
-            ));
+            )));
         }
     };
     let stderr_thread = match thread::Builder::new()
@@ -170,9 +194,9 @@ fn run_probe_command(
         Ok(handle) => handle,
         Err(error) => {
             control.kill();
-            return Err(format!(
+            return Err(ProbeMediaError::FfmpegTools(format!(
                 "Failed to start the FFprobe stderr reader: {error}"
-            ));
+            )));
         }
     };
     let status = control.wait();
@@ -185,29 +209,40 @@ fn run_probe_command(
     if let Some(context) = context {
         clear_process(context.job_id);
         if context.cancel.is_cancelled() {
-            return Err("File transcription was cancelled".into());
+            return Err(ProbeMediaError::Media(
+                "File transcription was cancelled".into(),
+            ));
         }
     }
-    Ok((status?, output??, error_output??))
+    let status = status.map_err(ProbeMediaError::Media)?;
+    let output = output
+        .map_err(|_| ProbeMediaError::Media("FFprobe stdout reader failed".to_string()))?
+        .map_err(ProbeMediaError::Media)?;
+    let error_output = error_output
+        .map_err(|_| ProbeMediaError::Media("FFprobe stderr reader failed".to_string()))?
+        .map_err(ProbeMediaError::Media)?;
+    Ok((status, output, error_output))
 }
 
 pub(super) fn probe_media(
     source: &Path,
     tools: &ToolPaths,
     context: Option<JobProcessContext<'_>>,
-) -> Result<FileMediaInfo, String> {
+) -> Result<FileMediaInfo, ProbeMediaError> {
     let (status, stdout, stderr) = run_probe_command(ffprobe_command(tools, source), context)?;
     if !status.success() {
         let detail = String::from_utf8_lossy(&stderr);
         let detail = detail.trim();
         if detail.is_empty() {
-            return Err("FFprobe could not read the selected media file".into());
+            return Err(ProbeMediaError::Media(
+                "FFprobe could not read the selected media file".into(),
+            ));
         }
-        return Err(format!(
+        return Err(ProbeMediaError::Media(format!(
             "FFprobe could not read the selected media file: {detail}"
-        ));
+        )));
     }
-    parse_probe(&stdout)
+    parse_probe(&stdout).map_err(ProbeMediaError::Media)
 }
 
 #[cfg(test)]
@@ -256,6 +291,21 @@ mod tests {
     }
 
     #[test]
+    fn non_executable_ffprobe_is_classified_as_a_tool_error() {
+        let directory =
+            crate::commands::file_transcription::test_support::test_dir("probe-invalid-tool");
+        let tools = crate::commands::file_transcription::test_support::dummy_tools(&directory);
+
+        let error = probe_media(Path::new("missing-media.file"), &tools, None).unwrap_err();
+        std::fs::remove_dir_all(&directory).unwrap();
+
+        assert!(matches!(
+            error,
+            ProbeMediaError::FfmpegTools(message) if message.starts_with("Failed to start FFprobe:")
+        ));
+    }
+
+    #[test]
     fn capped_process_output_rejects_only_bytes_beyond_the_limit() {
         assert_eq!(read_capped(&b"1234"[..], 4, None).unwrap(), b"1234");
         assert!(read_capped(&b"12345"[..], 4, None).is_err());
@@ -272,7 +322,7 @@ mod tests {
         command.args(["/D", "/C", "exit 0"]).stdout(Stdio::null());
         let error = run_probe_command(command, None).unwrap_err();
         assert!(
-            error.contains("stdout was not available"),
+            error.message().contains("stdout was not available"),
             "unexpected error: {error}"
         );
 
@@ -283,7 +333,7 @@ mod tests {
             .stderr(Stdio::null());
         let error = run_probe_command(command, None).unwrap_err();
         assert!(
-            error.contains("stderr was not available"),
+            error.message().contains("stderr was not available"),
             "unexpected error: {error}"
         );
     }

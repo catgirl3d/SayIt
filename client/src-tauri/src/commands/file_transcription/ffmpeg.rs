@@ -2,6 +2,7 @@ use super::pcm::{CHANNELS, SAMPLE_BYTES, SAMPLE_RATE};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tauri::{AppHandle, Manager};
 
 const TOOL_SCAN_MAX_DEPTH: u8 = 3;
 const TOOL_SCAN_MAX_ENTRIES_PER_DIRECTORY: usize = 256;
@@ -48,47 +49,49 @@ fn absolute_candidate(path: PathBuf) -> PathBuf {
     }
 }
 
-fn program_candidates(directory: Option<&Path>, name: &str) -> Vec<PathBuf> {
+fn program_candidates(directory: &Path, name: &str) -> Vec<PathBuf> {
     let names = if cfg!(windows) {
-        vec![format!("{name}.exe"), name.to_string()]
+        vec![format!("{name}.exe")]
     } else {
         vec![name.to_string()]
     };
-    match directory {
-        Some(directory) => names
-            .into_iter()
-            .map(|candidate| absolute_candidate(directory.join(candidate)))
-            .collect(),
-        None => std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-            .flat_map(|directory| {
-                names
-                    .iter()
-                    .map(move |name| absolute_candidate(directory.join(name)))
-            })
-            .collect(),
-    }
+    names
+        .into_iter()
+        .map(|candidate| absolute_candidate(directory.join(candidate)))
+        .collect()
 }
 
-fn resolve_program(directory: Option<&Path>, name: &str) -> Result<PathBuf, String> {
+fn resolve_program(directory: &Path, name: &str) -> Option<PathBuf> {
     program_candidates(directory, name)
         .into_iter()
         .find(|path| path.is_file())
-        .ok_or_else(|| {
-            if directory.is_some() {
-                format!(
-                    "{name} was not found in the selected FFmpeg folder. Install FFmpeg and select the folder containing ffmpeg and ffprobe."
-                )
-            } else {
-                format!(
-                    "{name} was not found on PATH. Install FFmpeg and add its bin folder to PATH, or select that folder in SayIt."
-                )
-            }
-        })
 }
 
-pub(super) fn resolve_tools(directory: Option<&str>) -> Result<ToolPaths, String> {
+fn resolve_tools_in_directory(directory: &Path) -> Option<ToolPaths> {
+    Some(ToolPaths {
+        ffmpeg: resolve_program(directory, "ffmpeg")?,
+        ffprobe: resolve_program(directory, "ffprobe")?,
+    })
+}
+
+pub(super) fn bundled_ffmpeg_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("resources").join("ffmpeg"));
+    }
+    #[cfg(debug_assertions)]
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("ffmpeg"),
+    );
+    candidates
+}
+
+pub(super) fn resolve_tools(
+    directory: Option<&str>,
+    sidecar_candidates: &[PathBuf],
+) -> Result<ToolPaths, String> {
     let directory = directory
         .map(str::trim)
         .filter(|directory| !directory.is_empty())
@@ -100,11 +103,20 @@ pub(super) fn resolve_tools(directory: Option<&str>) -> Result<ToolPaths, String
                 directory.display()
             ));
         }
+        return resolve_tools_in_directory(directory).ok_or_else(|| {
+            format!(
+                "The selected FFmpeg folder does not contain both ffmpeg.exe and ffprobe.exe: {}",
+                directory.display()
+            )
+        });
     }
-    Ok(ToolPaths {
-        ffmpeg: resolve_program(directory.as_deref(), "ffmpeg")?,
-        ffprobe: resolve_program(directory.as_deref(), "ffprobe")?,
-    })
+    sidecar_candidates
+        .iter()
+        .find_map(|candidate| resolve_tools_in_directory(candidate))
+        .ok_or_else(|| {
+            "The bundled FFmpeg and FFprobe are missing or damaged. Please reinstall SayIt."
+                .to_string()
+        })
 }
 
 /// Both media tools may only open local files and pipes: the whitelist keeps a crafted
@@ -346,7 +358,34 @@ pub(super) fn detect_default_ffmpeg_directory() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::file_transcription::test_support::test_dir;
+    use crate::commands::file_transcription::test_support::{dummy_tools, test_dir};
+
+    static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct PathEnvironmentGuard {
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl PathEnvironmentGuard {
+        fn prepend(directory: &Path) -> Self {
+            let original = std::env::var_os("PATH");
+            let mut paths = vec![directory.to_path_buf()];
+            if let Some(path) = original.as_deref() {
+                paths.extend(std::env::split_paths(path));
+            }
+            std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+            Self { original }
+        }
+    }
+
+    impl Drop for PathEnvironmentGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                Some(path) => std::env::set_var("PATH", path),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
 
     #[test]
     fn detects_winget_style_nested_layout_within_the_bounded_depth() {
@@ -458,5 +497,106 @@ mod tests {
         assert_eq!(values_after("-acodec"), vec!["pcm_s16le".to_string()]);
         assert_eq!(values_after("-ac"), vec!["1".to_string()]);
         assert_eq!(values_after("-ar"), vec![SAMPLE_RATE.to_string()]);
+    }
+
+    #[test]
+    fn selected_override_wins_over_a_valid_bundled_sidecar() {
+        let override_directory = test_dir("ffmpeg-resolve-override");
+        let sidecar_directory = test_dir("ffmpeg-resolve-sidecar");
+        let _ = dummy_tools(&override_directory);
+        let _ = dummy_tools(&sidecar_directory);
+
+        let result = resolve_tools(
+            Some(override_directory.to_str().unwrap()),
+            std::slice::from_ref(&sidecar_directory),
+        );
+        std::fs::remove_dir_all(&override_directory).unwrap();
+        std::fs::remove_dir_all(&sidecar_directory).unwrap();
+        let tools = result.unwrap();
+
+        assert!(tools.ffmpeg.starts_with(&override_directory));
+        assert!(tools.ffprobe.starts_with(&override_directory));
+    }
+
+    #[test]
+    fn incomplete_override_fails_without_using_the_bundled_sidecar() {
+        let override_directory = test_dir("ffmpeg-resolve-incomplete-override");
+        let sidecar_directory = test_dir("ffmpeg-resolve-valid-sidecar");
+        std::fs::write(override_directory.join("ffmpeg.exe"), b"dummy").unwrap();
+        let _ = dummy_tools(&sidecar_directory);
+
+        let result = resolve_tools(
+            Some(override_directory.to_str().unwrap()),
+            std::slice::from_ref(&sidecar_directory),
+        );
+        std::fs::remove_dir_all(&override_directory).unwrap();
+        std::fs::remove_dir_all(&sidecar_directory).unwrap();
+        let error = result.err().unwrap();
+
+        assert!(error.contains("selected FFmpeg folder"));
+        assert!(error.contains(override_directory.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn a_valid_bundled_sidecar_is_used_without_an_override() {
+        let sidecar_directory = test_dir("ffmpeg-resolve-sidecar-only");
+        let _ = dummy_tools(&sidecar_directory);
+
+        let result = resolve_tools(None, std::slice::from_ref(&sidecar_directory));
+        std::fs::remove_dir_all(&sidecar_directory).unwrap();
+        let tools = result.unwrap();
+
+        assert!(tools.ffmpeg.starts_with(&sidecar_directory));
+        assert!(tools.ffprobe.starts_with(&sidecar_directory));
+    }
+
+    #[test]
+    fn an_incomplete_bundled_sidecar_requires_reinstalling_sayit() {
+        let sidecar_directory = test_dir("ffmpeg-resolve-incomplete-sidecar");
+        std::fs::write(sidecar_directory.join("ffmpeg.exe"), b"dummy").unwrap();
+
+        let result = resolve_tools(None, std::slice::from_ref(&sidecar_directory));
+        std::fs::remove_dir_all(&sidecar_directory).unwrap();
+        let error = result.err().unwrap();
+
+        assert!(error.contains("bundled FFmpeg and FFprobe"));
+        assert!(error.contains("reinstall SayIt"));
+    }
+
+    #[test]
+    fn an_empty_candidate_list_yields_the_reinstall_error() {
+        let error = resolve_tools(None, &[]).err().unwrap();
+
+        assert!(error.contains("bundled FFmpeg and FFprobe"));
+    }
+
+    #[test]
+    fn bundled_resolution_never_consults_the_path_environment() {
+        let _path_guard = PATH_MUTEX.lock().unwrap();
+        let path_like_directory = test_dir("ffmpeg-resolve-path-like");
+        let _ = dummy_tools(&path_like_directory);
+        // This intentionally mutates PATH to pin the file-transcription no-PATH contract.
+        let _environment_guard = PathEnvironmentGuard::prepend(&path_like_directory);
+
+        let result = resolve_tools(None, &[]);
+
+        std::fs::remove_dir_all(&path_like_directory).unwrap();
+        let error = result.err().unwrap();
+
+        assert!(error.contains("bundled FFmpeg and FFprobe"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_does_not_resolve_extensionless_ffmpeg() {
+        let directory = test_dir("ffmpeg-resolve-windows-extension");
+        std::fs::write(directory.join("ffmpeg"), b"dummy").unwrap();
+        std::fs::write(directory.join("ffprobe.exe"), b"dummy").unwrap();
+
+        let result = resolve_tools(Some(directory.to_str().unwrap()), &[]);
+        std::fs::remove_dir_all(&directory).unwrap();
+        let error = result.err().unwrap();
+
+        assert!(error.contains("selected FFmpeg folder"));
     }
 }

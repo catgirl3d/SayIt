@@ -127,6 +127,8 @@ export default function FileTranscription() {
   const [inspecting, setInspecting] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   const [error, setError] = useState('')
+  // This flow-scoped flag is set only for classified FFmpeg-tools failures, not any page error.
+  const [ffmpegInspectFailed, setFfmpegInspectFailed] = useState(false)
   const [settingsError, setSettingsError] = useState('')
   const [copied, setCopied] = useState(false)
   const [cancelRequested, setCancelRequested] = useState(false)
@@ -184,7 +186,7 @@ export default function FileTranscription() {
         if (!cancelled && !ffmpegDirectoryRef.current && candidate) setFfmpegSuggestion(candidate)
       })
       .catch(() => {
-        // FFmpeg detection is optional; PATH and manual folder selection remain authoritative.
+        // FFmpeg detection is optional; manual folder selection remains an explicit override.
       })
     return () => { cancelled = true }
   }, [ffmpegDirectory])
@@ -204,6 +206,7 @@ export default function FileTranscription() {
     setMediaInfo(null)
     setAudioStreamIndex(null)
     setError('')
+    setFfmpegInspectFailed(false)
     try {
       const inspected = await fileTranscriptionService.inspect(nextFilePath, nextFfmpegDirectory)
       if (requestId !== inspectionRequest.current || !inspected) return
@@ -211,7 +214,11 @@ export default function FileTranscription() {
       const defaultTrack = inspected.audioTracks.find((track) => track.isDefault) ?? inspected.audioTracks[0]
       setAudioStreamIndex(defaultTrack?.index ?? null)
     } catch (reason) {
-      if (requestId === inspectionRequest.current) setError(`${t('files.inspectFailed')}: ${errorMessage(reason)}`)
+      if (requestId === inspectionRequest.current) {
+        const inspectionKind = (reason as { inspectionKind?: string } | null)?.inspectionKind
+        setFfmpegInspectFailed(inspectionKind === 'ffmpeg-tools')
+        setError(`${t('files.inspectFailed')}: ${errorMessage(reason)}`)
+      }
     } finally {
       if (requestId === inspectionRequest.current) setInspecting(false)
     }
@@ -414,8 +421,8 @@ export default function FileTranscription() {
             <CardHeader className="pb-4"><CardTitle className="text-lg">{t('files.destinationTitle')}</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <div className="flex gap-2"><div className="min-w-0 flex-1 rounded-md border border-input-border bg-input-bg px-3 py-2 text-sm text-foreground">{outputDirectory ? formatFilePathForDisplay(outputDirectory) : <span className="text-input-placeholder">{t('files.noOutputFolder')}</span>}</div><Button type="button" variant="outline" size="icon" onClick={() => void chooseOutputDirectory()} aria-label={t('files.chooseOutput')} disabled={active}><FolderOpen className="h-4 w-4" /></Button></div>
-              <div className="space-y-2"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium">{t('files.ffmpegTitle')}</div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('files.ffmpegHelp')}</p></div><div className="flex shrink-0 gap-2"><Button type="button" variant="outline" size="sm" onClick={() => void chooseFfmpegDirectory()} disabled={active}>{t('files.chooseFfmpeg')}</Button>{ffmpegDirectory && <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedFfmpegDirectory(null); if (filePath) void inspectSelectedFile(filePath, null) }} disabled={active}>{t('files.usePath')}</Button>}</div></div><div className="text-xs text-muted-foreground">{ffmpegDirectory ? formatFilePathForDisplay(ffmpegDirectory) : t('files.ffmpegPath')}</div></div>
-              {ffmpegSuggestion && !ffmpegDirectory && <div className="flex flex-col gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between" role="status"><div className="min-w-0"><div className="text-sm font-medium">{t('files.ffmpegSuggestionTitle')}</div><p className="mt-1 text-xs text-muted-foreground">{t('files.ffmpegSuggestionBody')}</p><code className="mt-1 block break-all text-xs text-foreground">{ffmpegSuggestion}</code></div><div className="flex shrink-0 gap-2"><Button type="button" size="sm" onClick={() => void useDetectedFfmpegDirectory()} disabled={active}>{t('files.useDetectedFfmpeg')}</Button><Button type="button" variant="ghost" size="sm" onClick={() => setFfmpegSuggestion(null)} disabled={active}>{t('files.dismissFfmpegSuggestion')}</Button></div></div>}
+              <div className="space-y-2"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium">{t('files.ffmpegTitle')}</div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('files.ffmpegHelp')}</p></div><div className="flex shrink-0 gap-2"><Button type="button" variant="outline" size="sm" onClick={() => void chooseFfmpegDirectory()} disabled={active}>{t('files.chooseFfmpeg')}</Button>{ffmpegDirectory && <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedFfmpegDirectory(null); if (filePath) void inspectSelectedFile(filePath, null) }} disabled={active}>{t('files.useBundledFfmpeg')}</Button>}</div></div><div className="text-xs text-muted-foreground">{ffmpegDirectory ? formatFilePathForDisplay(ffmpegDirectory) : t('files.ffmpegPath')}</div></div>
+              {ffmpegInspectFailed && ffmpegSuggestion && !ffmpegDirectory && <div className="flex flex-col gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between" role="status"><div className="min-w-0"><div className="text-sm font-medium">{t('files.ffmpegSuggestionTitle')}</div><p className="mt-1 text-xs text-muted-foreground">{t('files.ffmpegSuggestionBody')}</p><code className="mt-1 block break-all text-xs text-foreground">{ffmpegSuggestion}</code></div><div className="flex shrink-0 gap-2"><Button type="button" size="sm" onClick={() => void useDetectedFfmpegDirectory()} disabled={active}>{t('files.useDetectedFfmpeg')}</Button><Button type="button" variant="ghost" size="sm" onClick={() => setFfmpegSuggestion(null)} disabled={active}>{t('files.dismissFfmpegSuggestion')}</Button></div></div>}
               <Button type="button" className="w-full gap-2" onClick={() => void startTranscription()} disabled={!canStart}><Play className="h-4 w-4" />{t('files.start')}</Button>
             </CardContent>
           </Card>

@@ -9,7 +9,7 @@ Working style:
 
 - Read the guide first, then inspect the current state: `git status`, current branch, the version sources, and the newest section of `CHANGELOG-FORK.md`.
 - Confirm with the user before every irreversible or outward-facing step: commit, push, and workflow dispatch.
-- Do the checklist together with the user: version bump in all sources, changelog section freeze (replace `(unreleased)` with the release date, e.g. `## v0.2.2 — 2026-10-12`), local checks (`test:release-manifest`, `i18n:check`).
+- Do the checklist together with the user: version bump in all sources, changelog section freeze (replace `(unreleased)` with the release date, e.g. `## v0.2.2 — 2026-10-12`), local checks (`test:scripts`, `i18n:check`).
 - Only after user confirmation: commit, push `main`, then dispatch `gh workflow run publish-windows-release.yml --ref main` and watch the run.
 - After the run finishes, verify the published release: the notes section appears once with the full-changelog footer link, both assets (`SayIt_X.Y.Z_x64-setup.exe`, `latest-win32-x64.json`) are present, and the manifest carries the release notes.
 - Never release new content under an already released version: every release gets a new version number.

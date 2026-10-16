@@ -23,9 +23,9 @@ pub use self::contract::*;
 pub use self::state::{release_external_transition, try_begin_external_transition};
 pub use self::temp::cleanup_stale_temp_directories;
 
-use self::ffmpeg::{detect_default_ffmpeg_directory, resolve_tools};
+use self::ffmpeg::{bundled_ffmpeg_candidates, detect_default_ffmpeg_directory, resolve_tools};
 use self::job::WorkerInput;
-use self::media::probe_media;
+use self::media::{ProbeMediaError, probe_media};
 use self::output::export_documents;
 use self::state::{
     ActiveJob, STATE_CHANGED, TerminalJob, active_job_blocks_new_start, app_snapshot_emitter,
@@ -42,18 +42,36 @@ use std::thread;
 use tauri::AppHandle;
 use transcribe_cpp::CancelToken;
 
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", content = "message", rename_all = "kebab-case")]
+pub enum InspectTranscriptionError {
+    FfmpegTools(String),
+    Media(String),
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn inspect_transcription_file(
+    app: AppHandle,
     file_path: String,
     ffmpeg_directory: Option<String>,
-) -> Result<FileMediaInfo, String> {
+) -> Result<FileMediaInfo, InspectTranscriptionError> {
     tokio::task::spawn_blocking(move || {
-        let source = validate_source(Path::new(&file_path))?;
-        let tools = resolve_tools(ffmpeg_directory.as_deref())?;
-        probe_media(&source, &tools, None)
+        let source =
+            validate_source(Path::new(&file_path)).map_err(InspectTranscriptionError::Media)?;
+        let sidecar_candidates = bundled_ffmpeg_candidates(&app);
+        let tools = resolve_tools(ffmpeg_directory.as_deref(), &sidecar_candidates)
+            .map_err(InspectTranscriptionError::FfmpegTools)?;
+        probe_media(&source, &tools, None).map_err(|error| match error {
+            ProbeMediaError::FfmpegTools(message) => {
+                InspectTranscriptionError::FfmpegTools(message)
+            }
+            ProbeMediaError::Media(message) => InspectTranscriptionError::Media(message),
+        })
     })
     .await
-    .map_err(|error| format!("Media inspection task failed: {error}"))?
+    .map_err(|error| {
+        InspectTranscriptionError::Media(format!("Media inspection task failed: {error}"))
+    })?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -111,7 +129,8 @@ pub fn start_file_transcription(
             }
         }
     }
-    let tools = resolve_tools(request.ffmpeg_directory.as_deref())?;
+    let sidecar_candidates = bundled_ffmpeg_candidates(&app);
+    let tools = resolve_tools(request.ffmpeg_directory.as_deref(), &sidecar_candidates)?;
     let job_id = new_job_id();
     let resource_lease = match request.engine {
         FileTranscriptionEngine::Local => Some(gguf_asr::acquire_file_resource(&job_id)?),

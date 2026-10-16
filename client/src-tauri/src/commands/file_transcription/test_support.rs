@@ -44,7 +44,7 @@ pub(super) fn test_path(name: &str) -> std::path::PathBuf {
 pub(super) fn dummy_tools(directory: &std::path::Path) -> ToolPaths {
     std::fs::write(directory.join("ffmpeg.exe"), b"dummy").unwrap();
     std::fs::write(directory.join("ffprobe.exe"), b"dummy").unwrap();
-    super::ffmpeg::resolve_tools(Some(directory.to_str().unwrap())).unwrap()
+    super::ffmpeg::resolve_tools(Some(directory.to_str().unwrap()), &[]).unwrap()
 }
 
 pub(super) fn worker_input(

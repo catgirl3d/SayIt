@@ -62,6 +62,10 @@ jobs:
         working-directory: client
         run: npm ci
 
+      - name: Fetch the pinned FFmpeg sidecar
+        working-directory: client
+        run: npm run ffmpeg:fetch
+
       - name: Determine version and release notes
         id: meta
         shell: pwsh
