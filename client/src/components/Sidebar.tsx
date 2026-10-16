@@ -59,9 +59,9 @@ const aiNavItems = [
 ] as const satisfies readonly NavItemDef[]
 
 const systemNavItems = [
+  { to: '/general', icon: Sliders, labelKey: 'nav.general' },
   { to: '/audio', icon: Mic, labelKey: 'nav.audio' },
   { to: '/shortcuts', icon: Keyboard, labelKey: 'nav.shortcuts' },
-  { to: '/general', icon: Sliders, labelKey: 'nav.general' },
   { to: '/appearance', icon: Palette, labelKey: 'nav.appearance' },
   { to: '/usage', icon: BarChart3, labelKey: 'nav.personalization' },
   { to: '/diagnostics', icon: Stethoscope, labelKey: 'nav.diagnostics' },
