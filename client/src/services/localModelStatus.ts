@@ -3,7 +3,7 @@ import { getDefault } from './defaults'
 import { builtinLocalModelName } from '@/i18n/displayNames'
 
 /** Default local model id, derived from the registered settings defaults (services/defaults.ts). */
-export const DEFAULT_LOCAL_MODEL_ID = getDefault('localAsr.modelId', 'sensevoice-small-gguf')
+export const DEFAULT_LOCAL_MODEL_ID = getDefault<string>('localAsr.modelId')
 
 export type LocalModelIpc = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 

@@ -28,6 +28,10 @@ describe('selected local model id', () => {
     getSettingMock.mockReset()
   })
 
+  it('is the default registered in the settings registry', () => {
+    expect(DEFAULT_LOCAL_MODEL_ID).toBe('nemotron-asr-streaming-0.6b-gguf')
+  })
+
   it('reads the stored id with the default as the setting fallback', async () => {
     getSettingMock.mockResolvedValue('qwen3-asr-1.7b-gguf')
 

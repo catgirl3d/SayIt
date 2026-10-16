@@ -27,6 +27,7 @@ import { Segmented } from '@/components/ui/segmented'
 import { Select } from '@/components/ui/select'
 import { Modal } from '@/components/ui/modal'
 import { getSetting, setSetting } from '@/services/store'
+import { getSelectedLocalModelId } from '@/services/localModelStatus'
 import { refreshModeStatus } from '@/stores/modeStatus'
 import { reconnectProvider } from '@/services/recorder'
 import { describeDownloadError } from '@/lib/errorMessages'
@@ -526,7 +527,7 @@ export default function LocalModeSection({ speechLanguage }: Props) {
       setGpuSummary(null)
     }
 
-    const selected = (await getSetting('localAsr.modelId', 'sensevoice-small-gguf')) as string
+    const selected = await getSelectedLocalModelId()
     if (isActive() && modelIntentGenerationRef.current === hydrationIntentGeneration && selectedModelIdRef.current === '') {
       selectedModelIdRef.current = selected
       setSelectedModelId(selected)
@@ -1181,7 +1182,7 @@ export function LocalModeAdvancedSection() {
     await setSetting('localAsr.accelerator', value)
     setRebinding(true)
     try {
-      const modelId = (await getSetting('localAsr.modelId', 'sensevoice-small-gguf')) as string
+      const modelId = await getSelectedLocalModelId()
       await invoke<string>('preload_local_model', { modelId, accelerator: value })
     } catch {
       /* ignore */
