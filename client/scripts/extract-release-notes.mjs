@@ -13,6 +13,9 @@
  * the next version heading or the end of the file. A heading suffix such as
  * `(unreleased)` or a release date lives in the file but is normalized away in
  * the output, so the published heading is always the plain version.
+ *
+ * The same extractor serves the Ukrainian CHANGELOG-FORK.uk.md via --changelog:
+ * the format is identical, and error messages name the actual source file.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { argv } from 'node:process'
@@ -27,7 +30,7 @@ const NUMERIC_VERSION = /^\d+\.\d+\.\d+$/
 // headings like `## v0.2.2.1` or `## v0.2.2-rc1` cannot be published as version 0.2.2.
 const VERSION_HEADING = /^## v(\d+\.\d+\.\d+)(?=\s|$)/
 
-export function extractReleaseNotes(changelogText, version) {
+export function extractReleaseNotes(changelogText, version, sourceName = 'CHANGELOG-FORK.md') {
   if (typeof version !== 'string' || !NUMERIC_VERSION.test(version)) {
     throw new Error(`Invalid release version '${version}' (expected numeric major.minor.patch)`)
   }
@@ -46,12 +49,12 @@ export function extractReleaseNotes(changelogText, version) {
   }
 
   if (start < 0) {
-    throw new Error(`CHANGELOG-FORK.md has no section for version ${version} (expected a '## v${version}' heading)`)
+    throw new Error(`${sourceName} has no section for version ${version} (expected a '## v${version}' heading)`)
   }
 
   const body = lines.slice(start + 1, end).join('\n').trim()
   if (body === '') {
-    throw new Error(`CHANGELOG-FORK.md section for version ${version} is empty`)
+    throw new Error(`${sourceName} section for version ${version} is empty`)
   }
 
   return `## v${version}\n\n${body}`
@@ -80,7 +83,8 @@ function main(args) {
   if (!options.version) throw new Error('Missing required option --version')
 
   const changelogPath = options.changelog ?? join(REPO_ROOT, 'CHANGELOG-FORK.md')
-  const section = extractReleaseNotes(readFileSync(changelogPath, 'utf8'), options.version)
+  const sourceName = changelogPath.replace(/^.*[\\/]/, '')
+  const section = extractReleaseNotes(readFileSync(changelogPath, 'utf8'), options.version, sourceName)
 
   if (options.output === undefined) {
     process.stdout.write(`${section}\n`)

@@ -43,6 +43,7 @@ function expectRejected(info: VersionInfo, expectedError = 'Invalid fork update 
   expect(info.releaseDate).toBeNull()
   expect(info.sha512).toBeNull()
   expect(info.notes).toBeNull()
+  expect(info.notesLocalized).toBeNull()
   expect(info.error).toBe(expectedError)
 }
 
@@ -83,6 +84,7 @@ describe('checkVersionUpdate', () => {
     expect(info.releaseDate).toBe('2026-09-16T00:00:00.000Z')
     expect(info.sha512).toBe(VALID_SHA512)
     expect(info.notes).toBe(validManifest().notes)
+    expect(info.notesLocalized).toBeNull()
     expect(info.error).toBeNull()
     expect(info.sourceUrl).toBe(PROJECT_UPDATE_MANIFEST_URL)
   })
@@ -185,6 +187,47 @@ describe('checkVersionUpdate', () => {
 
   it('rejects non-string release notes', async () => {
     expectRejected(await check('0.1.9', manifestWith({ notes: ['x'] })))
+  })
+
+  it('carries localized release notes keyed by locale', async () => {
+    const info = await check('0.1.9', manifestWith({
+      notesLocalized: { uk: '## v0.2.1\n\n- Зміна' },
+    }))
+    expect(info.error).toBeNull()
+    expect(info.hasUpdate).toBe(true)
+    expect(info.notes).toBe(validManifest().notes)
+    expect(info.notesLocalized).toEqual({ uk: '## v0.2.1\n\n- Зміна' })
+  })
+
+  it('reports no localized notes for manifests without the field', async () => {
+    const info = await check('0.1.9', validManifest())
+    expect(info.error).toBeNull()
+    expect(info.notesLocalized).toBeNull()
+  })
+
+  it('treats an empty localized map as absent', async () => {
+    const info = await check('0.1.9', manifestWith({ notesLocalized: {} }))
+    expect(info.error).toBeNull()
+    expect(info.notesLocalized).toBeNull()
+  })
+
+  // Localized notes are additive display data with a guaranteed English fallback, so a
+  // malformed field must degrade to English — never block an update that the security-
+  // relevant fields (version, URL, hash) declare available.
+  it.each([
+    ['blank translation', { uk: '' }],
+    ['whitespace translation', { uk: '   ' }],
+    ['non-string translation', { uk: 42 }],
+    ['blank locale key', { '': '## v0.2.1\n\n- x' }],
+    ['array instead of a map', ['## v0.2.1']],
+    ['string instead of a map', '## v0.2.1'],
+    ['number instead of a map', 42],
+  ])('ignores malformed localized notes (%s) instead of rejecting the manifest', async (_label, notesLocalized) => {
+    const info = await check('0.1.9', manifestWith({ notesLocalized }))
+    expect(info.error).toBeNull()
+    expect(info.hasUpdate).toBe(true)
+    expect(info.notesLocalized).toBeNull()
+    expect(info.notes).toBe(validManifest().notes)
   })
 
   it('reports HTTP failures with their status and no partial metadata', async () => {

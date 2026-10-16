@@ -18,6 +18,10 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
 - The same section travels inside the update manifest, so the app shows those notes on
   the About page the moment it finds the update; there is nothing to write for the
   in-app notes per release.
+- The About page follows the interface language: when the release has a Ukrainian
+  section in `CHANGELOG-FORK.uk.md`, it travels in the manifest as `notesLocalized.uk`.
+  A missing Ukrainian section is not fatal — the app falls back to the English notes —
+  but the release then ships without localized notes.
 - Never edit the release body on GitHub by hand: the next dispatch of the same version
   replaces it.
 
@@ -33,7 +37,10 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
      (never hand-edit the lockfile).
    Verify with `npm --prefix client run check:release-versions`.
 3. Freeze the changelog section in `CHANGELOG-FORK.md`: replace `(unreleased)` with the
-   release date (`## vX.Y.Z — YYYY-MM-DD`). The section must be non-empty.
+   release date (`## vX.Y.Z — YYYY-MM-DD`). The section must be non-empty. Mirror the
+   frozen section in `CHANGELOG-FORK.uk.md` under the same `## vX.Y.Z` heading — the
+   translation is written at freeze, not during development. If it is missing, the
+   release proceeds with English-only notes.
 4. Run the release checks: `npm --prefix client run test:scripts` and
    `npm --prefix client run i18n:check`.
 5. Commit (`chore(release): vX.Y.Z`) and push `main`.
@@ -44,7 +51,10 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
      `Full fork changelog: <link pinned to the build commit>`;
    - assets: `SayIt_X.Y.Z_x64-setup.exe` and `latest-win32-x64.json`;
    - an installed older build is offered `X.Y.Z` by "Check for updates", and the About
-     page shows the same release notes from the manifest.
+     page shows the same release notes from the manifest;
+   - with the interface language set to Ukrainian, the About page shows the Ukrainian
+     notes when the release has a `CHANGELOG-FORK.uk.md` section (English fallback
+     otherwise).
 8. Next batch: add a new `## v<next> (unreleased)` section at the top of
    `CHANGELOG-FORK.md` when the first entry appears.
 

@@ -47,6 +47,7 @@ const AVAILABLE: VersionInfo = {
   releaseDate: '2026-09-19T00:00:00.000Z',
   sha512: 'VALID-SHA512-BASE64==',
   notes: '## v0.2.2\n\n- Faster captions',
+  notesLocalized: null,
   error: null,
   sourceUrl: 'https://github.com/catgirl3d/SayIt/releases/latest/download/latest-win32-x64.json',
 }

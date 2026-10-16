@@ -19,6 +19,14 @@ export interface VersionInfo {
    * the About page. Optional: manifests published before this field existed stay valid.
    */
   notes: string | null
+  /**
+   * Localized release notes keyed by interface locale (the manifest's
+   * `notesLocalized`), additive to `notes`. The base field stays the English source
+   * and the fallback; this map is display-only, so a malformed value is dropped here
+   * instead of failing the manifest closed — an update must never be blocked by a
+   * translation problem.
+   */
+  notesLocalized: Record<string, string> | null
   error: string | null
   /** The URL the manifest was fetched from. The fork channel is fixed, so this is constant. */
   sourceUrl: string | null
@@ -68,7 +76,9 @@ const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
  * the version the manifest declares. Any deviation returns the invalid-manifest result
  * with every field null, so a half-valid manifest can never smuggle a download URL or
  * a hash past this boundary. Release notes are optional (manifests published before the
- * field existed stay valid) but must be a non-empty string when present.
+ * field existed stay valid) but must be a non-empty string when present. Localized notes
+ * (`notesLocalized`) are optional and additive: a malformed map degrades to "no
+ * translations" (the English `notes` still shows) rather than invalidating the manifest.
  */
 export async function checkVersionUpdate(currentVersion: string): Promise<VersionInfo> {
   const base: VersionInfo = {
@@ -79,6 +89,7 @@ export async function checkVersionUpdate(currentVersion: string): Promise<Versio
     releaseDate: null,
     sha512: null,
     notes: null,
+    notesLocalized: null,
     error: null,
     sourceUrl: PROJECT_UPDATE_MANIFEST_URL,
   }
@@ -112,6 +123,7 @@ function validateManifest(base: VersionInfo, currentVersion: string, raw: unknow
   const url = manifest.url
   const sha512 = manifest.sha512
   const notes = manifest.notes
+  const notesLocalized = manifest.notesLocalized
 
   if (
     typeof version !== 'string' ||
@@ -135,8 +147,32 @@ function validateManifest(base: VersionInfo, currentVersion: string, raw: unknow
   base.sha512 = sha512
   base.downloadUrl = url
   base.notes = typeof notes === 'string' ? notes : null
+  base.notesLocalized = normalizeLocalizedNotes(notesLocalized)
   base.hasUpdate = compareVersions(currentVersion, version) > 0
   return base
+}
+
+/**
+ * Normalize the optional `notesLocalized` map.
+ *
+ * Deliberately lenient, unlike the base `notes` field: translations are additive
+ * display data with a guaranteed English fallback, so any deviation (wrong type, blank
+ * locale or blank section) degrades to `null` — no translations shown — while the
+ * manifest stays valid. Failing the manifest closed here would block a legitimate
+ * update over a display-only problem. All entries drop together, mirroring the
+ * generator's all-or-nothing validation of the same map.
+ */
+function normalizeLocalizedNotes(value: unknown): Record<string, string> | null {
+  if (value === undefined) return null
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) return null
+  const normalized: Record<string, string> = {}
+  for (const [locale, text] of entries) {
+    if (locale.trim() === '' || typeof text !== 'string' || text.trim() === '') return null
+    normalized[locale] = text
+  }
+  return normalized
 }
 
 function invalidManifest(base: VersionInfo): VersionInfo {

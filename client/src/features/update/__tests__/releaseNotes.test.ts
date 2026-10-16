@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseReleaseNotes } from '../releaseNotes'
+import { parseReleaseNotes, pickReleaseNotes } from '../releaseNotes'
 
 const SECTION = `## v0.2.2
 
@@ -50,5 +50,29 @@ describe('parseReleaseNotes', () => {
   it('returns no blocks for empty or whitespace input', () => {
     expect(parseReleaseNotes('')).toEqual([])
     expect(parseReleaseNotes('  \n\n  ')).toEqual([])
+  })
+})
+
+describe('pickReleaseNotes', () => {
+  it('prefers the translation for the active locale', () => {
+    expect(pickReleaseNotes('base', { uk: 'uk-text' }, 'uk')).toBe('uk-text')
+  })
+
+  it('falls back to the base notes when the locale has no translation', () => {
+    expect(pickReleaseNotes('base', { uk: 'uk-text' }, 'en')).toBe('base')
+    expect(pickReleaseNotes('base', null, 'uk')).toBe('base')
+  })
+
+  it('does not treat a blank translation as present', () => {
+    expect(pickReleaseNotes('base', { uk: '   ' }, 'uk')).toBe('base')
+  })
+
+  it('prefers the translation even when there are no base notes', () => {
+    expect(pickReleaseNotes(null, { uk: 'uk-text' }, 'uk')).toBe('uk-text')
+  })
+
+  it('returns null when neither source exists', () => {
+    expect(pickReleaseNotes(null, null, 'uk')).toBeNull()
+    expect(pickReleaseNotes(null, { uk: 'uk-text' }, 'en')).toBeNull()
   })
 })

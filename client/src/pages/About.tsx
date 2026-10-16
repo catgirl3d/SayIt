@@ -11,11 +11,11 @@ import {
   hasAvailableUpdate,
   type AutoUpdateState,
 } from '@/features/update/autoUpdate'
-import { parseReleaseNotes } from '@/features/update/releaseNotes'
+import { parseReleaseNotes, pickReleaseNotes } from '@/features/update/releaseNotes'
 import appIconOnDark from '@/assets/icon-128.png'
 import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { getLocale, t } from '@/i18n'
-import { useT } from '@/i18n/useT'
+import { useLocale, useT } from '@/i18n/useT'
 import { PROJECT_RELEASES_URL, PROJECT_REPOSITORY_URL } from '@/services/projectLinks'
 
 const currentVersion = __APP_VERSION__
@@ -47,8 +47,16 @@ export default function About() {
 
   // Release notes for the version the manifest describes: the available update when one
   // exists, otherwise the latest released version. They arrive with the manifest itself,
-  // so the page shows the real changelog section of that release.
-  const notes = versionInfo?.notes ?? null
+  // so the page shows the real changelog section of that release, in the interface
+  // language when the manifest carries a translation (notesLocalized) — with the
+  // English section as the fallback.
+  const locale = useLocale()
+  const baseNotes = versionInfo?.notes ?? null
+  const localizedNotes = versionInfo?.notesLocalized ?? null
+  const notes = useMemo(
+    () => pickReleaseNotes(baseNotes, localizedNotes, locale),
+    [baseNotes, localizedNotes, locale],
+  )
   const notesVersion = versionInfo?.latestVersion ?? null
   const releaseNotes = useMemo(() => (notes ? parseReleaseNotes(notes) : []), [notes])
 
