@@ -62,6 +62,13 @@ test('rejects a version with no section', () => {
   assert.throws(() => extractReleaseNotes(CHANGELOG, '0.2.3'), /no section for version 0\.2\.3/)
 })
 
+test('names the given source file when the requested section is missing', () => {
+  assert.throws(
+    () => extractReleaseNotes(CHANGELOG, '0.2.3', 'CHANGELOG-FORK.uk.md'),
+    /CHANGELOG-FORK\.uk\.md has no section for version 0\.2\.3/,
+  )
+})
+
 test('rejects an empty section', () => {
   const text = '# c\n\n## v0.2.2 (unreleased)\n\n## v0.2.1\n\n- old\n'
   assert.throws(() => extractReleaseNotes(text, '0.2.2'), /section for version 0\.2\.2 is empty/)
@@ -115,6 +122,29 @@ test('CLI fails closed when the section is missing', () => {
         { encoding: 'utf8', stdio: 'pipe' },
       ),
       /no section for version 0\.2\.9/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CLI reports the actual changelog file name when the section is missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sayit-notes-test-'))
+  try {
+    const changelogPath = join(dir, 'CHANGELOG-FORK.uk.md')
+    writeFileSync(changelogPath, CHANGELOG)
+    assert.throws(
+      () => execFileSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL('./extract-release-notes.mjs', import.meta.url)),
+          '--version', '0.2.9',
+          '--changelog', changelogPath,
+          '--output', join(dir, 'notes.md'),
+        ],
+        { encoding: 'utf8', stdio: 'pipe' },
+      ),
+      /CHANGELOG-FORK\.uk\.md has no section for version 0\.2\.9/,
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })
