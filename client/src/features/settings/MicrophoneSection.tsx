@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select, type SelectOption } from '@/components/ui/select'
@@ -7,7 +7,8 @@ import { cleanMicLabel } from './utils'
 import { cleanActiveMicLabel } from '@/services/recorder/micSourceReminder'
 import type { TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
-import type { MicBoostSetting } from '@/services/defaults'
+import { DEFAULT_MIC_BOOST, MIC_BOOST_AUTO, resolveMicBoost, type MicBoostSetting } from '@/services/defaults'
+import MicBoostControl from './MicBoostControl'
 
 export type MicVolumeLevel = 'idle' | 'silent' | 'low' | 'normal'
 
@@ -114,13 +115,19 @@ export default function MicrophoneSection({
     return options
   }, [mics, selectedMic, t])
 
-  const boostOptions = useMemo(() => [
-    { value: '1', label: t('mic.boostOff') },
-    { value: '2', label: t('mic.boost2x') },
-    { value: '3', label: t('mic.boost3x') },
-    { value: '5', label: t('mic.boost5x') },
-    { value: 'auto', label: t('mic.boostAuto') },
+  const boostModeOptions = useMemo(() => [
+    { value: 'manual', label: t('mic.boostManual') },
+    { value: MIC_BOOST_AUTO, label: t('mic.boostAuto') },
   ] as const, [t])
+
+  // Leaving auto restores the last manual gain instead of snapping back to the default.
+  const lastManualBoost = useRef<MicBoostSetting>(DEFAULT_MIC_BOOST)
+  useEffect(() => {
+    if (micBoost !== MIC_BOOST_AUTO) lastManualBoost.current = micBoost
+  }, [micBoost])
+
+  const boostAuto = micBoost === MIC_BOOST_AUTO
+  const boostGain = resolveMicBoost(micBoost).gain
 
   const vol = VOLUME_CONFIG[volumeLevel]
 
@@ -167,21 +174,38 @@ export default function MicrophoneSection({
             <p className="text-xs text-destructive">{errorMessage}</p>
           )}
 
-          <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p id="mic-boost-label" className="text-sm font-medium">{t('mic.boost')}</p>
-              <p className="text-xs text-muted-foreground">{t('mic.boostDesc')}</p>
+          <div className="space-y-3 border-t border-border pt-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p id="mic-boost-label" className="text-sm font-medium">{t('mic.boost')}</p>
+                <p className="text-xs text-muted-foreground">{t('mic.boostDesc')}</p>
+              </div>
+              <div className="shrink-0" style={ready ? undefined : { visibility: 'hidden' }}>
+                <Segmented
+                  labelledBy="mic-boost-label"
+                  value={boostAuto ? MIC_BOOST_AUTO : 'manual'}
+                  onChange={(mode) => onMicBoostChange(mode === MIC_BOOST_AUTO ? MIC_BOOST_AUTO : lastManualBoost.current)}
+                  options={boostModeOptions}
+                  animated={animate}
+                  size="sm"
+                  className="shrink-0"
+                />
+              </div>
             </div>
-            <div className="shrink-0" style={ready ? undefined : { visibility: 'hidden' }}>
-              <Segmented
-                labelledBy="mic-boost-label"
-                value={micBoost}
-                onChange={onMicBoostChange}
-                options={boostOptions}
-                animated={animate}
-                size="sm"
-                className="shrink-0"
-              />
+
+            <div style={ready ? undefined : { visibility: 'hidden' }}>
+              {boostAuto ? (
+                <p className="rounded-lg border border-border bg-background px-4 py-3 text-sm text-muted-foreground">
+                  {t('mic.boostAutoDesc')}
+                </p>
+              ) : (
+                <MicBoostControl
+                  gain={boostGain}
+                  onChange={(gain) => onMicBoostChange(String(gain) as MicBoostSetting)}
+                  labelledBy="mic-boost-label"
+                  animated={animate}
+                />
+              )}
             </div>
           </div>
         </div>
