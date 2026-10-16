@@ -430,6 +430,9 @@ describe('caption split at a length cut', () => {
     expect(prepareCommitOfText('Он так и не сказал нам как')).toMatchObject({ text: 'Он так и не сказал нам', carryText: 'как' })
     expect(prepareCommitOfText('Я ничего не знаю и как')).toMatchObject({ text: 'Я ничего не знаю', carryText: 'и как' })
     expect(prepareCommitOfText('Они долго шли под')).toMatchObject({ text: 'Они долго шли', carryText: 'под' })
+    expect(prepareCommitOfText('Я совсем не знаю где')).toMatchObject({ text: 'Я совсем не знаю', carryText: 'где' })
+    expect(prepareCommitOfText('Никто не мог сказать нам куда')).toMatchObject({ text: 'Никто не мог сказать нам', carryText: 'куда' })
+    expect(prepareCommitOfText('Они не сказали нам откуда')).toMatchObject({ text: 'Они не сказали нам', carryText: 'откуда' })
 
     expect(prepareCommitOfText('Я зовсім не знаю де')).toMatchObject({ text: 'Я зовсім не знаю', carryText: 'де' })
     expect(prepareCommitOfText('Ніхто не міг сказати нам куди')).toMatchObject({ text: 'Ніхто не міг сказати нам', carryText: 'куди' })
