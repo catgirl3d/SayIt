@@ -103,6 +103,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Removed the Simplified Chinese desktop, tray, overlay, web-demo, and installer UI; English and Ukrainian are now the only supported interface locales while Chinese ASR remains supported independently.
 - Removed the Chinese built-in prompt option. Legacy Chinese prompt records may remain stored for safe parsing, but Chinese prompt selection and active legacy Chinese overrides are no longer supported; English and Ukrainian instructions remain available with per-language prompt overrides.
 - Moved shared prompt and rule definitions into reusable constants.
+- Reworked the Ukrainian interface copy throughout the app: settled terminology (застосунок, папка, налаштування, провайдер, AI-очищення, Копіювати, Закрити), clearer wording and grammar, number-in-message templates that no longer produce broken forms like "1 термінів", and unified punctuation — the single ellipsis character "…" now replaces "..." in both English and Ukrainian strings.
 
 #### AI Providers
 
