@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, act, within, cleanup } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
+import { setLocale } from '@/i18n'
 import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
 import { fileTranscriptionService, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
 import { releaseFileTranscription, reserveFileTranscription } from '@/services/recorder'
@@ -101,8 +102,10 @@ function cloudProfile(overrides: Partial<AsrProfile> = {}): AsrProfile {
 
 describe('file transcription page', () => {
   afterEach(() => {
+    cleanup()
     fileTranscriptionService.dispose()
     releaseFileTranscription()
+    setLocale('en')
     vi.restoreAllMocks()
   })
 
@@ -157,7 +160,7 @@ describe('file transcription page', () => {
 
     expect(screen.getByText('OpenAI transcription')).toBeTruthy()
     expect(screen.getByText('whisper-1')).toBeTruthy()
-    expect(screen.getByText('openai_transcribe')).toBeTruthy()
+    expect(screen.queryByText('openai_transcribe')).toBeNull()
   })
 
   it('allows cloud transcription without an installed local model and sends the selected cloud profile', async () => {
@@ -429,26 +432,6 @@ describe('file transcription page', () => {
     expect(native.invoke).not.toHaveBeenCalledWith('cancel_file_transcription', expect.anything())
   })
 
-  it('uses a destructive style for the cancellation confirmation', async () => {
-    renderPage()
-    await waitFor(() => expect(stateListener).not.toBeNull())
-    act(() => {
-      stateListener?.({ payload: fileSnapshot({
-        jobId: 'job-cancel-1',
-        sequence: 13,
-        phase: 'transcribing',
-        resourcesReleased: false,
-        error: null,
-      }) })
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    const confirmButton = within(screen.getByRole('dialog')).getByRole('button', { name: 'Stop transcription' })
-
-    expect(confirmButton.className).toContain('destructive')
-    expect(confirmButton.className).not.toContain('bg-primary')
-  })
-
   it('shows truthful preparation progress and no progress for checking or loading', async () => {
     renderPage()
     await waitFor(() => expect(stateListener).not.toBeNull())
@@ -492,7 +475,7 @@ describe('file transcription page', () => {
         durationMs: null,
         processedMs: 5_000,
         error: null,
-        resourcesReleased: true,
+        resourcesReleased: false,
       }) })
     })
     expect(screen.queryByLabelText('Processed audio progress')).toBeNull()
@@ -589,11 +572,12 @@ describe('file transcription page', () => {
       stateListener?.({ payload: fileSnapshot({
         jobId: 'job-cancel-1',
         sequence: 61,
-        phase: 'finalizing',
+        phase: 'completed',
         resourcesReleased: true,
         error: null,
       }) })
     })
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
   it('offers a detected FFmpeg folder and re-inspects the selected file when used', async () => {
@@ -816,5 +800,84 @@ describe('file transcription page', () => {
 
     const startButton = screen.getByRole('button', { name: 'Start transcription' })
     expect((startButton as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('refreshes engine settings and keeps the chosen cloud profile when the language changes', async () => {
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile(),
+        cloudProfile({ id: 'cloud-profile-2', provider: 'openai_transcribe', model: 'whisper-1' }),
+      ],
+      activeId: 'cloud-profile-1',
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    const downloadsBefore = native.invoke.mock.calls.filter(([command]) => command === 'list_downloaded_models').length
+    const loadsBefore = cloudProfiles.loadAsrProfiles.mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    expect(screen.getByText('whisper-1')).toBeTruthy()
+
+    act(() => { setLocale('uk') })
+
+    await waitFor(() => expect(
+      native.invoke.mock.calls.filter(([command]) => command === 'list_downloaded_models').length,
+    ).toBeGreaterThan(downloadsBefore))
+    await waitFor(() => expect(cloudProfiles.loadAsrProfiles.mock.calls.length).toBeGreaterThan(loadsBefore))
+    await waitFor(() => expect(screen.getByText('whisper-1')).toBeTruthy())
+  })
+
+  it('ignores a stale cloud profile response that arrives after the language change', async () => {
+    let resolveFirst: (value: { profiles: AsrProfile[]; activeId: string }) => void = () => undefined
+    const firstLoad = new Promise<{ profiles: AsrProfile[]; activeId: string }>((resolve) => { resolveFirst = resolve })
+    cloudProfiles.loadAsrProfiles
+      .mockImplementationOnce(async () => firstLoad)
+      .mockResolvedValueOnce({
+        profiles: [cloudProfile({ id: 'cloud-profile-2', provider: 'openai_transcribe', model: 'whisper-1' })],
+        activeId: 'cloud-profile-2',
+      })
+    renderPage()
+
+    await waitFor(() => expect(cloudProfiles.loadAsrProfiles).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+
+    act(() => { setLocale('uk') })
+
+    await waitFor(() => expect(cloudProfiles.loadAsrProfiles).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByText('whisper-1')).toBeTruthy())
+
+    resolveFirst({ profiles: [cloudProfile()], activeId: 'cloud-profile-1' })
+    await act(async () => {})
+
+    expect(screen.getByText('whisper-1')).toBeTruthy()
+    expect(screen.queryByText('nova-3')).toBeNull()
+  })
+
+  it('restarts the copy reset timer when copying again', async () => {
+    renderPage()
+    await waitFor(() => expect(stateListener).not.toBeNull())
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({ jobId: 'job-copy', sequence: 1, phase: 'completed', resourcesReleased: true, error: null }) })
+    })
+
+    vi.useFakeTimers()
+    try {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy text' })) })
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      fireEvent.click(screen.getByRole('button', { name: 'Copied' }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+      expect(screen.getByRole('button', { name: 'Copy text' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

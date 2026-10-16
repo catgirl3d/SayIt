@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  errorMessage,
   FileTranscriptionService,
   type FileTranscriptionBridge,
   type FileTranscriptionSnapshot,
@@ -76,13 +77,16 @@ function createHarness() {
     calls.push('listen:file-transcription-state')
     return () => undefined
   })
+  const copyText = vi.fn(async (_text: string): Promise<void> => {
+    calls.push('copyText')
+  })
   const admission = {
     reserveFileTranscription: vi.fn(() => calls.push('reserve')),
     releaseFileTranscription: vi.fn(() => calls.push('release')),
     setFileTranscriptionAdmissionReady: vi.fn(),
   }
-  const bridge = { invoke, listen } as unknown as FileTranscriptionBridge
-  return { calls, invoke, listen, admission, bridge }
+  const bridge = { invoke, listen, copyText } as unknown as FileTranscriptionBridge
+  return { calls, invoke, listen, copyText, admission, bridge }
 }
 
 describe('file transcription service', () => {
@@ -140,18 +144,16 @@ describe('file transcription service', () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'start_file_transcription') return snapshot({ resourcesReleased: true })
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return []
       return command === 'get_file_transcription_state' ? null : undefined
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await service.start({
+    await service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'sensevoice-small-gguf',
-      language: 'en',
-      accelerator: 'auto',
     })
 
     expect(harness.invoke).toHaveBeenCalledWith('start_file_transcription', {
@@ -160,11 +162,11 @@ describe('file transcription service', () => {
         outputDirectory: 'C:/output',
         ffmpegDirectory: null,
         audioStreamIndex: null,
-        modelId: 'sensevoice-small-gguf',
-        language: 'en',
-        accelerator: 'auto',
         engine: 'local',
         cloud: null,
+        modelId: 'sensevoice-small-gguf',
+        language: 'uk',
+        accelerator: 'auto',
       },
     })
   })
@@ -280,18 +282,16 @@ describe('file transcription service', () => {
     harness.invoke.mockImplementation(async (command: string) => {
       harness.calls.push(`invoke:${command}`)
       if (command === 'start_file_transcription') throw new Error('native start failed')
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return []
       return command === 'get_file_transcription_state' ? null : undefined
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await expect(service.start({
+    await expect(service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'sensevoice-small-gguf',
-      language: 'en',
-      accelerator: 'auto',
     })).rejects.toThrow('native start failed')
 
     expect(harness.calls.indexOf('reserve')).toBeLessThan(harness.calls.indexOf('invoke:start_file_transcription'))
@@ -308,18 +308,16 @@ describe('file transcription service', () => {
     })
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'start_file_transcription') return snapshot({ phase: 'failed', error: 'checkpoint failed' })
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return []
       return command === 'get_file_transcription_state' ? null : undefined
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await service.start({
+    await service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'sensevoice-small-gguf',
-      language: 'en',
-      accelerator: 'auto',
     })
 
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
@@ -342,19 +340,17 @@ describe('file transcription service', () => {
         startInvoked()
         return new Promise((_resolve, reject) => { rejectStart = reject })
       }
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return Promise.resolve([])
       return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
     await service.init()
 
-    const startPromise = service.start({
+    const startPromise = service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'sensevoice-small-gguf',
-      language: 'en',
-      accelerator: 'auto',
     })
     await startCalled
     stateHandler?.({ payload: snapshot({ sequence: 1 }) })
@@ -380,19 +376,17 @@ describe('file transcription service', () => {
         startInvoked()
         return new Promise((_resolve, reject) => { rejectStart = reject })
       }
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return Promise.resolve([])
       return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
     await service.init()
 
-    const startPromise = service.start({
+    const startPromise = service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'sensevoice-small-gguf',
-      language: 'en',
-      accelerator: 'auto',
     })
     await startCalled
     stateHandler?.({ payload: snapshot({ sequence: 1 }) })
@@ -419,19 +413,17 @@ describe('file transcription service', () => {
         startInvoked()
         return new Promise((_resolve, reject) => { rejectStart = reject })
       }
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return Promise.resolve([])
       return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
     await service.init()
 
-    const startPromise = service.start({
+    const startPromise = service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'sensevoice-small-gguf',
-      language: 'en',
-      accelerator: 'auto',
     })
     await startCalled
     stateHandler?.({ payload: snapshot({ sequence: 1 }) })
@@ -488,30 +480,25 @@ describe('file transcription service', () => {
     ]
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'start_file_transcription') return starts.shift()
+      if (command === 'list_available_models' || command === 'list_downloaded_models') return []
       return command === 'get_file_transcription_state' ? null : undefined
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await service.start({
+    await service.startWithCurrentSettings({
       filePath: 'C:/one.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'model',
-      language: 'en',
-      accelerator: 'auto',
     })
     stateHandler?.({ payload: snapshot({ jobId: 'job-1', sequence: 1, resourcesReleased: true, phase: 'failed' }) })
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
     stateHandler?.({ payload: snapshot({ jobId: 'job-1', sequence: 2, resourcesReleased: true, phase: 'failed' }) })
-    await service.start({
+    await service.startWithCurrentSettings({
       filePath: 'C:/two.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
-      modelId: 'model',
-      language: 'en',
-      accelerator: 'auto',
     })
 
     stateHandler?.({ payload: snapshot({ jobId: 'job-1', sequence: 4, resourcesReleased: true, phase: 'failed' }) })
@@ -710,5 +697,52 @@ describe('file transcription service', () => {
 
     secondHandler?.({ payload: snapshot({ sequence: 7 }) })
     expect(service.getSnapshot()?.sequence).toBe(7)
+  })
+
+  it('normalizes thrown values to a message string', () => {
+    expect(errorMessage(new Error('boom'))).toBe('boom')
+    expect(errorMessage('plain failure')).toBe('plain failure')
+  })
+
+  it('sends clipboard text through the injected bridge', async () => {
+    const harness = createHarness()
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.copyText('hello')
+
+    expect(harness.copyText).toHaveBeenCalledWith('hello')
+  })
+
+  it('drops stale snapshot sequences and accepts the next newer one', async () => {
+    const harness = createHarness()
+    let stateHandler: ((event: { payload: FileTranscriptionSnapshot }) => void) | undefined
+    harness.listen.mockImplementation(async (_event, handler) => {
+      stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
+      return () => undefined
+    })
+    harness.invoke.mockImplementation(async (command: string) =>
+      command === 'get_file_transcription_state' ? snapshot({ sequence: 5 }) : undefined,
+    )
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    const notifications = vi.fn()
+    service.subscribe(notifications)
+
+    await service.init()
+    expect(service.getSnapshot()?.sequence).toBe(5)
+    notifications.mockClear()
+
+    // Different payloads on the same job: the snapshot must remain untouched.
+    stateHandler?.({ payload: snapshot({ sequence: 3, text: 'older text' }) })
+    stateHandler?.({ payload: snapshot({ sequence: 5, text: 'same sequence text' }) })
+
+    expect(service.getSnapshot()?.sequence).toBe(5)
+    expect(service.getSnapshot()?.text).toBe('Saved text')
+    expect(notifications).not.toHaveBeenCalled()
+
+    stateHandler?.({ payload: snapshot({ sequence: 6, text: 'newer text' }) })
+
+    expect(service.getSnapshot()?.sequence).toBe(6)
+    expect(service.getSnapshot()?.text).toBe('newer text')
+    expect(notifications).toHaveBeenCalledTimes(1)
   })
 })

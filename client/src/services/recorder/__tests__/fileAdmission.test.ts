@@ -85,14 +85,11 @@ describe('file transcription recorder admission', () => {
       invoke: vi.fn(async <T>(command: string, _args?: Record<string, unknown>) => (command === 'get_file_transcription_state' ? null : undefined) as T),
     } as unknown as FileTranscriptionBridge
     const service = new FileTranscriptionService(ipc, recorder)
-    await expect(service.start({
+    await expect(service.startWithCurrentSettings({
       filePath: 'C:/recording.mp4',
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: 0,
-      modelId: 'model',
-      language: 'en',
-      accelerator: 'auto',
     })).rejects.toThrow()
     expect(ipc.invoke).not.toHaveBeenCalledWith('start_file_transcription', expect.anything())
 

@@ -19,11 +19,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
-import { useT } from '@/i18n/useT'
+import { useLocale, useT } from '@/i18n/useT'
 import { t as translate, type TranslationKey } from '@/i18n'
 import { ConfirmDeleteModal } from '@/features/settings/ConfirmDeleteModal'
 import { getSpeechLanguageEnglishName, type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import {
+  errorMessage,
   fileTranscriptionService,
   formatFileDuration,
   formatFilePathForDisplay,
@@ -67,10 +68,6 @@ function acceleratorLabel(accelerator: string): string {
   return translate('common.auto')
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 function parentDirectory(path: string): string {
   const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   if (separator === 2 && path[1] === ':') return path.slice(0, 3)
@@ -103,6 +100,7 @@ function isCancellablePhase(phase: FilePhase): boolean {
 
 export default function FileTranscription() {
   const t = useT()
+  const locale = useLocale()
   const snapshot = useSyncExternalStore(
     fileTranscriptionService.subscribe,
     fileTranscriptionService.getSnapshot,
@@ -135,13 +133,18 @@ export default function FileTranscription() {
   const inspectionRequest = useRef(0)
   const ffmpegDirectoryRef = useRef<string | null>(null)
   const ffmpegDetectionStarted = useRef(false)
+  const copyResetTimer = useRef<number | null>(null)
 
   useEffect(() => {
-    void fileTranscriptionService.init().catch((reason) => setError(`${t('files.restoreFailed')}: ${errorText(reason)}`))
+    let cancelled = false
+    void fileTranscriptionService.init().catch((reason) => {
+      if (!cancelled) setError(`${t('files.restoreFailed')}: ${errorMessage(reason)}`)
+    })
     void fileTranscriptionService.getLocalSettings()
-      .then((value) => { setSettingsError(''); setLocalSettings(value) })
-      .catch((reason) => setSettingsError(`${t('files.settingsFailed')}: ${errorText(reason)}`))
-  }, [t])
+      .then((value) => { if (cancelled) return; setSettingsError(''); setLocalSettings(value) })
+      .catch((reason) => { if (!cancelled) setSettingsError(`${t('files.settingsFailed')}: ${errorMessage(reason)}`) })
+    return () => { cancelled = true }
+  }, [locale, t])
 
   useEffect(() => {
     let cancelled = false
@@ -158,13 +161,13 @@ export default function FileTranscription() {
         })
       })
       .catch((reason) => {
-        if (!cancelled) setCloudProfilesError(errorText(reason))
+        if (!cancelled) setCloudProfilesError(errorMessage(reason))
       })
       .finally(() => {
         if (!cancelled) setCloudProfilesLoading(false)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [locale, t])
 
   useEffect(() => {
     if (!snapshot || snapshot.resourcesReleased) setCancelRequested(false)
@@ -185,6 +188,10 @@ export default function FileTranscription() {
     return () => { cancelled = true }
   }, [ffmpegDirectory])
 
+  useEffect(() => () => {
+    if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current)
+  }, [])
+
   const setSelectedFfmpegDirectory = (directory: string | null) => {
     ffmpegDirectoryRef.current = directory
     setFfmpegDirectory(directory)
@@ -203,7 +210,7 @@ export default function FileTranscription() {
       const defaultTrack = inspected.audioTracks.find((track) => track.isDefault) ?? inspected.audioTracks[0]
       setAudioStreamIndex(defaultTrack?.index ?? null)
     } catch (reason) {
-      if (requestId === inspectionRequest.current) setError(`${t('files.inspectFailed')}: ${errorText(reason)}`)
+      if (requestId === inspectionRequest.current) setError(`${t('files.inspectFailed')}: ${errorMessage(reason)}`)
     } finally {
       if (requestId === inspectionRequest.current) setInspecting(false)
     }
@@ -221,7 +228,7 @@ export default function FileTranscription() {
       setFilePath(selected)
       await inspectSelectedFile(selected, ffmpegDirectory)
     } catch (reason) {
-      setError(`${t('files.chooseFileFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.chooseFileFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -231,7 +238,7 @@ export default function FileTranscription() {
       const selected = await open({ directory: true, multiple: false })
       if (typeof selected === 'string' && selected) setOutputDirectory(selected)
     } catch (reason) {
-      setError(`${t('files.chooseOutputFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.chooseOutputFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -244,7 +251,7 @@ export default function FileTranscription() {
       setFfmpegSuggestion(null)
       if (filePath) await inspectSelectedFile(filePath, selected)
     } catch (reason) {
-      setError(`${t('files.chooseFfmpegFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.chooseFfmpegFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -272,7 +279,7 @@ export default function FileTranscription() {
         cloudProfileId: selectedCloudProfile ? selectedCloudProfile.id : undefined,
       })
     } catch (reason) {
-      setError(`${t('files.startFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.startFailed')}: ${errorMessage(reason)}`)
     } finally {
       setActionBusy(false)
     }
@@ -286,7 +293,7 @@ export default function FileTranscription() {
       await fileTranscriptionService.cancel()
     } catch (reason) {
       setCancelRequested(false)
-      setError(`${t('files.cancelFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.cancelFailed')}: ${errorMessage(reason)}`)
     } finally {
       setActionBusy(false)
     }
@@ -297,7 +304,7 @@ export default function FileTranscription() {
     try {
       await fileTranscriptionService.init()
     } catch (reason) {
-      setError(`${t('files.restoreFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.restoreFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -306,7 +313,7 @@ export default function FileTranscription() {
       setLocalSettings(await fileTranscriptionService.getLocalSettings())
       setSettingsError('')
     } catch (reason) {
-      setSettingsError(`${t('files.settingsFailed')}: ${errorText(reason)}`)
+      setSettingsError(`${t('files.settingsFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -317,7 +324,7 @@ export default function FileTranscription() {
     try {
       await fileTranscriptionService.retryExport(snapshot.jobId)
     } catch (reason) {
-      setError(`${t('files.retryExportFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.retryExportFailed')}: ${errorMessage(reason)}`)
     } finally {
       setActionBusy(false)
     }
@@ -328,9 +335,13 @@ export default function FileTranscription() {
     try {
       await fileTranscriptionService.copyText(snapshot.text)
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 1400)
+      if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current)
+      copyResetTimer.current = window.setTimeout(() => {
+        copyResetTimer.current = null
+        setCopied(false)
+      }, 1400)
     } catch (reason) {
-      setError(`${t('files.copyFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.copyFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -340,7 +351,7 @@ export default function FileTranscription() {
     try {
       await shellOpen(outputDirectory || parentDirectory(resultPath))
     } catch (reason) {
-      setError(`${t('files.openFolderFailed')}: ${errorText(reason)}`)
+      setError(`${t('files.openFolderFailed')}: ${errorMessage(reason)}`)
     }
   }
 
@@ -415,8 +426,8 @@ export default function FileTranscription() {
                  <Button type="button" variant={engine === 'cloud' ? 'secondary' : 'ghost'} className="h-8 flex-1" aria-pressed={engine === 'cloud'} onClick={() => setEngine('cloud')} disabled={active || actionBusy}>{t('files.engineCloud')}</Button>
                </div>
                {engine === 'local' ? localSettings ? <><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{localSettings.modelName}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.language')}</span><span className="text-right font-medium">{languageLabel(localSettings.language)}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.accelerator')}</span><span className="text-right font-medium">{acceleratorLabel(localSettings.accelerator)}</span></div>{!localSettings.modelInstalled && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.modelMissing')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openVoiceEngine')}<ExternalLink className="h-3 w-3" /></Link></div>}</> : settingsError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{settingsError}</span></div><Button type="button" variant="outline" size="sm" className="h-8" onClick={() => void retryLocalSettings()}>{t('common.retry')}</Button></div> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.settingsLoading')}</div> : cloudProfilesLoading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('files.cloudProfilesLoading')}</div> : cloudProfilesError ? <div className="space-y-2"><div className="flex items-start gap-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{t('files.cloudProfilesFailed')}: {cloudProfilesError}</span></div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div> : cloudProfiles.length === 0 ? <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.cloudNoProfiles')}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div> : <>
-                 <div className="space-y-1.5"><span id="file-cloud-profile-label" className="text-xs font-medium text-foreground">{t('files.cloudProfile')}</span><Select labelledBy="file-cloud-profile-label" value={cloudProfileId} onChange={setCloudProfileId} placeholder={t('files.cloudSelectProfile')} disabled={active || actionBusy} options={cloudProfiles.map((profile) => ({ value: profile.id, label: `${profile.label} · ${profile.model}`, title: `${profile.provider} · ${profile.model}` }))} /></div>
-                  {selectedCloudProfile && <div className="space-y-2 rounded-lg bg-muted/30 px-3 py-2.5"><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudProvider')}</span><span className="text-right font-medium">{selectedCloudProfile.provider}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{selectedCloudProfile.model}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudLabel')}</span><span className="text-right font-medium">{selectedCloudProfile.label}</span></div></div>}
+                 <div className="space-y-1.5"><span id="file-cloud-profile-label" className="text-xs font-medium text-foreground">{t('files.cloudProfile')}</span><Select labelledBy="file-cloud-profile-label" value={cloudProfileId} onChange={setCloudProfileId} placeholder={t('files.cloudSelectProfile')} disabled={active || actionBusy} options={cloudProfiles.map((profile) => ({ value: profile.id, label: `${profile.label} · ${profile.model}`, title: `${profile.label} · ${profile.model}` }))} /></div>
+                  {selectedCloudProfile && <div className="space-y-2 rounded-lg bg-muted/30 px-3 py-2.5"><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.cloudProvider')}</span><span className="text-right font-medium">{selectedCloudProfile.label}</span></div><div className="flex items-start justify-between gap-4"><span className="text-muted-foreground">{t('files.model')}</span><span className="text-right font-medium">{selectedCloudProfile.model}</span></div></div>}
                   {selectedCloudProfile && !isCloudProfileReady(selectedCloudProfile) && <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong"><div>{t('files.cloudProfileMissing')}: {selectedCloudProfile.missing}</div><Link className="inline-flex items-center gap-1 font-medium underline underline-offset-2" to="/voice-engine">{t('files.openCloudSettings')}<ExternalLink className="h-3 w-3" /></Link></div>}
                </>}
              </CardContent>

@@ -20,16 +20,6 @@ export type FilePhase =
 
 export type FileTranscriptionEngine = 'local' | 'cloud'
 
-export interface FileTranscriptionRequest {
-  filePath: string
-  outputDirectory: string
-  modelId: string
-  language: SpeechInputLanguage
-  accelerator: string
-  ffmpegDirectory: string | null
-  audioStreamIndex: number | null
-}
-
 export interface FileTranscriptionCloudProfile {
   id: string
   label: string
@@ -39,7 +29,7 @@ export interface FileTranscriptionCloudProfile {
   missing: string
 }
 
-export interface FileTranscriptionCloudRequest {
+interface FileTranscriptionCloudRequest {
   label: string
   config: AsrProviderConfig
 }
@@ -88,6 +78,7 @@ export interface FileTranscriptionStartOptions {
 export interface FileTranscriptionBridge {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
   listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void>
+  copyText(text: string): Promise<void>
 }
 
 export interface FileTranscriptionAdmission {
@@ -121,6 +112,7 @@ interface FileTranscriptionIpcRequest {
 const defaultBridge: FileTranscriptionBridge = {
   invoke: <T>(command: string, args?: Record<string, unknown>) => bridge.invoke<T>(command, args),
   listen: <T>(event: string, handler: (event: { payload: T }) => void) => bridge.listen<T>(event, handler),
+  copyText: async (text: string) => { await bridge.copyText(text) },
 }
 
 const defaultAdmission: FileTranscriptionAdmission = {
@@ -129,7 +121,7 @@ const defaultAdmission: FileTranscriptionAdmission = {
   setFileTranscriptionAdmissionReady,
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -286,14 +278,6 @@ export class FileTranscriptionService {
     }
   }
 
-  async start(request: FileTranscriptionRequest): Promise<FileTranscriptionSnapshot> {
-    return this.startReserved('local', async () => ({
-      ...request,
-      engine: 'local',
-      cloud: null,
-    }))
-  }
-
   async startWithCurrentSettings(options: FileTranscriptionStartOptions): Promise<FileTranscriptionSnapshot> {
     const { engine: requestedEngine, cloudProfileId, ...fileOptions } = options
     const engine = requestedEngine ?? 'local'
@@ -302,10 +286,12 @@ export class FileTranscriptionService {
         const language = await getSpeechInputLanguage()
         return this.buildCloudRequest(fileOptions, cloudProfileId, language)
       }
-      const settings = await this.getLocalSettings()
+      const { modelId, language, accelerator } = await this.getLocalSettings()
       return {
         ...fileOptions,
-        ...settings,
+        modelId,
+        language,
+        accelerator,
         engine: 'local',
         cloud: null,
       }
@@ -359,7 +345,7 @@ export class FileTranscriptionService {
   }
 
   async copyText(text: string): Promise<void> {
-    await bridge.copyText(text)
+    await this.ipc.copyText(text)
   }
 
   private receiveSnapshot(next: FileTranscriptionSnapshot, generation: number): void {
