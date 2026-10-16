@@ -123,11 +123,19 @@ describe('file transcription page', () => {
   it('shows the file picker workflow and existing local engine summary', async () => {
     renderPage()
 
-    expect(screen.getByRole('heading', { name: 'Transcribe a file' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Transcribe a file/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Choose audio or video file' })).toBeTruthy()
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect(screen.getByText('English')).toBeTruthy()
     expect(screen.getByText('Auto')).toBeTruthy()
+  })
+
+  it('marks the page title with the shared alpha badge', () => {
+    renderPage()
+
+    const heading = screen.getByRole('heading', { level: 1 })
+    expect(heading.querySelector('svg')).toBeTruthy()
+    expect(heading.textContent).toContain('Alpha')
   })
 
   it('renders the cloud profile selector with provider, model, and label details', async () => {

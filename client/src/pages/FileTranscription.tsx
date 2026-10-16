@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
+import AlphaBadge from '@/components/AlphaBadge'
 import { useLocale, useT } from '@/i18n/useT'
 import { t as translate, type TranslationKey } from '@/i18n'
 import { ConfirmDeleteModal } from '@/features/settings/ConfirmDeleteModal'
@@ -378,7 +379,10 @@ export default function FileTranscription() {
             <FileAudio className="h-5 w-5" aria-hidden />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{t('files.title')}</h1>
+            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+              {t('files.title')}
+              <AlphaBadge className="text-xs" />
+            </h1>
             <p className="mt-1 text-sm text-muted-foreground">{t('files.description')}</p>
           </div>
         </div>

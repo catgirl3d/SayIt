@@ -646,12 +646,14 @@ describe('settings rows and dialogs', () => {
     expect(loaded).toContain('Up to 6s · translation only')
   })
 
-  it('marks the page title with the shared beta badge', async () => {
+  it('marks the page title with the shared alpha badge', async () => {
     const { loaded } = await renderRows()
 
     const titleStart = loaded.indexOf('Translate computer audio')
     expect(titleStart).toBeGreaterThan(-1)
-    expect(loaded.slice(titleStart, loaded.indexOf('</h1>', titleStart))).toContain('Beta')
+    const title = loaded.slice(titleStart, loaded.indexOf('</h1>', titleStart))
+    expect(title).toContain('<svg')
+    expect(title).toContain('sr-only">Alpha<')
   })
 
   it('summarises what will run: original above translation and live recognition', async () => {
