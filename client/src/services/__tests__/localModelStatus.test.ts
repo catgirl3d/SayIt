@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import mainRsSource from '../../../src-tauri/src/main.rs?raw'
 
 const getSettingMock = vi.fn()
 
@@ -45,10 +46,33 @@ describe('selected local model id', () => {
     await expect(getSelectedLocalModelId()).resolves.toBe(DEFAULT_LOCAL_MODEL_ID)
   })
 
+  it('treats a whitespace-only stored value as the default model', async () => {
+    getSettingMock.mockResolvedValue('   ')
+
+    await expect(getSelectedLocalModelId()).resolves.toBe(DEFAULT_LOCAL_MODEL_ID)
+  })
+
+  it('trims surrounding whitespace from the stored id', async () => {
+    getSettingMock.mockResolvedValue('  qwen3-asr-1.7b-gguf  ')
+
+    await expect(getSelectedLocalModelId()).resolves.toBe('qwen3-asr-1.7b-gguf')
+  })
+
   it('propagates setting read failures instead of reporting the default', async () => {
     getSettingMock.mockRejectedValue(new Error('store offline'))
 
     await expect(getSelectedLocalModelId()).rejects.toThrow('store offline')
+  })
+})
+
+describe('startup warm-up parity', () => {
+  // The Rust side cannot read the JS registry, so its fallback literal is a
+  // deliberate mirror of DEFAULTS['localAsr.modelId']; this test turns a
+  // forgotten sync into a failure instead of a silently stale warm-up model.
+  it('keeps the Rust fallback in sync with the registered default', () => {
+    const fallback = mainRsSource.match(/localAsr\.modelId[\s\S]{0,400}?unwrap_or\("([^"]+)"\)/)
+
+    expect(fallback?.[1]).toBe(DEFAULT_LOCAL_MODEL_ID)
   })
 })
 
