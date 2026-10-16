@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyReplacements, parseBatchReplacements, type TextReplacementRule } from '../textReplacement'
+import { BUILTIN_REPLACEMENTS, applyReplacements, parseBatchReplacements, type TextReplacementRule } from '../textReplacement'
 
 function rule(from: string, to: string, enabled = true): TextReplacementRule {
   return { id: '1', from, to, enabled }
@@ -124,5 +124,22 @@ describe('applyReplacements 的顺序语义', () => {
       rule('b', '甲', '丙'),
     ])
     expect(result).toBe('丙')
+  })
+})
+
+describe('built-in text replacements', () => {
+  it('ship no Chinese defaults', () => {
+    const chinese = BUILTIN_REPLACEMENTS.filter((builtin) =>
+      /[\u3400-\u4dbf\u4e00-\u9fff]/.test(builtin.from + builtin.to))
+    expect(chinese).toEqual([])
+  })
+
+  it('do not rewrite ordinary English words', () => {
+    const sentence = 'The water pump keeps pumping through the night'
+    expect(applyReplacements(sentence, BUILTIN_REPLACEMENTS)).toBe(sentence)
+  })
+
+  it('keep the Cloud Code to Claude Code correction', () => {
+    expect(applyReplacements('Cloud Code answered', BUILTIN_REPLACEMENTS)).toBe('Claude Code answered')
   })
 })

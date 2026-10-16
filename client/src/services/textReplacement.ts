@@ -1,4 +1,4 @@
-// 文本替换服务 — 对 ASR 识别结果做客户端侧的文本替换
+// Text replacement service — client-side rewrites of ASR recognition results
 
 import { getSetting, setSetting } from './store'
 
@@ -11,19 +11,14 @@ export interface TextReplacementRule {
 
 const STORAGE_KEY = 'textReplacements'
 
-/** 内置默认文本替换规则（新用户首次使用时填充） */
-// i18n-allow-start: 中文 ASR 默认替换数据，不是界面文案
+/** Built-in default replacement rules (shown while the user has none of their own) */
 export const BUILTIN_REPLACEMENTS: TextReplacementRule[] = [
-  { id: 'builtin_1', from: '安卓说话', to: '按住说话', enabled: true },
-  { id: 'builtin_2', from: '我的邮箱', to: 'test@example.com', enabled: true },
-  { id: 'builtin_3', from: 'pump', to: 'Prompt', enabled: true },
-  { id: 'builtin_4', from: 'Cloud Code', to: 'Claude Code', enabled: true },
+  { id: 'builtin_1', from: 'Cloud Code', to: 'Claude Code', enabled: true },
 ]
-// i18n-allow-end
 
 export async function getTextReplacements(): Promise<TextReplacementRule[]> {
   const rules = await getSetting<TextReplacementRule[]>(STORAGE_KEY, [])
-  // 新用户没有任何规则时，返回内置默认
+  // Return the built-in defaults while the user has no rules of their own
   if (!rules || rules.length === 0) {
     return BUILTIN_REPLACEMENTS.map((r) => ({ ...r }))
   }
@@ -34,22 +29,24 @@ export async function saveTextReplacements(rules: TextReplacementRule[]): Promis
   await setSetting(STORAGE_KEY, rules)
 }
 
-/** 批量文本解析出的规则草稿（尚未分配 id/enabled） */
+/** Rule drafts parsed from batch text (no id/enabled assigned yet) */
 export interface ParsedReplacement {
   from: string
   to: string
 }
 
 /**
- * 解析批量输入文本为替换规则草稿。
- * - 每行一条规则；空行忽略。
- * - 分隔符支持：制表符（从表格粘贴）、`=>`、`->`、中文逗号「，」、英文逗号「,」。
- *   取整行中最靠前出现的分隔符切分：分隔符前为「原文」，其后（含其余分隔符）为「替换为」。
- * - 无分隔符的行：整行作为「原文」，替换为留空（即删除该文本）。
- * - 原文为空的行忽略。
+ * Parse pasted batch text into replacement rule drafts.
+ * - One rule per line; empty lines are ignored.
+ * - Separators: tab (pasted from a spreadsheet), `=>`, `->`, a Chinese comma 「，」, an ASCII comma `,`.
+ *   The earliest separator in the line splits it: before it is the "from" side, after it
+ *   (including any further separators) is the "to" side.
+ * - A line with no separator: the whole line is the "from" side and the replacement is empty
+ *   (i.e. the text is deleted).
+ * - Lines with an empty "from" side are ignored.
  */
 export function parseBatchReplacements(input: string): ParsedReplacement[] {
-  const separators = ['\t', '=>', '->', '，', ','] // i18n-allow: 中文批量输入分隔符
+  const separators = ['\t', '=>', '->', '，', ','] // i18n-allow: Chinese comma as a batch-input separator
   const result: ParsedReplacement[] = []
 
   for (const rawLine of input.split(/\r?\n/)) {
@@ -80,7 +77,7 @@ export function parseBatchReplacements(input: string): ParsedReplacement[] {
   return result
 }
 
-/** 对文本应用所有启用的替换规则 */
+/** Apply every enabled replacement rule to the text */
 export function applyReplacements(text: string, rules: TextReplacementRule[]): string {
   let result = text
   for (const rule of rules) {
@@ -91,7 +88,7 @@ export function applyReplacements(text: string, rules: TextReplacementRule[]): s
   return result
 }
 
-/** 加载规则并应用替换（便捷方法） */
+/** Load the rules and apply them (convenience helper) */
 export async function applyTextReplacements(text: string): Promise<string> {
   if (!text) return text
   const rules = await getTextReplacements()

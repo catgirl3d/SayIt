@@ -32,6 +32,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Selection editing no longer defaults an unspecified "translate" command to Chinese: Ukrainian selected text is translated to English, and any other text to Ukrainian.
 - Removed the Chinese words from the built-in AI hotword set; saved copies drop them on the next load.
 - The automatic paragraph splitting and number normalization switches are now shown only when the speech language is Chinese; for other speech languages they did nothing and are hidden.
+- The built-in text replacements no longer carry Chinese-only defaults or the pump→Prompt rule; new installs keep only the Cloud Code → Claude Code correction.
 
 ## v0.2.2 — 2026-10-12
 
