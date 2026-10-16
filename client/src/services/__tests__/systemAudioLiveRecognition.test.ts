@@ -416,6 +416,35 @@ describe('caption split at a length cut', () => {
     })
   })
 
+  it('moves a trailing question word, with the dangling words before it, to the next caption', () => {
+    expect(prepareCommitOfText('I really do not know what')).toMatchObject({ text: 'I really do not know', carryText: 'what' })
+    expect(prepareCommitOfText('She never told us anything about how')).toMatchObject({
+      text: 'She never told us anything',
+      carryText: 'about how',
+    })
+    expect(prepareCommitOfText('We will find out later when')).toMatchObject({ text: 'We will find out later', carryText: 'when' })
+    expect(prepareCommitOfText('Nobody could tell us where')).toMatchObject({ text: 'Nobody could tell us', carryText: 'where' })
+    expect(prepareCommitOfText('They have not decided whether')).toMatchObject({ text: 'They have not decided', carryText: 'whether' })
+
+    expect(prepareCommitOfText('Я совсем не знаю что')).toMatchObject({ text: 'Я совсем не знаю', carryText: 'что' })
+    expect(prepareCommitOfText('Он так и не сказал нам как')).toMatchObject({ text: 'Он так и не сказал нам', carryText: 'как' })
+    expect(prepareCommitOfText('Я ничего не знаю и как')).toMatchObject({ text: 'Я ничего не знаю', carryText: 'и как' })
+    expect(prepareCommitOfText('Они долго шли под')).toMatchObject({ text: 'Они долго шли', carryText: 'под' })
+
+    expect(prepareCommitOfText('Я зовсім не знаю де')).toMatchObject({ text: 'Я зовсім не знаю', carryText: 'де' })
+    expect(prepareCommitOfText('Ніхто не міг сказати нам куди')).toMatchObject({ text: 'Ніхто не міг сказати нам', carryText: 'куди' })
+    expect(prepareCommitOfText('Вони не сказали нам звідки')).toMatchObject({ text: 'Вони не сказали нам', carryText: 'звідки' })
+  })
+
+  it('stops the dangling-word scan at a punctuated question word and keeps the one-third limit for it', () => {
+    // A comma right after the word ends the scan before it; with no space after it, it is not a clause break either.
+    expect(prepareCommitOfText('Nobody could say when,')).toMatchObject({ text: 'Nobody could say when,', carryText: '' })
+
+    // "about how" would be more than a third of the text, and a carry that is too long is dropped, not trimmed.
+    expect(prepareCommitOfText('We know about how')).toMatchObject({ text: 'We know about how', carryText: '' })
+    expect(prepareCommitOfText('See what')).toMatchObject({ text: 'See what', carryText: '' })
+  })
+
   it('tries dangling words only after a clause break is out of reach and only within a third of the text', () => {
     const rejectedClause = 'Well, this remainder is about the'
     // 27 of the 33 characters follow the clause break, so it is rejected and the dangling words decide.
@@ -639,7 +668,7 @@ describe('carried words and the next caption length', () => {
     const { accumulator, send, ready } = commitWithCarry()
 
     // 16 of the 40 characters carry over: 1280 of the 3200 ms. The caption ends where they begin (1920 ms).
-    expect(ready).toMatchObject({ carryText: 'Epsilon zeta eta', carryAudioMs: 1_280, endedAt: 2_979 })
+    expect(ready).toMatchObject({ carryText: 'Epsilon zeta eta', carryAudioMs: 1_280, carryStartAudioMs: 1_920, endedAt: 2_979 })
     expect(accumulator.liveOriginal).toBe('Epsilon zeta eta')
     expect(accumulator.registerFinalize('cap')).toMatchObject({ targetStartMs: 1_920 })
 
@@ -653,9 +682,53 @@ describe('carried words and the next caption length', () => {
 
     // The caption keeps its whole confirmed span, 3200 ms (mapped through the anchor of frame 99), and the carried
     // words open the next window at the boundary: a full 6000 ms, i.e. 188 frames (6016 ms).
-    expect(ready).toMatchObject({ carryText: 'Epsilon zeta eta', carryAudioMs: 1_280, endedAt: 4_299 })
+    expect(ready).toMatchObject({ carryText: 'Epsilon zeta eta', carryAudioMs: 1_280, carryStartAudioMs: 3_200, endedAt: 4_299 })
     expect(accumulator.registerFinalize('cap')).toMatchObject({ targetStartMs: 3_200 })
     const cutFrame = sendFrames(send, 188).findIndex((result) => result.targetCrossed) + 1
     expect(cutFrame).toBe(188)
+  })
+
+  it('starts the carried words from the end of the confirmed text when the flush boundary is later', () => {
+    const accumulator = new LiveSpeechAccumulator({ language: 'en', targetMs: 6_000 })
+    const send = createStream(accumulator, 1_000)
+    sendFrames(send, 120)
+    accumulator.acceptResult(liveResult({
+      resultId: 1,
+      audioStartMs: 0,
+      audioEndMs: 3_200,
+      text: 'Alpha beta gamma delta. Epsilon zeta eta',
+      isFinal: true,
+    }), 100)
+
+    // Trailing silence: the flush answers at 3520 ms, 320 ms after the last confirmed word. The carried words
+    // still start at 3200 - 1280 = 1920 ms; the later boundary must not shift them.
+    const first = readyCommit(accumulator.prepareCommit(3_520, 3_520, true))
+    expect(first).toMatchObject({
+      boundaryAudioMs: 3_520,
+      carryText: 'Epsilon zeta eta',
+      carryAudioMs: 1_280,
+      carryStartAudioMs: 1_920,
+      endedAt: 2_979,
+    })
+    accumulator.completeCommit(first)
+    expect(accumulator.confirmedBoundaryMs).toBe(3_200)
+
+    accumulator.acceptResult(liveResult({
+      resultId: 2,
+      audioStartMs: 3_520,
+      audioEndMs: 3_840,
+      text: 'theta iota.',
+      isFinal: true,
+    }), 200)
+
+    // The carried start maps through the anchor of frame 60 (1920 ms). Started at the boundary it would be
+    // 3520 - 1280 = 2240 ms (frame 70), i.e. 3310.
+    expect(accumulator.prepareCommit(3_840, 3_840)).toMatchObject({
+      kind: 'ready',
+      text: 'Epsilon zeta eta theta iota.',
+      carryText: '',
+      startedAt: 2_980,
+      endedAt: 4_959,
+    })
   })
 })

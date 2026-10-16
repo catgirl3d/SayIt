@@ -274,8 +274,10 @@ describe('live subtitle layout', () => {
     expect(captionsAndWarnings).toContain('max-h-[48px]')
     expect(captionsAndWarnings).toContain('[@media(max-height:299px)_and_(min-height:255px)]:max-h-[32px]')
     expect(captionsAndWarnings).toContain('[@media(max-height:254px)]:max-h-[12px]')
-    expect(captionsAndWarnings).toContain('max-h-[60px]')
-    expect(captionsAndWarnings).toContain('max-h-[96px]')
+    expect(captionsAndWarnings).toContain('max-h-[40px]')
+    expect(captionsAndWarnings).toContain('max-h-[64px]')
+    expect(captionsAndWarnings).not.toContain('max-h-[60px]')
+    expect(captionsAndWarnings).not.toContain('max-h-[96px]')
     expect(captionsAndWarnings).toContain('[@media(max-height:399px)]:max-h-[16px]')
     expect(captionsAndWarnings).toContain('[@media(max-height:399px)]:max-h-[24px]')
     expect(captionsAndWarnings).toContain('[@media(max-height:254px)]:max-h-[12px]')
@@ -283,9 +285,13 @@ describe('live subtitle layout', () => {
     expect(liveTextClasses?.[1]).toContain('[@media(max-height:360px)_and_(min-height:261px)]:leading-4')
     expect(liveTextClasses?.[1]).toContain('[@media(max-height:399px)]:line-clamp-1')
     const liveSourceClasses = captionsAndWarnings.match(/<p class="([^"]+)"[^>]*>Settled original/)
-    expect(liveSourceClasses?.[1]).toContain('line-clamp-3')
+    expect(liveSourceClasses?.[1]).toContain(' max-h-[40px] ')
+    expect(liveSourceClasses?.[1]).toContain(' line-clamp-2 ')
+    expect(liveSourceClasses?.[1]).not.toContain('line-clamp-3')
     const liveTranslationClasses = captionsAndWarnings.match(/<p class="([^"]+)"[^>]*>Settled translation/)
-    expect(liveTranslationClasses?.[1]).toContain('line-clamp-3')
+    expect(liveTranslationClasses?.[1]).toContain(' max-h-[64px] ')
+    expect(liveTranslationClasses?.[1]).toContain(' line-clamp-2 ')
+    expect(liveTranslationClasses?.[1]).not.toContain('line-clamp-3')
     expect(captionsAndWarnings).toContain(longNotice)
     expect(captionsAndWarnings).toContain(longWarning)
     expect(captionsAndWarnings).toContain(longSource)
@@ -296,6 +302,23 @@ describe('live subtitle layout', () => {
     expect(statusAndError).toContain(longNotice)
     expect(statusAndError).toContain(longWarning)
     expect(statusAndError).toContain(longError)
+  })
+
+  it.each([
+    { name: 'only a notice', props: { notice: 'Untranslated notice' } },
+    { name: 'only a warning', props: { status: 'Persistent dictionary warning' } },
+    { name: 'neither a notice nor a warning', props: {} },
+  ])('keeps three-line settled captions with $name', ({ props }) => {
+    const markup = render({ source: 'Settled original', text: 'Settled translation', ...props })
+    const sourceClasses = markup.match(/<p class="([^"]+)"[^>]*>Settled original/)?.[1]
+    const translationClasses = markup.match(/<p class="([^"]+)"[^>]*>Settled translation/)?.[1]
+
+    expect(sourceClasses).toContain(' max-h-[60px] ')
+    expect(sourceClasses).toContain(' line-clamp-3 ')
+    expect(sourceClasses).not.toContain('max-h-[40px]')
+    expect(translationClasses).toContain(' max-h-[96px] ')
+    expect(translationClasses).toContain(' line-clamp-3 ')
+    expect(translationClasses).not.toContain('max-h-[64px]')
   })
 
   it('ignores live text when the live-recognition flag is absent or false', () => {

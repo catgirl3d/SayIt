@@ -57,9 +57,11 @@ const SUBTITLE_ERROR_CLASS = 'text-base leading-6 text-amber-300'
 const LIVE_SUBTITLE_ERROR_CLASS = 'max-h-[72px] overflow-hidden break-words text-base leading-6 text-amber-300 line-clamp-3 [@media(max-height:260px)]:max-h-[40px] [@media(max-height:260px)]:leading-5 [@media(max-height:260px)]:line-clamp-2'
 const SOURCE_CAPTION_BASE_CLASS = 'mb-1.5 whitespace-pre-wrap break-words text-sm leading-5'
 const LIVE_SOURCE_CAPTION_CLASS = ' max-h-[60px] overflow-hidden line-clamp-3 [@media(max-height:399px)]:mb-1 [@media(max-height:399px)]:max-h-[16px] [@media(max-height:399px)]:leading-4 [@media(max-height:399px)]:line-clamp-1'
+const LIVE_SOURCE_CAPTION_COMPACT_CLASS = ' max-h-[40px] overflow-hidden line-clamp-2 [@media(max-height:399px)]:mb-1 [@media(max-height:399px)]:max-h-[16px] [@media(max-height:399px)]:leading-4 [@media(max-height:399px)]:line-clamp-1'
 const BATCH_SOURCE_CAPTION_CLASS = ' line-clamp-3'
 const TRANSLATION_CAPTION_BASE_CLASS = 'whitespace-pre-wrap break-words text-xl font-medium leading-8'
 const LIVE_TRANSLATION_CAPTION_CLASS = ' max-h-[96px] overflow-hidden line-clamp-3 [@media(max-height:399px)]:max-h-[24px] [@media(max-height:399px)]:leading-6 [@media(max-height:399px)]:line-clamp-1'
+const LIVE_TRANSLATION_CAPTION_COMPACT_CLASS = ' max-h-[64px] overflow-hidden line-clamp-2 [@media(max-height:399px)]:max-h-[24px] [@media(max-height:399px)]:leading-6 [@media(max-height:399px)]:line-clamp-1'
 const PLACEHOLDER_CAPTION_BASE_CLASS = 'text-xl font-medium leading-8'
 const LIVE_PLACEHOLDER_CAPTION_CLASS = ' max-h-[64px] overflow-hidden [@media(max-height:399px)]:leading-6'
 const LIVE_OVERLAY_CONTENT_CLASS = 'pointer-events-none flex h-[384px] max-h-[calc(100vh-16px)] w-full max-w-[700px] flex-col items-center justify-end gap-2 overflow-hidden'
@@ -95,6 +97,12 @@ export function SubtitleCaption({ text, source, status, notice, error, liveText 
     </p>
   )
   const liveStatusClass = error ? `${LIVE_STATUS_CLASS}${LIVE_STATUS_ERROR_CLASS}` : LIVE_STATUS_CLASS
+  // The settled region is capped at 256 px (70vh - 24px of a 400 px window), 222 px inside its padding and border.
+  // A notice and a warning together take 108 px, leaving 114 px: three-line captions (162 px) would clip the
+  // translation, while two-line captions (110 px) fit.
+  const liveCompact = Boolean(notice && status)
+  const liveSourceCaptionClass = liveCompact ? LIVE_SOURCE_CAPTION_COMPACT_CLASS : LIVE_SOURCE_CAPTION_CLASS
+  const liveTranslationCaptionClass = liveCompact ? LIVE_TRANSLATION_CAPTION_COMPACT_CLASS : LIVE_TRANSLATION_CAPTION_CLASS
   const liveStatusMarkup = (
     <>
       {notice && (
@@ -122,14 +130,14 @@ export function SubtitleCaption({ text, source, status, notice, error, liveText 
     <>
       {source && (
         <p
-          className={`${SOURCE_CAPTION_BASE_CLASS}${liveRecognition ? LIVE_SOURCE_CAPTION_CLASS : BATCH_SOURCE_CAPTION_CLASS}`}
+          className={`${SOURCE_CAPTION_BASE_CLASS}${liveRecognition ? liveSourceCaptionClass : BATCH_SOURCE_CAPTION_CLASS}`}
           style={{ color: 'var(--overlay-text-muted)' }}
         >
           {source}
         </p>
       )}
       {text ? (
-        <p className={`${TRANSLATION_CAPTION_BASE_CLASS}${liveRecognition ? LIVE_TRANSLATION_CAPTION_CLASS : ''}`}>{text}</p>
+        <p className={`${TRANSLATION_CAPTION_BASE_CLASS}${liveRecognition ? liveTranslationCaptionClass : ''}`}>{text}</p>
       ) : source ? (
         <p
           aria-hidden

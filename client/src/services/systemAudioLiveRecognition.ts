@@ -1,4 +1,5 @@
 import { FRAME_BYTES, FRAME_MS } from './subtitleSegmentation'
+import { DANGLING_WORDS, NUMBER_WORD } from './liveCaptionWords'
 import type { SegmentCloseReason } from './pipelineTrace'
 import type { LiveAsrResult } from './transcription/types'
 
@@ -61,23 +62,8 @@ function splitAfterLast(text: string, pattern: RegExp, maxShare: number): Captio
   return { head, carry }
 }
 
-// Words that lean on the word after them (articles, prepositions, conjunctions, determiners) in English,
-// Ukrainian, and Russian. Auxiliaries and pronouns are left out: they also end clauses ("could be", "told her").
-const DANGLING_WORDS = new Set([
-  'a', 'an', 'the', 'to', 'of', 'in', 'on', 'at', 'for', 'with', 'by', 'from', 'as', 'and', 'or', 'but', 'nor',
-  'that', 'which', 'who', 'whose', 'than', 'into', 'onto', 'about', 'over', 'under', 'after', 'before', 'between',
-  'through', 'during', 'without', 'within', 'against', 'among', 'if', 'because', 'while', 'its', 'their', 'his',
-  'our', 'my', 'your', 'this', 'these', 'those', 'every', 'each',
-  'і', 'й', 'та', 'а', 'але', 'або', 'чи', 'в', 'у', 'на', 'з', 'із', 'зі', 'до', 'по', 'про', 'від', 'за', 'для',
-  'при', 'через', 'над', 'під', 'перед', 'між', 'без', 'після', 'що', 'щоб', 'як', 'якщо', 'коли', 'бо', 'наш',
-  'наша', 'наше', 'наші', 'свій', 'своя', 'своє', 'свої', 'цей', 'ця', 'ці', 'який', 'яка', 'яке', 'які',
-  'и', 'но', 'или', 'во', 'с', 'со', 'к', 'ко', 'о', 'об', 'от', 'из', 'для', 'между', 'после', 'чтобы', 'если',
-  'когда', 'потому', 'который', 'которая', 'которое', 'которые', 'этот', 'эта', 'эти', 'наша', 'наши', 'свой',
-  'своё', 'свои',
-])
-// A number leans on the unit or noun after it; a spelled-out number moves together with all of its words.
-const NUMBER_WORD = /^(?:\d[\d.,]*%?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|тисяч[аі]?|мільйон\p{L}*|мільярд\p{L}*|тысяч[аи]?|миллион\p{L}*|миллиард\p{L}*)$/u
-// At most this many trailing words move to the next caption when no punctuation qualifies.
+// At most this many trailing words (dangling words and numbers; a spelled-out number moves with all of its words)
+// move to the next caption when no punctuation qualifies.
 const MAX_DANGLING_WORDS = 4
 
 /** Moves words at the end that only make sense with what follows them (a preposition, an article, a number). */
@@ -237,6 +223,12 @@ export interface LiveCommitReady {
   readonly carryText: string
   /** Estimated audio the carried text takes, from its share of the confirmed text. */
   readonly carryAudioMs: number
+  /**
+   * Audio time at which the carried text starts: where the committed caption ends, i.e. the end of the confirmed
+   * text less the carried share, not the later flush boundary. The boundary when the carry does not count toward
+   * the next caption or there is nothing to carry.
+   */
+  readonly carryStartAudioMs: number
 }
 
 export type LiveCommitPreparation =
@@ -625,6 +617,7 @@ export class LiveSpeechAccumulator {
         asrModel: this.phraseModel,
         carryText,
         carryAudioMs,
+        carryStartAudioMs: carryText && this.carryCountsTowardNext ? endAudioMs : boundaryAudioMs,
       }
     }
     return {
@@ -639,16 +632,19 @@ export class LiveSpeechAccumulator {
       asrModel: this.phraseModel,
       carryText,
       carryAudioMs: 0,
+      carryStartAudioMs: boundaryAudioMs,
     }
   }
 
   completeCommit(commit: LiveCommitReady): LiveCommitCompletion {
     this.committedWatermark = Math.max(this.committedWatermark, commit.boundaryAudioMs)
-    // Carried words were spoken just before the boundary. When they count toward the next caption, their start
-    // is estimated from their share of the confirmed speech; otherwise the next caption starts at the boundary.
+    // Carried words were spoken just before the end of the confirmed text, which trailing silence can leave
+    // earlier than the boundary. When they count toward the next caption, their start is estimated from their
+    // share of the confirmed speech (carryStartAudioMs); otherwise the next caption starts at the boundary.
+    // That start lies inside the speech just committed, so it is not before the previous watermark.
     const carry = commit.carryText
     const carryLeadMs = carry && this.carryCountsTowardNext ? commit.carryAudioMs : 0
-    const carryStartMs = commit.boundaryAudioMs - carryLeadMs
+    const carryStartMs = carry ? commit.carryStartAudioMs : commit.boundaryAudioMs
     // Accepted results never start before the watermark, and carried words start at carryStartMs, so only the
     // last anchor at or before the earlier of the two is still needed.
     const retainFromMs = Math.min(this.committedWatermark, carryStartMs)
@@ -656,7 +652,8 @@ export class LiveSpeechAccumulator {
     this.confirmedText = carry
     this.carriedChars = carry.length
     this.confirmedStartMs = carry ? carryStartMs : null
-    this.confirmedEndMs = carry ? commit.boundaryAudioMs : 0
+    // The carried words end where the confirmed text ended (start plus lead), or at the boundary without a lead.
+    this.confirmedEndMs = carry ? carryStartMs + carryLeadMs : 0
     this.confirmedAt = carry ? commit.confirmedAt : null
     if (this.interimStartMs === null || this.interimEndMs <= commit.boundaryAudioMs) {
       this.interimText = ''
