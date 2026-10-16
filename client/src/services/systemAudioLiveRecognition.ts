@@ -33,11 +33,11 @@ const LIVE_EARLY_WORDS_AFTER = 3
 // Sentence-final punctuation inside a text, optionally followed by closing quotes or brackets: Latin marks
 // only before whitespace, so decimals and "U.S" do not split; CJK marks anywhere, as those scripts put no
 // space after them.
-const SENTENCE_BREAK = /[.!?]["'”’»)\]]*(?=\s)|[。！？]["'”’»)\]]*/gu
+const SENTENCE_BREAK = /[.!?]["'”’»)\]]*(?=\s)|[。！？]["'”’»)\]]*/gu // i18n-allow: CJK sentence and clause punctuation used to split captions
 // The same sentence end, also at the very end of the text: the freshest live period has nothing after it yet.
-const SENTENCE_BREAK_OR_END = /[.!?]["'”’»)\]]*(?=\s|$)|[。！？]["'”’»)\]]*/gu
+const SENTENCE_BREAK_OR_END = /[.!?]["'”’»)\]]*(?=\s|$)|[。！？]["'”’»)\]]*/gu // i18n-allow: CJK sentence and clause punctuation used to split captions
 // Clause punctuation inside a text, with the same whitespace rule for Latin marks.
-const CLAUSE_BREAK = /[,;:]["'”’»)\]]*(?=\s)|[，、；：]["'”’»)\]]*/gu
+const CLAUSE_BREAK = /[,;:]["'”’»)\]]*(?=\s)|[，、；：]["'”’»)\]]*/gu // i18n-allow: CJK sentence and clause punctuation used to split captions
 // A cap commit ends its caption at the last sentence end when no more than this share of the text follows
 // it; that remainder opens the next caption. A longer remainder means the sentence ended too early to cut.
 const MAX_SENTENCE_CARRY_SHARE = 0.6
