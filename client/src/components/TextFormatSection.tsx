@@ -1,4 +1,4 @@
-// 文本格式规范开关 — 不依赖 AI 的客户端文本处理
+// Text formatting switches — client-side text processing that does not need AI
 
 import { useEffect, useRef, useState } from 'react'
 import { HelpCircle } from 'lucide-react'
@@ -13,21 +13,25 @@ import {
 import type { TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { useAiEnabled } from '@/hooks/useAiEnabled'
+import { getSpeechInputLanguage } from '@/services/speechInputLanguage'
 
 interface ToggleDef {
   key: keyof TextPostProcessOptions
   titleKey: TranslationKey
-  /** 行内可见的简短说明 */
+  /** Short description shown inline next to the switch */
   hintKey: TranslationKey
-  /** hover 问号显示的详细说明 + 例子（换行用 \n） */
+  /** Detailed description + examples shown on the help hover (newlines use \n) */
   detailKey: TranslationKey
+  /** Only meaningful for Chinese speech; hidden for every other speech language. */
+  chineseOnly?: boolean
 }
 
 /**
- * 存 key 而不是文案。
+ * Keys are stored, not copy.
  *
- * 这里的 detail 是「说明 + 例子 + AI 生效条件」三段拼起来的，所以拼接也放到渲染期，
- * 否则模块加载时就把当时的语言固化下来了。
+ * The detail text is assembled from description + examples + the AI note, so the
+ * concatenation happens at render time; doing it at module load would freeze the
+ * language that was active back then.
  */
 const TOGGLES: ToggleDef[] = [
   {
@@ -35,12 +39,14 @@ const TOGGLES: ToggleDef[] = [
     titleKey: 'textFormat.autoSegment.title',
     hintKey: 'textFormat.autoSegment.hint',
     detailKey: 'textFormat.autoSegment.help',
+    chineseOnly: true,
   },
   {
     key: 'normalizeNumbers',
     titleKey: 'textFormat.normalizeNumbers.title',
     hintKey: 'textFormat.normalizeNumbers.hint',
     detailKey: 'textFormat.normalizeNumbers.help',
+    chineseOnly: true,
   },
   {
     key: 'stripTrailingPunctuation',
@@ -61,25 +67,32 @@ export default function TextFormatSection() {
   const aiEnabled = useAiEnabled()
   const [opts, setOpts] = useState<TextPostProcessOptions>(DEFAULT_POST_PROCESS)
   const initialized = useRef(false)
-  // 读到已保存值之前，开关先隐藏、且不放动画：避免先画出默认值再跳到已保存值（闪一下）。
-  // 用 finally 兜底，读取失败也让开关出现（呈默认值），不至于一直隐藏。
+  // Before the saved values are read the switches stay hidden and animate nothing: this
+  // avoids drawing the defaults and then jumping to the saved values (a visible flash).
   const [ready, setReady] = useState(false)
-  // animate 与 ready 分开：ready 决定何时显示，animate 决定何时允许过渡。
-  // 若在揭开/赋值的同一帧就把 transition 加回来，按 CSS 规范浏览器会认为
-  // 「有过渡且值变了」，于是把「默认值→已保存值」真的动画一遍（看起来就是闪一下）。
-  // 所以揭开那一帧仍不带过渡，隔两帧待值稳定后才开过渡。
+  // animate is separate from ready: ready decides when to show, animate when transitions
+  // are allowed. If the transition is re-enabled in the same frame the value is applied,
+  // the CSS spec makes the browser animate "default -> saved value" for real (that is the
+  // flash). So the reveal frame still has no transition; it is added two frames later,
+  // after the value has settled.
   const [animate, setAnimate] = useState(false)
+  // Paragraph splitting and number normalization only do anything for Chinese speech.
+  const [showChineseOnlyToggles, setShowChineseOnlyToggles] = useState(false)
 
   useEffect(() => {
-    getTextPostProcessOptions()
+    const optionsLoaded = getTextPostProcessOptions()
       .then((loaded) => {
         setOpts(loaded)
         initialized.current = true
       })
-      .finally(() => {
-        setReady(true)
-        requestAnimationFrame(() => requestAnimationFrame(() => setAnimate(true)))
-      })
+    const speechLanguageLoaded = getSpeechInputLanguage()
+      .then((language) => setShowChineseOnlyToggles(language === 'zh'))
+    // Reveal the switches only after both reads settle; a failed read still reveals them
+    // with the default values, so they can never stay hidden.
+    Promise.allSettled([optionsLoaded, speechLanguageLoaded]).then(() => {
+      setReady(true)
+      requestAnimationFrame(() => requestAnimationFrame(() => setAnimate(true)))
+    })
   }, [])
 
   useEffect(() => {
@@ -91,19 +104,24 @@ export default function TextFormatSection() {
     setOpts((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
+  const visibleToggles = TOGGLES.filter((def) => !def.chineseOnly || showChineseOnlyToggles)
+
   return (
     <div className="mb-6 rounded-lg border border-border">
       <div className="border-b border-border px-4 py-3">
         <h2 className="text-lg font-semibold">{t('textFormat.title')}</h2>
-        {/* 说清生效条件：这几项是"没有 AI 时我们自己做的排版兜底"。开了 AI 整理，
-            排版就归 AI 管，这里整体不生效——两边都做会互相打架。文本替换不在此列，见热词页的「文本替换」。 */}
+        {/* State the effect condition: these are the fallback formatting rules we apply
+            when there is no AI. With AI cleanup on, formatting belongs to the AI and this
+            section does not apply at all — both sides doing it would fight each other.
+            Text replacements are not affected; see the Text replacement section on the
+            Hotwords page. */}
         <p className="mt-0.5 text-xs text-muted-foreground">
           {t('textFormat.desc')}
         </p>
       </div>
       <div className="divide-y divide-border/60">
-        {/* 变量名从 t 改成 def：t 现在是翻译函数，同名会被遮蔽掉 */}
-        {TOGGLES.map((def) => {
+        {/* The loop variable is def, not t: t is the translation function now and would be shadowed */}
+        {visibleToggles.map((def) => {
           const labelId = `text-format-${def.key}-label`
           return (
             <div key={def.key} className="flex items-center gap-2.5 px-4 py-2.5">

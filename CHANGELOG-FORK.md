@@ -31,6 +31,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Live captions can now take three lines for the translation and for the original above it before they are cut with an ellipsis (was two), except while both a notice and a warning are shown, when they keep two lines.
 - Selection editing no longer defaults an unspecified "translate" command to Chinese: Ukrainian selected text is translated to English, and any other text to Ukrainian.
 - Removed the Chinese words from the built-in AI hotword set; saved copies drop them on the next load.
+- The automatic paragraph splitting and number normalization switches are now shown only when the speech language is Chinese; for other speech languages they did nothing and are hidden.
 
 ## v0.2.2 — 2026-10-12
 
