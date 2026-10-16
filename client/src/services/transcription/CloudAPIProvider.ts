@@ -869,10 +869,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
         this.deepgramStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: ready')
       } else if (isQwenStreamProvider(asrProvider) && realtime) {
-        // 千问流式：只在开启实时显示、且这份配置真的就绪时才走流式 WebSocket。
-        //   · qwen_realtime      需要 WorkspaceId（isStreamingDisplayReady 已把关）
-        //   · qwen_audio_stream  不需要，填了密钥就能用
-        // qwen3-asr-flash（非实时）与未开启实时显示时都不进此分支，走下面的一次性识别。
+        // Qwen streaming: only when live captions are on and this configuration is
+        // actually ready does the run take the streaming WebSocket.
+        //   · qwen_realtime      needs a WorkspaceId (isStreamingDisplayReady gates it)
+        //   · qwen_audio_stream  needs none; an API key is enough
+        // qwen3-asr-flash (non-real-time) and runs without live captions skip this branch
+        // and use the one-shot recognition below.
         this.isQwenStream = true
         this.qwenCommands = QWEN_STREAM_COMMANDS[asrProvider]
         if (!profile) return
@@ -884,6 +886,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
           hotwords: startOpts.hotwords ?? [],
           realtime,
           workspaceId: qwenWorkspaceId,
+          // Only the OpenAI-realtime protocol carries the speech language today; "auto"
+          // leaves identification to the service. The duplex audio-stream protocol does
+          // not take this parameter yet, so it is sent for qwen_realtime only.
+          ...(asrProvider === 'qwen_realtime'
+            ? { language: normalizeSpeechInputLanguage(startOpts.language) }
+            : {}),
         })
         if (!open.opened || !this.isRunCurrent(runId)) return
         this.qwenStreamReady = true

@@ -68,10 +68,45 @@ static RT_STATE: once_cell::sync::Lazy<Arc<Mutex<RtState>>> =
 
 static RT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// 打开千问实时 ASR 会话
+/// Build the `session.update` event for the realtime socket.
 ///
-/// hotwords：热词列表，通过 session.input_audio_transcription.corpus.text 上下文偏置（最多 10000 tokens）
-/// realtime：是否开启实时显示（中间结果上抛）
+/// Fields follow the official SDK: modalities, audio format, sample rate, language, VAD.
+/// The language is optional on the service side, so `None` / empty / "auto" omits the field
+/// and lets the service identify the language itself.
+fn build_session_update(language: Option<&str>, hotwords: Option<&[String]>) -> serde_json::Value {
+    let mut input_audio_transcription = serde_json::json!({});
+    if let Some(language) = language
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("auto"))
+    {
+        input_audio_transcription["language"] = serde_json::Value::String(language.to_string());
+    }
+    if let Some(ctx) = hotwords.and_then(super::asr_qwen::build_hotword_context_text) {
+        input_audio_transcription["corpus"] = serde_json::json!({ "text": ctx });
+    }
+
+    serde_json::json!({
+        "event_id": "init_session",
+        "type": "session.update",
+        "session": {
+            "modalities": ["text"],
+            "input_audio_format": "pcm",
+            "sample_rate": 16000,
+            "input_audio_transcription": input_audio_transcription,
+            "turn_detection": {
+                "type": "server_vad",
+                "threshold": 0.0,
+                "silence_duration_ms": 400
+            }
+        }
+    })
+}
+
+/// Open a Qwen realtime ASR session.
+///
+/// hotwords: bias terms sent as session.input_audio_transcription.corpus.text (up to 10000 tokens)
+/// realtime: whether interim results are emitted for live captions
+/// language: the app's speech-input language; `None` / empty / "auto" lets the service identify it
 #[tauri::command]
 pub async fn qwen_stream_open(
     app: AppHandle,
@@ -79,6 +114,7 @@ pub async fn qwen_stream_open(
     hotwords: Option<Vec<String>>,
     realtime: Option<bool>,
     workspace_id: Option<String>,
+    language: Option<String>,
 ) -> Result<(), String> {
     let realtime = realtime.unwrap_or(false);
 
@@ -146,32 +182,8 @@ pub async fn qwen_stream_open(
         realtime
     ));
 
-    // 发送 session.update 配置
-    let mut input_audio_transcription = serde_json::json!({
-        "language": "zh"
-    });
-    if let Some(words) = &hotwords {
-        if let Some(ctx) = super::asr_qwen::build_hotword_context_text(words) {
-            input_audio_transcription["corpus"] = serde_json::json!({ "text": ctx });
-        }
-    }
-
-    // 字段对齐官方 SDK：modalities: ["text"] + 音频格式/采样率 + 语言 + VAD。
-    let session_update = serde_json::json!({
-        "event_id": "init_session",
-        "type": "session.update",
-        "session": {
-            "modalities": ["text"],
-            "input_audio_format": "pcm",
-            "sample_rate": 16000,
-            "input_audio_transcription": input_audio_transcription,
-            "turn_detection": {
-                "type": "server_vad",
-                "threshold": 0.0,
-                "silence_duration_ms": 400
-            }
-        }
-    });
+    // Send the session.update configuration.
+    let session_update = build_session_update(language.as_deref(), hotwords.as_deref());
 
     ws.send(tungstenite::Message::Text(
         serde_json::to_string(&session_update).unwrap().into(),
@@ -598,7 +610,7 @@ pub async fn qwen_stream_finish() -> Result<String, String> {
     Ok(final_text)
 }
 
-/// 关闭会话
+/// Close the session
 #[tauri::command]
 pub async fn qwen_stream_close() -> Result<(), String> {
     if RT_ACTIVE.load(Ordering::SeqCst) {
@@ -610,4 +622,46 @@ pub async fn qwen_stream_close() -> Result<(), String> {
         let _ = ws.close(None).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_session_update;
+
+    #[test]
+    fn session_update_uses_the_explicit_language() {
+        let update = build_session_update(Some("uk"), None);
+        assert_eq!(
+            update["session"]["input_audio_transcription"]["language"],
+            serde_json::json!("uk")
+        );
+    }
+
+    #[test]
+    fn session_update_leaves_auto_language_to_the_service() {
+        for language in [None, Some(""), Some("  "), Some("auto"), Some("AUTO")] {
+            let update = build_session_update(language, None);
+            assert!(
+                update["session"]["input_audio_transcription"]
+                    .get("language")
+                    .is_none(),
+                "language {:?} must not be sent",
+                language
+            );
+        }
+    }
+
+    #[test]
+    fn session_update_keeps_hotwords_alongside_the_language() {
+        let words = vec!["SayIt".to_string()];
+        let update = build_session_update(Some("en"), Some(&words));
+        let transcription = &update["session"]["input_audio_transcription"];
+        assert_eq!(transcription["language"], serde_json::json!("en"));
+        assert!(
+            transcription["corpus"]["text"]
+                .as_str()
+                .expect("corpus text")
+                .contains("SayIt")
+        );
+    }
 }

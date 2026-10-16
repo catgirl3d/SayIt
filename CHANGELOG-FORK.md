@@ -34,6 +34,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - The automatic paragraph splitting and number normalization switches are now shown only when the speech language is Chinese; for other speech languages they did nothing and are hidden.
 - The built-in text replacements no longer carry Chinese-only defaults or the pump→Prompt rule; new installs keep only the Cloud Code → Claude Code correction.
 - New installs use Nemotron Streaming 0.6B as the default local model, which recognizes Ukrainian and Russian out of the box; SenseVoice stays available as the fastest Chinese/English option.
+- Qwen realtime streaming now sends the selected speech language instead of always assuming Chinese; with "auto" the service identifies the language itself.
 
 ## v0.2.2 — 2026-10-12
 
