@@ -6,6 +6,7 @@ import {
   type FileTranscriptionBridge,
   type FileTranscriptionSnapshot,
 } from '../fileTranscription'
+import { DEFAULT_LOCAL_MODEL_ID } from '../localModelStatus'
 
 const profileStoreMocks = vi.hoisted(() => ({
   loadAsrProfiles: vi.fn(),
@@ -165,7 +166,7 @@ describe('file transcription service', () => {
         audioStreamIndex: null,
         engine: 'local',
         cloud: null,
-        modelId: 'sensevoice-small-gguf',
+        modelId: DEFAULT_LOCAL_MODEL_ID,
         language: 'uk',
         accelerator: 'auto',
       },
@@ -194,7 +195,7 @@ describe('file transcription service', () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'list_available_models') throw new Error('catalog offline')
-      if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', complete: true }]
+      if (command === 'list_downloaded_models') return [{ id: DEFAULT_LOCAL_MODEL_ID, complete: true }]
       if (command === 'start_file_transcription') return snapshot({ resourcesReleased: true })
       return command === 'get_file_transcription_state' ? null : undefined
     })
@@ -213,7 +214,7 @@ describe('file transcription service', () => {
         outputDirectory: 'C:/output',
         ffmpegDirectory: null,
         audioStreamIndex: null,
-        modelId: 'sensevoice-small-gguf',
+        modelId: DEFAULT_LOCAL_MODEL_ID,
         language: 'uk',
         accelerator: 'auto',
         engine: 'local',

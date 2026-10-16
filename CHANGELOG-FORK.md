@@ -33,6 +33,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Removed the Chinese words from the built-in AI hotword set; saved copies drop them on the next load.
 - The automatic paragraph splitting and number normalization switches are now shown only when the speech language is Chinese; for other speech languages they did nothing and are hidden.
 - The built-in text replacements no longer carry Chinese-only defaults or the pump→Prompt rule; new installs keep only the Cloud Code → Claude Code correction.
+- New installs use Nemotron Streaming 0.6B as the default local model, which recognizes Ukrainian and Russian out of the box; SenseVoice stays available as the fastest Chinese/English option.
 
 ## v0.2.2 — 2026-10-12
 

@@ -301,6 +301,9 @@ beforeEach(() => {
   native.settings.set('aiMinDurationSec', 10)
   native.settings.set('activePresetId', 'intent')
   native.settings.set('speechInput.language', 'en')
+  // A configured local-mode user has an explicit model selection; this must match the
+  // downloaded-model list below so readiness never depends on the catalog default.
+  native.settings.set('localAsr.modelId', 'sensevoice-small-gguf')
   native.listeners.clear()
   sourceCaptureEndUnixUs = Date.now() * 1_000
   sourceClockOffsetUs = 0
