@@ -35,6 +35,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - The built-in text replacements no longer carry Chinese-only defaults or the pump→Prompt rule; new installs keep only the Cloud Code → Claude Code correction.
 - New installs use Nemotron Streaming 0.6B as the default local model, which recognizes Ukrainian and Russian out of the box; SenseVoice stays available as the fastest Chinese/English option.
 - Qwen realtime streaming now sends the selected speech language instead of always assuming Chinese; with "auto" the service identifies the language itself.
+- Microphone boost on the Audio page is no longer limited to 1x, 2x, 3x, and 5x: a Manual / Auto switch now sits above a slider that sets any fixed gain from 1x to 20x in 0.5x steps, with preset chips jumping to 1×, 2×, 3×, 5×, 10×, and 20×. The slider is logarithmic, so every doubling takes the same width and the everyday 1×–5× range is no longer squeezed into a fifth of the track. The current gain with its decibel equivalent is shown above the track, and the track is split into three zones — safe up to 5×, high up to 10×, distortion risk above — with the current zone named below it. The slider also works from the keyboard: arrows change the gain by 0.5×, Page Up / Page Down by 2×, Home and End jump to 1× and 20×. Switching to Auto and back restores the last manual gain. Previously saved settings keep the same gain.
 
 ## v0.2.2 — 2026-10-12
 
