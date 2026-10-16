@@ -12,6 +12,7 @@ dev-scripts/
 dev-notes/
 we-media/
 sayit说话波形图效果.html
+temp/*
 
 # ── Server dev artifacts ──
 server/.kiro/
