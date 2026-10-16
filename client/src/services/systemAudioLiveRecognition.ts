@@ -21,7 +21,7 @@ const LIVE_CAPTURE_TIME_TOLERANCE_US = 4
 // Once the caption length is reached, wait up to this much more audio for a pause between words before the
 // flush: Deepgram re-decodes a word that straddles a forced Finalize, so that word comes back duplicated,
 // split, or not at all.
-const LIVE_PAUSE_WAIT_MS = 400
+const LIVE_PAUSE_WAIT_MS = 600
 // A frame is a pause between words when its RMS level falls to this share of the recent speech peak.
 const LIVE_PAUSE_LEVEL_RATIO = 0.2
 // The recent speech peak decays by this factor per frame, halving in about a second.

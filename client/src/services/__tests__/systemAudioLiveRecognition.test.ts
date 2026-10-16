@@ -566,8 +566,8 @@ describe('early caption cut at a sentence end', () => {
 
 describe('wait for a pause before a length cut', () => {
   const TARGET_FRAMES = 20
-  // 400 ms is 12.5 frames: the wait that began at the target frame expires at the 13th frame after it.
-  const PAUSE_WAIT_FRAMES = 13
+  // 600 ms is 18.75 frames: the wait that began at the target frame expires at the 19th frame after it.
+  const PAUSE_WAIT_FRAMES = 19
   const LOUD = 1_000
   // A frame is a pause at or below 20% of the recent speech peak.
   const QUIET = 100
@@ -579,7 +579,7 @@ describe('wait for a pause before a length cut', () => {
     return { accumulator, send: createStream(accumulator) }
   }
 
-  it('waits 400 ms past the length limit when the audio has no pause, then flushes', () => {
+  it('waits 600 ms past the length limit when the audio has no pause, then flushes', () => {
     const { send } = withPendingText()
     const results = sendFrames(send, TARGET_FRAMES + PAUSE_WAIT_FRAMES, LOUD)
 
