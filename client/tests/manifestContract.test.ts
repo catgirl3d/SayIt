@@ -70,6 +70,48 @@ describe('release generator output satisfies the runtime manifest validator', ()
       expect(info.downloadUrl).toBe(generated.url)
       expect(info.sha512).toBe(generated.sha512)
       expect(info.notes).toBe('## v0.2.1\n\n- Something changed')
+      // Without translated files the generator must not emit the field at all: the
+      // manifest contract for English-only releases stays byte-identical to before
+      // localization existed, which is what manifests already in the wild (and older
+      // clients) rely on.
+      expect('notesLocalized' in generated).toBe(false)
+      expect(info.notesLocalized).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps localized notes reachable from a generated manifest', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-contract-'))
+    try {
+      const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
+      const manifestPath = join(dir, UPDATE_MANIFEST_FILENAME)
+      const notesPath = join(dir, 'notes.md')
+      const ukNotesPath = join(dir, 'notes-uk.md')
+      writeFileSync(installerPath, 'installer-bytes')
+      writeFileSync(notesPath, '## v0.2.1\n\n- Something changed\n')
+      writeFileSync(ukNotesPath, '## v0.2.1\n\n- Дещо змінилося\n')
+
+      execFileSync(process.execPath, [
+        GENERATOR_PATH,
+        '--version', '0.2.1',
+        '--repository', 'catgirl3d/SayIt',
+        '--installer', installerPath,
+        '--release-date', '2026-09-19T00:00:00.000Z',
+        '--notes-file', notesPath,
+        '--localized-notes-file', `uk=${ukNotesPath}`,
+        '--output', manifestPath,
+      ])
+
+      const generated = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      expect(generated.notesLocalized).toEqual({ uk: '## v0.2.1\n\n- Дещо змінилося' })
+
+      vi.spyOn(bridge, 'checkUpdateManifest').mockResolvedValue({ status: 200, body: generated })
+      const info = await checkVersionUpdate('0.2.0')
+
+      expect(info.error).toBeNull()
+      expect(info.notes).toBe('## v0.2.1\n\n- Something changed')
+      expect(info.notesLocalized).toEqual({ uk: '## v0.2.1\n\n- Дещо змінилося' })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -106,12 +106,36 @@ jobs:
             throw "Could not extract the CHANGELOG-FORK.md section for $tag"
           }
 
+          # The Ukrainian section is optional by design: the app falls back to the
+          # English notes when a translation is missing, so the release is not blocked
+          # while the translation is pending. When present, it rides into the manifest
+          # as notesLocalized.uk and the release body links the Ukrainian changelog.
+          $ukSectionPath = Join-Path $env:RUNNER_TEMP 'sayit-release-section-uk.md'
+          $ukSectionFile = ''
+          $ukChangelogExists = Test-Path -LiteralPath 'CHANGELOG-FORK.uk.md'
+          if ($ukChangelogExists) {
+            node client/scripts/extract-release-notes.mjs --version $version --changelog 'CHANGELOG-FORK.uk.md' --output $ukSectionPath
+            $ukExtractionFailed = $LASTEXITCODE -ne 0
+            # Reset the native exit code: the failure below is handled (English-only
+            # fallback), and GitHub Actions fails the step on the final $LASTEXITCODE
+            # even when the script itself completed successfully.
+            $LASTEXITCODE = 0
+            if (-not $ukExtractionFailed) {
+              $ukSectionFile = $ukSectionPath
+            } else {
+              Write-Warning "No CHANGELOG-FORK.uk.md section for $tag; publishing with English release notes only"
+            }
+          }
+
           $notes = [System.Collections.Generic.List[string]]::new()
           $notes.Add("Built from commit $($env:RELEASE_SHA) on branch $($env:GITHUB_REF_NAME).")
           $notes.Add('')
           $notes.Add((Get-Content -LiteralPath $sectionPath -Raw).Trim())
           $notes.Add('')
           $notes.Add("Full fork changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG-FORK.md")
+          if ($ukChangelogExists) {
+            $notes.Add("Ukrainian changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG-FORK.uk.md")
+          }
 
           $notesPath = Join-Path $env:RUNNER_TEMP 'sayit-release-notes.md'
           [System.IO.File]::WriteAllText(
@@ -124,6 +148,7 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "notes_file=$notesPath" >> $env:GITHUB_OUTPUT
           "section_file=$sectionPath" >> $env:GITHUB_OUTPUT
+          "uk_section_file=$ukSectionFile" >> $env:GITHUB_OUTPUT
 
       - name: Build NSIS installer
         working-directory: client
@@ -157,13 +182,19 @@ jobs:
           $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'latest-win32-x64.json'
           $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
 
-          node client/scripts/generate-update-manifest.mjs `
-            --version '${{ steps.meta.outputs.version }}' `
-            --repository '${{ github.repository }}' `
-            --installer '${{ steps.installer.outputs.path }}' `
-            --release-date $releaseDate `
-            --notes-file '${{ steps.meta.outputs.section_file }}' `
-            --output $manifestPath
+          $manifestArgs = @(
+            'client/scripts/generate-update-manifest.mjs',
+            '--version', '${{ steps.meta.outputs.version }}',
+            '--repository', '${{ github.repository }}',
+            '--installer', '${{ steps.installer.outputs.path }}',
+            '--release-date', $releaseDate,
+            '--notes-file', '${{ steps.meta.outputs.section_file }}',
+            '--output', $manifestPath
+          )
+          if ('${{ steps.meta.outputs.uk_section_file }}' -ne '') {
+            $manifestArgs += @('--localized-notes-file', "uk=${{ steps.meta.outputs.uk_section_file }}")
+          }
+          & node @manifestArgs
           if ($LASTEXITCODE -ne 0) {
             throw 'Could not generate the update manifest'
           }

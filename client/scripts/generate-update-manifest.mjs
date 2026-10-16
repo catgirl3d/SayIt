@@ -11,7 +11,10 @@
  *
  * The manifest also carries the release notes for the version — the CHANGELOG-FORK.md
  * section that the release workflow already extracts — so the desktop app can show
- * what changed at the moment it discovers the update, without a second request.
+ * what changed at the moment it discovers the update, without a second request. Translated
+ * sections (CHANGELOG-FORK.uk.md) ride in `notesLocalized` keyed by interface locale; the
+ * English `notes` stays the required source and the app's fallback, and the field is
+ * omitted entirely when no translations exist.
  *
  * The repository is pinned: running the release workflow from any repository other
  * than the fork fails here instead of publishing metadata that points at the wrong
@@ -39,7 +42,7 @@ export function installerNameForVersion(version) {
   return `SayIt_${version}_x64-setup.exe`
 }
 
-export function buildUpdateManifest({ version, repository, installerName, installerBytes, releaseDate, notes }) {
+export function buildUpdateManifest({ version, repository, installerName, installerBytes, releaseDate, notes, localizedNotes }) {
   if (repository !== FORK_REPOSITORY) {
     throw new Error(`Refusing to build a manifest for repository '${repository}' (expected '${FORK_REPOSITORY}')`)
   }
@@ -62,6 +65,26 @@ export function buildUpdateManifest({ version, repository, installerName, instal
   if (typeof notes !== 'string' || notes.trim() === '') {
     throw new Error('Invalid release notes (expected the CHANGELOG-FORK.md section for this version)')
   }
+  // Localized sections are additive display data for non-English interface locales.
+  // The base `notes` above stays the English source and the app's fallback, so a blank
+  // or malformed translation must never ship: it either fails the release here or is
+  // omitted entirely (no entry, no field).
+  let normalizedLocalizedNotes = null
+  if (localizedNotes !== undefined) {
+    if (typeof localizedNotes !== 'object' || localizedNotes === null || Array.isArray(localizedNotes)) {
+      throw new Error('Invalid localized release notes (expected a map of locale to section text)')
+    }
+    const entries = Object.entries(localizedNotes)
+    if (entries.length > 0) {
+      normalizedLocalizedNotes = {}
+      for (const [locale, text] of entries) {
+        if (locale.trim() === '' || typeof text !== 'string' || text.trim() === '') {
+          throw new Error(`Invalid localized release notes for locale '${locale}' (expected a non-empty string)`)
+        }
+        normalizedLocalizedNotes[locale] = text.trim()
+      }
+    }
+  }
 
   const manifest = {
     version,
@@ -69,6 +92,11 @@ export function buildUpdateManifest({ version, repository, installerName, instal
     url: `https://github.com/${FORK_REPOSITORY}/releases/download/v${version}/${expectedName}`,
     sha512: createHash('sha512').update(installerBytes).digest('base64'),
     notes: notes.trim(),
+  }
+  // Emit the field only when translations exist, so manifests for English-only
+  // releases stay byte-identical to the pre-localization contract.
+  if (normalizedLocalizedNotes !== null) {
+    manifest.notesLocalized = normalizedLocalizedNotes
   }
   // Measure exactly what main() writes: pretty-printed JSON plus a trailing newline.
   const manifestBytes = Buffer.byteLength(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
@@ -78,7 +106,9 @@ export function buildUpdateManifest({ version, repository, installerName, instal
   return manifest
 }
 
-const CLI_OPTIONS = new Set(['version', 'repository', 'installer', 'release-date', 'notes-file', 'output'])
+const CLI_OPTIONS = new Set(['version', 'repository', 'installer', 'release-date', 'notes-file', 'localized-notes-file', 'output'])
+/** Repeatable option: each use adds one <locale>=<file> entry. */
+const REPEATABLE_OPTIONS = new Set(['localized-notes-file'])
 
 function parseArgs(args) {
   const options = {}
@@ -87,13 +117,33 @@ function parseArgs(args) {
     if (!arg.startsWith('--')) throw new Error(`Unexpected argument '${arg}'`)
     const key = arg.slice(2)
     if (!CLI_OPTIONS.has(key)) throw new Error(`Unknown option '${arg}'`)
-    if (options[key] !== undefined) throw new Error(`Duplicate option '${arg}'`)
+    if (options[key] !== undefined && !REPEATABLE_OPTIONS.has(key)) throw new Error(`Duplicate option '${arg}'`)
     const value = args[i + 1]
     if (value === undefined || value.startsWith('--')) throw new Error(`Missing value for '${arg}'`)
-    options[key] = value
+    if (REPEATABLE_OPTIONS.has(key)) {
+      const separator = value.indexOf('=')
+      if (separator <= 0 || separator === value.length - 1) {
+        throw new Error(`Invalid ${arg} value '${value}' (expected <locale>=<path>)`)
+      }
+      options[key] = [...(options[key] ?? []), [value.slice(0, separator), value.slice(separator + 1)]]
+    } else {
+      options[key] = value
+    }
     i += 1
   }
   return options
+}
+
+function readLocalizedNotes(entries) {
+  if (entries === undefined || entries.length === 0) return undefined
+  const localizedNotes = {}
+  for (const [locale, path] of entries) {
+    if (Object.prototype.hasOwnProperty.call(localizedNotes, locale)) {
+      throw new Error(`Duplicate localized notes for locale '${locale}'`)
+    }
+    localizedNotes[locale] = readFileSync(path, 'utf8')
+  }
+  return localizedNotes
 }
 
 function main(args) {
@@ -112,6 +162,7 @@ function main(args) {
     installerBytes,
     releaseDate: options['release-date'],
     notes,
+    localizedNotes: readLocalizedNotes(options['localized-notes-file']),
   })
 
   writeFileSync(options.output, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')

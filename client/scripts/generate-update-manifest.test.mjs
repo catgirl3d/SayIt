@@ -106,6 +106,51 @@ test('rejects release notes that would exceed the native manifest size limit', (
   )
 })
 
+test('carries trimmed localized release notes when provided', () => {
+  const manifest = buildUpdateManifest({
+    ...VALID,
+    localizedNotes: { uk: '## v0.2.1\n\n- Зміна\n' },
+  })
+  assert.deepEqual(manifest, {
+    version: '0.2.1',
+    releaseDate: '2026-09-16T00:00:00.000Z',
+    url: 'https://github.com/catgirl3d/SayIt/releases/download/v0.2.1/SayIt_0.2.1_x64-setup.exe',
+    sha512: createHash('sha512').update('fixture').digest('base64'),
+    notes: '## v0.2.1\n\n- Something changed',
+    notesLocalized: { uk: '## v0.2.1\n\n- Зміна' },
+  })
+})
+
+test('omits the localized notes field when none are provided', () => {
+  assert.equal('notesLocalized' in buildUpdateManifest(VALID), false)
+})
+
+test('rejects blank or malformed localized release notes', () => {
+  for (const localizedNotes of [
+    { uk: '' },
+    { uk: '   ' },
+    { uk: 42 },
+    { '': '## v0.2.1\n\n- x' },
+    ['## v0.2.1'],
+    '## v0.2.1\n\n- x',
+    null,
+  ]) {
+    assert.throws(
+      () => buildUpdateManifest({ ...VALID, localizedNotes }),
+      /Invalid localized release notes/,
+      `localizedNotes ${JSON.stringify(localizedNotes)} must be rejected`,
+    )
+  }
+})
+
+test('counts localized notes toward the native manifest size limit', () => {
+  const localizedNotes = { uk: `## v0.2.1\n\n- ${'z'.repeat(70 * 1024)}` }
+  assert.throws(
+    () => buildUpdateManifest({ ...VALID, localizedNotes }),
+    /Manifest is \d+ bytes \(limit 65536\)/,
+  )
+})
+
 test('CLI writes the manifest with a trailing newline', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-test-'))
   try {
@@ -139,6 +184,100 @@ test('CLI writes the manifest with a trailing newline', () => {
       sha512: createHash('sha512').update('installer-bytes').digest('base64'),
       notes: '## v0.2.1\n\n- Note one',
     })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CLI reads --localized-notes-file values into notesLocalized', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-test-'))
+  try {
+    const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
+    const outputPath = join(dir, 'latest-win32-x64.json')
+    const notesPath = join(dir, 'notes.md')
+    const ukNotesPath = join(dir, 'notes-uk.md')
+    writeFileSync(installerPath, 'installer-bytes')
+    writeFileSync(notesPath, '## v0.2.1\n\n- Note one\n')
+    writeFileSync(ukNotesPath, '## v0.2.1\n\n- Зміна одна\n')
+
+    execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('./generate-update-manifest.mjs', import.meta.url)),
+        '--version', '0.2.1',
+        '--repository', 'catgirl3d/SayIt',
+        '--installer', installerPath,
+        '--release-date', '2026-09-19T00:00:00.000Z',
+        '--notes-file', notesPath,
+        '--localized-notes-file', `uk=${ukNotesPath}`,
+        '--output', outputPath,
+      ],
+      { encoding: 'utf8' },
+    )
+
+    const raw = readFileSync(outputPath, 'utf8')
+    assert.deepEqual(JSON.parse(raw).notesLocalized, { uk: '## v0.2.1\n\n- Зміна одна' })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CLI rejects a --localized-notes-file value without locale=path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-test-'))
+  try {
+    const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
+    const notesPath = join(dir, 'notes.md')
+    writeFileSync(installerPath, 'installer-bytes')
+    writeFileSync(notesPath, '## v0.2.1\n\n- Note one\n')
+    assert.throws(
+      () => execFileSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL('./generate-update-manifest.mjs', import.meta.url)),
+          '--version', '0.2.1',
+          '--repository', 'catgirl3d/SayIt',
+          '--installer', installerPath,
+          '--release-date', '2026-09-19T00:00:00.000Z',
+          '--notes-file', notesPath,
+          '--localized-notes-file', 'notes-uk.md',
+          '--output', join(dir, 'latest-win32-x64.json'),
+        ],
+        { encoding: 'utf8', stdio: 'pipe' },
+      ),
+      /expected <locale>=<path>/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CLI rejects two localized notes files for the same locale', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sayit-manifest-test-'))
+  try {
+    const installerPath = join(dir, 'SayIt_0.2.1_x64-setup.exe')
+    const notesPath = join(dir, 'notes.md')
+    const ukNotesPath = join(dir, 'notes-uk.md')
+    writeFileSync(installerPath, 'installer-bytes')
+    writeFileSync(notesPath, '## v0.2.1\n\n- Note one\n')
+    writeFileSync(ukNotesPath, '## v0.2.1\n\n- Зміна одна\n')
+    assert.throws(
+      () => execFileSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL('./generate-update-manifest.mjs', import.meta.url)),
+          '--version', '0.2.1',
+          '--repository', 'catgirl3d/SayIt',
+          '--installer', installerPath,
+          '--release-date', '2026-09-19T00:00:00.000Z',
+          '--notes-file', notesPath,
+          '--localized-notes-file', `uk=${ukNotesPath}`,
+          '--localized-notes-file', `uk=${ukNotesPath}`,
+          '--output', join(dir, 'latest-win32-x64.json'),
+        ],
+        { encoding: 'utf8', stdio: 'pipe' },
+      ),
+      /Duplicate localized notes for locale 'uk'/,
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
