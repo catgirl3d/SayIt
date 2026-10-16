@@ -260,6 +260,9 @@ fn main() {
     // Clean up expired log files on startup
     cleanup_expired_logs(&storage);
 
+    // Remove temp directories left by a file transcription that crashed before cleanup
+    commands::file_transcription::cleanup_stale_temp_directories();
+
     // Read PTT setting before moving storage into managed state
     let ptt_setting_val = storage.get("shortcutPTT", None);
     // 兜底键与 storage 种子、前端 defaults.ts 保持一致；绝不能是 Shift（会触发筛选键）
@@ -743,6 +746,13 @@ fn main() {
             models::gguf_asr::gguf_asr_diagnostics,
             models::test_audio::run_asr_benchmark,
             models::test_audio::get_test_audio_b64,
+            // File transcription
+            commands::file_transcription::inspect_transcription_file,
+            commands::file_transcription::detect_ffmpeg_directory,
+            commands::file_transcription::start_file_transcription,
+            commands::file_transcription::get_file_transcription_state,
+            commands::file_transcription::cancel_file_transcription,
+            commands::file_transcription::retry_file_transcription_export,
         ])
         .on_window_event(|window, event| {
             // 点击关闭按钮时隐藏到托盘，而不是退出
@@ -759,7 +769,11 @@ fn main() {
         // action — but the builder structure is kept as-is.
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, _event| {});
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                commands::file_transcription::handle_exit_requested(app_handle, &api, code);
+            }
+        });
 }
 
 #[cfg(test)]

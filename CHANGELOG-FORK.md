@@ -7,6 +7,10 @@ Sections are ordered by version, newest first. For upstream history prior to the
 
 ### Features and Improvements
 
+- Added a Files page that transcribes one audio or video file into TXT and Markdown with the local speech engine: choose the file and an output folder, pick the audio track when a video has several, watch preparation and recognition progress, cancel with a confirmation, and retry a failed export. Recognized text lives in a draft that survives cancel, errors, or a crash, and nothing is inserted into the active window.
+- The Files page can also transcribe through a configured Cloud API profile: switch the Engine card to Cloud and pick the profile. An incompletely configured profile keeps Start off and names what is missing, and cloud jobs leave the local engine free — local dictation and computer subtitles keep working.
+- File transcription uses FFmpeg and FFprobe that you install yourself; SayIt looks for them in PATH or in a folder you pick, and explains where to get them when they are missing. Nothing is downloaded or bundled.
+- While a file job runs, starting local dictation or local computer subtitles is refused with a busy notice instead of sharing the same engine; a file job will not start while either is active, and cloud modes keep working. File jobs never enter History or usage statistics.
 - AI cleanup failures are no longer silent: when the selected provider does not respond, returns an error or an empty result, or its profile is incomplete, the overlay shows a short reason notice after the recognized text is inserted, and History marks the record as "AI: not applied" instead of hiding the AI row.
 - The live original in Computer subtitles is now compact for a short phrase and grows up to three lines with the text, instead of occupying a fixed-height card.
 - In live computer-audio subtitles, the original panel no longer blanks out between phrases: the last recognized phrase stays on screen while its translation is prepared, until the next phrase replaces it. It clears only when the session pauses or stops.

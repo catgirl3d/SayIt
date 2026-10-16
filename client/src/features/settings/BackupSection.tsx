@@ -194,7 +194,8 @@ export default function BackupSection() {
     }
   }
 
-  // 第二步：确认覆盖后执行导入，成功则展示提示并自动重启
+  // Step 2: after the overwrite confirmation run the import; on success show
+  // the notice and restart automatically.
   const confirmImport = async () => {
     if (!importConfirm) return
     const { kind, path } = importConfirm
@@ -207,8 +208,17 @@ export default function BackupSection() {
     try {
       await runImport(kind, path, importToken)
       setImportDone(true)
-      // 略作停留让用户看到提示，再自动重启使更改生效
-      setTimeout(() => { void restartApp() }, 1500)
+      // Hold the notice briefly so the user can see it, then restart so the
+      // imported data is applied.
+      setTimeout(() => {
+        void restartApp().catch((error) => {
+          // The import itself succeeded; only the restart could not be
+          // scheduled, so surface that without reopening the import flow.
+          setImportDone(false)
+          setBusyAction(null)
+          setActionError(t('backup.restartFailed', { message: String(error) }))
+        })
+      }, 1500)
     } catch (error) {
       setActionError(t('backup.importFailed', { message: String(error) }))
       setBusyAction(null)

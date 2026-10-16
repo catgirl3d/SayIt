@@ -1,7 +1,7 @@
-// Shared delete-confirmation dialog for the profile lists. Both settings sections
+// Shared confirmation dialog for the profile lists and other interruptible actions. Both settings sections
 // used to inline the same shell (Modal at a fixed width, Cancel + Delete footer at
 // the same spots); the only real differences were the body sentence and the confirm
-// button styling, which are parameters here.
+// button styling and label, which are parameters here.
 
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,7 @@ interface ConfirmDeleteModalProps {
   showCloseButton?: boolean
   /** Renders the confirm action with the destructive outline styling (AI section). */
   danger?: boolean
+  confirmLabel?: string
 }
 
 export function ConfirmDeleteModal({
@@ -25,8 +26,10 @@ export function ConfirmDeleteModal({
   onConfirm,
   showCloseButton,
   danger,
+  confirmLabel,
 }: ConfirmDeleteModalProps) {
   const t = useT()
+  const actionLabel = confirmLabel ?? t('common.delete')
   return (
     <Modal title={title} onClose={onCancel} showCloseButton={showCloseButton} panelClassName="w-[420px]">
       <div className="mt-3 space-y-4">
@@ -41,11 +44,11 @@ export function ConfirmDeleteModal({
               onClick={onConfirm}
               className="h-9 rounded-md border border-destructive/30 bg-destructive/5 px-3 text-sm font-medium text-destructive-strong transition-colors hover:bg-destructive/10"
             >
-              {t('common.delete')}
+              {actionLabel}
             </button>
           ) : (
             <Button size="sm" className="h-9" onClick={onConfirm}>
-              {t('common.delete')}
+              {actionLabel}
             </Button>
           )}
         </div>

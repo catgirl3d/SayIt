@@ -22,6 +22,7 @@ use transcribe_cpp::{
 };
 
 use super::downloader::model_dir;
+use crate::providers::wav::pcm16le_to_f32;
 
 /// 已加载的引擎。Session 内部持有 Model 的 Arc，所以重复推理不会重新加载权重。
 ///
@@ -47,6 +48,108 @@ pub(crate) struct Loaded {
 }
 
 static CACHE: Mutex<Option<Loaded>> = Mutex::new(None);
+
+#[derive(Default)]
+struct NativeAdmission {
+    file_job: Option<String>,
+    local_operations: usize,
+}
+
+impl NativeAdmission {
+    fn reserve_file(&mut self, job_id: &str) -> Result<(), String> {
+        if self.file_job.is_some() || self.local_operations != 0 {
+            return Err("The local engine is busy with another transcription".into());
+        }
+        self.file_job = Some(job_id.to_string());
+        Ok(())
+    }
+
+    fn reserve_local(&mut self) -> Result<(), String> {
+        if self.file_job.is_some() {
+            return Err("The local engine is busy with a file transcription".into());
+        }
+        self.local_operations += 1;
+        Ok(())
+    }
+
+    fn release_file(&mut self, job_id: &str) {
+        if self.file_job.as_deref() == Some(job_id) {
+            self.file_job = None;
+        }
+    }
+
+    fn release_local(&mut self) {
+        self.local_operations = self.local_operations.saturating_sub(1);
+    }
+}
+
+static NATIVE_ADMISSION: Mutex<NativeAdmission> = Mutex::new(NativeAdmission {
+    file_job: None,
+    local_operations: 0,
+});
+
+/// Set when an unload request arrives while a file job owns the engine; the
+/// file lease's drop then performs the unload instead of losing the request.
+static PENDING_UNLOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Admission held from file-job start until the worker has released its native resources.
+pub struct FileResourceLease {
+    job_id: String,
+}
+
+impl Drop for FileResourceLease {
+    fn drop(&mut self) {
+        {
+            let mut admission = NATIVE_ADMISSION
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            admission.release_file(&self.job_id);
+        }
+        run_pending_unload();
+    }
+}
+
+/// Runs a deferred unload once no file job owns the engine. If another file job
+/// grabbed the engine between the release and this call, the request is kept.
+fn run_pending_unload() {
+    if !PENDING_UNLOAD.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    match acquire_local_resource() {
+        Ok(_resource) => unload_unchecked(),
+        Err(_) => PENDING_UNLOAD.store(true, std::sync::atomic::Ordering::SeqCst),
+    }
+}
+
+struct LocalResourceLease;
+
+impl Drop for LocalResourceLease {
+    fn drop(&mut self) {
+        let mut admission = NATIVE_ADMISSION
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        admission.release_local();
+    }
+}
+
+/// Reserve the shared native engine for one file transcription before starting any worker gap.
+pub fn acquire_file_resource(job_id: &str) -> Result<FileResourceLease, String> {
+    let mut admission = NATIVE_ADMISSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    admission.reserve_file(job_id)?;
+    Ok(FileResourceLease {
+        job_id: job_id.to_string(),
+    })
+}
+
+fn acquire_local_resource() -> Result<LocalResourceLease, String> {
+    let mut admission = NATIVE_ADMISSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    admission.reserve_local()?;
+    Ok(LocalResourceLease)
+}
 
 /// 引擎状态的轻量镜像：只放"诊断 / 状态查询要读的那几个字段"，与 CACHE 分成两把锁。
 ///
@@ -137,9 +240,7 @@ pub fn init_backends() {
     });
 }
 
-/// 该模型的权重是否已经下载好（目录里能找到 .gguf）。
-/// 只给测试用：生产路径上"没下载"是由 `ensure_loaded` 报错表达的，不需要预检。
-#[cfg(test)]
+/// Check whether the selected model directory contains a GGUF before media preparation starts.
 pub fn model_is_downloaded(model_id: &str) -> bool {
     find_gguf(&model_dir(model_id)).is_ok()
 }
@@ -283,13 +384,25 @@ fn resolve_backend(pref: &str) -> Backend {
     }
 }
 
-/// 加载模型（若 key 未变则复用）。`accelerator` 取 "auto" | "cpu" | "gpu"。
-/// 换加速器要重建：后端是 Model::load_with 时绑定的，之后改不了。
-fn ensure_loaded(model_id: &str, accelerator: &str) -> Result<(), String> {
+/// Load the model, reusing it when the key is unchanged. `accelerator` is
+/// "auto" | "cpu" | "gpu"; changing it forces a reload because the backend is
+/// bound when Model::load_with runs and cannot change afterwards.
+fn ensure_loaded_unchecked(model_id: &str, accelerator: &str) -> Result<(), String> {
     let mut cache = CACHE
         .lock()
         .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    ensure_loaded_locked(&mut cache, model_id, accelerator)
+}
 
+/// Load the model unless the cached key (model_id, accelerator) already matches.
+/// The caller must already hold the CACHE lock: `transcribe` keeps one continuous
+/// hold across this call and the following inference so a concurrent caller cannot
+/// replace the cached model in between.
+fn ensure_loaded_locked(
+    cache: &mut Option<Loaded>,
+    model_id: &str,
+    accelerator: &str,
+) -> Result<(), String> {
     if let Some(ref c) = *cache {
         if c.model_id == model_id && c.accelerator == accelerator {
             // 与空闲卸载共用同一把锁更新时间，保证守护线程拿到锁后不会
@@ -388,12 +501,9 @@ const WARMUP_SEC: usize = 2;
 /// 返回耗时（毫秒）。失败不算错误：预热只是优化，失败了顶多第一次慢一点。
 fn warmup(entry: &mut Loaded) -> u128 {
     let t0 = Instant::now();
-    let pcm: Vec<f32> = WARMUP_WAV
-        .get(44..) // 跳过 WAV header
-        .unwrap_or(&[])
-        .chunks_exact(2)
+    // Skip the WAV header.
+    let pcm: Vec<f32> = pcm16le_to_f32(WARMUP_WAV.get(44..).unwrap_or(&[]))
         .take(WARMUP_SEC * 16000)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
         .collect();
     if pcm.is_empty() {
         return 0;
@@ -470,18 +580,16 @@ fn run_options(
     }
 }
 
-/// 用常驻 session 转写。超过 session 上限的音频按上限切段顺序解码。
-/// `language` 是每次转写传入的运行时参数，不影响模型缓存。
-fn transcribe_with_cache(
+/// Decode on the resident session. Audio above the session limit is cut into
+/// segments and decoded in order. `language` is a per-run parameter and does not
+/// affect the model cache. The caller holds the CACHE lock; the activity guard
+/// refreshes the last-activity time on every return path before the lock is released.
+fn transcribe_locked(
+    entry: &mut Loaded,
     samples: &[f32],
     sample_rate: usize,
     language: &str,
 ) -> Result<String, String> {
-    let mut cache = CACHE
-        .lock()
-        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
-    let entry = cache.as_mut().ok_or("Model is not loaded")?;
-    // 守卫会在所有成功/错误返回路径上、释放 CACHE 锁之前刷新最后活动时间。
     let _activity_guard = ActivityGuard;
     touch_activity();
     let opts = run_options(
@@ -505,7 +613,7 @@ fn transcribe_with_cache(
             .map_err(|e| format!("Inference failed: {}", e));
     }
 
-    // 极长音频（超过模型上下文）才走分段。日常口述不会走到这里。
+    // Only extremely long audio (beyond the model context) is decoded in segments; everyday dictation never reaches this path.
     log::warn!(
         "Audio length {:.1}s exceeds the model limit {:.1}s; decoding in segments",
         samples.len() as f64 / sample_rate as f64,
@@ -533,15 +641,42 @@ fn transcribe_with_cache(
 
 /// 预加载模型。
 pub fn preload(model_id: &str, accelerator: &str) -> Result<(), String> {
-    ensure_loaded(model_id, accelerator)
+    let _resource = acquire_local_resource()?;
+    ensure_loaded_unchecked(model_id, accelerator)
 }
 
-/// 释放常驻引擎，交还几百 MB ~ 数 GB 内存。
+/// Release the resident engine and return hundreds of MB to several GB of memory.
+/// Test-only convenience: production callers use the fallible `try_unload`.
+#[cfg(test)]
 pub fn unload() {
-    if let Ok(mut cache) = CACHE.lock() {
-        if let Some(entry) = cache.take() {
-            log::info!("Unloading GGUF ASR model: {}", entry.model_id);
+    let _ = try_unload();
+}
+
+/// Release the cached model unless a file transcription owns the native resource.
+/// A request refused by an active file job is remembered and runs when that
+/// job's lease is dropped, so switching away from local mode never leaves the
+/// model resident because of a transient file job.
+pub fn try_unload() -> Result<(), String> {
+    match acquire_local_resource() {
+        Ok(_resource) => {
+            PENDING_UNLOAD.store(false, std::sync::atomic::Ordering::SeqCst);
+            unload_unchecked();
+            Ok(())
         }
+        Err(error) => {
+            // `reserve_local` only fails while a file job owns the engine.
+            PENDING_UNLOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(error)
+        }
+    }
+}
+
+fn unload_unchecked() {
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.take() {
+        log::info!("Unloading GGUF ASR model: {}", entry.model_id);
     }
     mark_unloaded();
 }
@@ -559,7 +694,7 @@ pub fn loading_model() -> Option<String> {
     STATUS.lock().ok().and_then(|s| s.loading_model.clone())
 }
 
-/// 转写一段 16 kHz mono f32 PCM。
+/// Transcribe one chunk of 16 kHz mono f32 PCM.
 pub fn transcribe(
     model_id: &str,
     language: &str,
@@ -567,8 +702,91 @@ pub fn transcribe(
     samples: &[f32],
     sample_rate: usize,
 ) -> Result<String, String> {
-    ensure_loaded(model_id, accelerator)?;
-    transcribe_with_cache(samples, sample_rate, language)
+    let _resource = acquire_local_resource()?;
+    // Load and decode under one continuous CACHE lock: releasing it in between let a
+    // concurrent call (dictation, History reprocessing, preload) replace the cached
+    // model before inference started, so the wrong model could run.
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    ensure_loaded_locked(&mut cache, model_id, accelerator)?;
+    let entry = cache.as_mut().ok_or("Model is not loaded")?;
+    transcribe_locked(entry, samples, sample_rate, language)
+}
+
+/// A file job's exclusive binding to the cached session. Dropping it clears the native abort
+/// callback even when the worker exits through an error or cancellation path.
+pub struct FileSessionLease {
+    max_audio_ms: i64,
+}
+
+impl FileSessionLease {
+    pub fn max_audio_ms(&self) -> i64 {
+        self.max_audio_ms
+    }
+}
+
+impl Drop for FileSessionLease {
+    fn drop(&mut self) {
+        clear_file_cancel_token();
+    }
+}
+
+/// Load or reuse the cached model and install the job-scoped cancellation callback.
+pub fn prepare_file_session(
+    model_id: &str,
+    accelerator: &str,
+    token: &transcribe_cpp::CancelToken,
+) -> Result<FileSessionLease, String> {
+    ensure_loaded_unchecked(model_id, accelerator)?;
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    let entry = cache.as_mut().ok_or("Model is not loaded")?;
+    entry.session.set_cancel_token(token);
+    Ok(FileSessionLease {
+        max_audio_ms: entry.max_audio_ms,
+    })
+}
+
+/// Clear the native callback without touching the job's cancellation flag.
+pub(crate) fn clear_file_cancel_token() {
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.as_mut() {
+        entry.session.clear_cancel_token();
+    }
+}
+
+/// Run one bounded file window on the already prepared cached session.
+pub fn transcribe_file_window(
+    samples: &[f32],
+    sample_rate: usize,
+    language: &str,
+) -> Result<String, String> {
+    if sample_rate != 16_000 {
+        return Err(format!(
+            "File ASR expects 16 kHz PCM, received {sample_rate} Hz"
+        ));
+    }
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire model cache lock: {}", e))?;
+    let entry = cache.as_mut().ok_or("Model is not loaded")?;
+    let _activity_guard = ActivityGuard;
+    touch_activity();
+    let opts = run_options(
+        language,
+        &entry.languages,
+        entry.supports_itn,
+        entry.supports_pnc,
+    );
+    entry
+        .session
+        .run(samples, &opts)
+        .map(|transcript| transcript.text.trim().to_string())
+        .map_err(|error| format!("Inference failed: {}", error))
 }
 
 // ── 空闲卸载 ──
@@ -631,6 +849,10 @@ pub fn spawn_idle_unloader(initial_idle_minutes: u64) {
                     continue;
                 }
 
+                let Ok(_resource) = acquire_local_resource() else {
+                    continue;
+                };
+
                 let mut cache = match CACHE.lock() {
                     Ok(cache) => cache,
                     Err(error) => {
@@ -681,6 +903,58 @@ mod tests {
 
     const SR_U: usize = 16000;
 
+    #[test]
+    fn file_admission_blocks_local_operations_until_released() {
+        let mut admission = NativeAdmission::default();
+        admission.reserve_file("test-file-job").unwrap();
+        assert!(admission.reserve_local().is_err());
+        admission.release_file("test-file-job");
+        admission.reserve_local().unwrap();
+        admission.release_local();
+    }
+
+    #[test]
+    fn file_window_rejects_non_16k_sample_rate() {
+        let error = transcribe_file_window(&[], 8_000, "auto").unwrap_err();
+        assert!(error.contains("16 kHz"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn pending_unload_runs_once_the_file_lease_releases() {
+        let Ok(lease) = acquire_file_resource("pending-unload-test") else {
+            eprintln!("skip: the local engine is busy with a parallel test");
+            return;
+        };
+
+        assert!(try_unload().is_err());
+        assert!(PENDING_UNLOAD.load(std::sync::atomic::Ordering::SeqCst));
+
+        drop(lease);
+
+        assert!(!PENDING_UNLOAD.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn file_session_drop_clears_the_native_cancel_callback() {
+        let id = "sensevoice-small-gguf";
+        if !model_present(id) {
+            eprintln!("skip: {id} not downloaded");
+            return;
+        }
+        init_backends();
+        let token = transcribe_cpp::CancelToken::new();
+        let session = prepare_file_session(id, "auto", &token).unwrap();
+        token.cancel();
+        drop(session);
+
+        let result = transcribe(id, "auto", "auto", &read_test_wav(), SR_U);
+        assert!(
+            result.is_ok(),
+            "a dropped file session must clear its cancelled callback"
+        );
+        unload();
+    }
+
     /// 读 16 kHz / mono / 16-bit WAV 为 f32（只够读我们自己的测试音频）。
     fn read_wav(name: &str) -> Vec<f32> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -688,10 +962,7 @@ mod tests {
             .join(name);
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("resources/{name}: {e}"));
         assert_eq!(&bytes[0..4], b"RIFF");
-        bytes[44..]
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-            .collect()
+        pcm16le_to_f32(&bytes[44..]).collect()
     }
 
     fn read_test_wav() -> Vec<f32> {

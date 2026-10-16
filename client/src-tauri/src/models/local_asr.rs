@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use super::downloader::{model_dir, models_dir};
 use super::gguf_asr;
+use crate::providers::wav::pcm16le_to_f32;
 
 /// 采样率固定 16 kHz —— 前端采集就重采样到这个值，引擎也只接受这个值。
 const SR: usize = 16000;
@@ -34,10 +35,7 @@ fn decode_pcm(audio_b64: &str) -> Result<Vec<f32>, String> {
         ));
     }
 
-    Ok(pcm_bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-        .collect())
+    Ok(pcm16le_to_f32(&pcm_bytes).collect())
 }
 
 #[tauri::command]
@@ -141,9 +139,9 @@ pub async fn preload_local_model(
 /// 否则常驻的权重（几百 MB ~ 数 GB）会一直占用到应用退出。
 #[tauri::command]
 pub async fn unload_local_model() -> Result<(), String> {
-    tokio::task::spawn_blocking(gguf_asr::unload)
+    tokio::task::spawn_blocking(gguf_asr::try_unload)
         .await
-        .map_err(|e| format!("Release task failed: {}", e))
+        .map_err(|e| format!("Release task failed: {}", e))?
 }
 
 /// 动态调整本地模型的空闲卸载时间。0 = 常驻；其余值由设置页限制为

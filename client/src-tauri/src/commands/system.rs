@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use crate::commands::file_transcription;
 use crate::storage::Storage;
 use base64::Engine;
 use serde::Serialize;
@@ -1050,6 +1052,16 @@ pub fn install_downloaded_update(
     // excluded; the guarantee here is "the bytes came from the fork release and matched
     // the manifest at verification time", not "no local attacker exists".
     #[cfg(target_os = "windows")]
+    if let Err(error) = file_transcription::try_begin_external_transition() {
+        UPDATE_OP_IN_PROGRESS.store(false, Ordering::SeqCst);
+        write_log_line(&format!(
+            "[update] installation refused while file transcription is active: {}",
+            error
+        ));
+        return Err(error);
+    }
+
+    #[cfg(target_os = "windows")]
     match spawn_installer(&final_path.to_string_lossy()) {
         Ok(()) => {
             *lock_verified_update() = None;
@@ -1060,6 +1072,7 @@ pub fn install_downloaded_update(
         Err(e) => {
             // Keep the verified package authorized: the user can retry without
             // re-downloading the whole installer.
+            file_transcription::release_external_transition();
             UPDATE_OP_IN_PROGRESS.store(false, Ordering::SeqCst);
             return Err(e);
         }

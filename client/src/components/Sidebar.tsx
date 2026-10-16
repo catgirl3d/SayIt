@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Home,
+  FileText,
   Clock,
   BookOpen,
   AudioLines,
@@ -22,7 +23,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip } from '@/components/ui/tooltip'
-import BetaBadge from '@/components/BetaBadge'
+import AlphaBadge from '@/components/AlphaBadge'
 import { useConnectionStatus } from '@/hooks/useConnectionStatus'
 import { getModeStatus, refreshModeStatus, subscribeModeStatus } from '@/stores/modeStatus'
 import { hasAvailableUpdate } from '@/features/update/autoUpdate'
@@ -34,8 +35,8 @@ interface NavItemDef {
   to: string
   icon: typeof Home
   labelKey: TranslationKey
-  /** Shows the shared "Beta" marker after the label. */
-  beta?: boolean
+  /** Shows the shared "Alpha" marker after the label. */
+  alpha?: boolean
 }
 
 /**
@@ -45,7 +46,8 @@ interface NavItemDef {
  */
 const workspaceNavItems: readonly NavItemDef[] = [
   { to: '/', icon: Home, labelKey: 'nav.home' },
-  { to: '/system-audio', icon: Captions, labelKey: 'nav.systemAudio', beta: true },
+  { to: '/files', icon: FileText, labelKey: 'nav.files', alpha: true },
+  { to: '/system-audio', icon: Captions, labelKey: 'nav.systemAudio', alpha: true },
   { to: '/history', icon: Clock, labelKey: 'nav.history' },
   { to: '/hotwords', icon: BookOpen, labelKey: 'nav.hotwords' },
 ]
@@ -73,12 +75,12 @@ function NavItem({
   to,
   icon: Icon,
   label,
-  beta,
+  alpha,
 }: {
   to: string
   icon: typeof Home
   label: string
-  beta?: boolean
+  alpha?: boolean
 }) {
   return (
     <NavLink
@@ -95,7 +97,7 @@ function NavItem({
     >
       <Icon className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">{label}</span>
-      {beta && <BetaBadge />}
+      {alpha && <AlphaBadge />}
     </NavLink>
   )
 }
@@ -229,8 +231,8 @@ export default function Sidebar() {
           <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
             {t('nav.section.workspace')}
           </div>
-          {workspaceNavItems.map(({ to, icon, labelKey, beta }) => (
-            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} beta={beta} />
+          {workspaceNavItems.map(({ to, icon, labelKey, alpha }) => (
+            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} alpha={alpha} />
           ))}
         </div>
 

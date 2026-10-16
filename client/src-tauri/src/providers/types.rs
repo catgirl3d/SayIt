@@ -64,7 +64,7 @@ pub struct TestResult {
 }
 
 /// ASR 供应商配置（前端传入）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AsrProviderConfig {
     pub provider: String,
     #[serde(default)]
@@ -76,8 +76,21 @@ pub struct AsrProviderConfig {
     pub extra: serde_json::Value,
 }
 
+// api_key is redacted so an accidental `{:?}` on a request can never leak credentials.
+impl std::fmt::Debug for AsrProviderConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AsrProviderConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"<redacted>")
+            .field("app_id", &self.app_id)
+            .field("extra", &self.extra)
+            .finish()
+    }
+}
+
 /// AI 供应商配置（前端传入）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AiProviderConfig {
     pub provider: String,
     #[serde(default)]
@@ -89,6 +102,20 @@ pub struct AiProviderConfig {
     /// 供应商特定的额外配置
     #[serde(default)]
     pub extra: serde_json::Value,
+}
+
+// api_key is redacted so an accidental `{:?}` on a request can never leak credentials.
+impl std::fmt::Debug for AiProviderConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AiProviderConfig")
+            .field("provider", &self.provider)
+            .field("api_url", &self.api_url)
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .field("extra", &self.extra)
+            .finish()
+    }
 }
 
 /// 云端转写请求（前端传入）
@@ -171,5 +198,36 @@ mod tests {
                 "warning": "deepgram_keyterm_limit"
             })
         );
+    }
+
+    #[test]
+    fn debug_output_redacts_the_api_key() {
+        let config = AsrProviderConfig {
+            provider: "deepgram".to_string(),
+            api_key: "sentinel-secret".to_string(),
+            app_id: "app-id".to_string(),
+            extra: serde_json::json!({ "model": "nova-3" }),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("sentinel-secret"));
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("nova-3"));
+    }
+
+    #[test]
+    fn ai_debug_output_redacts_the_api_key() {
+        let config = AiProviderConfig {
+            provider: "openai".to_string(),
+            api_url: "https://api.example.com/v1".to_string(),
+            api_key: "sentinel-secret".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            extra: serde_json::json!({ "temperature": 0.2 }),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("sentinel-secret"));
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("gpt-4o-mini"));
     }
 }

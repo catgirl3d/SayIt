@@ -147,117 +147,49 @@ pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListRes
 pub async fn cloud_transcribe(
     request: CloudTranscribeRequest,
 ) -> Result<CloudTranscribeResult, String> {
-    let config = &request.asr_config;
+    dispatch_cloud_transcribe(
+        &request.asr_config,
+        &request.audio_b64,
+        request.sample_rate,
+        &request.hotwords,
+    )
+    .await
+}
+
+pub(crate) async fn dispatch_cloud_transcribe(
+    config: &AsrProviderConfig,
+    audio_b64: &str,
+    sample_rate: u32,
+    hotwords: &[String],
+) -> Result<CloudTranscribeResult, String> {
     let result = match config.provider.as_str() {
         "deepgram" => {
-            return asr_deepgram::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await;
+            return asr_deepgram::transcribe(audio_b64, sample_rate, config, hotwords).await;
         }
-        "doubao" => {
-            asr_doubao::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
-        }
+        "doubao" => asr_doubao::transcribe(audio_b64, sample_rate, config, hotwords).await,
         "doubao_v2" => {
-            asr_doubao_stream::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
+            asr_doubao_stream::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         "qwen" | "aliyun" | "qwen_realtime" => {
-            asr_qwen::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
+            asr_qwen::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         // Qwen-Audio-3.0 流式：关掉实时字幕、以及设置页的识别测试都走这条一次性路径。
         // 用的仍是同一个 duplex 协议，只是整段音频推完再收结果。
         "qwen_audio_stream" => {
-            asr_qwen_audio_stream::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
+            asr_qwen_audio_stream::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
-        "qwen_omni" => {
-            asr_qwen_omni::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
-        }
-        "mimo" => {
-            asr_mimo::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
-        }
-        "groq_whisper" => {
-            asr_groq::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
-        }
-        "openai_transcribe" => {
-            asr_groq::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
-        }
+        "qwen_omni" => asr_qwen_omni::transcribe(audio_b64, sample_rate, config, hotwords).await,
+        "mimo" => asr_mimo::transcribe(audio_b64, sample_rate, config, hotwords).await,
+        "groq_whisper" => asr_groq::transcribe(audio_b64, sample_rate, config, hotwords).await,
+        "openai_transcribe" => asr_groq::transcribe(audio_b64, sample_rate, config, hotwords).await,
         "gemini_transcribe" => {
-            asr_gemini::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
+            asr_gemini::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         "openrouter_transcribe" => {
-            asr_openrouter::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
+            asr_openrouter::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         "openai_compat" => {
-            asr_openai_compat::transcribe(
-                &request.audio_b64,
-                request.sample_rate,
-                config,
-                &request.hotwords,
-            )
-            .await
+            asr_openai_compat::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         other => Err(error_protocol::encode(
             "connect_failed",

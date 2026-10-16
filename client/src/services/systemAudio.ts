@@ -51,6 +51,7 @@ import {
   hideSubtitleOverlay,
   presentSubtitleOverlay,
   releaseSystemAudio,
+  assertLocalSystemAudioAdmission,
   updateSubtitleOverlay,
 } from './recorder'
 import { getProvider } from './transcription'
@@ -103,6 +104,7 @@ interface SessionDependencies {
   acquire: () => Promise<void>
   release: () => Promise<void>
   getProvider: () => TranscriptionProvider
+  assertLocalAdmission?: () => void
   overlay: {
     present: (payload: SubtitleOverlayPayload) => Promise<number>
     update: (payload: SubtitleOverlayPayload) => Promise<void>
@@ -577,6 +579,7 @@ export class SystemAudioSession {
         this.snapshot = { ...this.snapshot, liveRecognition: false }
       }
       if (generation !== this.generation) return
+      if (this.provider?.mode === 'local') this.dependencies.assertLocalAdmission?.()
       const provider = this.provider
       if (!provider) throw new Error(t('systemAudio.notReady'))
       const acceptAsrWarning = (code: AsrWarningCode | undefined) => {
@@ -727,6 +730,7 @@ export class SystemAudioSession {
         if (generation !== this.generation) { unlisten(); return }
         this.unlisteners.push(unlisten)
       }
+      if (provider.mode === 'local') this.dependencies.assertLocalAdmission?.()
       this.captureStartIssued = true
       let settleCaptureStart!: () => void
       const captureStartCompletion = new Promise<void>((resolve) => { settleCaptureStart = resolve })
@@ -1532,6 +1536,7 @@ export const systemAudioSession = new SystemAudioSession({
   acquire: acquireSystemAudio,
   release: releaseSystemAudio,
   getProvider,
+  assertLocalAdmission: assertLocalSystemAudioAdmission,
   overlay: {
     present: presentSubtitleOverlay,
     update: updateSubtitleOverlay,

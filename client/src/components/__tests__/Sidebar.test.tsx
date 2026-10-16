@@ -25,13 +25,16 @@ function renderSidebar() {
   return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(Sidebar)))
 }
 
-describe('sidebar beta marker', () => {
-  it('marks only the computer subtitles entry with the beta badge', () => {
+describe('sidebar alpha marker', () => {
+  it('marks the file transcription and computer subtitles entries with the alpha badge', () => {
     const markup = renderSidebar()
 
-    expect((markup.match(/Beta/g) ?? []).length).toBe(1)
-    const entryStart = markup.indexOf('href="/system-audio"')
-    expect(entryStart).toBeGreaterThan(-1)
-    expect(markup.slice(entryStart, markup.indexOf('</a>', entryStart))).toContain('Beta')
+    expect((markup.match(/sr-only">Alpha</g) ?? []).length).toBe(2)
+    for (const href of ['/files', '/system-audio']) {
+      const entryStart = markup.indexOf(`href="${href}"`)
+      expect(entryStart, href).toBeGreaterThan(-1)
+      const entry = markup.slice(entryStart, markup.indexOf('</a>', entryStart))
+      expect(entry, href).toContain('sr-only">Alpha<')
+    }
   })
 })

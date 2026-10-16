@@ -114,3 +114,23 @@ export function hideSubtitleOverlay() {
   return orchestrator.hideSubtitleOverlay()
 }
 
+/** Reserve the local engine for file transcription without touching capture state. */
+export function reserveFileTranscription() {
+  return orchestrator.reserveFileTranscription()
+}
+
+/** Release the file transcription reservation after native resources are actually free. */
+export function releaseFileTranscription() {
+  orchestrator.releaseFileTranscription()
+}
+
+/** Keep local capture closed until the file service has restored its native state. */
+export function setFileTranscriptionAdmissionReady(ready: boolean) {
+  orchestrator.setFileTranscriptionAdmissionReady(ready)
+}
+
+/** Check the local subtitle boundary after its provider mode is resolved. */
+export function assertLocalSystemAudioAdmission() {
+  orchestrator.assertLocalSystemAudioAdmission()
+}
+

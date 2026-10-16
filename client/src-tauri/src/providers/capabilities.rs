@@ -45,6 +45,12 @@ const UI_CAPABILITIES: &[(&str, HotwordDelivery, Option<usize>)] = &[
     ("local", HotwordDelivery::NotWiredUp, None),
 ];
 
+pub(crate) fn is_cloud_asr_provider(provider: &str) -> bool {
+    CLOUD_CAPABILITIES
+        .iter()
+        .any(|(key, _, _)| *key == provider)
+}
+
 pub fn hotword_capability(provider: &str) -> AsrHotwordCapability {
     CLOUD_CAPABILITIES
         .iter()
@@ -168,6 +174,13 @@ pub async fn test_asr_connection() {}
                 .iter()
                 .all(|provider| { matrix[provider].delivery != HotwordDelivery::UnknownProvider })
         );
+    }
+
+    #[test]
+    fn cloud_asr_provider_validation_accepts_only_dispatch_keys() {
+        assert!(is_cloud_asr_provider("qwen_omni"));
+        assert!(!is_cloud_asr_provider("qwen_omni_35_plus"));
+        assert!(!is_cloud_asr_provider("unknown_provider"));
     }
 
     #[test]
