@@ -17,6 +17,9 @@
  * the real findings. So comments are stripped first, then what remains is
  * searched.
  *
+ * It also validates the active locales (en/uk): no Chinese in values, the
+ * same leaf keys on both sides, and identical {placeholder} sets per key.
+ *
  * Usage:
  *   node scripts/check-i18n.mjs            # summary of files not yet migrated
  *   node scripts/check-i18n.mjs --all      # list every line
@@ -147,23 +150,102 @@ function isAllowed(relPath) {
   return ALLOWLIST.some((prefix) => posix.startsWith(prefix))
 }
 
-const findings = []
-const activeLocaleFindings = []
-for (const name of ['en.json', 'uk.json']) {
-  const file = join(CLIENT_ROOT, 'src/i18n/locales', name)
+// --- Active locale checks (en/uk) ---
+
+const LOCALE_DIR = 'src/i18n/locales'
+const LOCALE_NAMES = ['en.json', 'uk.json']
+const PLACEHOLDER = /\{[^}]*\}/g
+
+/** Collect every leaf of a locale table as `path -> value`; objects join with '.', array items get `[index]` suffixes. */
+function collectLeaves(value, path, out) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectLeaves(item, `${path}[${index}]`, out))
+    return
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      collectLeaves(child, path === '' ? key : `${path}.${key}`, out)
+    }
+    return
+  }
+  out.set(path, value)
+}
+
+/** Line for a leaf path: the literal key first, then the closest matching parent segment (nested tables hold no dotted literals). */
+function locateKeyLine(source, path) {
+  const segments = path.split(/\.|\[\d+\]/).filter(Boolean)
+  for (let end = segments.length; end >= 1; end--) {
+    const offset = source.indexOf(JSON.stringify(segments.slice(0, end).join('.')))
+    if (offset !== -1) return source.slice(0, offset).split('\n').length
+  }
+  return 1
+}
+
+/** Sorted, de-duplicated placeholder tokens of a string value; null for non-string leaves. */
+function placeholders(value) {
+  if (typeof value !== 'string') return null
+  return [...new Set(value.match(PLACEHOLDER) ?? [])].sort()
+}
+
+const localeFindings = []
+const localeTables = new Map()
+
+for (const name of LOCALE_NAMES) {
+  const file = join(CLIENT_ROOT, LOCALE_DIR, name)
   const source = readFileSync(file, 'utf8')
-  const table = JSON.parse(source)
-  for (const [key, value] of Object.entries(table)) {
-    if (!CJK.test(value)) continue
-    const keyOffset = source.indexOf(JSON.stringify(key))
-    activeLocaleFindings.push({
-      file: `src/i18n/locales/${name}`,
-      line: source.slice(0, keyOffset).split('\n').length,
-      text: `${key}: ${value}`,
+  const leaves = new Map()
+  collectLeaves(JSON.parse(source), '', leaves)
+  localeTables.set(name, { relPath: `${LOCALE_DIR}/${name}`, source, leaves })
+
+  for (const [key, value] of leaves) {
+    if (!CJK.test(String(value))) continue
+    localeFindings.push({
+      file: `${LOCALE_DIR}/${name}`,
+      line: locateKeyLine(source, key),
+      text: `${key}: ${String(value)}`,
     })
   }
 }
 
+// The active locales must stay aligned: identical leaf keys and identical
+// placeholder sets. A renamed or dropped {placeholder} silently breaks the UI,
+// and a key present on one side only means a missing or orphaned string.
+const enTable = localeTables.get('en.json')
+const ukTable = localeTables.get('uk.json')
+if (enTable && ukTable) {
+  for (const key of enTable.leaves.keys()) {
+    if (!ukTable.leaves.has(key)) {
+      localeFindings.push({
+        file: enTable.relPath,
+        line: locateKeyLine(enTable.source, key),
+        text: `missing in uk.json: ${key}`,
+      })
+    }
+  }
+  for (const key of ukTable.leaves.keys()) {
+    if (!enTable.leaves.has(key)) {
+      localeFindings.push({
+        file: ukTable.relPath,
+        line: locateKeyLine(ukTable.source, key),
+        text: `missing in en.json: ${key}`,
+      })
+    }
+  }
+  for (const [key, enValue] of enTable.leaves) {
+    if (!ukTable.leaves.has(key)) continue
+    const enPlaceholders = placeholders(enValue)
+    const ukPlaceholders = placeholders(ukTable.leaves.get(key))
+    if (enPlaceholders === null || ukPlaceholders === null) continue
+    if (enPlaceholders.join(' ') === ukPlaceholders.join(' ')) continue
+    localeFindings.push({
+      file: ukTable.relPath,
+      line: locateKeyLine(ukTable.source, key),
+      text: `placeholder mismatch: ${key} (en: ${enPlaceholders.join(', ') || 'none'} | uk: ${ukPlaceholders.join(', ') || 'none'})`,
+    })
+  }
+}
+
+const findings = []
 for (const file of walk(SRC_ROOT)) {
   const relPath = relative(CLIENT_ROOT, file)
   if (isAllowed(relPath)) continue
@@ -172,10 +254,10 @@ for (const file of walk(SRC_ROOT)) {
     findings.push({ file: relPath.split(sep).join('/'), ...item })
   }
 }
-findings.push(...activeLocaleFindings)
+findings.push(...localeFindings)
 
 if (findings.length === 0) {
-  console.log('check-i18n: no hardcoded Chinese found outside the allowlist.')
+  console.log('check-i18n: no hardcoded Chinese outside the allowlist; en/uk locales are consistent.')
   process.exit(0)
 }
 
@@ -194,7 +276,7 @@ if (showAll) {
   }
 }
 
-console.log(`\ncheck-i18n: ${findings.length} line(s) in ${byFile.size} file(s) still hold Chinese in code.`)
+console.log(`\ncheck-i18n: ${findings.length} finding(s) in ${byFile.size} file(s).`)
 if (strict) {
   console.error('check-i18n: --strict is on, failing.')
   process.exit(1)

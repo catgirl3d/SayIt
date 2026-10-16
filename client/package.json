@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:scripts": "node --test scripts/generate-update-manifest.test.mjs scripts/check-release-versions.test.mjs scripts/extract-release-notes.test.mjs scripts/fetch-sidecar.test.mjs",
+    "test:scripts": "node --test scripts/generate-update-manifest.test.mjs scripts/check-release-versions.test.mjs scripts/extract-release-notes.test.mjs scripts/fetch-sidecar.test.mjs scripts/check-i18n.test.mjs",
     "ffmpeg:fetch": "node ./scripts/fetch-sidecar.mjs",
     "check:release-versions": "node scripts/check-release-versions.mjs",
     "lint": "eslint src --ext .ts,.tsx",
