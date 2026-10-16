@@ -9,8 +9,16 @@
  *   - App prompt rules → BUILTIN_APP_RULES in src/services/personalization/defaults.ts
  */
 
-export const MIC_BOOST_VALUES = ['1', '2', '3', '5', 'auto'] as const
-export type MicBoostSetting = (typeof MIC_BOOST_VALUES)[number]
+// Microphone boost is stored as a string: 'auto' (browser AGC) or a fixed linear gain such
+// as '3' or '7.5'. The string form predates the slider (the old picker saved '1' | '2' |
+// '3' | '5' | 'auto'), so every previously saved value still resolves to the same gain
+// without a migration. 1x leaves the signal untouched; the ceiling is 20x (about +26 dB),
+// beyond which even a very quiet microphone only gains noise and hard clipping.
+export const MIC_BOOST_AUTO = 'auto'
+export const MIC_BOOST_MIN = 1
+export const MIC_BOOST_MAX = 20
+export const MIC_BOOST_STEP = 0.5
+export type MicBoostSetting = typeof MIC_BOOST_AUTO | `${number}`
 export const DEFAULT_MIC_BOOST: MicBoostSetting = '3'
 export const DEFAULT_BUILTIN_PROMPT_LANGUAGE = 'en'
 export const LEGACY_BUILTIN_PROMPT_LANGUAGE = 'zh-CN'
@@ -21,21 +29,25 @@ export interface MicBoostConfig {
   autoGainControl: boolean
 }
 
-export function resolveMicBoost(value: unknown): MicBoostConfig {
-  const setting: MicBoostSetting = typeof value === 'string'
-    && (MIC_BOOST_VALUES as readonly string[]).includes(value)
-    ? value as MicBoostSetting
-    : DEFAULT_MIC_BOOST
+/** Plain decimal only: rejects '', ' ', '0x10', '1e3', '-2' and 'NaN', which Number() would otherwise coerce. */
+const MIC_BOOST_NUMBER = /^\d+(?:\.\d+)?$/
 
-  return {
-    setting,
-    gain: setting === '2'
-      ? 2
-      : setting === '3'
-        ? 3
-        : setting === '5' ? 5 : 1,
-    autoGainControl: setting === 'auto',
+/** Clamp to the supported range and snap to the slider step; multiples of 0.5 are exact in binary, so the string form stays clean. */
+export function normalizeMicBoostGain(gain: number): number {
+  const clamped = Math.min(MIC_BOOST_MAX, Math.max(MIC_BOOST_MIN, gain))
+  return Math.round(clamped / MIC_BOOST_STEP) * MIC_BOOST_STEP
+}
+
+export function resolveMicBoost(value: unknown): MicBoostConfig {
+  if (value === MIC_BOOST_AUTO) {
+    return { setting: MIC_BOOST_AUTO, gain: 1, autoGainControl: true }
   }
+  if (typeof value !== 'string' || !MIC_BOOST_NUMBER.test(value)) {
+    return resolveMicBoost(DEFAULT_MIC_BOOST)
+  }
+
+  const gain = normalizeMicBoostGain(Number(value))
+  return { setting: String(gain) as MicBoostSetting, gain, autoGainControl: false }
 }
 
 export const DEFAULTS: Record<string, unknown> = {
@@ -74,7 +86,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // suppression is tuned for "comfortable to a human ear" and may shave off detail ASR
   // wants, so users with a clean mic environment can turn it off to compare accuracy.
   micNoiseSuppression: true,
-  micBoost: DEFAULT_MIC_BOOST, // '1' = off; '2', '3', '5' = fixed gain; 'auto' = browser AGC
+  micBoost: DEFAULT_MIC_BOOST, // 'auto' = browser AGC; otherwise a fixed gain from '1' (off) to '20' in 0.5 steps
 
   // System-audio subtitles reuse the active ASR/AI profiles, not dictation presets.
   'systemAudio.deviceId': '',
