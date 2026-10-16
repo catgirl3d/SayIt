@@ -29,6 +29,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Live computer-audio captions now end at sentence ends much more often. A caption that has reached half of its maximum length closes at a recognized sentence end as soon as the next sentence begins. A caption cut by the length limit ends at its last sentence end, or else at a comma, semicolon, or colon, and avoids ending on an article, preposition, conjunction, question word, or number (English, Ukrainian, Russian); the words left over open the next caption and count toward its length. A cut in the middle of speech waits up to 0.6 s for a pause between words, so the word at the boundary is much less often duplicated, cut in half, or lost.
 - Live computer-audio recognition no longer stops with "Live recognition stopped because source audio timing exceeded the retained capture window" when the captured audio has many small timing irregularities while a phrase is spoken.
 - Live captions can now take three lines for the translation and for the original above it before they are cut with an ellipsis (was two), except while both a notice and a warning are shown, when they keep two lines.
+- Selection editing no longer defaults an unspecified "translate" command to Chinese: Ukrainian selected text is translated to English, and any other text to Ukrainian.
 
 ## v0.2.2 — 2026-10-12
 
