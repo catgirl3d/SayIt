@@ -50,8 +50,7 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
 
 ## FFmpeg sidecar
 
-The plan, verified facts and smoke set live in `docs/FFMPEG_SIDECAR_PLAN.md`. The bundled
-pair is part of every release:
+The bundled pair is part of every release:
 
 - The pinned pair (`ffmpeg.exe` + `ffprobe.exe`) is fetched and verified by the release
   workflow itself, in a step placed before "Build NSIS installer": download the archive
