@@ -34,7 +34,7 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
    Verify with `npm --prefix client run check:release-versions`.
 3. Freeze the changelog section in `CHANGELOG-FORK.md`: replace `(unreleased)` with the
    release date (`## vX.Y.Z — YYYY-MM-DD`). The section must be non-empty.
-4. Run the release checks: `npm --prefix client run test:release-manifest` and
+4. Run the release checks: `npm --prefix client run test:scripts` and
    `npm --prefix client run i18n:check`.
 5. Commit (`chore(release): vX.Y.Z`) and push `main`.
 6. Dispatch the workflow on `main`:
@@ -47,6 +47,28 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
      page shows the same release notes from the manifest.
 8. Next batch: add a new `## v<next> (unreleased)` section at the top of
    `CHANGELOG-FORK.md` when the first entry appears.
+
+## FFmpeg sidecar
+
+The plan, verified facts and smoke set live in `docs/FFMPEG_SIDECAR_PLAN.md`. The bundled
+pair is part of every release:
+
+- The pinned pair (`ffmpeg.exe` + `ffprobe.exe`) is fetched and verified by the release
+  workflow itself, in a step placed before "Build NSIS installer": download the archive
+  pinned in `client/ffmpeg.lock.json`, verify its SHA256 before unpacking, place the pair
+  where the bundle picks it up. A mismatch must fail the build; never fall back to any
+  other FFmpeg.
+- The changelog records the delivery change: the `v0.2.3 (unreleased)` bullet claiming
+  FFmpeg is user-installed ("File transcription uses FFmpeg and FFprobe that you install
+  yourself ...") was replaced with the bundled wording inside the same section — that
+  bullet describes the same feature's final behavior, not a new entry.
+- Release verification additionally confirms: the installer contains the bundled pair (its
+  payload is 7.8 MB — measure and record the actual installer growth in the release notes),
+  and a fresh install on a machine with no FFmpeg in PATH transcribes a file with no setup.
+- To update FFmpeg: rebuild in `catgirl3d/ffmpeg-build` (recipe pinned in its repo),
+  publish a new `v<ffmpeg-version>-sayit.N` release with the tarball, `SHA256SUMS` and
+  `BUILDINFO.txt`, re-run the smoke set from the plan doc, then update
+  `client/ffmpeg.lock.json` in a normal commit.
 
 ## Notes
 
