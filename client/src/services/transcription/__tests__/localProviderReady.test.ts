@@ -10,6 +10,7 @@ vi.mock('../../store', () => ({ getSetting: (...args: unknown[]) => getSettingMo
 vi.mock('../../debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => runtimeEvents.addRuntimeEvent(...args) }))
 
 import { LocalProvider } from '../LocalProvider'
+import { DEFAULT_LOCAL_MODEL_ID } from '../../localModelStatus'
 
 /** 让 getSetting 返回选中的模型 id，其余键给默认值 */
 function settings(modelId: string) {
@@ -105,7 +106,7 @@ describe('LocalProvider 的就绪判定', () => {
   it('treats an empty stored id as the default model', async () => {
     settings('')
     invokeMock.mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === 'list_downloaded_models' ? [{ id: 'sensevoice-small-gguf', complete: true }] : ''),
+      Promise.resolve(cmd === 'list_downloaded_models' ? [{ id: DEFAULT_LOCAL_MODEL_ID, complete: true }] : ''),
     )
 
     const provider = new LocalProvider()
@@ -127,7 +128,7 @@ describe('LocalProvider 的就绪判定', () => {
   it('transcribes with the same normalized id it checked when the stored id is empty', async () => {
     settings('')
     invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === 'list_downloaded_models') return Promise.resolve([{ id: 'sensevoice-small-gguf', complete: true }])
+      if (cmd === 'list_downloaded_models') return Promise.resolve([{ id: DEFAULT_LOCAL_MODEL_ID, complete: true }])
       if (cmd === 'local_transcribe') return Promise.resolve({ text: '', elapsed_ms: 5 })
       return Promise.resolve('')
     })
@@ -142,7 +143,7 @@ describe('LocalProvider 的就绪判定', () => {
     await vi.waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('local_transcribe', {
         audioB64: expect.any(String),
-        modelId: 'sensevoice-small-gguf',
+        modelId: DEFAULT_LOCAL_MODEL_ID,
         language: 'auto',
         accelerator: 'auto',
       })

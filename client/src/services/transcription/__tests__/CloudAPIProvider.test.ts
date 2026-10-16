@@ -435,6 +435,48 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(finals[0]).toMatchObject({ asrEngine: 'doubao_v2', asrModel: 'Doubao-Seed-ASR-2.0' })
   })
 
+  it('sends the selected speech language to the Qwen realtime session', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'qwen-account',
+      provider: 'qwen_realtime',
+      apiKey: 'qwen-key',
+      appId: '',
+      workspaceId: 'ws-test',
+      model: '',
+      omniPrompt: '',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'qwen_stream_finish' ? 'recognized' : undefined
+    ))
+
+    const provider = new CloudAPIProvider()
+    const finals: Array<{ asrEngine?: string; asrText?: string }> = []
+    let resolveDone = () => {}
+    const done = new Promise<void>((resolve) => { resolveDone = resolve })
+    await provider.connect({ onFinal: (result) => finals.push(result), onDone: () => resolveDone() })
+
+    expect(provider.start({ runId: 21, language: 'uk', streamingDisplay: true })).toBe(true)
+    provider.sendAudio(new ArrayBuffer(16000))
+    // The Qwen stream opens asynchronously; stop only takes the streaming path once ready.
+    await vi.waitFor(() => {
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'qwen_stream_open')).toBe(true)
+    })
+    const openArgs = mocks.invoke.mock.calls.find(([command]) => command === 'qwen_stream_open')?.[1] as {
+      language?: string
+      realtime?: boolean
+      workspaceId?: string
+    }
+    expect(openArgs.language).toBe('uk')
+    expect(openArgs.realtime).toBe(true)
+    expect(openArgs.workspaceId).toBe('ws-test')
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(provider.stop()).toBe(true)
+    await done
+
+    expect(finals[0]).toMatchObject({ asrEngine: 'qwen_realtime', asrText: 'recognized' })
+  })
+
   it('does not dispatch Auto chat after cancellation while multipart is pending', async () => {
     let rejectMultipart!: (reason: string) => void
     mocks.loadActiveAsrProfile.mockResolvedValue({

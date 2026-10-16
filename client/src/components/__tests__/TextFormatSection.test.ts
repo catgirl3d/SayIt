@@ -52,7 +52,8 @@ afterEach(async () => {
 })
 
 function renderWithSavedOptions() {
-  hookStateOverrides.values = [savedOptions, true, true]
+  // useState order: opts, ready, animate, showChineseOnlyToggles
+  hookStateOverrides.values = [savedOptions, true, true, true]
   return renderToStaticMarkup(createElement(TextFormatSection))
 }
 
