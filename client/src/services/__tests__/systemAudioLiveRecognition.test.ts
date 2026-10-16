@@ -4,7 +4,7 @@ import {
   type LiveFrameTiming,
   type LiveIdleTiming,
 } from '../systemAudioLiveRecognition'
-import { FRAME_MS } from '../subtitleSegmentation'
+import { FRAME_BYTES, FRAME_MS } from '../subtitleSegmentation'
 import type { LiveAsrResult } from '../transcription/types'
 
 function liveResult(overrides: Partial<LiveAsrResult> = {}): LiveAsrResult {
@@ -38,7 +38,7 @@ function recordFrame(accumulator: LiveSpeechAccumulator, timing: LiveFrameTiming
   if (inspected.kind !== 'accepted') throw new Error(`Expected an accepted frame, got ${inspected.kind}`)
   if (inspected.closeGap) throw new Error('Test frame unexpectedly requires an idle gap close')
   accumulator.recordFrame(inspected)
-  accumulator.markFrameSent()
+  accumulator.markFrameSent(new Uint8Array(FRAME_BYTES))
 }
 
 function idle(timing: LiveFrameTiming, confirmedThroughUnixUs: number): LiveIdleTiming {
@@ -101,7 +101,7 @@ describe('live speech accumulator', () => {
     expect(inspected).toMatchObject({ kind: 'accepted', audioStartMs: 0, closeGap: false })
     if (inspected.kind !== 'accepted') throw new Error('Expected the first frame to be accepted')
     accumulator.recordFrame(inspected)
-    accumulator.markFrameSent()
+    accumulator.markFrameSent(new Uint8Array(FRAME_BYTES))
 
     const malformedIdle = accumulator.acceptIdle(idle(first, first.captureEndUnixUs! + 511_999))
     expect(malformedIdle).toMatchObject({ kind: 'error', error: { kind: 'idle' } })
