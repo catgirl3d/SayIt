@@ -1,0 +1,20 @@
+{
+  "version": "8.1.2",
+  "platform": "x86_64-pc-windows-msvc",
+  "archivePlatform": "x86_64-w64-mingw32",
+  "releasePage": "https://github.com/catgirl3d/ffmpeg-build/releases/tag/v8.1.2-sayit.1",
+  "archiveUrl": "https://github.com/catgirl3d/ffmpeg-build/releases/download/v8.1.2-sayit.1/ffmpeg-8.1.2-audio-x86_64-w64-mingw32.tar.gz",
+  "archiveSha256": "8e9399880364a2e69ef2b7e32ffbacf4d8a8f0d68988ad7af2c4590c816936e3",
+  "files": [
+    {
+      "name": "ffmpeg.exe",
+      "pathInArchive": "ffmpeg-8.1.2-audio-x86_64-w64-mingw32/bin/ffmpeg.exe",
+      "sha256": "f16b54c9fb01a5c34a32f0fe62f4ec8a3433c0065605afa944a9bbfe4e5c250b"
+    },
+    {
+      "name": "ffprobe.exe",
+      "pathInArchive": "ffmpeg-8.1.2-audio-x86_64-w64-mingw32/bin/ffprobe.exe",
+      "sha256": "c147e3f92cfdf1005c86cb1a26c3b52a2ae2f410df4f391b8f5110d909051056"
+    }
+  ]
+}
