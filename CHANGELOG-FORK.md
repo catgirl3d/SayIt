@@ -30,6 +30,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 - Live computer-audio recognition no longer stops with "Live recognition stopped because source audio timing exceeded the retained capture window" when the captured audio has many small timing irregularities while a phrase is spoken.
 - Live captions can now take three lines for the translation and for the original above it before they are cut with an ellipsis (was two), except while both a notice and a warning are shown, when they keep two lines.
 - Selection editing no longer defaults an unspecified "translate" command to Chinese: Ukrainian selected text is translated to English, and any other text to Ukrainian.
+- Removed the Chinese words from the built-in AI hotword set; saved copies drop them on the next load.
 
 ## v0.2.2 — 2026-10-12
 

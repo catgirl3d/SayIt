@@ -17,14 +17,12 @@ export const BUILTIN_SETS: Record<string, { label: string; description: string; 
   ai: {
     get label() { return t('dict.aiSet') },
     get description() { return t('dict.aiSetDesc') },
-    // i18n-allow-start: 内置中文热词数据，不是界面文案
     words: [
-      'ChatGPT', 'GPT', 'OpenAI', 'Claude', 'DeepSeek', '豆包', 'Gemini',
-      'LLM', 'Token', 'Prompt', 'Agent', 'Ollama', '千问', '大模型',
-      'OpenClaw', 'ASR', 'Codex', 'Claude Code', 'SayIt', 'Hermes',
+      'ChatGPT', 'GPT', 'OpenAI', 'Claude', 'DeepSeek', 'Gemini',
+      'LLM', 'Token', 'Prompt', 'Agent', 'Ollama', 'OpenClaw',
+      'ASR', 'Codex', 'Claude Code', 'SayIt', 'Hermes',
       'Vibe Coding', 'Typeless', 'Vibe',
     ],
-    // i18n-allow-end
   },
 }
 
