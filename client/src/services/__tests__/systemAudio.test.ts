@@ -910,7 +910,7 @@ describe('system audio subtitle session', () => {
 
     it('still names the other states, which would otherwise leave the overlay blank', async () => {
       await session.start({ deviceId: '', targetLanguage: 'ru' })
-      expect(statuses()[0]).toBe('Starting computer subtitles...')
+      expect(statuses()[0]).toBe('Starting computer subtitles…')
 
       await session.pause()
       expect(lastStatus()).toBe('Subtitles paused')
