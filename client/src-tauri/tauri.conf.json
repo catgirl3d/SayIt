@@ -5,8 +5,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run ffmpeg:fetch && npm run dev",
+    "beforeBuildCommand": "npm run ffmpeg:fetch && npm run build"
   },
   "app": {
     "withGlobalTauri": false,
@@ -36,6 +36,7 @@
     ],
     "resources": {
       "resources/*": "resources/",
+      "resources/ffmpeg/*": "resources/ffmpeg/",
       "transcribe-libs/*": "./"
     },
     "icon": [

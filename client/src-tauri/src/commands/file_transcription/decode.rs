@@ -109,7 +109,7 @@ pub(super) fn read_decoded_audio(
     let mut command = ffmpeg_command(&input.tools, source, track);
     let child = command.spawn().map_err(|error| {
         WorkerOutcome::Failed(format!(
-            "Failed to start FFmpeg. Install a working FFmpeg build or select its folder: {error}"
+            "Failed to start FFmpeg. Choose a folder containing FFmpeg and FFprobe, or reinstall SayIt: {error}"
         ))
     })?;
     supervise_decoded_audio(&input.job_id, &input.cancel, child, pcm_path)
@@ -291,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn decoder_spawn_failure_reports_the_install_hint() {
+    fn decoder_spawn_failure_reports_the_sidecar_or_override_hint() {
         let dir = test_dir("decode-spawn-failure");
         let input = worker_input(
             "job-spawn-failure",
@@ -311,7 +311,7 @@ mod tests {
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("Install a working FFmpeg build"),
+            message.contains("Choose a folder containing FFmpeg and FFprobe, or reinstall SayIt"),
             "unexpected error: {message}"
         );
         std::fs::remove_dir_all(dir).ok();

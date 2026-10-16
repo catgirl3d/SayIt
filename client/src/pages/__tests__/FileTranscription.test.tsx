@@ -138,6 +138,44 @@ describe('file transcription page', () => {
     expect(heading.textContent).toContain('Alpha')
   })
 
+  it('uses the bundled FFmpeg by default without offering a PATH mode', async () => {
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText("Using SayIt's built-in FFmpeg and FFprobe")).toBeTruthy())
+    expect(screen.getByText(/SayIt includes built-in FFmpeg and FFprobe/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /path/i })).toBeNull()
+  })
+
+  it('shows bundled resolver errors in the page error alert', async () => {
+    const message = 'The bundled FFmpeg and FFprobe are missing or damaged. Please reinstall SayIt.'
+    dialog.open.mockResolvedValue('C:/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') throw new Error(message)
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(`Could not inspect this file: ${message}`))
+  })
+
+  it('shows selected FFmpeg folder resolver errors in the page error alert', async () => {
+    const message = 'The selected FFmpeg folder does not contain both ffmpeg.exe and ffprobe.exe: C:/broken/ffmpeg'
+    dialog.open.mockResolvedValueOnce('C:/broken/ffmpeg').mockResolvedValueOnce('C:/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') throw new Error(message)
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
+    await waitFor(() => expect(screen.getByText('C:/broken/ffmpeg')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(`Could not inspect this file: ${message}`))
+  })
+
   it('renders the cloud profile selector with provider, model, and label details', async () => {
     cloudProfiles.loadAsrProfiles.mockResolvedValue({
       profiles: [cloudProfile()],
@@ -604,42 +642,93 @@ describe('file transcription page', () => {
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
-  it('offers a detected FFmpeg folder and re-inspects the selected file when used', async () => {
+  it('does not show a detected FFmpeg folder on a healthy page', async () => {
     detectedFfmpegDirectory = 'C:/tools/ffmpeg'
-    dialog.open.mockResolvedValue('C:/recording.mp4')
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('C:/tools/ffmpeg')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
-    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }))
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    expect(screen.queryByText('C:/tools/ffmpeg')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull()
+  })
 
+  it('offers a detected FFmpeg folder after inspect fails and re-inspects when used', async () => {
+    detectedFfmpegDirectory = 'C:/tools/ffmpeg'
+    dialog.open.mockResolvedValue('C:/recording.mp4')
+    let inspectAttempts = 0
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') {
+        inspectAttempts += 1
+        if (inspectAttempts === 1) throw { kind: 'ffmpeg-tools', message: 'bundled tools unavailable' }
+      }
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('bundled tools unavailable'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Use this folder' })).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }))
     await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('inspect_transcription_file', {
       filePath: 'C:/recording.mp4',
       ffmpegDirectory: 'C:/tools/ffmpeg',
     }))
+    expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull()
   })
 
-  it('dismisses a detected FFmpeg folder suggestion for the session', async () => {
+  it('does not offer a detected FFmpeg folder for a media inspection error', async () => {
     detectedFfmpegDirectory = 'C:/tools/ffmpeg'
+    dialog.open.mockResolvedValue('C:/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') throw { kind: 'media', message: 'Invalid data found' }
+      return native.defaultInvoke(command, args)
+    })
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('C:/tools/ffmpeg')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Invalid data found'))
+    expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull()
+  })
+
+  it('does not show a detected FFmpeg folder for an unrelated page error', async () => {
+    detectedFfmpegDirectory = 'C:/tools/ffmpeg'
+    dialog.open.mockRejectedValueOnce(new Error('output picker unavailable'))
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('output picker unavailable'))
+    expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull()
+  })
+
+  it('dismisses a detected FFmpeg folder suggestion after inspect fails', async () => {
+    detectedFfmpegDirectory = 'C:/tools/ffmpeg'
+    dialog.open.mockResolvedValue('C:/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') throw { kind: 'ffmpeg-tools', message: 'bundled tools unavailable' }
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Use this folder' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
 
+    expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull()
     expect(screen.queryByText('C:/tools/ffmpeg')).toBeNull()
   })
 
-  it('hides the detected suggestion after the user chooses a folder manually', async () => {
+  it('keeps the detected folder hidden after the user chooses a folder manually', async () => {
     detectedFfmpegDirectory = 'C:/tools/ffmpeg'
     dialog.open.mockResolvedValue('C:/manual/ffmpeg')
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('C:/tools/ffmpeg')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
 
     await waitFor(() => expect(screen.getByText('C:/manual/ffmpeg')).toBeTruthy())
-    expect(screen.queryByText('C:/tools/ffmpeg')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull()
   })
 
   it('shows no FFmpeg suggestion when detection returns no candidate', async () => {

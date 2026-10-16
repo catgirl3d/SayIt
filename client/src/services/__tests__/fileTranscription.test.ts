@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   errorMessage,
   FileTranscriptionService,
+  normalizeInspectionFailure,
   type FileTranscriptionBridge,
   type FileTranscriptionSnapshot,
 } from '../fileTranscription'
@@ -752,6 +753,21 @@ describe('file transcription service', () => {
   it('normalizes thrown values to a message string', () => {
     expect(errorMessage(new Error('boom'))).toBe('boom')
     expect(errorMessage('plain failure')).toBe('plain failure')
+  })
+
+  it('normalizes classified inspection failures and preserves unclassified values', () => {
+    const ffmpegFailure = normalizeInspectionFailure({ kind: 'ffmpeg-tools', message: 'x' }) as Error & { inspectionKind?: string }
+    const mediaFailure = normalizeInspectionFailure({ kind: 'media', message: 'y' }) as Error & { inspectionKind?: string }
+    const plainError = new Error('z')
+
+    expect(ffmpegFailure).toBeInstanceOf(Error)
+    expect(ffmpegFailure.message).toBe('x')
+    expect(ffmpegFailure.inspectionKind).toBe('ffmpeg-tools')
+    expect(mediaFailure.message).toBe('y')
+    expect(mediaFailure.inspectionKind).toBe('media')
+    expect(normalizeInspectionFailure(plainError)).toBe(plainError)
+    expect((normalizeInspectionFailure(plainError) as Error & { inspectionKind?: string }).inspectionKind).toBeUndefined()
+    expect(normalizeInspectionFailure('plain failure')).toBe('plain failure')
   })
 
   it('sends clipboard text through the injected bridge', async () => {

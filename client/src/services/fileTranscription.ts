@@ -58,6 +58,10 @@ export interface FileMediaInfo {
   audioTracks: Array<{ index: number; label: string; isDefault: boolean }>
 }
 
+export type FileInspectionErrorKind = 'ffmpeg-tools' | 'media'
+
+type FileInspectionError = Error & { inspectionKind?: FileInspectionErrorKind }
+
 export interface LocalFileSettings {
   modelId: string
   modelName: string
@@ -113,6 +117,17 @@ const defaultAdmission: FileTranscriptionAdmission = {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+export function normalizeInspectionFailure(reason: unknown): unknown {
+  if (typeof reason !== 'object' || reason === null) return reason
+  const candidate = reason as { kind?: unknown; message?: unknown }
+  if ((candidate.kind === 'ffmpeg-tools' || candidate.kind === 'media') && typeof candidate.message === 'string') {
+    const error = new Error(candidate.message) as FileInspectionError
+    error.inspectionKind = candidate.kind
+    return error
+  }
+  return reason
 }
 
 export function formatFileDuration(durationMs: number | null): string {
@@ -233,7 +248,7 @@ export class FileTranscriptionService {
       return generation === this.inspectionGeneration ? result : null
     } catch (error) {
       if (generation !== this.inspectionGeneration) return null
-      throw error
+      throw normalizeInspectionFailure(error)
     }
   }
 
