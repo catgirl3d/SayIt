@@ -835,7 +835,7 @@ export class SystemAudioSession {
       return
     }
     if (generation !== this.generation || live !== this.liveSession) return
-    const sendResult = accumulator.markFrameSent()
+    const sendResult = accumulator.markFrameSent(audio)
     // A target crossing during silence must not flush the stream: Deepgram would finalize a
     // stray word into a phrase of its own. Flush only while speech is actually pending.
     // The flush answer confirms the whole window and commits it as one caption; committing a
@@ -906,7 +906,8 @@ export class SystemAudioSession {
   private commitLivePhrase(boundaryAudioMs: number, closeReason: SegmentCloseReason, targetStartMs = this.liveAccumulator?.audioMs ?? 0) {
     const accumulator = this.liveAccumulator
     if (!accumulator) return
-    const prepared = accumulator.prepareCommit(boundaryAudioMs, targetStartMs)
+    // Only a length cut lands mid-speech; a pause or gap already ends the caption where the speaker stopped.
+    const prepared = accumulator.prepareCommit(boundaryAudioMs, targetStartMs, closeReason === 'cap')
     if (prepared.kind === 'none') return
     if (prepared.kind === 'error') {
       this.failLiveRecognition(prepared.error)

@@ -40,13 +40,20 @@ describe('recent speech context', () => {
     expect(new RecentSpeech().contextBefore(1_000)).toBe('')
   })
 
-  it('returns the previous segments in spoken order, no more than two', () => {
+  it('returns the previous segments in spoken order, no more than six', () => {
     const recent = new RecentSpeech()
     recent.push('first', span(0, 1_000))
     recent.push('second', span(1_000, 2_000))
     recent.push('third', span(2_000, 3_000))
 
-    expect(recent.contextBefore(3_000)).toBe('second third')
+    expect(recent.contextBefore(3_000)).toBe('first second third')
+  })
+
+  it('drops segments older than the window', () => {
+    const recent = new RecentSpeech()
+    for (let index = 1; index <= 7; index++) recent.push(`segment ${index}`, span(index * 1_000, (index + 1) * 1_000))
+
+    expect(recent.contextBefore(8_000)).toBe('segment 2 segment 3 segment 4 segment 5 segment 6 segment 7')
   })
 
   it('drops everything once the pause before the next segment is too long', () => {

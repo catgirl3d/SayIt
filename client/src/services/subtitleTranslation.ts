@@ -3,8 +3,8 @@ export const SUBTITLE_CONTEXT_SOURCE = 'subtitles'
 
 // Speech that ended more than this long before the next segment starts belongs to another scene or speaker.
 export const CONTEXT_MAX_GAP_MS = 6_000
-export const CONTEXT_MAX_CHARS = 300
-const CONTEXT_MAX_SEGMENTS = 2
+export const CONTEXT_MAX_CHARS = 500
+const CONTEXT_MAX_SEGMENTS = 6
 
 const languageNames = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' })
 

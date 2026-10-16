@@ -183,7 +183,7 @@ function enablePipelineDebug() {
   return { getPipelineSnapshot }
 }
 
-function frames(count: number, probability: number, value = 1, sessionId?: number, discontinuity = false) {
+function frames(count: number, probability: number, value?: number, sessionId?: number, discontinuity = false) {
   const started = [...native.invoke.mock.calls].reverse().find(([name]) => name === 'start_system_audio_capture')
   const id = sessionId ?? (started?.[1] as { sessionId: number } | undefined)?.sessionId
   if (!id) throw new Error('Missing native capture session ID')
@@ -254,7 +254,9 @@ interface CapturedSystemAudioFrame {
   captureAnchors: Array<{ audioOffsetSamples: number; captureUnixUs: number }>
 }
 
-function captureFrame(sessionId: number, probability: number, value = 1, discontinuity = false): CapturedSystemAudioFrame {
+// Speech frames carry a constant level and frames without speech are silent, so the live accumulator sees a
+// real pause (a frame far below the recent speech peak) wherever the VAD reports none; pass `value` to override.
+function captureFrame(sessionId: number, probability: number, value = probability > 0 ? 1 : 0, discontinuity = false): CapturedSystemAudioFrame {
   sourceCaptureEndUnixUs = Math.max(sourceCaptureEndUnixUs, Date.now() * 1_000 + sourceClockOffsetUs)
   const captureStartUnixUs = sourceCaptureEndUnixUs
   sourceCaptureEndUnixUs += 32_000
@@ -2973,7 +2975,11 @@ describe('system audio subtitle session', () => {
       await settle()
       expect(polishRequests().map((request) => request.text)).toEqual(['Confirmed prefix'])
 
-      frames(63, 0.9)
+      frames(62, 0.9)
+      await settle()
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
+
+      frames(1, 0)
       await settle()
 
       expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
@@ -3003,7 +3009,7 @@ describe('system audio subtitle session', () => {
       emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Phrase A', isFinal: true })
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
       emitLiveResult(harness, 0, { resultId: 3, audioStartMs: 32, audioEndMs: 64, text: 'Continuing speech' })
-      frames(1, 0.9)
+      frames(1, 0)
 
       expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
     })
@@ -3015,7 +3021,7 @@ describe('system audio subtitle session', () => {
       await useLiveSession(harness)
       frames(93, 0.9)
       emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 2_944, audioEndMs: 2_976, text: 'First phrase' })
-      frames(1, 0.9)
+      frames(1, 0)
 
       const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
       const gapFrame = captureFrame(captureId, 0.9)
@@ -3042,7 +3048,9 @@ describe('system audio subtitle session', () => {
 
       expect(trace.getPipelineSnapshot().runs.map((run) => run.closeReason)).toEqual(['cap'])
 
-      frames(93, 0.9)
+      frames(92, 0.9)
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
+      frames(1, 0)
       expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(3)
     })
 
@@ -3062,7 +3070,7 @@ describe('system audio subtitle session', () => {
       })
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 64, text: 'Next phrase' })
       frames(93, 0.9)
-      frames(1, 0.9)
+      frames(1, 0)
       expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(1)
 
       emitLiveResult(harness, 0, {
@@ -3099,7 +3107,11 @@ describe('system audio subtitle session', () => {
       expect(polishRequests().map((request) => request.text)).toEqual(['First phrase', 'Next phrase'])
 
       emitLiveResult(harness, 0, { resultId: 5, audioStartMs: 64, audioEndMs: 80, text: 'Later phrase' })
-      frames(93, 0.9)
+      frames(92, 0.9)
+      await settle()
+      expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(2)
+
+      frames(1, 0)
       await settle()
 
       expect(harness.sessions[0]?.finalize).toHaveBeenCalledTimes(3)
@@ -3112,7 +3124,7 @@ describe('system audio subtitle session', () => {
       await useLiveSession(harness)
       frames(93, 0.9)
       emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 2_944, audioEndMs: 2_976, text: 'Unflushed phrase' })
-      frames(1, 0.9)
+      frames(1, 0)
 
       const captureId = (native.invoke.mock.calls.find(([name]) => name === 'start_system_audio_capture')?.[1] as { sessionId: number }).sessionId
       const gapFrame = captureFrame(captureId, 0.9)
@@ -3352,13 +3364,31 @@ describe('system audio subtitle session', () => {
       expect(polishRequests()).toHaveLength(0)
     })
 
-    it('localizes a phrase whose capture timing exceeded the retained source-anchor window', async () => {
-      const harness = createLiveProviderHarness()
-      await useLiveSession(harness)
-      for (let index = 0; index < 66; index++) {
+    // Each frame after the first opens its own source-time anchor through a small capture gap.
+    function framesWithSourceJitter(count: number) {
+      for (let index = 0; index < count; index++) {
         if (index > 0) sourceCaptureEndUnixUs += 5_000
         frames(1, 0.9)
       }
+    }
+
+    it('commits a phrase whose capture timing spans more anchors than a single native frame may carry', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      framesWithSourceJitter(66)
+      emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Mapped phrase', isFinal: true })
+      emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
+      await settle()
+
+      expect(session.getSnapshot().state).toBe('listening')
+      expect(polishRequests().map((request) => request.text)).toEqual(['Mapped phrase'])
+    })
+
+    it('localizes a phrase whose capture timing exceeded the retained source-anchor window', async () => {
+      const harness = createLiveProviderHarness()
+      await useLiveSession(harness)
+      // One more than the 4096 anchors the accumulator retains for a phrase that is never committed.
+      framesWithSourceJitter(4_097)
       emitLiveResult(harness, 0, { resultId: 1, audioStartMs: 0, audioEndMs: 32, text: 'Unmapped phrase', isFinal: true })
       emitLiveResult(harness, 0, { resultId: 2, audioStartMs: 32, audioEndMs: 32, text: '', speechFinal: true })
       await settle()
