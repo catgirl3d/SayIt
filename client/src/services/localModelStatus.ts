@@ -3,18 +3,20 @@ import { getDefault } from './defaults'
 import { builtinLocalModelName } from '@/i18n/displayNames'
 
 /** Default local model id, derived from the registered settings defaults (services/defaults.ts). */
-export const DEFAULT_LOCAL_MODEL_ID = getDefault('localAsr.modelId', 'sensevoice-small-gguf')
+export const DEFAULT_LOCAL_MODEL_ID = getDefault<string>('localAsr.modelId')
 
 export type LocalModelIpc = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
 /**
  * Reads the selected local ASR model. The stored value is normalized in one
- * place: an empty value means the default model, so the Files page, the sidebar
- * engine indicator, and dictation never disagree about which model is selected.
+ * place: a blank value (empty or whitespace-only) means the default model, so
+ * the Files page, the sidebar engine indicator, and dictation never disagree
+ * about which model is selected. The Rust startup warm-up in
+ * src-tauri/src/main.rs applies the same rule to the same setting.
  */
 export async function getSelectedLocalModelId(): Promise<string> {
   const stored = await getSetting('localAsr.modelId', DEFAULT_LOCAL_MODEL_ID)
-  return String(stored || DEFAULT_LOCAL_MODEL_ID)
+  return String(stored ?? '').trim() || DEFAULT_LOCAL_MODEL_ID
 }
 
 /**

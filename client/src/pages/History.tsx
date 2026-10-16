@@ -44,6 +44,7 @@ import { applyTextTransforms, restoreHotwordSpacing } from '@/services/textPostP
 import { buildHotwordInjectionPart } from '@/services/personalization/promptRouter'
 import { applySpeechLanguageToPrompt, getSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { loadActiveHotwords } from '@/services/hotwords/settings'
+import { getSelectedLocalModelId } from '@/services/localModelStatus'
 
 const HISTORY_PAGE_SIZE = 100
 
@@ -320,7 +321,7 @@ export async function reprocessViaLocal(
   const durationSec = (chunk.byteLength / 2) / 16000
   const audioB64 = uint8ArrayToBase64(new Uint8Array(chunk))
 
-  const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
+  const modelId = await getSelectedLocalModelId()
   const accelerator = await getSetting('localAsr.accelerator', 'auto') as string
 
   // hotwords 在 GGUF 引擎上不支持（transcribe.cpp 只有 whisper 族接 initial prompt），

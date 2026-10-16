@@ -6,7 +6,7 @@ import { Play, Pause } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Feedback } from '@/components/ui/feedback'
-import { getSetting } from '@/services/store'
+import { getSelectedLocalModelId } from '@/services/localModelStatus'
 import { getEngineDraftDirty, subscribeEngineDraft } from '@/stores/engineDraft'
 import { resolveAsrDisplayModel, resolveQwenOmniModel } from '@/lib/asrModels'
 import { buildAsrProviderConfig, CUSTOM_ASR_PROVIDER, findAsrProvider } from './asrProviderCatalog'
@@ -87,7 +87,7 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
       const { pcmB64, pcmBytes, audioSec: audioDurationSec } = await prepareTestPcm(speechLanguage)
 
       if (workMode === 'local') {
-        const modelId = await getSetting('localAsr.modelId', 'sensevoice-small-gguf') as string
+        const modelId = await getSelectedLocalModelId()
         const r = await invoke<{ text: string; elapsed_ms: number; model_id: string }>('run_asr_benchmark', {
           modelId, language: speechLanguage,
         })

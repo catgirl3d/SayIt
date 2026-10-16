@@ -308,10 +308,16 @@ fn main() {
     // 本地模式：启动就在后台把模型加载起来，别等用户第一次按热键才等几百毫秒~几秒。
     // 非本地模式不加载，避免白占几百 MB 内存。
     if storage.get("workMode", None).as_str() == Some("local") {
+        // Fallback mirrors the JS-side default (DEFAULTS['localAsr.modelId'] in
+        // services/defaults.ts): an absent or blank stored value means "the default
+        // model", exactly like getSelectedLocalModelId() on the JS side. Keep the
+        // two sides in sync when the default changes.
         let model_id = storage
             .get("localAsr.modelId", None)
             .as_str()
-            .unwrap_or("sensevoice-small-gguf")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("nemotron-asr-streaming-0.6b-gguf")
             .to_string();
         let accelerator = storage
             .get("localAsr.accelerator", None)
