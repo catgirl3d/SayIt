@@ -759,6 +759,64 @@ mod tests {
         assert_eq!(status.code(), Some(7));
     }
 
+    /// The last-owner drop is the one cleanup path the explicit kill()/wait()
+    /// tests never exercise: the destructor itself must terminate a running
+    /// child and return. The closed stdout pipe is the external proof that the
+    /// process is gone — a surviving ping would hold the pipe until its own
+    /// ~30s lifetime expires. The finite ping lifetime is also the fallback
+    /// when either the destructor or the reader misses the shared deadline.
+    /// Boundary: this proves termination and destructor return, not the reap
+    /// bookkeeping of an already-terminated child (a kill-only mutant passes).
+    #[cfg(windows)]
+    #[test]
+    fn dropping_the_last_child_handle_terminates_a_running_child() {
+        let mut child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Preparation check: only a still-running child can prove the drop.
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "preparation failed: ping exited before the drop could be tested"
+        );
+        let (stdout, stderr) =
+            take_child_pipes(&mut child, "stdout missing", "stderr missing").unwrap();
+        drop(stderr);
+        let control = ChildControl::new(child);
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut stdout = stdout;
+            let mut sink = std::io::sink();
+            let _ = read_tx.send(std::io::copy(&mut stdout, &mut sink));
+        });
+        let (drop_tx, drop_rx) = std::sync::mpsc::channel();
+        let dropper = std::thread::spawn(move || {
+            drop(control);
+            let _ = drop_tx.send(());
+        });
+        // One shared deadline bounds both the destructor return and the EOF;
+        // a late event fails the test instead of hanging the suite.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        assert!(
+            drop_rx
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .is_ok(),
+            "the final handle drop did not return within the budget"
+        );
+        let read_outcome = read_rx
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .expect("the child kept its pipe open past the budget; it was not terminated");
+        assert!(
+            read_outcome.is_ok(),
+            "reading the child output failed before EOF: {read_outcome:?}"
+        );
+        dropper.join().unwrap();
+        reader.join().unwrap();
+    }
+
     #[test]
     fn job_ids_and_sequences_are_unique_and_monotonic() {
         let first = new_job_id();
