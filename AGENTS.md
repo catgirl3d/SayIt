@@ -39,3 +39,7 @@
 - `ci-rust.yml` runs `cargo fmt --all --check`, an advisory `cargo clippy`, and `cargo test --locked` for `client/src-tauri/**`, `rust-toolchain.toml`, and `rustfmt.toml` changes, on the toolchain pinned in `rust-toolchain.toml` (1.97.1) with `rustfmt.toml` pinning style edition 2024.
 - The Rust gate is formatting-enforced: run `cargo fmt --all` in `client/src-tauri` before committing Rust changes. After applying upstream port patches, format the touched files before committing — ported upstream code arrives unformatted.
 - `cargo clippy` runs with `continue-on-error` as a baseline measurement; do not treat its result as a merge gate until a baseline decision is made.
+
+## 8. Never Commit Plans or Working Notes
+- NEVER commit plan documents, drafts, internal reviews, or working notes (e.g. `docs/*PLAN*.md`, follow-ups, design notes) to this repository — not in normal commits, PRs, or history rewrites.
+- Such files stay local and untracked. Only the maintainer's explicit per-file request can change that, and the file must be named explicitly each time.
