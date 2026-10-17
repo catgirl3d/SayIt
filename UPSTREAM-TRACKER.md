@@ -7,7 +7,7 @@ Covers upstream 0.2.1 (`8687e9b`) and 0.2.2 (`c704300`), plus follow-up fixes.
 - The local `dev-scripts/upstream-decisions/` journal remains the authoritative record for accept/reject decisions on upstream commits; this file mirrors progress in one readable list.
 - Update this file when a port lands or a decision changes. Keep one row per feature.
 
-Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits; open PRs #83/#85/#87 tracked in Upstream watch, #86 declined).
+Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits; PR #87 ported early and shipped in fork PR #22; PR #85 ported early as fork PR #25, draft; PR #83 and #85 still open upstream; #86 declined).
 
 ## Ported
 
@@ -24,6 +24,7 @@ Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partia
 | History/AI polish fixes: blank completion is an error, keyless providers via catalog, request-time attribution, blank keyed model guard | `6a5bfc5` |
 | Settings accessibility and AI state fixes | `2ad1715` |
 | Hotword capability matrix (Rust) + dynamic Dictionary support table + ignored-hotword diagnostics | `df2ef41` |
+| OpenRouter AI cleanup provider preset (upstream PR #87, ported early via fork PR #22) | `f6275b9`, `3cef9c2` |
 
 ## Partial
 
@@ -48,12 +49,11 @@ Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partia
 
 ## Upstream watch (open PRs, not merged)
 
-Checked 2026-10-17: upstream `main` is still at `0ceba3e` (2026-10-09); the PRs below are open (@DemonMartin) and stay out of the 0.2.1/0.2.2 port scope until merged. PR #86 is declined in advance (see Won't do). Early review done; journal decisions are recorded only after merge, on the squashed commit.
+Checked 2026-10-17: upstream `main` is still at `0ceba3e` (2026-10-09); the PRs below are open by @DemonMartin. Early ports do not wait for the upstream merge and are noted per row; the journal decision is recorded only after the upstream merge, on the squashed commit. PR #86 is declined in advance (see Won't do); PR #87 was ported early and shipped in fork PR #22 (see Ported).
 
 | PR | Feature | Size | Early assessment |
 | --- | --- | --- | --- |
-| #87 | OpenRouter as an AI provider (reuses the OpenAI-compatible path) | 28+/8−, 5 files | Medium: UX preset on top of the generic `openai_compat` route; small adaptation |
-| #85 | Custom model for selected-text editing | 424+/18−, 19 files | High: fills a missing per-context choice; not cherry-pickable, keep fork's `reasoningEffort`/`serviceTier` in profiles |
+| #85 | Custom model for selected-text editing | 424+/18−, 19 files | Ported early in fork PR #25 (draft, open): flat service setting plus a per-run frozen snapshot; fork `reasoningEffort`/`serviceTier` preserved; the upstream `aiPolicy` refactor is not ported. Journal entry after the upstream merge. |
 | #83 | Recognition fallback chains (local/cloud/server) | 2034+/192−, 36 files | High: resilience win, no Rust; wide recorder/timing refactor (timeout 30→60 s) — adapt carefully |
 
 ## Deferred
