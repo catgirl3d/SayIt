@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
+import { systemAudioSession } from '@/services/systemAudio'
 import Sidebar from '../Sidebar'
 
 // The update service registers a Tauri event listener at import time; without a window
@@ -25,6 +26,21 @@ function renderSidebar() {
   return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(Sidebar)))
 }
 
+function navEntry(markup: string, href: string) {
+  const entryStart = markup.indexOf(`href="${href}"`)
+  expect(entryStart, href).toBeGreaterThan(-1)
+  return markup.slice(entryStart, markup.indexOf('</a>', entryStart))
+}
+
+function withSessionState<T>(state: 'listening' | 'paused', render: () => T): T {
+  const spy = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...systemAudioSession.getSnapshot(), state })
+  try {
+    return render()
+  } finally {
+    spy.mockRestore()
+  }
+}
+
 describe('sidebar alpha marker', () => {
   it('marks the file transcription and computer subtitles entries with the alpha badge', () => {
     const markup = renderSidebar()
@@ -36,5 +52,24 @@ describe('sidebar alpha marker', () => {
       const entry = markup.slice(entryStart, markup.indexOf('</a>', entryStart))
       expect(entry, href).toContain('sr-only">Alpha<')
     }
+  })
+
+  it('shows the live session state in place of the alpha badge while subtitles are listening', () => {
+    const markup = withSessionState('listening', renderSidebar)
+
+    const entry = navEntry(markup, '/system-audio')
+    expect(entry).toContain('bg-success')
+    expect(entry).toContain('sr-only">Listening to computer audio<')
+    expect(entry).not.toContain('sr-only">Alpha<')
+    expect((markup.match(/sr-only">Alpha</g) ?? []).length).toBe(1)
+    expect(navEntry(markup, '/files')).toContain('sr-only">Alpha<')
+  })
+
+  it('shows the paused state in the computer subtitles entry', () => {
+    const entry = navEntry(withSessionState('paused', renderSidebar), '/system-audio')
+
+    expect(entry).toContain('bg-warning')
+    expect(entry).toContain('sr-only">Subtitles paused<')
+    expect(entry).not.toContain('sr-only">Alpha<')
   })
 })
