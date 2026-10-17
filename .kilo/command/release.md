@@ -7,7 +7,7 @@ If `$ARGUMENTS` names a version, that is the release version; otherwise ask whic
 
 Working style:
 
-- Read the guide first, then inspect the current state: `git status`, current branch, the version sources, and the newest section of `CHANGELOG-FORK.md`.
+- Read the guide first, then inspect the current state: `git status`, current branch, the version sources, and the newest section of `CHANGELOG.md`.
 - Confirm with the user before every irreversible or outward-facing step: commit, push, and workflow dispatch.
 - Do the checklist together with the user: version bump in all sources, changelog section freeze (replace `(unreleased)` with the release date, e.g. `## v0.2.2 — 2026-10-12`), local checks (`test:scripts`, `i18n:check`).
 - Only after user confirmation: commit, push `main`, then dispatch `gh workflow run publish-windows-release.yml --ref main` and watch the run.

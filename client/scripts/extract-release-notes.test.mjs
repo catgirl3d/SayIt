@@ -64,8 +64,8 @@ test('rejects a version with no section', () => {
 
 test('names the given source file when the requested section is missing', () => {
   assert.throws(
-    () => extractReleaseNotes(CHANGELOG, '0.2.3', 'CHANGELOG-FORK.uk.md'),
-    /CHANGELOG-FORK\.uk\.md has no section for version 0\.2\.3/,
+    () => extractReleaseNotes(CHANGELOG, '0.2.3', 'CHANGELOG.uk.md'),
+    /CHANGELOG\.uk\.md has no section for version 0\.2\.3/,
   )
 })
 
@@ -81,7 +81,7 @@ test('rejects a malformed version', () => {
 test('CLI writes the section to --output', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sayit-notes-test-'))
   try {
-    const changelogPath = join(dir, 'CHANGELOG-FORK.md')
+    const changelogPath = join(dir, 'CHANGELOG.md')
     const outputPath = join(dir, 'notes.md')
     writeFileSync(changelogPath, CHANGELOG)
 
@@ -108,7 +108,7 @@ test('CLI writes the section to --output', () => {
 test('CLI fails closed when the section is missing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sayit-notes-test-'))
   try {
-    const changelogPath = join(dir, 'CHANGELOG-FORK.md')
+    const changelogPath = join(dir, 'CHANGELOG.md')
     writeFileSync(changelogPath, CHANGELOG)
     assert.throws(
       () => execFileSync(
@@ -131,7 +131,7 @@ test('CLI fails closed when the section is missing', () => {
 test('CLI reports the actual changelog file name when the section is missing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sayit-notes-test-'))
   try {
-    const changelogPath = join(dir, 'CHANGELOG-FORK.uk.md')
+    const changelogPath = join(dir, 'CHANGELOG.uk.md')
     writeFileSync(changelogPath, CHANGELOG)
     assert.throws(
       () => execFileSync(
@@ -144,7 +144,7 @@ test('CLI reports the actual changelog file name when the section is missing', (
         ],
         { encoding: 'utf8', stdio: 'pipe' },
       ),
-      /CHANGELOG-FORK\.uk\.md has no section for version 0\.2\.9/,
+      /CHANGELOG\.uk\.md has no section for version 0\.2\.9/,
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })

@@ -15,7 +15,7 @@ export interface VersionInfo {
   /** Installer SHA-512 (Base64). Re-verified by the Rust side after download. */
   sha512: string | null
   /**
-   * Release notes for the manifest's version (the CHANGELOG-FORK.md section), shown on
+   * Release notes for the manifest's version (the CHANGELOG.md section), shown on
    * the About page. Optional: manifests published before this field existed stay valid.
    */
   notes: string | null

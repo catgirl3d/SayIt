@@ -20,7 +20,7 @@ Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcr
 
 ## Fork Build
 
-This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG-FORK.md) ([Ukrainian translation](CHANGELOG-FORK.uk.md)).
+This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG.md) ([Ukrainian translation](CHANGELOG.uk.md)).
 
 **English, Ukrainian, Russian, and Chinese dictation:** built-in cleanup prompts are available in English and Ukrainian. Choose their instruction language separately in AI settings; on a fresh setup it follows the UI language. Set the ASR recognition language independently and use a model that supports the language you speak.
 
