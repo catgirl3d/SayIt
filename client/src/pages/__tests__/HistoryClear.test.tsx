@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 
 const mocks = vi.hoisted(() => ({
   listHistory: vi.fn(),
   countHistory: vi.fn(),
   clearHistory: vi.fn(),
+  exportHistory: vi.fn(),
   emit: vi.fn(),
 }))
 
@@ -19,6 +20,10 @@ vi.mock('@/services/store', async (importOriginal) => {
     clearHistory: (...args: unknown[]) => mocks.clearHistory(...args),
   }
 })
+
+vi.mock('@/services/exports', () => ({
+  exportHistory: (...args: unknown[]) => mocks.exportHistory(...args),
+}))
 
 vi.mock('@/services/bridge', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/bridge')>()
@@ -44,7 +49,58 @@ describe('history clearing', () => {
     mocks.listHistory.mockReset().mockResolvedValue([])
     mocks.countHistory.mockReset().mockResolvedValue(0)
     mocks.clearHistory.mockReset().mockResolvedValue(undefined)
+    mocks.exportHistory.mockReset().mockResolvedValue({ canceled: true, filePath: null })
     mocks.emit.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('shows a load error without claiming the history is empty, then restores records after retry', async () => {
+    const record = {
+      id: 'record-1',
+      timestamp: Date.now(),
+      asrText: 'recognized text',
+      llmText: 'recognized text',
+      asrMs: 10,
+      llmMs: 0,
+      durationSec: 1,
+      charCount: 16,
+    }
+    mocks.listHistory.mockReset().mockRejectedValueOnce(new Error('history unavailable')).mockResolvedValueOnce([record])
+    mocks.countHistory.mockReset().mockResolvedValueOnce(0).mockResolvedValueOnce(1)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    render(<History />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(t('history.loadError'))
+    expect(screen.getByRole('button', { name: t('common.retry') })).toBeTruthy()
+    expect(screen.queryByText(t('history.empty'))).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: t('common.retry') }))
+
+    await waitFor(() => expect(screen.getAllByText('recognized text').length).toBeGreaterThan(0))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByText(t('history.empty'))).toBeNull()
+  })
+
+  it('reports an export failure and clears it after a successful retry', async () => {
+    mocks.exportHistory.mockReset().mockRejectedValueOnce(new Error('export unavailable')).mockResolvedValueOnce({ canceled: true, filePath: null })
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    render(<History />)
+    await waitFor(() => expect(mocks.listHistory).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: t('history.export') }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(t('history.exportError'))
+
+    fireEvent.click(screen.getByRole('button', { name: t('history.export') }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(screen.getByText(t('history.exportCanceled'))).toBeTruthy()
   })
 
   it('warns about the full deletion and keeps history intact when canceled', async () => {

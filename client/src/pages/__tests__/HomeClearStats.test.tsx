@@ -66,6 +66,18 @@ describe('clearing usage statistics', () => {
     vi.restoreAllMocks()
   })
 
+  it('marks totals unavailable instead of showing zero after a failed stats load', async () => {
+    mocks.getStats.mockReset().mockRejectedValueOnce(new Error('statistics unavailable'))
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    render(<Home />)
+
+    await waitFor(() => expect(screen.getByText(t('home.statsUnavailable'))).toBeTruthy())
+    expect(screen.getAllByText('—')).toHaveLength(4)
+    expect(screen.queryByText('0')).toBeNull()
+    consoleError.mockRestore()
+  })
+
   it('lists everything that will be deleted, what is kept, and that it cannot be undone', async () => {
     render(<Home />)
     await waitFor(() => expect(mocks.getStats).toHaveBeenCalled())

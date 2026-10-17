@@ -271,24 +271,14 @@ export async function getHistory(): Promise<HistoryRecord[]> {
   return listHistory()
 }
 
+// Fail loud: the owning UI must distinguish an unavailable history from an empty one.
 export async function listHistory(query: HistoryListQuery = {}): Promise<HistoryRecord[]> {
-  try {
-    const records = await api().historyList(query)
-    return (records as HistoryRecord[]) || []
-  } catch (err) {
-    console.error('[store] listHistory FAILED:', err)
-    return []
-  }
+  const records = await api().historyList(query)
+  return (records as HistoryRecord[]) || []
 }
 
 export async function countHistory(query: Omit<HistoryListQuery, 'limit' | 'offset'> = {}): Promise<number> {
-  try {
-    const count = await api().historyCount(query)
-    return count
-  } catch (err) {
-    console.error('[store] countHistory FAILED:', err)
-    return 0
-  }
+  return api().historyCount(query)
 }
 
 export async function addHistory(record: HistoryRecord): Promise<void> {
@@ -377,13 +367,9 @@ export async function getUsageSummary(sinceMs: number | null): Promise<UsageSumm
 
 /** All-time totals for the home screen. */
 export async function getStats(): Promise<Stats> {
-  try {
-    const summary = await getUsageSummary(null)
-    return { totalDurationSec: summary.totalDurationSec, totalChars: summary.totalChars }
-  } catch (err) {
-    console.error('[store] getStats FAILED:', err)
-    return { totalDurationSec: 0, totalChars: 0 }
-  }
+  // Fail loud: Home must not present an unavailable read as zero totals.
+  const summary = await getUsageSummary(null)
+  return { totalDurationSec: summary.totalDurationSec, totalChars: summary.totalChars }
 }
 
 export async function recordUsage(event: UsageEventInput): Promise<void> {

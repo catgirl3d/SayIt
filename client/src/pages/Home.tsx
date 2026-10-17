@@ -47,6 +47,7 @@ function WithKeyChip({
 export default function Home() {
   const t = useT()
   const [stats, setStats] = useState<Stats>({ totalDurationSec: 0, totalChars: 0 })
+  const [statsError, setStatsError] = useState(false)
   const statsRefreshVersion = useRef(0)
   const [isClearStatsDialogOpen, setIsClearStatsDialogOpen] = useState(false)
   const [isClearingStats, setIsClearingStats] = useState(false)
@@ -56,9 +57,17 @@ export default function Home() {
 
   const refreshStats = useCallback(() => {
     const refreshVersion = ++statsRefreshVersion.current
-    void getStats().then((nextStats) => {
-      if (refreshVersion === statsRefreshVersion.current) setStats(nextStats)
-    })
+    void getStats()
+      .then((nextStats) => {
+        if (refreshVersion !== statsRefreshVersion.current) return
+        setStats(nextStats)
+        setStatsError(false)
+      })
+      .catch((error) => {
+        if (refreshVersion !== statsRefreshVersion.current) return
+        console.error('[home] Failed to load usage stats:', error)
+        setStatsError(true)
+      })
   }, [])
 
   useEffect(() => {
@@ -118,9 +127,10 @@ export default function Home() {
     }).format(num)
   }
 
-  const totalTime = formatTime(stats.totalDurationSec)
-  const avgWordsPerMin = stats.totalDurationSec > 60 ? Math.round(stats.totalChars / (stats.totalDurationSec / 60)) : 0
-  const savedTime = formatTime(estimateTypingTimeSec(stats.totalChars))
+  const unavailableStat = { value: '—', extraValue: null, unit: '', extraUnit: null }
+  const totalTime = statsError ? unavailableStat : formatTime(stats.totalDurationSec)
+  const avgWordsPerMin = statsError ? unavailableStat.value : stats.totalDurationSec > 60 ? Math.round(stats.totalChars / (stats.totalDurationSec / 60)) : 0
+  const savedTime = statsError ? unavailableStat : formatTime(estimateTypingTimeSec(stats.totalChars))
 
   const handleClearStats = async () => {
     statsRefreshVersion.current += 1
@@ -165,18 +175,20 @@ export default function Home() {
     {
       icon: Mic,
       label: t('home.statChars'),
-      value: formatCompactNumber(stats.totalChars),
-      extraValue: null,
-      unit: t('home.unitChars'),
-      extraUnit: null,
+      ...(statsError ? unavailableStat : {
+        value: formatCompactNumber(stats.totalChars),
+        extraValue: null,
+        unit: t('home.unitChars'),
+        extraUnit: null,
+      }),
     },
     { icon: Zap, label: t('home.statSavedTime'), ...savedTime },
     {
       icon: Type,
       label: t('home.statSpeed'),
-      value: `${avgWordsPerMin}`,
+      value: avgWordsPerMin,
       extraValue: null,
-      unit: t('home.unitCharsPerMinute'),
+      unit: statsError ? '' : t('home.unitCharsPerMinute'),
       extraUnit: null,
     },
   ]
@@ -195,6 +207,7 @@ export default function Home() {
 
       <NoticeBanner />
 
+      {statsError && <p role="alert" className="mb-3 text-sm text-muted-foreground">{t('home.statsUnavailable')}</p>}
 
       <div className="grid grid-cols-2 gap-4">
         {cards.map(({ icon: Icon, label, value, extraValue, unit, extraUnit }) => (

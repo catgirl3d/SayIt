@@ -402,19 +402,31 @@ export default function History() {
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
   const [totalCount, setTotalCount] = useState(0)
   const [exportResult, setExportResult] = useState<{ filePath: string | null; canceled: boolean } | null>(null)
+  const [exportError, setExportError] = useState(false)
   const [reprocessWarning, setReprocessWarning] = useState<AsrWarningCode | null>(null)
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
   const [clearError, setClearError] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  const loadRequestGeneration = useRef(0)
   const reprocessWarningGeneration = useRef(0)
 
   const loadRecords = useCallback(async (searchKeyword: string, limit: number, favOnly: boolean) => {
-    const [items, total] = await Promise.all([
-      listHistory({ keyword: searchKeyword, favoriteOnly: favOnly, limit, offset: 0 }),
-      countHistory({ keyword: searchKeyword, favoriteOnly: favOnly }),
-    ])
-    setRecords(items)
-    setTotalCount(total)
+    const requestGeneration = ++loadRequestGeneration.current
+    try {
+      const [items, total] = await Promise.all([
+        listHistory({ keyword: searchKeyword, favoriteOnly: favOnly, limit, offset: 0 }),
+        countHistory({ keyword: searchKeyword, favoriteOnly: favOnly }),
+      ])
+      if (requestGeneration !== loadRequestGeneration.current) return
+      setRecords(items)
+      setTotalCount(total)
+      setLoadError(false)
+    } catch (error) {
+      if (requestGeneration !== loadRequestGeneration.current) return
+      console.error('[history] Failed to load history:', error)
+      setLoadError(true)
+    }
   }, [])
 
   useEffect(() => {
@@ -479,9 +491,16 @@ export default function History() {
   }
 
   const handleExport = async () => {
-    const result = await exportHistory({ keyword: debouncedKeyword })
-    setExportResult(result)
-    if (!result.canceled) setTimeout(() => setExportResult(null), 8000)
+    setExportError(false)
+    setExportResult(null)
+    try {
+      const result = await exportHistory({ keyword: debouncedKeyword })
+      setExportResult(result)
+      if (!result.canceled) setTimeout(() => setExportResult(null), 8000)
+    } catch (error) {
+      console.error('[history] Failed to export history:', error)
+      setExportError(true)
+    }
   }
 
   // Clearing the whole history: records, their recordings, and their share of the
@@ -681,6 +700,15 @@ export default function History() {
       {exportResult?.canceled && (
         <p className="mb-3 text-xs text-muted-foreground">{t('history.exportCanceled')}</p>
       )}
+      {exportError && <Feedback className="mb-3" tone="error" message={t('history.exportError')} />}
+      {loadError && (
+        <Feedback
+          className="mb-3"
+          tone="error"
+          message={t('history.loadError')}
+          actions={[{ label: t('common.retry'), onClick: () => void loadRecords(debouncedKeyword, visibleCount, favoriteOnly) }]}
+        />
+      )}
 
       {reprocessWarning === DEEPGRAM_KEYTERM_LIMIT && (
         <Feedback className="mb-3" tone="warning" message={t('asr.deepgramKeytermLimitWarning')} />
@@ -694,7 +722,7 @@ export default function History() {
         onEdit={handleEdit}
         onSaveAsrCorrection={handleSaveAsrCorrection}
         highlight={debouncedKeyword}
-        emptyText={keyword.trim() ? t('history.emptyNoMatch') : favoriteOnly ? t('history.emptyFavorites') : t('history.empty')}
+        emptyText={loadError ? '' : keyword.trim() ? t('history.emptyNoMatch') : favoriteOnly ? t('history.emptyFavorites') : t('history.empty')}
       />
 
       {totalCount > records.length && (
