@@ -820,7 +820,8 @@ fn build_selected_import_plan(
             .as_array()
             .ok_or_else(|| "Invalid prompt preset format".to_string())?;
         let mut local_presets = storage
-            .get("promptPresets", None)
+            .export_collection("promptPresets")
+            .map_err(|error| format!("Failed to export prompt presets: {}", error))?
             .as_array()
             .cloned()
             .unwrap_or_default();
@@ -1728,6 +1729,69 @@ mod tests {
         });
 
         assert!(full_config_preview_sections(&data).is_err());
+    }
+
+    #[test]
+    fn selected_import_rejects_corrupt_local_prompt_presets_without_replacing_them() {
+        let (storage, dir) = temp_storage("selected-corrupt-prompt-presets");
+        storage
+            .set(
+                "promptPresets",
+                &json!([{
+                    "id": "local-preset",
+                    "name": "Local preset",
+                    "systemPrompt": "Keep this preset",
+                }]),
+            )
+            .unwrap();
+        let raw_before: String = storage
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT raw_json FROM prompt_presets WHERE id = 'local-preset'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE prompt_presets SET raw_json = '{not-json' WHERE id = 'local-preset'",
+                [],
+            )
+            .unwrap();
+
+        let data = json!({
+            "items": {
+                "promptPresets": [{
+                    "name": "Imported preset",
+                    "systemPrompt": "Imported prompt",
+                }],
+            },
+        });
+        let error = match build_selected_import_plan(&storage, &data) {
+            Ok(_) => panic!("corrupt local prompt presets must reject selected import"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("promptPresets"), "unexpected error: {error}");
+        let raw_after: String = storage
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT raw_json FROM prompt_presets WHERE id = 'local-preset'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(raw_after, "{not-json");
+        assert_ne!(raw_after, raw_before);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
