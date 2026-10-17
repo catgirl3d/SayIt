@@ -461,7 +461,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm">
-      <div className="custom-scrollbar w-full max-w-lg max-h-[90vh] overflow-y-auto px-6 py-8">
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto px-6 py-8">
         {renderStep()}
 
         {/* 底部导航 */}

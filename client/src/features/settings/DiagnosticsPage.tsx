@@ -365,7 +365,7 @@ export default function DiagnosticsPage() {
               </div>
             </div>
 
-            <div className="custom-scrollbar max-h-64 min-h-[3rem] space-y-1 overflow-y-auto">
+            <div className="max-h-64 min-h-[3rem] space-y-1 overflow-y-auto">
               {filteredEvents().length === 0 ? (
                 <div className="flex h-12 items-center justify-center text-sm text-muted-foreground/50">
                   {t(logFilter === 'errors' ? 'diagnostics.noErrors' : logFilter === 'warnings' ? 'diagnostics.noWarnings' : 'diagnostics.noLogs')}
@@ -408,7 +408,7 @@ export default function DiagnosticsPage() {
             </div>
 
             {showFileLog && (
-              <pre className="custom-scrollbar mt-3 max-h-48 overflow-auto rounded-md bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
+              <pre className="mt-3 max-h-48 overflow-auto rounded-md bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
                 {logContent}
               </pre>
             )}

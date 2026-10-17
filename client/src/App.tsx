@@ -103,7 +103,7 @@ export default function App() {
       <TitleBar />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="custom-scrollbar flex-1 overflow-y-auto bg-background p-8">
+        <main className="flex-1 overflow-y-auto bg-background p-8">
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/files" element={<FileTranscription />} />

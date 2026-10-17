@@ -105,35 +105,6 @@
 
 }
 
-/* Custom scrollbar styles */
-@layer utilities {
-
-  /* Webkit browsers (Chrome, Safari, Edge) */
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: hsl(var(--muted-foreground) / 0.3);
-    border-radius: 3px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.5);
-  }
-
-  /* Firefox */
-  .custom-scrollbar {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
-  }
-}
-
 /* The surface enters on its own and the content root is not remounted, which avoids a flash of opacity over the whole layer. */
 @keyframes overlay-pill-surface-enter {
   from {
