@@ -1,11 +1,14 @@
-// 配置导出 / 导入弹窗。
+// Config export / import dialogs.
 //
-// 设计约束（改过两轮，记一下免得又走回头路）：
-// 1. 主题里 --primary 在浅色下接近纯黑，bg-primary/5 与 accent 悬停几乎同色，
-//    所以选中态不靠底色/描边，靠「勾选框填充 + 未选中文字降为 muted」的对比表达。
-// 2. 少用描边。同类条目收进一块 rounded-xl 面板里用发丝分割线，不做一行一个框。
-// 3. 层级靠字号、颜色和留白拉开；颜色只用主题 token，不用裸色阶。
-// 4. 入场动画复用 index.css 的 animate-fade-in-scale。
+// Design constraints (revised twice; recorded so nobody walks back into the old shape):
+// 1. In the light theme --primary is close to pure black, so bg-primary/5 and the accent hover
+//    are almost the same color. The selected state therefore does not rely on a background or
+//    outline; it is expressed by the contrast of "filled checkbox + unselected text dropped to muted".
+// 2. Use few outlines. Items of one kind go into a single rounded-xl panel separated by hairline
+//    dividers, not one box per row.
+// 3. Hierarchy comes from type size, color and whitespace; colors use theme tokens only, never raw
+//    color scales.
+// 4. The entrance animation reuses animate-fade-in-scale from index.css.
 
 import { useEffect, useState, type ReactNode } from 'react'
 import {
@@ -20,9 +23,9 @@ import {
   SlidersHorizontal,
   Sparkles,
   Tags,
-  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Modal, type ModalProps } from '@/components/ui/modal'
 import { type ConfigExportSelection, type ConfigImportPreview } from '@/services/backup'
 import { CUSTOM_THEMES_KEY, normalizeCustomThemes, type CustomTheme } from '@/services/hotwords/model'
 import { getPromptPresets, getSetting, type PromptPreset } from '@/services/store'
@@ -30,7 +33,7 @@ import { getTextReplacements, type TextReplacementRule } from '@/services/textRe
 import { useT } from '@/i18n/useT'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
 
-/** 头部图标底托，弹窗的视觉锚点。 */
+/** Backing tile for the header icon, the dialog's visual anchor. */
 function IconTile({ children, tone = 'default' }: { children: ReactNode; tone?: 'default' | 'warning' }) {
   const warning = tone === 'warning'
   return (
@@ -43,76 +46,25 @@ function IconTile({ children, tone = 'default' }: { children: ReactNode; tone?: 
   )
 }
 
-/** 弹窗外壳：头部与底栏固定、中间滚动；支持 Esc 与点遮罩关闭。 */
+/**
+ * Dialog shell: the shared Modal in its sectioned layout (header and footer stay fixed, the middle
+ * scrolls) with this feature's panel styling. Esc, backdrop click, focus handling and the dialog
+ * stack all come from Modal.
+ */
 function DialogShell({
-  icon,
-  title,
-  description,
-  children,
-  footer,
-  onClose,
   width = 'w-[520px]',
-}: {
-  icon: ReactNode
-  title: string
-  description?: ReactNode
-  children: ReactNode
-  footer: ReactNode
-  onClose: () => void
-  width?: string
-}) {
-  const t = useT()
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
+  ...modalProps
+}: Omit<ModalProps, 'showCloseButton' | 'panelClassName'> & { width?: string }) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 p-6 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className={`animate-fade-in-scale relative flex ${width} max-h-[82vh] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl`}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="shrink-0 px-6 pb-4 pt-5">
-          <div className="flex items-start gap-3">
-            {icon}
-            <div className="min-w-0 flex-1 pt-0.5">
-              <h3 className="text-[15px] font-semibold leading-snug">{title}</h3>
-              {description && (
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={t('configTransfer.close')}
-              className="-mr-1.5 -mt-1 shrink-0 rounded-lg p-1.5 text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </header>
-
-        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pb-5">{children}</div>
-
-        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 bg-muted/20 px-6 py-3.5">
-          {footer}
-        </footer>
-      </div>
-    </div>
+    <Modal
+      {...modalProps}
+      showCloseButton
+      panelClassName={`animate-fade-in-scale max-h-[82vh] rounded-2xl shadow-2xl ${width}`}
+    />
   )
 }
 
-/** 分段切换器：muted 轨道 + card 滑块，比描边按钮组更干净。 */
+/** Segmented switch: a muted track with a card-colored thumb, cleaner than a group of outlined buttons. */
 function SegmentedTabs<T extends string>({
   value,
   options,
@@ -144,14 +96,14 @@ function SegmentedTabs<T extends string>({
   )
 }
 
-/** 条目面板：一组同类条目共用一块面板 + 发丝分割线。 */
+/** Item panel: a group of items of one kind shares a single panel with hairline dividers. */
 function Panel({ children }: { children: ReactNode }) {
   return (
     <div className="overflow-hidden rounded-xl border border-border/70 divide-y divide-border/60">{children}</div>
   )
 }
 
-/** 小标题：分组名 + 右侧轻量文字按钮。 */
+/** Subheading: the group name plus a light text button on the right. */
 function GroupLabel({
   icon,
   title,
@@ -184,7 +136,7 @@ function TextButton({ onClick, children }: { onClick: () => void; children: Reac
   )
 }
 
-/** 只读信息行，用于「完整配置」清单。 */
+/** Read-only info row, used in the "Full configuration" list. */
 function InfoRow({
   icon,
   title,
@@ -206,7 +158,7 @@ function InfoRow({
   )
 }
 
-/** 勾选行：选中靠填充框 + 正常文字色，未选中整行降为 muted。 */
+/** Checkbox row: selected is a filled box with normal text color; unselected drops the whole row to muted. */
 function ChoiceRow({
   checked,
   onChange,
@@ -250,7 +202,7 @@ function EmptyRow({ children }: { children: ReactNode }) {
   return <p className="px-3.5 py-3 text-xs text-muted-foreground/70">{children}</p>
 }
 
-/** 警示条，只在真正需要提醒时出现。 */
+/** Warning strip, shown only when the user really needs a reminder. */
 function WarningNote({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/[0.07] px-3.5 py-2.5 text-xs leading-relaxed text-foreground/75">
@@ -626,7 +578,7 @@ export function ConfigImportDialog({
   )
 }
 
-/** 全部数据导入的覆盖确认。与配置导入共用外壳，避免同一面板里出现两套弹窗风格。 */
+/** Overwrite confirmation for the full-data import. Shares the shell with the config import so one panel does not show two dialog styles. */
 export function FullImportConfirmDialog({
   filePath,
   onClose,
@@ -677,7 +629,7 @@ export function FullImportConfirmDialog({
   )
 }
 
-/** 导入成功提示，稍后自动重启。居中图标样式与自动更新弹窗一致。 */
+/** Import-success notice; the app restarts automatically shortly after. The centered-icon style matches the auto-update dialog. */
 export function ImportDoneDialog() {
   const t = useT()
   return (
