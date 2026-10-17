@@ -5,11 +5,11 @@
 @layer base {
 
   /*
-   * CSS 变量 fallback（JS 主题系统未加载前的默认值）
-   * 运行时由 src/themes/ 的 applyTheme() 覆盖
+   * CSS variable fallbacks (the defaults used before the JS theme system has loaded)
+   * Overridden at runtime by applyTheme() in src/themes/
    */
   :root {
-    /* 基础色 — 与 light.ts 保持一致 */
+    /* Base colors — keep in sync with light.ts */
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
@@ -31,7 +31,7 @@
     --ring: 240 5.9% 10%;
     --radius: 0.5rem;
 
-    /* 区域色 */
+    /* Area colors */
     --sidebar-bg: 0 0% 100%;
     --sidebar-border: 240 5.9% 90%;
     --sidebar-item-active-bg: 240 4.8% 95.9%;
@@ -43,15 +43,16 @@
     --titlebar-close-hover-bg: 0 84% 60%;
     --titlebar-close-hover-text: 0 0% 100%;
 
-    /* 表单控件 */
+    /* Form controls */
     --input-bg: 0 0% 100%;
     --input-border: 240 5.9% 90%;
     --input-focus-border: 240 5.9% 10%;
     --input-focus-ring: 240 5.9% 10%;
     --input-placeholder: 240 4% 65%;
 
-    /* 状态色。-strong 是画在页面底色上的文字色（白底 ≥4.5:1），
-       不带后缀的是色块本体（圆点 / 进度条 / 10% 淡底）。见 src/themes/types.ts */
+    /* Status colors. -strong is the text color drawn on the page background (≥ 4.5:1 on a white
+       background); the unsuffixed one is the swatch itself (dots / progress bars / 10% tinted
+       backgrounds). See src/themes/types.ts */
     --success: 142 76% 36%;
     --success-foreground: 0 0% 100%;
     --success-strong: 142 72% 29%;
@@ -62,7 +63,7 @@
     --info-foreground: 0 0% 100%;
     --info-strong: 199 89% 33%;
 
-    /* Overlay 专用变量（独立黑底窗口） */
+    /* Overlay-only variables (standalone black-background window) */
     --overlay-bg: #0b0b0c;
     --overlay-text: #ffffff;
     --overlay-text-muted: #999999;
@@ -77,17 +78,17 @@
     @apply border-border;
   }
 
-  /* 全局 focus-visible 指示器 — 键盘用户可见焦点环 */
+  /* Global focus-visible indicator — a focus ring visible to keyboard users */
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
   }
 
-  /* 已有 ring 样式的组件（如 shadcn Button）不重复添加 outline */
+  /* Components that already have a ring style (such as the shadcn Button) do not get an extra outline */
   [class*="focus-visible:ring"]:focus-visible {
     outline: none;
   }
 
-  /* 排版层次：页面标题 */
+  /* Typographic hierarchy: page titles */
   h1 {
     @apply tracking-tight;
   }
@@ -104,10 +105,10 @@
 
 }
 
-/* 自定义滚动条样式 */
+/* Custom scrollbar styles */
 @layer utilities {
 
-  /* Webkit 浏览器（Chrome, Safari, Edge） */
+  /* Webkit browsers (Chrome, Safari, Edge) */
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -133,7 +134,7 @@
   }
 }
 
-/* Surface 单独入场，内容根节点不重挂载，避免整层透明度闪变。 */
+/* The surface enters on its own and the content root is not remounted, which avoids a flash of opacity over the whole layer. */
 @keyframes overlay-pill-surface-enter {
   from {
     opacity: 0.82;
@@ -146,7 +147,7 @@
   }
 }
 
-/* 中性准备圆点只表达“按键已响应、正在准备”，不暗示音频已经开始采集。 */
+/* The neutral preparing dot only says "the key press was acknowledged and the app is getting ready"; it does not imply that audio capture has started. */
 @keyframes overlay-preparing-dot-pulse {
 
   0%,
@@ -226,7 +227,7 @@
   clip-path: inset(0);
 }
 
-/* 流式字幕的文字光标：只改透明度、不缩放不移动，柔和的打字机竖线 */
+/* Text cursor of the streaming subtitles: only the opacity changes, with no scaling or movement, a soft typewriter bar */
 @keyframes caret-blink {
 
   0%,
@@ -255,7 +256,7 @@
   }
 }
 
-/* 进度条动画 */
+/* Progress bar animation */
 @keyframes progress-slide {
   0% {
     transform: translateX(-100%);
@@ -270,7 +271,7 @@
   }
 }
 
-/* 进度条填充动画 - 从左到右 */
+/* Progress bar fill animation - from left to right */
 @keyframes progress-fill {
   0% {
     transform: scaleX(0);
@@ -281,7 +282,7 @@
   }
 }
 
-/* 入场动画 */
+/* Entrance animation */
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -306,7 +307,7 @@
   }
 }
 
-/* 展开/折叠动画 */
+/* Expand/collapse animation */
 @keyframes expand {
   from {
     grid-template-rows: 0fr;
@@ -327,7 +328,7 @@
   }
 }
 
-/* 工具类 */
+/* Utility classes */
 @layer utilities {
   .animate-fade-in {
     animation: fade-in 250ms ease-out both;
@@ -337,7 +338,7 @@
     animation: fade-in-scale 200ms ease-out both;
   }
 
-  /* 交错入场延迟 */
+  /* Staggered entrance delays */
   .delay-75 {
     animation-delay: 75ms;
   }
@@ -347,7 +348,7 @@
   }
 }
 
-/* prefers-reduced-motion：尊重用户系统设置 */
+/* prefers-reduced-motion: respect the user's system setting */
 @media (prefers-reduced-motion: reduce) {
 
   *,
