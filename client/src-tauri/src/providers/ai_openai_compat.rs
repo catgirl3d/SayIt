@@ -5,7 +5,7 @@ use super::diag;
 use super::line_stream::LineStep;
 use super::prompt::{DEFAULT_SYSTEM_PROMPT, wrap_user_text};
 use super::reasoning::strip_thinking;
-use super::types::{AiProviderConfig, AiResult, TestResult, TextContext};
+use super::types::{AiProviderConfig, AiResult, RemoteModelInfo, TestResult, TextContext};
 use std::time::Instant;
 
 const SCOPE: &str = "ai/openai-compat";
@@ -465,7 +465,11 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
 /// For example, `.../v1/chat/completions` maps to `.../v1/models`.
 /// The chat endpoint itself is never used for model discovery because it requires
 /// a model ID and accepts POST requests, while the catalog uses GET.
-pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<String>, String> {
+///
+/// OpenAI-compatible catalogs carry optional display names and per-token prices
+/// (OpenRouter does), so each usable entry is returned with whatever metadata is
+/// present; malformed metadata never removes a model from the catalog.
+pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<RemoteModelInfo>, String> {
     let url = models_url(&config.api_url);
 
     diag::log(
@@ -531,23 +535,64 @@ pub async fn list_models(config: &AiProviderConfig) -> Result<Vec<String>, Strin
         )
     })?;
 
-    let models = extract_model_ids(&data);
+    let models = extract_models(&data);
     diag::ok(SCOPE, elapsed_ms, models.len());
     Ok(models)
 }
 
-/// Extract model IDs from an OpenAI-compatible GET /models response.
-/// Only string values in the standard `data[].id` field are accepted.
-fn extract_model_ids(data: &serde_json::Value) -> Vec<String> {
+/// Extract model entries from an OpenAI-compatible GET /models response.
+///
+/// Only entries with a non-empty string `data[].id` are returned. The optional
+/// `data[].name` and `data[].pricing.{prompt,completion}` fields are parsed
+/// independently, so one malformed field never drops the model itself.
+fn extract_models(data: &serde_json::Value) -> Vec<RemoteModelInfo> {
     let Some(items) = data.get("data").and_then(|d| d.as_array()) else {
         return Vec::new();
     };
     items
         .iter()
-        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
+        .filter_map(|item| {
+            let id = item.get("id").and_then(|id| id.as_str())?.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let name = item
+                .get("name")
+                .and_then(|name| name.as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string);
+            let pricing = item.get("pricing");
+            Some(RemoteModelInfo {
+                id: id.to_string(),
+                name,
+                input_price_per_million: pricing
+                    .and_then(|pricing| price_per_million(pricing.get("prompt"))),
+                output_price_per_million: pricing
+                    .and_then(|pricing| price_per_million(pricing.get("completion"))),
+            })
+        })
         .collect()
+}
+
+/// Convert one provider price field to USD per million tokens.
+///
+/// OpenRouter sends prices as decimal strings, while other compatible gateways
+/// may send JSON numbers. Dynamic routers report negative sentinel values such as
+/// "-1", and garbage ("NaN", "inf", arbitrary text) is treated as missing. The
+/// conversion is validated on both sides of the multiplication so no non-finite
+/// value ever reaches the IPC payload.
+fn price_per_million(value: Option<&serde_json::Value>) -> Option<f64> {
+    let per_token = match value? {
+        serde_json::Value::String(text) => text.trim().parse::<f64>().ok()?,
+        serde_json::Value::Number(number) => number.as_f64()?,
+        _ => return None,
+    };
+    if !per_token.is_finite() || per_token < 0.0 {
+        return None;
+    }
+    let per_million = per_token * 1_000_000.0;
+    per_million.is_finite().then_some(per_million)
 }
 
 /// Convert reqwest errors into concise diagnostic details.
@@ -1020,9 +1065,21 @@ mod tests {
         assert_eq!(result.text, TEST_INPUT);
     }
 
+    fn model_ids(models: &[RemoteModelInfo]) -> Vec<&str> {
+        models.iter().map(|model| model.id.as_str()).collect()
+    }
+
+    fn assert_price(actual: Option<f64>, expected: f64) {
+        let actual = actual.expect("price must be parsed");
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
+    }
+
     /// A standard response returns every data[].id value in server order.
     #[test]
-    fn extracts_model_ids_from_openai_list_response() {
+    fn extracts_models_from_openai_list_response() {
         let data: serde_json::Value = serde_json::json!({
             "object": "list",
             "data": [
@@ -1031,8 +1088,8 @@ mod tests {
             ]
         });
         assert_eq!(
-            extract_model_ids(&data),
-            vec!["gpt-4o-mini".to_string(), "gpt-4o".to_string()]
+            model_ids(&extract_models(&data)),
+            vec!["gpt-4o-mini", "gpt-4o"]
         );
     }
 
@@ -1041,7 +1098,7 @@ mod tests {
     #[test]
     fn missing_data_yields_empty_list() {
         let data: serde_json::Value = serde_json::json!({ "error": { "message": "not found" } });
-        assert!(extract_model_ids(&data).is_empty());
+        assert!(extract_models(&data).is_empty());
     }
 
     /// Non-string and empty IDs in data are discarded.
@@ -1056,7 +1113,120 @@ mod tests {
                 { "name": "no-id-field" }
             ]
         });
-        assert_eq!(extract_model_ids(&data), vec!["ok-model".to_string()]);
+        assert_eq!(model_ids(&extract_models(&data)), vec!["ok-model"]);
+    }
+
+    /// OpenRouter reports prices as per-token decimal strings; the IPC contract
+    /// exposes USD per million tokens.
+    #[test]
+    fn extracts_openrouter_names_and_scales_string_prices_per_million() {
+        let data = serde_json::json!({
+            "data": [{
+                "id": "deepseek/deepseek-v4.1-flash",
+                "name": "DeepSeek: DeepSeek V4.1 Flash",
+                "pricing": { "prompt": "0.00000015", "completion": "0.0000006" }
+            }]
+        });
+        let models = extract_models(&data);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "deepseek/deepseek-v4.1-flash");
+        assert_eq!(
+            models[0].name.as_deref(),
+            Some("DeepSeek: DeepSeek V4.1 Flash")
+        );
+        assert_price(models[0].input_price_per_million, 0.15);
+        assert_price(models[0].output_price_per_million, 0.6);
+    }
+
+    /// Some compatible gateways send JSON numbers instead of decimal strings.
+    #[test]
+    fn accepts_numeric_prices() {
+        let data = serde_json::json!({
+            "data": [{
+                "id": "numeric-model",
+                "pricing": { "prompt": 0.000003, "completion": 0.000015 }
+            }]
+        });
+        let models = extract_models(&data);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, None);
+        assert_price(models[0].input_price_per_million, 3.0);
+        assert_price(models[0].output_price_per_million, 15.0);
+    }
+
+    /// Dynamic routers report "-1"; other unusable values are reported as text.
+    /// Each malformed field becomes None, but the model stays in the catalog.
+    #[test]
+    fn malformed_prices_become_none_without_dropping_the_model() {
+        let data = serde_json::json!({
+            "data": [
+                { "id": "dynamic", "pricing": { "prompt": "-1", "completion": "NaN" } },
+                { "id": "infinite", "pricing": { "prompt": "inf", "completion": "junk" } },
+                { "id": "wrong-types", "pricing": { "prompt": true, "completion": { "value": 1 } } }
+            ]
+        });
+        let models = extract_models(&data);
+
+        assert_eq!(
+            model_ids(&models),
+            vec!["dynamic", "infinite", "wrong-types"]
+        );
+        for model in &models {
+            assert_eq!(model.input_price_per_million, None, "{}", model.id);
+            assert_eq!(model.output_price_per_million, None, "{}", model.id);
+        }
+    }
+
+    /// Missing metadata is not an error: both fields simply stay absent.
+    #[test]
+    fn missing_name_and_pricing_become_none_fields() {
+        let data = serde_json::json!({ "data": [{ "id": "plain-model" }] });
+        let models = extract_models(&data);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, None);
+        assert_eq!(models[0].input_price_per_million, None);
+        assert_eq!(models[0].output_price_per_million, None);
+    }
+
+    /// IDs are trimmed, and an id that is only whitespace is dropped.
+    #[test]
+    fn trims_ids_and_drops_whitespace_only_entries() {
+        let data = serde_json::json!({
+            "data": [{ "id": "  spaced-model  " }, { "id": "   " }]
+        });
+
+        assert_eq!(model_ids(&extract_models(&data)), vec!["spaced-model"]);
+    }
+
+    /// The frontend reads these exact snake_case field names, and absent metadata
+    /// must be omitted rather than serialized as null.
+    #[test]
+    fn remote_model_info_serialization_keeps_contract_field_names_and_omits_none() {
+        let data = serde_json::json!({
+            "data": [{
+                "id": "priced-model",
+                "name": "Priced Model",
+                "pricing": { "prompt": 0.000001, "completion": 0.000002 }
+            }, { "id": "plain-model" }]
+        });
+        let json = serde_json::to_value(extract_models(&data)).unwrap();
+
+        let priced = json[0].as_object().unwrap();
+        assert_eq!(
+            priced.get("id").and_then(|value| value.as_str()),
+            Some("priced-model")
+        );
+        assert_eq!(
+            priced.get("name").and_then(|value| value.as_str()),
+            Some("Priced Model")
+        );
+        assert!(priced.contains_key("input_price_per_million"));
+        assert!(priced.contains_key("output_price_per_million"));
+        assert_eq!(priced.len(), 4);
+        assert_eq!(json[1], serde_json::json!({ "id": "plain-model" }));
     }
 
     #[test]

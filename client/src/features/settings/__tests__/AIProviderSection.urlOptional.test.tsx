@@ -114,7 +114,16 @@ describe('AIProviderSection optional API URL', () => {
   })
 
   it('loads the model list from the official endpoint when the URL is blank', async () => {
-    coreMocks.invoke.mockResolvedValue({ ok: true, models: ['deepseek/deepseek-v4.1-flash'] })
+    coreMocks.invoke.mockResolvedValue({
+      ok: true,
+      models: [{
+        id: 'deepseek/deepseek-v4.1-flash',
+        name: 'DeepSeek: DeepSeek V4.1 Flash',
+        input_price_per_million: 0.15,
+        output_price_per_million: 0.6,
+      }],
+      message: '',
+    })
     profileStoreMocks.loadAiProfiles.mockResolvedValue({ profiles: [openrouter], activeId: openrouter.id })
     render(<AIProviderSection />)
 
@@ -130,6 +139,13 @@ describe('AIProviderSection optional API URL', () => {
         model: '',
       },
     }))
+
+    // A non-empty catalog swaps the manual model input for the searchable picker:
+    // the text input is gone, and the picker's search becomes available on open.
+    const picker = await screen.findByRole('button', { name: t('ai.model') })
+    expect(screen.queryByRole('textbox', { name: t('ai.model') })).toBeNull()
+    fireEvent.click(picker)
+    expect(await screen.findByLabelText(t('ai.modelSearch'))).toBeTruthy()
   })
 
   it('keeps a trimmed custom URL when saving an optional provider', async () => {

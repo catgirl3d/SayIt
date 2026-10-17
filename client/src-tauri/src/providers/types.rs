@@ -41,12 +41,28 @@ pub struct AiResult {
     pub elapsed_ms: u64,
 }
 
+/// One remote model exposed by a provider catalog.
+///
+/// Prices are USD per million tokens; a missing value means the provider did not
+/// report a usable price. The field names are part of the IPC contract and are
+/// consumed verbatim by the frontend model picker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteModelInfo {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_price_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_price_per_million: Option<f64>,
+}
+
 /// Remote model list result fetched from a provider endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelListResult {
     pub ok: bool,
     #[serde(default)]
-    pub models: Vec<String>,
+    pub models: Vec<RemoteModelInfo>,
     /// User-visible reason for a failure.
     #[serde(default)]
     pub message: String,
