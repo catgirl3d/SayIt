@@ -6,8 +6,9 @@ Sections are ordered by version, newest first.
 ## v0.3.1 (unreleased)
 
 ### Added
-- Added OpenRouter as a ready AI cleanup provider preset with DeepSeek V4.1 Flash as the default model and a link to its key page; the API URL is optional, and a blank field uses the official endpoint. The fetched model list can be searched, sorted by name or output price, shows input / output prices per million tokens, and opens scrolled to the current model.
-- The fetched model list now leaves out models that cannot clean up text: batch variants, speech (TTS, transcription, realtime, audio), embedding, rerank, moderation/safety and image-generation models. The model already saved in a service stays selectable even if it matches.
+- Added OpenRouter as a ready AI cleanup provider preset with a link to its key page; the API URL is optional, and a blank field uses the official endpoint. The fetched model list can be searched by typing in the model field, sorted by name or output price, shows input / output prices per million tokens, and opens scrolled to the chosen model. Two curated models — DeepSeek V4.1 Flash 1017 and Claude Haiku 5.5 — are offered as one-click picks under the model field.
+- The fetched model list now leaves out models that cannot clean up text: batch variants, speech (TTS, transcription, realtime, audio), embedding, rerank, moderation/safety and image- and video-generation models. A model already saved in a service is kept even if the list leaves it out.
+- The model field of the AI service editor is reworked. A new service starts without a preselected model instead of an outdated preset, shows the chosen models as chips inside the field (type a name and press Enter or a comma, or press Load models and pick several from the list), and the Save button shows how many cards will be created. An existing card shows its single model as plain text; Load models lets you pick a replacement from the list.
 - Selection editing can now use a separate saved AI service: pick it in the Context awareness card (default: the dictation model). The choice is fixed when recording starts and applies on every engine, including Qwen Omni, where the chosen model now performs the edit. If the saved service is removed, edits fall back to the dictation model; an incompletely configured service keeps the selected text unchanged.
 
 ### Changed
@@ -20,6 +21,7 @@ Sections are ordered by version, newest first.
 
 ### Fixed
 #### Desktop Client
+- Saving a new AI service after typing a model name no longer also creates a card for the preset model that was filled in beforehand, and no longer makes that card the active one. Test connection now tests the model you entered, and a model you removed no longer comes back after loading the model list.
 - Dialogs no longer close when you select text in a field and release the mouse outside the dialog. Before, such a drag closed the dialog and discarded what you had typed.
 - With two dialogs open at once, such as the backup list under a restore confirmation, Esc now closes only the top one.
 - A long dialog title no longer runs under the close button.

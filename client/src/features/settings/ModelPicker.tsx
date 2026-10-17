@@ -1,9 +1,20 @@
-// Searchable, sortable model picker for the AI editor.
+// Model field for the AI editor: a text input backed by a searchable, sortable catalog.
 //
 // Why a feature-local component instead of extending components/ui/select.tsx:
 // an OpenRouter catalog has ~470 entries with per-model metadata, while the shared
-// Select is a deliberately minimal control used elsewhere. The picker needs search,
-// sorting, price badges, and keyboard navigation that no other Select consumer asks for.
+// Select is a deliberately minimal control used elsewhere. The field needs chips, typed
+// custom ids, search, sorting, price badges, and keyboard navigation that no other Select
+// consumer asks for.
+//
+// Two meanings share the control. A new service collects several models, so the field is a tag
+// input: Enter or a comma commits the typed id as a chip. An existing card holds exactly one
+// model, so the field is a plain text input whose text is the model; chips for a single value
+// would only add a second row of padding. Once the catalog is loaded the field is also a
+// combobox: in tag mode the typed text filters the list, a click or Enter toggles a row, and an
+// id the provider does not list can still be added as typed; in plain mode picking a row
+// replaces the text, and the list opens unfiltered so the whole catalog is visible.
+// The list is a body portal; focus never leaves the input, so rows and sort buttons swallow
+// mousedown instead of taking focus.
 //
 // Escape routing note: the parent Modal closes on Escape via a document-level
 // **capture** listener (components/ui/modal.tsx), which runs before any React
@@ -15,19 +26,26 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, Search } from 'lucide-react'
+import { ChevronDown, Crown, Plus, X } from 'lucide-react'
+import { Tooltip } from '@/components/ui/tooltip'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
 import type { RemoteModel } from './aiProviderCatalog'
 
 export type ModelSort = 'name' | 'priceAsc' | 'priceDesc'
+
+/** Room the list wants below the field before it considers opening above; the list never grows past the cap. */
+const PREFERRED_LIST_HEIGHT = 320
+const MAX_LIST_HEIGHT = 360
 
 /** The display name shown for a model: its trimmed name, or the id as fallback. */
 function displayName(model: RemoteModel): string {
@@ -123,23 +141,59 @@ export function priceLabel(model: RemoteModel): PriceLabel {
 }
 
 export interface ModelPickerProps {
+  /** Fetched catalog. While it is empty the field is a plain tag input without a list. */
   models: RemoteModel[]
-  value: string
-  onChange: (id: string) => void
+  /** Tag mode only: the chosen model ids, shown as chips inside the field. */
+  value: string[]
+  /** Tag mode: several models may be chosen. Otherwise the field is plain text holding the one model. */
+  multiple?: boolean
+  /** Tag mode: a model was committed. Plain mode: a catalog row was picked, so the text becomes this id. */
+  onAdd: (id: string) => void
+  /** Tag mode only: a chip was removed. */
+  onRemove: (id: string) => void
+  /** The text in the input. Owned by the parent so unfinished input counts as an unsaved change. */
+  inputValue: string
+  onInputChange: (text: string) => void
+  /** Id of the text input, so a visible <label htmlFor> reaches the control. */
+  inputId?: string
+  /**
+   * Element whose box the list matches instead of the field's own. The field often shares a row with a
+   * button, and a list as narrow as the field cuts model names and ids off.
+   */
+  anchorRef?: RefObject<HTMLElement | null>
+  /** Ids to tag as recommended in the list. The list keeps the chosen sort; the tag only marks them. */
+  recommended?: string[]
   placeholder?: string
-  /** Associates the trigger with a visible label because a button has no htmlFor. */
-  labelledBy?: string
   disabled?: boolean
 }
 
-export function ModelPicker({ models, value, onChange, placeholder, labelledBy, disabled = false }: ModelPickerProps) {
+export function ModelPicker({
+  models,
+  value,
+  multiple = false,
+  onAdd,
+  onRemove,
+  inputValue,
+  onInputChange,
+  inputId,
+  anchorRef,
+  recommended = [],
+  placeholder,
+  disabled = false,
+}: ModelPickerProps) {
   const t = useT()
+  const listId = useId()
   const [isOpen, setIsOpen] = useState(false)
-  const [query, setQuery] = useState('')
   const [sort, setSort] = useState<ModelSort>('name')
   const [activeIndex, setActiveIndex] = useState(0)
-  const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
-  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  /** Plain mode: the text is the current model, so it only filters the list once the user edits it. */
+  const [typedSinceOpen, setTypedSinceOpen] = useState(false)
+  /** A list that opens downwards is placed by `top`, one that opens upwards by `bottom`, so it hugs the field at any height. */
+  const [dropdownStyle, setDropdownStyle] = useState<
+    { top: number | undefined; bottom: number | undefined; left: number; width: number; maxHeight: number } | null
+  >(null)
+  const fieldRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   /** Attached only to the keyboard-highlighted row, so the effect below can find it. */
@@ -147,33 +201,44 @@ export function ModelPicker({ models, value, onChange, placeholder, labelledBy, 
   /** Set when the panel opens: the first scroll centers the row, later ones only reveal it. */
   const centerActiveRowRef = useRef(false)
 
-  const selected = models.find((model) => model.id === value)
-  const filtered = useMemo(() => sortModels(filterModels(models, query), sort), [models, query, sort])
-  const highlightIndex = filtered.length === 0 ? -1 : Math.min(activeIndex, filtered.length - 1)
-  const panelVisible = dropdownStyle !== null
+  const hasCatalog = models.length > 0
+  const typed = inputValue.trim()
+  const filterText = multiple || typedSinceOpen ? inputValue : ''
+  const filtered = useMemo(() => sortModels(filterModels(models, filterText), sort), [models, filterText, sort])
+  /** The rows to mark as chosen: the chips, or the text of the plain field. */
+  const chosen = multiple ? value : typed ? [typed] : []
+  /** Tag mode: typed text the catalog does not list (and that is not chosen yet) is offered as a last row. */
+  const customId = multiple && hasCatalog && typed && !models.some((model) => model.id === typed) && !value.includes(typed) ? typed : ''
+  const optionCount = filtered.length + (customId ? 1 : 0)
+  const highlightIndex = optionCount === 0 ? -1 : Math.min(activeIndex, optionCount - 1)
+  const panelOpen = isOpen && hasCatalog
+  const panelVisible = panelOpen && dropdownStyle !== null
 
   const updatePosition = useCallback(() => {
-    const el = triggerRef.current
+    const el = anchorRef?.current ?? fieldRef.current
     if (!el) return
 
     const rect = el.getBoundingClientRect()
     const spaceBelow = window.innerHeight - rect.bottom - 8
     const spaceAbove = rect.top - 8
-    const openUpwards = spaceBelow < 180 && spaceAbove > spaceBelow
+    // Below is preferred; the list flips above the field when below cannot show a comfortable list
+    // and above has more room.
+    const openUpwards = spaceBelow < PREFERRED_LIST_HEIGHT && spaceAbove > spaceBelow
 
-    const maxHeight = Math.min(360, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
-    const top = openUpwards ? rect.top - maxHeight - 4 : rect.bottom + 4
+    const maxHeight = Math.min(MAX_LIST_HEIGHT, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
 
     setDropdownStyle({
-      top,
+      top: openUpwards ? undefined : rect.bottom + 4,
+      bottom: openUpwards ? window.innerHeight - rect.top + 4 : undefined,
       left: rect.left,
       width: rect.width,
       maxHeight,
     })
-  }, [])
+  }, [anchorRef])
 
+  // The chip count is a dependency because chips wrap: a taller field moves the panel's anchor.
   useLayoutEffect(() => {
-    if (isOpen) {
+    if (panelOpen) {
       updatePosition()
       const handleScrollOrResize = () => updatePosition()
       window.addEventListener('resize', handleScrollOrResize)
@@ -184,26 +249,26 @@ export function ModelPicker({ models, value, onChange, placeholder, labelledBy, 
       }
     }
     setDropdownStyle(null)
-  }, [isOpen, updatePosition])
+  }, [panelOpen, updatePosition, value.length])
 
   // Escape reaches this dropdown through a window-capture listener because the parent
   // Modal answers Escape on `document` in the capture phase, before any React handler.
-  // Consuming the event here closes only the panel and restores focus to the trigger.
+  // Consuming the event here closes only the panel and keeps focus in the input.
   useLayoutEffect(() => {
-    if (!isOpen) return
+    if (!panelOpen) return
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.stopPropagation()
       event.preventDefault()
       setIsOpen(false)
-      triggerRef.current?.focus({ preventScroll: true })
+      inputRef.current?.focus({ preventScroll: true })
     }
     window.addEventListener('keydown', onWindowKeyDown, true)
     return () => window.removeEventListener('keydown', onWindowKeyDown, true)
-  }, [isOpen])
+  }, [panelOpen])
 
   // Keeps the highlighted row inside the scrolled list: centered when the panel opens (so the
-  // current model is visible at once), revealed with the least movement afterwards. The list is
+  // chosen model is visible at once), revealed with the least movement afterwards. The list is
   // scrolled by hand instead of scrollIntoView because that would also scroll the page behind the
   // dialog. Depends on the panel's visibility flag, not on dropdownStyle: that object is replaced on
   // every scroll event (the scroll listener is a capture one, so it also fires for this list) and
@@ -225,52 +290,108 @@ export function ModelPicker({ models, value, onChange, placeholder, labelledBy, 
   }, [panelVisible, highlightIndex, filtered])
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!panelOpen) return
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node
-      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      if (fieldRef.current?.contains(target) || panelRef.current?.contains(target)) return
       setIsOpen(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isOpen])
+  }, [panelOpen])
 
-  function togglePicker() {
-    if (disabled) return
-    if (isOpen) {
-      setIsOpen(false)
-      return
+  /** Opens the list; `centerOnChosen` puts the keyboard highlight (and the scroll) on the first chosen row. */
+  function openPanel(centerOnChosen: boolean) {
+    if (disabled || !hasCatalog || panelOpen) return
+    setTypedSinceOpen(false)
+    if (centerOnChosen) {
+      // Rows as they will be listed after the reset above: plain mode lists the whole catalog.
+      const rows = sortModels(filterModels(models, multiple ? inputValue : ''), sort)
+      setActiveIndex(Math.max(0, rows.findIndex((model) => chosen.includes(model.id))))
+      centerActiveRowRef.current = true
     }
-    setQuery('')
-    // The keyboard highlight starts on the current model, so Enter keeps it and the arrows move from it.
-    setActiveIndex(Math.max(0, sortModels(models, sort).findIndex((model) => model.id === value)))
-    centerActiveRowRef.current = true
     setIsOpen(true)
   }
 
-  function selectModel(id: string) {
-    onChange(id)
-    setIsOpen(false)
-    triggerRef.current?.focus({ preventScroll: true })
-  }
-
-  function handlePanelKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      if (filtered.length === 0) return
-      setActiveIndex((index) => (Math.min(index, filtered.length - 1) + 1) % filtered.length)
+  function togglePanel() {
+    if (panelOpen) {
+      setIsOpen(false)
       return
     }
-    if (event.key === 'ArrowUp') {
+    inputRef.current?.focus({ preventScroll: true })
+    openPanel(true)
+  }
+
+  function handleInputChange(text: string) {
+    onInputChange(text)
+    setTypedSinceOpen(true)
+    setActiveIndex(0)
+    if (hasCatalog && !disabled) setIsOpen(true)
+  }
+
+  /** Tag mode: adds the typed text as a model id of its own, whether or not the catalog lists it. */
+  function commitTyped() {
+    if (!typed) return
+    onAdd(typed)
+    onInputChange('')
+    setActiveIndex(0)
+  }
+
+  /** Chooses (or, in multiple mode, un-chooses) a catalog row. */
+  function toggleModel(id: string) {
+    if (!multiple) {
+      onAdd(id)
+      setTypedSinceOpen(false)
+      setIsOpen(false)
+      inputRef.current?.focus({ preventScroll: true })
+      return
+    }
+    const cleared = inputValue !== ''
+    onInputChange('')
+    if (value.includes(id)) onRemove(id)
+    else onAdd(id)
+    // The panel stays open for the next pick. Clearing the filter swaps the list for the whole
+    // catalog, so the touched row is found again and scrolled to; otherwise the list stays put.
+    setActiveIndex(Math.max(0, sortModels(models, sort).findIndex((model) => model.id === id)))
+    centerActiveRowRef.current = cleared
+  }
+
+  function activateOption(index: number) {
+    if (index < filtered.length) toggleModel(filtered[index].id)
+    else commitTyped()
+  }
+
+  function handleInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!hasCatalog) return
       event.preventDefault()
-      if (filtered.length === 0) return
-      setActiveIndex((index) => (Math.min(index, filtered.length - 1) - 1 + filtered.length) % filtered.length)
+      if (!panelOpen) {
+        openPanel(true)
+        return
+      }
+      if (optionCount === 0) return
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      setActiveIndex((index) => (Math.min(index, optionCount - 1) + step + optionCount) % optionCount)
       return
     }
     if (event.key === 'Enter') {
       event.preventDefault()
-      if (highlightIndex >= 0) selectModel(filtered[highlightIndex].id)
+      if (panelOpen && highlightIndex >= 0) activateOption(highlightIndex)
+      else if (multiple) commitTyped()
+      else setIsOpen(false)
+      return
     }
+    if (multiple && event.key === ',') {
+      // A comma is never part of a model id, so it ends the name like Enter does.
+      event.preventDefault()
+      commitTyped()
+      return
+    }
+    if (multiple && event.key === 'Backspace' && inputValue === '' && value.length > 0) {
+      onRemove(value[value.length - 1])
+      return
+    }
+    if (event.key === 'Tab') setIsOpen(false)
   }
 
   function priceTitle(model: RemoteModel): string | undefined {
@@ -283,73 +404,72 @@ export function ModelPicker({ models, value, onChange, placeholder, labelledBy, 
     })
   }
 
-  const dropdown = isOpen && dropdownStyle ? createPortal(
+  /** Rows keep the input focused: a mousedown that moved focus would close nothing but break typing. */
+  const keepInputFocus = (event: { preventDefault: () => void }) => event.preventDefault()
+  const rowId = (index: number) => `${listId}-row-${index}`
+
+  const dropdown = panelOpen && dropdownStyle ? createPortal(
     <div
       ref={panelRef}
-      onKeyDown={handlePanelKeyDown}
       className="fixed z-[9999] flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-xl"
       style={{
-        top: `${dropdownStyle.top}px`,
+        top: dropdownStyle.top === undefined ? undefined : `${dropdownStyle.top}px`,
+        bottom: dropdownStyle.bottom === undefined ? undefined : `${dropdownStyle.bottom}px`,
         left: `${dropdownStyle.left}px`,
         width: `${dropdownStyle.width}px`,
         maxHeight: `${dropdownStyle.maxHeight}px`,
       }}
     >
-      <div className="flex flex-col gap-2 border-b border-border px-1.5 pb-2 pt-1.5">
-        {/* The only focus indicator while the panel is open: the trigger drops its own ring (see below). */}
-        <label className="flex h-9 items-center gap-2 rounded-md border border-input-border bg-input-bg px-3 transition-colors focus-within:border-input-focus-border">
-          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <input
-            autoFocus
-            type="text"
-            value={query}
-            onChange={(e) => { setQuery(e.target.value); setActiveIndex(0) }}
-            placeholder={t('ai.modelSearch')}
-            aria-label={t('ai.modelSearch')}
-            className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-input-placeholder focus:outline-none"
-          />
-        </label>
-        <div className="flex items-center gap-2 px-1.5 text-xs">
-          <span className="text-muted-foreground">{t('ai.modelSortLabel')}</span>
-          <div className="flex gap-0.5 rounded-md bg-input-bg p-0.5">
-            {([
-              { value: 'name', label: t('ai.modelSortName'), title: undefined },
-              { value: 'priceAsc', label: t('ai.modelSortPriceAsc'), title: t('ai.modelSortPriceTitle') },
-              { value: 'priceDesc', label: t('ai.modelSortPriceDesc'), title: t('ai.modelSortPriceTitle') },
-            ] as const).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={sort === option.value}
-                title={option.title}
-                onClick={() => { setSort(option.value); setActiveIndex(0) }}
-                className={cn(
-                  'h-6 rounded px-2.5 transition-colors',
-                  sort === option.value ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+      <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-2 text-xs">
+        <span className="text-muted-foreground">{t('ai.modelSortLabel')}</span>
+        <div className="flex gap-0.5 rounded-md bg-input-bg p-0.5">
+          {([
+            { value: 'name', label: t('ai.modelSortName'), title: undefined },
+            { value: 'priceAsc', label: t('ai.modelSortPriceAsc'), title: t('ai.modelSortPriceTitle') },
+            { value: 'priceDesc', label: t('ai.modelSortPriceDesc'), title: t('ai.modelSortPriceTitle') },
+          ] as const).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={sort === option.value}
+              title={option.title}
+              onMouseDown={keepInputFocus}
+              onClick={() => { setSort(option.value); setActiveIndex(0) }}
+              className={cn(
+                'h-6 rounded px-2.5 transition-colors',
+                sort === option.value ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {optionCount === 0 ? (
         <div className="px-3 py-6 text-center text-sm text-muted-foreground">{t('ai.modelNoMatch')}</div>
       ) : (
-        <div ref={listRef} role="listbox" className="relative flex flex-col gap-0.5 overflow-y-auto px-1.5 pb-1.5 pt-1">
+        <div
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          aria-multiselectable={multiple}
+          className="relative flex flex-col gap-0.5 overflow-y-auto px-1.5 pb-1.5 pt-1"
+        >
           {filtered.map((model, index) => {
             const price = priceLabel(model)
-            const isSelected = model.id === value
+            const isSelected = chosen.includes(model.id)
             return (
               <button
                 key={model.id}
+                id={rowId(index)}
                 ref={index === highlightIndex ? activeRowRef : undefined}
                 type="button"
                 role="option"
+                tabIndex={-1}
                 aria-selected={isSelected}
-                onClick={() => selectModel(model.id)}
+                onMouseDown={keepInputFocus}
+                onClick={() => toggleModel(model.id)}
                 className={cn(
                   'relative flex min-h-[52px] w-full shrink-0 items-center gap-3 rounded-md pl-3.5 pr-3 text-left text-sm transition-colors',
                   isSelected
@@ -361,7 +481,20 @@ export function ModelPicker({ models, value, onChange, placeholder, labelledBy, 
               >
                 {isSelected && <span aria-hidden className="absolute bottom-2.5 left-[3px] top-2.5 w-[3px] rounded-sm bg-primary" />}
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{displayName(model)}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate">{displayName(model)}</span>
+                    {recommended.includes(model.id) && (
+                      // The crown that already marks recommended local models and providers elsewhere in the app.
+                      <span
+                        role="img"
+                        className="inline-flex shrink-0 text-amber-500"
+                        title={t('local.recommended')}
+                        aria-label={t('local.recommended')}
+                      >
+                        <Crown className="h-3.5 w-3.5" aria-hidden />
+                      </span>
+                    )}
+                  </span>
                   <span className="block truncate text-xs font-normal leading-4 text-muted-foreground">{model.id}</span>
                 </span>
                 {price.kind === 'free' && (
@@ -379,42 +512,153 @@ export function ModelPicker({ models, value, onChange, placeholder, labelledBy, 
               </button>
             )
           })}
+          {customId && (
+            <button
+              id={rowId(filtered.length)}
+              ref={filtered.length === highlightIndex ? activeRowRef : undefined}
+              type="button"
+              role="option"
+              tabIndex={-1}
+              aria-selected={false}
+              onMouseDown={keepInputFocus}
+              onClick={commitTyped}
+              className={cn(
+                'flex min-h-[44px] w-full shrink-0 items-center gap-2 rounded-md px-3.5 text-left text-sm transition-colors',
+                filtered.length === highlightIndex ? 'bg-accent' : 'hover:bg-accent',
+              )}
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="min-w-0 truncate">{t('ai.modelAddCustom', { model: customId })}</span>
+            </button>
+          )}
         </div>
       )}
     </div>,
     document.body,
   ) : null
 
+  // The panel is a sibling of the field, not a child: React synthetic events bubble through portals,
+  // so a child panel would feed its own mousedown to the field's handler below.
   return (
-    <div className="relative">
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={togglePicker}
-        disabled={disabled}
-        aria-labelledby={labelledBy}
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
+    <>
+      <div
+        ref={fieldRef}
+        onMouseDown={(event) => {
+          // Clicks on the padding or the chips' gaps focus the input; buttons and the input itself behave natively.
+          const target = event.target as HTMLElement
+          if (disabled || target === inputRef.current || target.closest('button')) return
+          event.preventDefault()
+          inputRef.current?.focus({ preventScroll: true })
+          openPanel(true)
+        }}
         className={cn(
-          'flex h-9 w-full items-center justify-between rounded-md border border-input-border bg-input-bg px-3 text-sm text-foreground transition-colors',
-          'hover:border-muted-foreground/40 focus:border-input-focus-border focus:outline-none focus:ring-2 focus:ring-input-focus-ring/20',
-          'disabled:cursor-not-allowed disabled:opacity-50',
-          // Focus moves to the search field while open, so the trigger shows a neutral open state instead of a second focus ring.
-          isOpen && 'border-muted-foreground/40',
+          'flex w-full cursor-text items-center rounded-md border border-input-border bg-input-bg text-sm transition-colors',
+          multiple ? 'min-h-9 flex-wrap gap-1.5 py-1 pl-2 pr-1' : 'h-9 pl-3 pr-1',
+          'hover:border-muted-foreground/40 focus-within:border-input-focus-border focus-within:ring-2 focus-within:ring-input-focus-ring/20',
+          disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <span className={cn('truncate', !selected && !value && 'text-input-placeholder')}>
-          {selected ? displayName(selected) : value || placeholder || t('ui.selectPlaceholder')}
-        </span>
-        <ChevronDown
+        {multiple && value.map((id) => (
+          <span
+            key={id}
+            className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-secondary/50 py-0.5 pl-2 pr-1 text-xs"
+          >
+            <span className="truncate">{id}</span>
+            <button
+              type="button"
+              disabled={disabled}
+              onMouseDown={keepInputFocus}
+              onClick={() => onRemove(id)}
+              aria-label={t('ai.removeModel', { model: id })}
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive-strong"
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          id={inputId}
+          type="text"
+          role={hasCatalog ? 'combobox' : undefined}
+          aria-expanded={hasCatalog ? panelOpen : undefined}
+          aria-haspopup={hasCatalog ? 'listbox' : undefined}
+          aria-controls={panelOpen && optionCount > 0 ? listId : undefined}
+          aria-autocomplete={hasCatalog ? 'list' : undefined}
+          aria-activedescendant={panelOpen && highlightIndex >= 0 ? rowId(highlightIndex) : undefined}
+          autoComplete="off"
+          spellCheck={false}
+          value={inputValue}
+          disabled={disabled}
+          placeholder={placeholder}
+          onChange={(event) => handleInputChange(event.target.value)}
+          onKeyDown={handleInputKeyDown}
+          onClick={() => openPanel(true)}
           className={cn(
-            'ml-2 h-4 w-4 shrink-0 text-muted-foreground transition-transform',
-            isOpen && 'rotate-180',
+            'flex-1 bg-transparent text-sm text-foreground placeholder:text-input-placeholder focus:outline-none disabled:cursor-not-allowed',
+            multiple ? 'min-w-[8rem] py-0.5' : 'min-w-0',
           )}
         />
-      </button>
-
+        {hasCatalog && (
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            aria-label={t('ai.modelListToggle')}
+            aria-expanded={panelOpen}
+            onMouseDown={keepInputFocus}
+            onClick={togglePanel}
+            className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ChevronDown className={cn('h-4 w-4 transition-transform', panelOpen && 'rotate-180')} aria-hidden />
+          </button>
+        )}
+      </div>
       {dropdown}
+    </>
+  )
+}
+
+export interface RecommendedModelsProps {
+  /** Recommended ids, in display order. */
+  models: string[]
+  /** Ids already chosen: they are not offered again. */
+  chosen: string[]
+  onPick: (id: string) => void
+  disabled?: boolean
+}
+
+/**
+ * One-click picks under the model field. It works before the catalog is loaded, which is the point:
+ * a new service starts without a model, and recommendations are the quickest way to give it one.
+ * The row disappears once every recommendation is chosen. The crown alone labels the picks and its
+ * tooltip carries the word, matching the recommended marker used across the app.
+ */
+export function RecommendedModels({ models, chosen, onPick, disabled = false }: RecommendedModelsProps) {
+  const t = useT()
+  const offered = models.filter((id) => !chosen.includes(id))
+  if (offered.length === 0) return null
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+      <Tooltip content={t('local.recommended')}>
+        <span
+          className="inline-flex shrink-0 cursor-help items-center text-amber-500"
+          aria-label={t('local.recommended')}
+        >
+          <Crown className="h-3 w-3" aria-hidden />
+        </span>
+      </Tooltip>
+      {offered.map((id) => (
+        <button
+          key={id}
+          type="button"
+          disabled={disabled}
+          onClick={() => onPick(id)}
+          className="max-w-full truncate rounded-md border border-border bg-secondary/50 px-2 py-0.5 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+        >
+          {id}
+        </button>
+      ))}
     </div>
   )
 }

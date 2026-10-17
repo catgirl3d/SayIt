@@ -34,8 +34,18 @@ export interface AiProvider {
    * loading, and every path resolves it through effectiveApiUrl().
    */
   urlOptional?: boolean
-  /** 建议的模型，第一个作为新建时的默认值；同时作为表单里的快速选择 */
+  /**
+   * Example model ids for this provider. The first one is the placeholder of the editor's model
+   * field and the seed of blankProfile(); a new editor draft does not select it (see newDraftProfile),
+   * so an outdated id here costs a stale hint, never a saved card.
+   */
   defaultModels: string[]
+  /**
+   * Models the editor offers as one-click picks, in the order given. Unlike `defaultModels` this is a
+   * deliberate recommendation, set only by presets whose catalog we curate (model ids are provider
+   * specific, so a list is never shared between presets).
+   */
+  recommendedModels?: string[]
   /** No API key required (currently only local Ollama) */
   keyless?: boolean
   /** Console URL for obtaining a key */
@@ -103,6 +113,7 @@ export const AI_PROVIDERS: AiProvider[] = [
     // clearing it means "use the official endpoint" instead of blocking the save.
     urlOptional: true,
     defaultModels: ['deepseek/deepseek-v4.1-flash'],
+    recommendedModels: ['deepseek/deepseek-v4.1-flash-1017', 'anthropic/claude-haiku-5.5'],
     consoleUrl: 'https://openrouter.ai/settings/keys',
   },
   {
@@ -383,8 +394,8 @@ export function isChatModelId(id: string): boolean {
  * Normalize the remote model catalog before exposing it in the selector: trim ids, drop
  * empty and duplicate entries, and hide models that are not text chat models.
  *
- * A saved selection that falls out of the list this way stays selectable: the editor
- * injects the current model as a metadata-less entry when the catalog lacks it.
+ * A saved selection that falls out of the list this way is not lost: the editor keeps the
+ * saved model as the field's own text (or a chip), not as a catalog row.
  */
 export function normalizeRemoteModels(models: RemoteModel[]): RemoteModel[] {
   const seen = new Set<string>()
@@ -476,12 +487,14 @@ export function resolveActiveProfile(profiles: AiProfile[], activeId: string): A
  * Draft for the "New" action.
  *
  * It deliberately never looks like a copy of an existing card: URL and key always come from the
- * selected provider's own defaults, never from a saved profile. Adding another model on the same
- * endpoint is done by editing the existing card, which saves several models per submit.
+ * selected provider's own defaults, never from a saved profile. The model starts empty: a seeded
+ * name would be saved next to whatever the user picks and goes stale as providers retire models,
+ * so `defaultModels` only supplies the placeholder example. Several models can be entered in one
+ * new draft; each becomes its own card sharing the URL and key.
  */
 export function newDraftProfile(profiles: AiProfile[], activeId: string): AiProfile {
   const active = resolveActiveProfile(profiles, activeId)
-  return blankProfile(active?.provider)
+  return { ...blankProfile(active?.provider), model: '' }
 }
 
 /**
@@ -545,6 +558,10 @@ export interface ProviderSwitchResult {
  * user typed must survive a mis-click of the dropdown. The seeds are the card's own saved profile
  * (when editing) and the provider's most recent saved profile, so values auto-filled by an earlier
  * switch also count: A -> B -> A must not leave B's key on A while the reuse hint disappears.
+ *
+ * Model names left over from the provider's own preset (its examples and its recommendations) are
+ * dropped, not swapped for the target's preset: a model id of one provider is meaningless on another,
+ * and no preset is seeded any more.
  */
 export function applyProviderSwitch(
   draft: AiProfile,
@@ -560,12 +577,13 @@ export function applyProviderSwitch(
   const urlSeeded = seeds.some((s) => draft.apiUrl.trim() === s.apiUrl.trim())
   const keySeeded = seeds.some((s) => draft.apiKey === s.apiKey)
   const urlBoilerplate = draft.apiUrl.trim() === '' || draft.apiUrl.trim() === from.defaultUrl || urlSeeded
-  const modelsBoilerplate = models.length === 0 || models.every((m) => from.defaultModels.includes(m))
+  const modelsBoilerplate = models.length === 0
+    || models.every((m) => from.defaultModels.includes(m) || from.recommendedModels?.includes(m))
   return {
     provider: nextProvider,
     apiUrl: urlBoilerplate ? previous?.apiUrl || to.defaultUrl : draft.apiUrl,
     apiKey: draft.apiKey.trim() === '' || keySeeded ? previous?.apiKey ?? '' : draft.apiKey,
-    models: modelsBoilerplate ? (to.defaultModels[0] ? [to.defaultModels[0]] : []) : models,
+    models: modelsBoilerplate ? [] : models,
   }
 }
 

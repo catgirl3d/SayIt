@@ -22,10 +22,10 @@
 // Model name and provider are always visible; custom hostname is shown only when non-default;
 // full URL is available in the edit modal. Latency is the primary benchmark metric and remains visible.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
-import { ExternalLink, Info, Plus, RefreshCw, X } from 'lucide-react'
+import { ExternalLink, Info, Plus, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Feedback, FormatHint, type FeedbackTone } from '@/components/ui/feedback'
@@ -76,7 +76,7 @@ import {
 import { loadAiProfiles, saveAiProfiles } from './aiProfileStore'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { helpIconClass, inputClass, linkClass } from './formStyles'
-import { ModelPicker } from './ModelPicker'
+import { ModelPicker, RecommendedModels } from './ModelPicker'
 import { ProfileCard } from './ProfileCard'
 import { useBatchTest, type BatchRunResult } from './useBatchTest'
 import { getLocale, t } from '@/i18n'
@@ -264,6 +264,8 @@ export default function AIProviderSection() {
   /** List of model names to save under the shared provider endpoint and credentials */
   const [draftModels, setDraftModels] = useState<string[]>([])
   const [modelInput, setModelInput] = useState('')
+  /** The model field and its Load button: the model list spans this whole row, not just the field. */
+  const modelRowRef = useRef<HTMLDivElement>(null)
   /** Remote models are a temporary selector catalog, not persisted profiles. */
   const [availableModels, setAvailableModels] = useState<RemoteModel[]>([])
   /** Whether the model catalog is being fetched from the endpoint. */
@@ -297,17 +299,20 @@ export default function AIProviderSection() {
   const draftNeedsKey = !draftProvider.keyless
   const draftUrlError = draft ? checkApiUrl(draft.apiUrl) : ''
   const draftKeyHint = draft && draftNeedsKey ? checkAiKeyFormat(draft.provider, draft.apiKey) : ''
-  const selectedModel = draft?.model.trim() ?? ''
   /**
-   * The saved model may be absent from the fetched catalog (renamed, filtered, or
-   * fetched from another endpoint). Inject it as a metadata-less entry so the
-   * current selection stays visible and selectable, matching the old behavior.
+   * The models this submit will save. A new service collects chips (`draftModels`) and may save
+   * several, one card each, plus a name typed but not yet committed. An existing card holds one
+   * model, and the field's text is that model (`draftModels` stays empty). `draft.model` is never
+   * read for this, so the chips and the field text are the only source of truth.
    */
-  const modelOptions: RemoteModel[] = selectedModel && !availableModels.some((model) => model.id === selectedModel)
-    ? [{ id: selectedModel }, ...availableModels]
-    : availableModels
-  const draftSignature = draft ? draftSnapshot(draft, draftModels) : ''
-  const draftDirty = draft !== null && (draftSignature !== draftBaseline || modelInput.trim() !== '')
+  const pendingModels = ((): string[] => {
+    const typed = modelInput.trim()
+    if (!draftIsNew) return typed ? [typed] : []
+    if (!typed || draftModels.includes(typed)) return draftModels
+    return [...draftModels, typed]
+  })()
+  const draftSignature = draft ? draftSnapshot(draft, pendingModels) : ''
+  const draftDirty = draft !== null && draftSignature !== draftBaseline
   const draftKeyInherited = draft !== null
     && draftIsNew
     && draft.apiKey.trim() !== ''
@@ -386,11 +391,13 @@ export default function AIProviderSection() {
   }
 
   function openEditor(profile: AiProfile, isNew: boolean) {
-    const models = profile.model.trim() ? [profile.model.trim()] : []
+    const model = profile.model.trim()
+    // The baseline lists what the field would save untouched, so only a real change makes the draft dirty.
+    const models = !isNew && model ? [model] : []
     setDraft(profile)
     setDraftIsNew(isNew)
-    setDraftModels(models)
-    setModelInput('')
+    setDraftModels([])
+    setModelInput(isNew ? '' : model)
     setAvailableModels([])
     setDraftBaseline(draftSnapshot(profile, models))
     setNotice(null)
@@ -408,24 +415,24 @@ export default function AIProviderSection() {
     setEngineDraftDirty(false)
   }
 
+  /** A new service collects models as chips; picking from the list in an existing card swaps its one model. */
   function addModel(name: string) {
     const value = name.trim()
-    setModelInput('')
     setNotice(null)
-    if (!value || draftModels.includes(value)) return
-    setDraftModels([...draftModels, value])
+    if (!draftIsNew) {
+      if (!value || value === modelInput.trim()) return
+      setModelInput(value)
+      clearDraftCheck()
+      return
+    }
+    setModelInput('')
+    if (value && !draftModels.includes(value)) setDraftModels([...draftModels, value])
   }
 
   function removeModel(name: string) {
     setDraftModels(draftModels.filter((m) => m !== name))
     clearDraftCheck()
     setNotice(null)
-  }
-
-  function selectModel(name: string) {
-    setDraftModels(name ? [name] : [])
-    setModelInput('')
-    patchDraft({ model: name })
   }
 
   /**
@@ -472,8 +479,6 @@ export default function AIProviderSection() {
         return
       }
       setAvailableModels(models)
-      setDraftModels(selectedModel ? [selectedModel] : [])
-      setModelInput('')
       setNotice({ tone: 'success', scope: 'editor', message: t('ai.msg.modelsLoaded', { count: models.length }) })
     } catch (err) {
       const friendly = describeProviderError(err)
@@ -528,8 +533,9 @@ export default function AIProviderSection() {
 
   function handleDraftProvider(value: string) {
     if (!draft) return
-    const next = applyProviderSwitch(draft, draftModels, value, profiles)
-    setDraftModels(next.models)
+    const next = applyProviderSwitch(draft, draftIsNew ? draftModels : pendingModels, value, profiles)
+    if (draftIsNew) setDraftModels(next.models)
+    else setModelInput(next.models[0] ?? '')
     setAvailableModels([])
     setDraft({ ...draft, provider: next.provider, apiUrl: next.apiUrl, apiKey: next.apiKey, check: undefined })
     setNotice(null)
@@ -595,7 +601,7 @@ export default function AIProviderSection() {
       return
     }
 
-    const testModel = draftModels[0] || modelInput.trim() || draft.model.trim()
+    const testModel = pendingModels[0] ?? ''
     if (!testModel) {
       setNotice({ tone: 'warning', scope: 'editor', message: t('ai.err.testNoModel') })
       return
@@ -640,10 +646,8 @@ export default function AIProviderSection() {
   async function handleSave() {
     if (!draft || busy) return
 
-    // Auto-collect input text when saving if the user typed a model name without pressing Enter.
-    const models = modelInput.trim() && !draftModels.includes(modelInput.trim())
-      ? [...draftModels, modelInput.trim()]
-      : draftModels
+    // A model name typed without pressing Enter still counts.
+    const models = pendingModels
 
     const base = {
       provider: draft.provider,
@@ -688,8 +692,13 @@ export default function AIProviderSection() {
 
     setSaving(true)
     setNotice(null)
-    setModelInput('')
-    setDraftModels(models)
+    // Commit the collected names into the field's own state, so a failed save keeps them on screen.
+    if (draftIsNew) {
+      setModelInput('')
+      setDraftModels(models)
+    } else {
+      setModelInput(models[0] ?? '')
+    }
 
     const existingIds = new Set(profiles.map((p) => p.id))
     let nextProfiles = profiles.map((p) => withChecks.find((t) => t.id === p.id) ?? p)
@@ -1048,75 +1057,29 @@ export default function AIProviderSection() {
             )}
 
             <div>
-              <label
-                id="ai-model-label"
-                htmlFor={availableModels.length > 0 ? undefined : 'ai-model'}
-                className="mb-1 block text-sm text-muted-foreground"
-              >
+              <label htmlFor="ai-model" className="mb-1 block text-sm text-muted-foreground">
                 {t('ai.model')}
               </label>
-              {availableModels.length > 0 ? (
-                <ModelPicker
-                  models={modelOptions}
-                  value={selectedModel}
-                  onChange={(value) => selectModel(value)}
-                  placeholder={t('ai.selectModel')}
-                  labelledBy="ai-model-label"
-                />
-              ) : (
-                <>
-                  <div className="flex items-center gap-2">
-                    <input
-                      id="ai-model"
-                      value={modelInput}
-                      onChange={(e) => { setModelInput(e.target.value); clearDraftCheck(); setNotice(null) }}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter') return
-                        e.preventDefault()
-                        addModel(modelInput)
-                      }}
-                      placeholder={draftProvider.defaultModels[0] ?? t('ai.modelPlaceholder')}
-                      className={cn(inputClass, 'flex-1')}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-9 shrink-0"
-                      onClick={() => addModel(modelInput)}
-                      disabled={!modelInput.trim()}
-                    >
-                      {t('ai.addAnother')}
-                    </Button>
-                  </div>
-
-                  {draftModels.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {draftModels.map((model) => (
-                        <span
-                          key={model}
-                          className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/50 py-0.5 pl-2 pr-1 text-xs"
-                        >
-                          {model}
-                          <button
-                            type="button"
-                            onClick={() => removeModel(model)}
-                            aria-label={t('ai.removeModel', { model })}
-                            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive-strong"
-                          >
-                            <X className="h-3 w-3" aria-hidden />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-
-              <div className="mt-1.5">
+              <div ref={modelRowRef} className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <ModelPicker
+                    models={availableModels}
+                    value={draftModels}
+                    multiple={draftIsNew}
+                    onAdd={addModel}
+                    onRemove={removeModel}
+                    inputValue={modelInput}
+                    onInputChange={(text) => { setModelInput(text); clearDraftCheck(); setNotice(null) }}
+                    inputId="ai-model"
+                    anchorRef={modelRowRef}
+                    recommended={draftProvider.recommendedModels}
+                    placeholder={draftIsNew && draftModels.length > 0 ? t('ai.modelAddPlaceholder') : t('ai.modelPlaceholder')}
+                  />
+                </div>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-8"
+                  className="h-9 shrink-0"
                   onClick={() => void handleFetchModels()}
                   disabled={busy || fetchingModels}
                 >
@@ -1125,9 +1088,13 @@ export default function AIProviderSection() {
                 </Button>
               </div>
 
-              <p className="mt-1.5 text-[11px] text-muted-foreground">
-                {availableModels.length > 0 ? t('ai.modelSelectHint') : t('ai.multiModelHint')}
-              </p>
+              <RecommendedModels
+                models={draftProvider.recommendedModels ?? []}
+                chosen={pendingModels}
+                onPick={addModel}
+                disabled={busy}
+              />
+              {draftIsNew && <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ai.multiModelHint')}</p>}
             </div>
 
             {/* Request tuning, per capability. Hidden for providers whose endpoints would
@@ -1210,7 +1177,11 @@ export default function AIProviderSection() {
                   onClick={() => void handleSave()}
                   disabled={busy}
                 >
-                  {saving ? t('common.saving') : t('common.save')}
+                  {saving
+                    ? t('common.saving')
+                    : pendingModels.length > 1
+                      ? t('ai.saveCount', { count: pendingModels.length })
+                      : t('common.save')}
                 </Button>
               </div>
             </div>

@@ -83,6 +83,14 @@ describe('OpenRouter provider preset', () => {
     })
   })
 
+  it('recommends exactly the two curated models, and no other preset recommends anything', () => {
+    expect(findProvider('openrouter').recommendedModels).toEqual([
+      'deepseek/deepseek-v4.1-flash-1017',
+      'anthropic/claude-haiku-5.5',
+    ])
+    expect(AI_PROVIDERS.filter((p) => p.recommendedModels).map((p) => p.value)).toEqual(['openrouter'])
+  })
+
   it('is the only provider whose URL may be left blank', () => {
     expect(AI_PROVIDERS.filter((p) => p.urlOptional).map((p) => p.value)).toEqual(['openrouter'])
   })
@@ -377,6 +385,11 @@ describe('resolveActiveProfile', () => {
 })
 
 describe('newDraftProfile', () => {
+  it('starts without a model, whatever the provider seeds', () => {
+    expect(newDraftProfile([], '').model).toBe('')
+    expect(newDraftProfile([profile({ id: 'a', provider: 'groq' })], 'a')).toMatchObject({ provider: 'groq', model: '' })
+  })
+
   it('never copies the URL or key of a saved profile', () => {
     const saved = profile({ id: 'saved', apiUrl: 'https://custom.example/v1', apiKey: 'sk-saved' })
     const draft = newDraftProfile([saved], saved.id)
@@ -402,7 +415,7 @@ describe('applyProviderSwitch', () => {
       provider: 'deepseek',
       apiUrl: 'https://deepseek.example/v1',
       apiKey: 'sk-ds',
-      models: ['deepseek-v4-flash'],
+      models: [],
     })
   })
 
@@ -441,6 +454,19 @@ describe('applyProviderSwitch', () => {
     expect(next.apiKey).toBe('')
   })
 
+  it('drops model names left over from the provider preset instead of seeding the target preset', () => {
+    const qwen = profile({ id: 'q', provider: 'qwen', model: 'qwen3.6-flash' })
+    const next = applyProviderSwitch(qwen, ['qwen3.6-flash', 'qwen-plus'], 'deepseek', [qwen])
+    expect(next.models).toEqual([])
+    expect(applyProviderSwitch(qwen, [], 'deepseek', [qwen]).models).toEqual([])
+  })
+
+  it('drops a recommended model of the provider being left, like any other preset leftover', () => {
+    const draft = { ...blankProfile('openrouter'), apiUrl: '' }
+    const next = applyProviderSwitch(draft, ['anthropic/claude-haiku-5.5'], 'groq', [])
+    expect(next.models).toEqual([])
+  })
+
   it('keeps a URL, key, and model names the user typed', () => {
     const draft = { ...blankProfile('qwen'), apiUrl: 'http://127.0.0.1:9000/v1', apiKey: 'sk-mine' }
     const next = applyProviderSwitch(draft, ['my-local-model'], 'deepseek', [])
@@ -453,7 +479,7 @@ describe('applyProviderSwitch', () => {
     const draft = { ...blankProfile('openrouter'), apiUrl: '' }
     const next = applyProviderSwitch(draft, ['deepseek/deepseek-v4.1-flash'], 'deepseek', [])
     expect(next.apiUrl).toBe(findProvider('deepseek').defaultUrl)
-    expect(next.models).toEqual(['deepseek-v4-flash'])
+    expect(next.models).toEqual([])
   })
 
   it('switches into and out of OpenRouter without leaking a URL or key', () => {
@@ -471,7 +497,7 @@ describe('applyProviderSwitch', () => {
     )
     expect(back.apiUrl).toBe(findProvider('openrouter').defaultUrl)
     expect(back.apiKey).toBe('sk-or-test')
-    expect(back.models).toEqual(['deepseek/deepseek-v4.1-flash'])
+    expect(back.models).toEqual([])
   })
 })
 

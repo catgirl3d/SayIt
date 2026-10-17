@@ -44,3 +44,9 @@
 ## 8. Never Commit Plans or Working Notes
 - NEVER commit plan documents, drafts, internal reviews, or working notes (e.g. `docs/*PLAN*.md`, follow-ups, design notes) to this repository — not in normal commits, PRs, or history rewrites.
 - Such files stay local and untracked. Only the maintainer's explicit per-file request can change that, and the file must be named explicitly each time.
+
+## 9. Storybook Coverage for User-Visible UI
+- Every new or materially changed user-visible component, page, or dialog must include added or updated Storybook coverage in the same change. Keep `*.stories.tsx` files co-located with the implementation under `client/src/**`, following the existing naming and title conventions; a component that is independently interactive needs focused stories — incidental appearance inside a parent story is not sufficient coverage.
+- Cover the meaningful supported states and behaviors, as applicable: default/selected, empty, loading, error, disabled, and edge data. Add `storybook/test` play functions for important interaction flows, including controlled value updates where relevant.
+- Use deterministic fixtures and the existing Storybook mocks instead of real backend or native calls; use `parameters.tauri.settings` where applicable for settings-backed UI. Stories and play functions must stay compatible with the portable-stories smoke suite under Vitest/jsdom.
+- Before completing UI work, run the Storybook smoke suite (`client/src/storybook/__tests__/storiesSmoke.test.tsx`) and, from `client/`, `npm run storybook:typecheck`; both must pass. Preview the affected stories with `npm run storybook` to check visual states jsdom cannot validate.
