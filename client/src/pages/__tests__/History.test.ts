@@ -21,6 +21,7 @@ vi.mock('@/services/store', () => ({
 }))
 
 import { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
+import { getRuntimeServerAiSource, setRuntimeServerAiSource } from '@/services/transcription/serverAiSource'
 
 function mockCloudProfile(provider = 'openai_transcribe') {
   mocks.loadActiveAsrProfile.mockResolvedValue({
@@ -1015,6 +1016,21 @@ describe('history server reprocessing', () => {
     })
   })
 
+  it('does not overwrite the runtime server AI source while reprocessing', async () => {
+    setRuntimeServerAiSource('managed')
+    try {
+      mockSettings({
+        'server.aiSource': 'custom',
+        ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      })
+
+      await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+
+      expect(getRuntimeServerAiSource()).toBe('managed')
+    } finally {
+      setRuntimeServerAiSource('managed')
+    }
+  })
   it('keeps the recognized Qwen Omni text without a separate cleanup request', async () => {
     mockCloudProfile('qwen_omni_flash')
     mockSettings(aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'))

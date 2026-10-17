@@ -14,7 +14,7 @@ import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
 import { polishWithClientAi, skippedPolishResult, type ClientAiPolishResult } from '@/services/transcription/clientAiPolish'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
-import { loadServerAiSource } from '@/services/transcription/serverAiSource'
+import { readStoredServerAiSource } from '@/services/transcription/serverAiSource'
 import { resolveAiPolishRoute } from '@/services/transcription/aiPolicy'
 import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/transcription'
 import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode } from '@/services/transcription/types'
@@ -74,7 +74,7 @@ export async function reprocessViaServer(
   const { getWSUrl } = await import('@/services/runtimeConfig')
   const wsUrl = getWSUrl()
   const [serverAiSource, rawAiMinDurationSec] = await Promise.all([
-    loadServerAiSource(),
+    readStoredServerAiSource(), // Read-only lookup: History must not overwrite the live provider's runtime value.
     getSetting('aiMinDurationSec', 0),
   ])
   const audioDurationSec = (chunk.byteLength / 2) / 16000
