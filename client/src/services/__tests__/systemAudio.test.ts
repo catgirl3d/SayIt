@@ -2204,6 +2204,60 @@ describe('system audio subtitle session', () => {
     expect(session.getSnapshot().caption).toBe('')
   })
 
+  it('splits translation into the client lane for a custom-AI server', async () => {
+    native.settings.set('server.aiSource', 'custom')
+    const messages: Array<Record<string, unknown>> = []
+    const sockets: ServerSocket[] = []
+    class ServerSocket {
+      static OPEN = 1
+      readyState = 0
+      onopen: (() => void) | null = null
+      onmessage: ((event: { data: string }) => void) | null = null
+      onclose: ((event: { code: number; reason: string }) => void) | null = null
+      onerror = null
+      binaryType = ''
+      constructor() {
+        sockets.push(this)
+        queueMicrotask(() => {
+          this.readyState = 1
+          this.onopen?.()
+          this.receive({ type: 'ready', asr: true, llm: false, connection_id: 'custom-connection' })
+        })
+      }
+      receive(data: Record<string, unknown>) { this.onmessage?.({ data: JSON.stringify(data) }) }
+      send(data: string | ArrayBuffer) {
+        if (typeof data !== 'string') return
+        const message = JSON.parse(data)
+        messages.push(message)
+        if (message.cmd === 'stop') queueMicrotask(() => {
+          this.receive({ type: 'final', asr_text: 'Original speech', llm_text: '', asr_ms: 5, llm_ms: 0, duration_sec: 1 })
+          this.receive({ type: 'done' })
+        })
+      }
+      close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }) }
+    }
+    vi.stubGlobal('WebSocket', ServerSocket)
+    const provider = new ServerProvider()
+    const providerStart = vi.spyOn(provider, 'start')
+    session = new SystemAudioSession({
+      getProvider: () => provider,
+      acquire: async () => { leased = true },
+      release: async () => { leased = false },
+      overlay,
+    })
+
+    await session.start({ deviceId: '', targetLanguage: 'ru' })
+    frames(20, 0.9)
+    frames(15, 0)
+    await settle()
+
+    expect(providerStart).toHaveBeenCalledWith(expect.objectContaining({ disableAi: true, requireTranslation: true }))
+    expect(messages.find((message) => message.cmd === 'start')?.disable_ai).toBe(true)
+    expect(native.invoke.mock.calls.filter(([name]) => name === 'cloud_polish')).toHaveLength(1)
+    expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Translated speech' })
+    expect(sockets).toHaveLength(1)
+  })
+
   it('does not let an overdue inactivity timer close a newly received phrase', async () => {
     await session.start({ deviceId: '', targetLanguage: 'ru' })
     frames(20, 0.9)
