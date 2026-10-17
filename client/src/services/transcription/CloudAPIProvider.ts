@@ -20,6 +20,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getSetting } from '../store'
 import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
+import { createIntegratedSkipResult, resolveAiPolishRoute } from './aiPolicy'
 import { polishWithClientAi } from './clientAiPolish'
 import { transcribeCustomAsr } from './customAsrRequest'
 import {
@@ -1134,17 +1135,17 @@ export class CloudAPIProvider implements TranscriptionProvider {
         return
       }
 
-      // Omni normally provides its own cleanup; subtitles still need the requested translation
-      // stage, but a chosen selection-edit service overrides the built-in cleanup for
-      // selected-text edits — the model the user picked must do the edit.
-      const polish = isQwenOmni && !startOpts.requireTranslation && !startOpts.selectionAiConfig
-        ? {
-          llmText: startOpts.textContext?.selectedText || asrText,
-          llmMs: 0,
-          contextApplied: startOpts.textContext ? false : undefined,
-          aiSource: 'none' as const,
-          aiStatus: 'skipped' as const,
-        }
+      // The route decision lives in aiPolicy: Omni normally provides its own cleanup, but
+      // subtitles need the separate translation stage and a chosen selection-edit service
+      // overrides the built-in cleanup — the model the user picked must do the edit.
+      const route = resolveAiPolishRoute({
+        workMode: 'cloud_api',
+        integratedAsr: isQwenOmni,
+        requireTranslation: Boolean(startOpts.requireTranslation),
+        selectionAiChosen: Boolean(startOpts.selectionAiConfig),
+      })
+      const polish = route === 'integrated'
+        ? createIntegratedSkipResult(startOpts, asrText)
         : await polishWithClientAi({
           asrText,
           durationSec,

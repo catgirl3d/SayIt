@@ -55,6 +55,7 @@ import {
   updateSubtitleOverlay,
 } from './recorder'
 import { getProvider } from './transcription'
+import { resolveAiPolishRoute } from './transcription/aiPolicy'
 import { polishWithClientAi } from './transcription/clientAiPolish'
 import { getRuntimeServerAiSource } from './transcription/serverAiSource'
 import { loadActiveHotwords } from './hotwords/settings'
@@ -1195,11 +1196,17 @@ export class SystemAudioSession {
   }
 
   // Client API, local and custom-AI server modes run their AI stage on this client, so it can be a lane
-  // of its own. A managed server run performs ASR and translation inside one server run.
+  // of its own. A managed server run performs ASR and translation inside one server run. The server-source
+  // condition now comes from the shared route policy; client API and local runs always keep translation in this lane.
   private usesClientTranslation(): boolean {
     const provider = this.provider
     if (!provider) return false
-    return provider.mode !== 'server' || getRuntimeServerAiSource() === 'custom'
+    if (provider.mode !== 'server') return true
+    return resolveAiPolishRoute({
+      workMode: 'server',
+      serverAiSource: getRuntimeServerAiSource(),
+      selectionAiChosen: false,
+    }) === 'client'
   }
 
   private publishQueueDepth(): void {
