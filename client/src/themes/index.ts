@@ -9,12 +9,16 @@ import type { ThemeDefinition, ThemeId } from './types'
 import light from './light'
 import dark from './dark'
 import claude from './claude'
+import teal from './teal'
+import tealDark from './teal-dark'
 
 /** 所有已注册主题（新增主题只需在此添加一行） */
 const themes: Record<string, ThemeDefinition> = {
   light,
   dark,
   claude,
+  teal,
+  'teal-dark': tealDark,
 }
 
 /** 主题列表（用于 UI 渲染） */

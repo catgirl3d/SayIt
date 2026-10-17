@@ -103,4 +103,4 @@ export interface ThemeDefinition {
 }
 
 /** 主题 ID 类型 */
-export type ThemeId = 'light' | 'dark' | 'claude'
+export type ThemeId = 'light' | 'dark' | 'claude' | 'teal' | 'teal-dark'
