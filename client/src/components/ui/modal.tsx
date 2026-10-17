@@ -147,10 +147,11 @@ export function Modal({
 
   return createPortal(
     <div
-      // The backdrop uses fixed black rather than --foreground: in the dark theme foreground is a
-      // near-white light gray, and using it as the backdrop would light the background up. The
-      // backdrop must be dark in every theme.
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      // Frosted backdrop, the one shared style for every modal layer (the installing overlay and
+      // the import-complete notice use it too): the page behind is blurred rather than plainly
+      // dimmed. --background is near-black in the dark theme, so the layer still reads dark there;
+      // do not go back to fixed black — it cannot produce this look in the light themes.
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
       onMouseDown={(e) => { pressStartedInPanel.current = e.target !== e.currentTarget }}
       onClick={() => { if (!pressStartedInPanel.current) requestClose() }}
     >

@@ -39,6 +39,7 @@ export default function UpdateDialog() {
   // The target version comes from the validated metadata the install is acting on.
   const version = state.versionInfo?.latestVersion || ''
 
+  // Backdrop: the shared frosted style (Modal and the import-complete notice) — keep in sync.
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background/80 backdrop-blur-sm">
       <div

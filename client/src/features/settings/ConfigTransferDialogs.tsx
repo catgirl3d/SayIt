@@ -642,8 +642,9 @@ export function ImportDoneDialog() {
     cardRef.current?.focus()
   }, [])
 
+  // Backdrop: the shared frosted style (Modal and the installing overlay) — keep in sync.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 p-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm">
       <div
         ref={cardRef}
         role="alertdialog"
