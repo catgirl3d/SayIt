@@ -1,9 +1,16 @@
 import * as bridge from './bridge'
-import { getSetting } from './store'
-import { getSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
-import { checkLocalModelInstalled, getSelectedLocalModelId, resolveLocalModelName, type LocalModelIpc } from './localModelStatus'
+import { getSetting, setSetting } from './store'
+import { getSpeechInputLanguage, normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
+import { checkLocalModelInstalled, getSelectedLocalModelId, type LocalModelIpc } from './localModelStatus'
 import { loadAsrProfiles } from '@/features/settings/asrProfileStore'
-import { buildAsrProviderConfig, describeAsrMissing, findAsrProvider, type AsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import {
+  buildAsrProviderConfig,
+  describeAsrMissing,
+  findAsrProvider,
+  type AsrProviderConfig,
+  type AsrProfile,
+} from '@/features/settings/asrProviderCatalog'
+import { localModelDisplayName } from '@/i18n/displayNames'
 import { releaseFileTranscription, reserveFileTranscription, setFileTranscriptionAdmissionReady } from './recorder'
 
 export type FilePhase =
@@ -62,12 +69,28 @@ export type FileInspectionErrorKind = 'ffmpeg-tools' | 'media'
 
 type FileInspectionError = Error & { inspectionKind?: FileInspectionErrorKind }
 
-export interface LocalFileSettings {
+export interface FileTranscriptionModelOption {
+  id: string
+  name: string
+}
+
+export interface FileTranscriptionJobOptions {
+  engine: FileTranscriptionEngine
+  /** Installed (downloaded AND complete) local models, display names resolved for the current locale. */
+  models: FileTranscriptionModelOption[]
+  /** Non-empty when the installed-models list could not be read; models is then empty. */
+  modelsError: string
+  /** Resolved job model: remembered value if installed, else the global localAsr.modelId if installed,
+   * else the first installed model, else ''. */
   modelId: string
-  modelName: string
-  modelInstalled: boolean
   language: SpeechInputLanguage
+  /** Global localAsr.accelerator value; the local worker needs it and the page has no control for it. */
   accelerator: string
+  cloudProfiles: FileTranscriptionCloudProfile[]
+  /** Non-empty when the cloud profile list could not be read; cloudProfiles is then empty. */
+  cloudProfilesError: string
+  /** Remembered profile if it still exists, else the active profile, else the first profile, else ''. */
+  cloudProfileId: string
 }
 
 export interface FileTranscriptionStartOptions {
@@ -76,6 +99,10 @@ export interface FileTranscriptionStartOptions {
   ffmpegDirectory: string | null
   audioStreamIndex: number | null
   engine?: FileTranscriptionEngine
+  /** Per-job local model id (required for the local engine). */
+  modelId?: string
+  /** Per-job speech language for both engines; falls back to the global setting when omitted. */
+  language?: SpeechInputLanguage
   cloudProfileId?: string | null
 }
 
@@ -264,50 +291,121 @@ export class FileTranscriptionService {
     }
   }
 
-  /** Local model/language/accelerator with the single normalization rule for their defaults. */
-  private async loadLocalBaseSettings(): Promise<{
-    modelId: string
-    language: SpeechInputLanguage
-    accelerator: string
-  }> {
-    const modelId = await getSelectedLocalModelId()
-    const [language, acceleratorValue] = await Promise.all([
+  async loadJobOptions(): Promise<FileTranscriptionJobOptions> {
+    const [
+      storedEngine,
+      rememberedModelId,
+      rememberedCloudProfileId,
+      storedLanguage,
+      globalLanguage,
+      acceleratorValue,
+      globalModelId,
+    ] = await Promise.all([
+      getSetting('fileTranscription.engine', ''),
+      getSetting('fileTranscription.modelId', ''),
+      getSetting('fileTranscription.cloudProfileId', ''),
+      getSetting('fileTranscription.language', ''),
       getSpeechInputLanguage(),
       getSetting('localAsr.accelerator', 'auto'),
+      getSelectedLocalModelId(),
     ])
-    return { modelId, language, accelerator: String(acceleratorValue || 'auto') }
+
+    const [modelsResult, profilesResult] = await Promise.allSettled([
+      this.ipc.invoke<Array<{ id: string; name: string; complete: boolean }>>('list_downloaded_models'),
+      this.getCloudProfiles(),
+    ])
+
+    let models: FileTranscriptionModelOption[] = []
+    let modelsError = ''
+    if (modelsResult.status === 'fulfilled') {
+      models = modelsResult.value
+        .filter((model) => model.complete === true)
+        .map((model) => ({ id: model.id, name: localModelDisplayName(model) }))
+    } else {
+      modelsError = errorMessage(modelsResult.reason)
+    }
+
+    let cloudProfiles: FileTranscriptionCloudProfile[] = []
+    let cloudProfilesError = ''
+    let activeId = ''
+    if (profilesResult.status === 'fulfilled') {
+      cloudProfiles = profilesResult.value.profiles
+      activeId = profilesResult.value.activeId
+    } else {
+      cloudProfilesError = errorMessage(profilesResult.reason)
+    }
+
+    const rememberedLanguage =
+      typeof storedLanguage === 'string' && storedLanguage !== ''
+        ? normalizeSpeechInputLanguage(storedLanguage)
+        : globalLanguage
+    const modelIds = new Set(models.map((model) => model.id))
+    const modelId =
+      modelsError !== ''
+        ? ''
+        : modelIds.has(String(rememberedModelId))
+          ? String(rememberedModelId)
+          : modelIds.has(globalModelId)
+            ? globalModelId
+            : (models[0]?.id ?? '')
+    const profileIds = new Set(cloudProfiles.map((profile) => profile.id))
+    const cloudProfileId =
+      cloudProfilesError !== ''
+        ? ''
+        : profileIds.has(String(rememberedCloudProfileId))
+          ? String(rememberedCloudProfileId)
+          : profileIds.has(activeId)
+            ? activeId
+            : (cloudProfiles[0]?.id ?? '')
+
+    return {
+      engine: storedEngine === 'cloud' ? 'cloud' : 'local',
+      models,
+      modelsError,
+      modelId,
+      language: rememberedLanguage,
+      accelerator: String(acceleratorValue || 'auto'),
+      cloudProfiles,
+      cloudProfilesError,
+      cloudProfileId,
+    }
   }
 
-  async getLocalSettings(): Promise<LocalFileSettings> {
-    const base = await this.loadLocalBaseSettings()
-    const invokeIpc: LocalModelIpc = (command, args) => this.ipc.invoke(command, args)
-    const [modelName, modelInstalled] = await Promise.all([
-      resolveLocalModelName(invokeIpc, base.modelId),
-      checkLocalModelInstalled(invokeIpc, base.modelId),
-    ])
-    return { ...base, modelName, modelInstalled }
+  async rememberJobSelection(
+    patch: Partial<Pick<FileTranscriptionJobOptions, 'engine' | 'modelId' | 'language' | 'cloudProfileId'>>,
+  ): Promise<void> {
+    await Promise.all(Object.entries(patch).map(([key, value]) => setSetting(`fileTranscription.${key}`, value)))
   }
 
   async startWithCurrentSettings(options: FileTranscriptionStartOptions): Promise<FileTranscriptionSnapshot> {
-    const { engine: requestedEngine, cloudProfileId, ...fileOptions } = options
+    const {
+      engine: requestedEngine,
+      cloudProfileId,
+      modelId: requestedModelId,
+      language: requestedLanguage,
+      ...fileOptions
+    } = options
     const engine = requestedEngine ?? 'local'
+    const language = requestedLanguage ?? (await getSpeechInputLanguage())
     return this.startReserved(engine, async () => {
       if (engine === 'cloud') {
-        const language = await getSpeechInputLanguage()
         return this.buildCloudRequest(fileOptions, cloudProfileId, language)
       }
-      const base = await this.loadLocalBaseSettings()
+      const modelId = String(requestedModelId ?? '').trim()
+      if (!modelId) throw new Error('A local ASR model must be selected')
       const invokeIpc: LocalModelIpc = (command, args) => this.ipc.invoke(command, args)
-      // Keep the settings-load contract here as well: an unreadable downloaded
-      // list must stop the start before the worker is invoked. The panel gates
-      // Start on modelInstalled; a readable list that lacks the model still
-      // reaches the worker, which reports the real reason.
-      await checkLocalModelInstalled(invokeIpc, base.modelId)
+      // Keep the downloaded-model guard: an unreadable list stops the start before
+      // the worker is invoked. A readable list that lacks the model still reaches
+      // the worker, which reports the real reason.
+      await checkLocalModelInstalled(invokeIpc, modelId)
+      const acceleratorValue = await getSetting('localAsr.accelerator', 'auto')
       return {
         ...fileOptions,
-        ...base,
         engine: 'local',
         cloud: null,
+        modelId,
+        language,
+        accelerator: String(acceleratorValue || 'auto'),
       }
     })
   }

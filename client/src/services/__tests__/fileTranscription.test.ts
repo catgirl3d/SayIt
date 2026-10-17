@@ -18,6 +18,7 @@ const speechLanguageMocks = vi.hoisted(() => ({
 
 const storeMocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
+  setSetting: vi.fn(),
 }))
 
 vi.mock('@/features/settings/asrProfileStore', () => ({
@@ -27,6 +28,7 @@ vi.mock('@/features/settings/asrProfileStore', () => ({
 vi.mock('@/services/store', async (importOriginal) => ({
   ...(await importOriginal()),
   getSetting: storeMocks.getSetting,
+  setSetting: storeMocks.setSetting,
 }))
 
 vi.mock('../speechInputLanguage', async (importOriginal) => ({
@@ -73,6 +75,7 @@ function createHarness() {
   const invoke = vi.fn(async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
     calls.push(`invoke:${command}`)
     if (command === 'get_file_transcription_state') return null
+    if (command === 'list_downloaded_models') return []
     return undefined
   })
   const listen = vi.fn(async (_event: string, _handler: (event: { payload: unknown }) => void): Promise<() => void> => {
@@ -97,6 +100,7 @@ describe('file transcription service', () => {
     profileStoreMocks.loadAsrProfiles.mockResolvedValue({ profiles: [cloudProfile], activeId: cloudProfile.id })
     speechLanguageMocks.getSpeechInputLanguage.mockResolvedValue('uk')
     storeMocks.getSetting.mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    storeMocks.setSetting.mockResolvedValue(undefined)
   })
 
   it('returns cloud profile display metadata without exposing credentials', async () => {
@@ -104,13 +108,15 @@ describe('file transcription service', () => {
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
     await expect(service.getCloudProfiles()).resolves.toEqual({
-      profiles: [{
-        id: 'cloud-a',
-        label: 'Groq Whisper',
-        provider: 'groq_whisper',
-        model: 'whisper-large-v3',
-        missing: '',
-      }],
+      profiles: [
+        {
+          id: 'cloud-a',
+          label: 'Groq Whisper',
+          provider: 'groq_whisper',
+          model: 'whisper-large-v3',
+          missing: '',
+        },
+      ],
       activeId: 'cloud-a',
     })
   })
@@ -138,16 +144,173 @@ describe('file transcription service', () => {
     expect(profiles.map(({ id, missing }) => ({ id, missing }))).toEqual([
       { id: 'cloud-a', missing: '' },
       { id: 'cloud-b', missing: 'no API key yet' },
-      { id: 'cloud-c', missing: 'base URL must be a valid HTTP(S) URL without username or password, query, or fragment' },
+      {
+        id: 'cloud-c',
+        missing: 'base URL must be a valid HTTP(S) URL without username or password, query, or fragment',
+      },
     ])
   })
 
-  it('keeps local request fields and marks the IPC request as local', async () => {
+  it('loads only complete downloaded models with localized display names', async () => {
+    const harness = createHarness()
+    harness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_downloaded_models') {
+        return [
+          { id: 'sensevoice-small-gguf', name: 'Raw SenseVoice', complete: true },
+          { id: 'incomplete-model', name: 'Incomplete', complete: false },
+          { id: 'truthy-model', name: 'Truthy complete', complete: 'yes' as unknown as boolean },
+          { id: 'custom-model', name: 'Custom model', complete: true },
+        ]
+      }
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await expect(service.loadJobOptions()).resolves.toMatchObject({
+      models: [
+        { id: 'sensevoice-small-gguf', name: 'SenseVoice Small' },
+        { id: 'custom-model', name: 'Custom model' },
+      ],
+      modelId: 'sensevoice-small-gguf',
+      modelsError: '',
+    })
+  })
+
+  it('resolves the remembered model, global model, first model, and empty-list fallbacks', async () => {
+    const load = async (
+      rememberedModelId: string,
+      globalModelId: string,
+      downloaded: Array<{ id: string; name: string; complete: boolean }>,
+    ) => {
+      const harness = createHarness()
+      harness.invoke.mockImplementation(async (command: string) => {
+        if (command === 'list_downloaded_models') return downloaded
+        return command === 'get_file_transcription_state' ? null : undefined
+      })
+      storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+        if (key === 'fileTranscription.modelId') return rememberedModelId
+        if (key === 'localAsr.modelId') return globalModelId
+        return fallback
+      })
+      const service = new FileTranscriptionService(harness.bridge, harness.admission)
+      return service.loadJobOptions()
+    }
+
+    await expect(
+      load('remembered', 'global', [
+        { id: 'remembered', name: 'Remembered', complete: true },
+        { id: 'global', name: 'Global', complete: true },
+      ]),
+    ).resolves.toMatchObject({ modelId: 'remembered' })
+    await expect(
+      load('gone', 'global', [
+        { id: 'global', name: 'Global', complete: true },
+        { id: 'first', name: 'First', complete: true },
+      ]),
+    ).resolves.toMatchObject({ modelId: 'global' })
+    await expect(load('gone', 'missing', [{ id: 'first', name: 'First', complete: true }])).resolves.toMatchObject({
+      modelId: 'first',
+    })
+    await expect(load('gone', 'missing', [])).resolves.toMatchObject({ modelId: '' })
+  })
+
+  it('keeps a remembered language including auto, and falls back to the global language when empty', async () => {
+    const harness = createHarness()
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'fileTranscription.language') return 'auto'
+      return fallback
+    })
+
+    await expect(service.loadJobOptions()).resolves.toMatchObject({ language: 'auto' })
+
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'fileTranscription.language') return ''
+      return fallback
+    })
+    await expect(service.loadJobOptions()).resolves.toMatchObject({ language: 'uk' })
+  })
+
+  it('resolves the remembered, active, first, and empty cloud profile fallbacks', async () => {
+    const harness = createHarness()
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+    const profiles = [cloudProfile, { ...cloudProfile, id: 'cloud-b', model: 'second-model' }]
+
+    const load = async (remembered: string, activeId: string, availableProfiles = profiles) => {
+      profileStoreMocks.loadAsrProfiles.mockResolvedValue({ profiles: availableProfiles, activeId })
+      storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+        if (key === 'fileTranscription.cloudProfileId') return remembered
+        return fallback
+      })
+      return service.loadJobOptions()
+    }
+
+    await expect(load('cloud-b', 'cloud-a')).resolves.toMatchObject({ cloudProfileId: 'cloud-b' })
+    await expect(load('gone', 'cloud-b')).resolves.toMatchObject({ cloudProfileId: 'cloud-b' })
+    await expect(load('gone', 'gone')).resolves.toMatchObject({ cloudProfileId: 'cloud-a' })
+    await expect(load('gone', 'gone', [])).resolves.toMatchObject({ cloudProfileId: '' })
+  })
+
+  it('captures model and cloud profile errors independently', async () => {
+    const modelFailureHarness = createHarness()
+    modelFailureHarness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_downloaded_models') throw new Error('models unavailable')
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const modelFailureService = new FileTranscriptionService(modelFailureHarness.bridge, modelFailureHarness.admission)
+
+    await expect(modelFailureService.loadJobOptions()).resolves.toMatchObject({
+      models: [],
+      modelsError: 'models unavailable',
+      modelId: '',
+      cloudProfilesError: '',
+      cloudProfileId: 'cloud-a',
+    })
+
+    profileStoreMocks.loadAsrProfiles.mockRejectedValue(new Error('profiles unavailable'))
+    const profileFailureHarness = createHarness()
+    profileFailureHarness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_downloaded_models') return [{ id: 'installed', name: 'Installed', complete: true }]
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const profileFailureService = new FileTranscriptionService(
+      profileFailureHarness.bridge,
+      profileFailureHarness.admission,
+    )
+
+    await expect(profileFailureService.loadJobOptions()).resolves.toMatchObject({
+      models: [{ id: 'installed', name: 'Installed' }],
+      modelsError: '',
+      modelId: 'installed',
+      cloudProfiles: [],
+      cloudProfilesError: 'profiles unavailable',
+      cloudProfileId: '',
+    })
+  })
+
+  it('remembers only the provided file transcription keys', async () => {
+    const harness = createHarness()
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.rememberJobSelection({ modelId: 'model-a', language: 'auto' })
+
+    expect(storeMocks.setSetting).toHaveBeenCalledTimes(2)
+    expect(storeMocks.setSetting).toHaveBeenCalledWith('fileTranscription.modelId', 'model-a')
+    expect(storeMocks.setSetting).toHaveBeenCalledWith('fileTranscription.language', 'auto')
+    expect(storeMocks.setSetting).not.toHaveBeenCalledWith('fileTranscription.engine', expect.anything())
+    expect(storeMocks.setSetting).not.toHaveBeenCalledWith('localAsr.modelId', expect.anything())
+  })
+
+  it('starts a local run with the selected model and language while keeping the global accelerator', async () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'start_file_transcription') return snapshot({ resourcesReleased: true })
-      if (command === 'list_available_models' || command === 'list_downloaded_models') return []
+      if (command === 'list_downloaded_models') return [{ id: 'selected-model', name: 'Selected', complete: true }]
       return command === 'get_file_transcription_state' ? null : undefined
+    })
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'localAsr.accelerator') return 'gpu'
+      return fallback
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
@@ -156,6 +319,9 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      engine: 'local',
+      modelId: ' selected-model ',
+      language: 'en',
     })
 
     expect(harness.invoke).toHaveBeenCalledWith('start_file_transcription', {
@@ -166,11 +332,13 @@ describe('file transcription service', () => {
         audioStreamIndex: null,
         engine: 'local',
         cloud: null,
-        modelId: DEFAULT_LOCAL_MODEL_ID,
-        language: 'uk',
-        accelerator: 'auto',
+        modelId: 'selected-model',
+        language: 'en',
+        accelerator: 'gpu',
       },
     })
+    expect(storeMocks.setSetting).not.toHaveBeenCalledWith('localAsr.modelId', expect.anything())
+    expect(storeMocks.setSetting).not.toHaveBeenCalledWith('speechInput.language', expect.anything())
   })
 
   it('refuses to start a local run when the downloaded model list cannot be read', async () => {
@@ -181,53 +349,41 @@ describe('file transcription service', () => {
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await expect(service.startWithCurrentSettings({
-      filePath: 'C:/recording.mp4',
-      outputDirectory: 'C:/output',
-      ffmpegDirectory: null,
-      audioStreamIndex: null,
-    })).rejects.toThrow('ipc boom')
+    await expect(
+      service.startWithCurrentSettings({
+        filePath: 'C:/recording.mp4',
+        outputDirectory: 'C:/output',
+        ffmpegDirectory: null,
+        audioStreamIndex: null,
+        modelId: 'selected-model',
+      }),
+    ).rejects.toThrow('ipc boom')
 
     expect(harness.invoke).not.toHaveBeenCalledWith('start_file_transcription', expect.anything())
   })
 
-  it('starts a local run even when the model catalog is down', async () => {
+  it('rejects a local start without a model and never invokes the worker', async () => {
     const harness = createHarness()
-    harness.invoke.mockImplementation(async (command: string) => {
-      if (command === 'list_available_models') throw new Error('catalog offline')
-      if (command === 'list_downloaded_models') return [{ id: DEFAULT_LOCAL_MODEL_ID, complete: true }]
-      if (command === 'start_file_transcription') return snapshot({ resourcesReleased: true })
-      return command === 'get_file_transcription_state' ? null : undefined
-    })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await service.startWithCurrentSettings({
-      filePath: 'C:/recordings/voice.mp4',
-      outputDirectory: 'C:/output',
-      ffmpegDirectory: null,
-      audioStreamIndex: null,
-    })
-
-    expect(harness.invoke).toHaveBeenCalledWith('start_file_transcription', {
-      request: {
-        filePath: 'C:/recordings/voice.mp4',
+    await expect(
+      service.startWithCurrentSettings({
+        filePath: 'C:/recording.mp4',
         outputDirectory: 'C:/output',
         ffmpegDirectory: null,
         audioStreamIndex: null,
-        modelId: DEFAULT_LOCAL_MODEL_ID,
-        language: 'uk',
-        accelerator: 'auto',
-        engine: 'local',
-        cloud: null,
-      },
-    })
+      }),
+    ).rejects.toThrow('A local ASR model must be selected')
+
+    expect(harness.invoke).not.toHaveBeenCalledWith('start_file_transcription', expect.anything())
   })
 
   it('builds a cloud request from a fixed profile snapshot and does not reserve local admission', async () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
-      if (command === 'start_file_transcription') return snapshot({ engine: 'cloud', cloudLabel: 'Groq Whisper', resourcesReleased: true })
-      if (command === 'list_available_models' || command === 'list_downloaded_models') return []
+      if (command === 'start_file_transcription')
+        return snapshot({ engine: 'cloud', cloudLabel: 'Groq Whisper', resourcesReleased: true })
+      if (command === 'list_downloaded_models') throw new Error('local model list unavailable')
       return command === 'get_file_transcription_state' ? null : undefined
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
@@ -239,6 +395,7 @@ describe('file transcription service', () => {
       audioStreamIndex: 2,
       engine: 'cloud',
       cloudProfileId: 'cloud-a',
+      language: 'en',
     })
 
     const startCall = harness.invoke.mock.calls.find(([command]) => command === 'start_file_transcription')
@@ -249,19 +406,19 @@ describe('file transcription service', () => {
       ffmpegDirectory: null,
       audioStreamIndex: 2,
       engine: 'cloud',
-      language: 'uk',
+      language: 'en',
       cloud: {
         label: 'Groq Whisper',
         config: {
           provider: 'groq_whisper',
           api_key: 'cloud-key',
           app_id: '',
-          extra: { model: 'whisper-large-v3', language: 'uk' },
+          extra: { model: 'whisper-large-v3', language: 'en' },
         },
       },
     })
     expect(request).not.toHaveProperty('modelId')
-    expect(request).toHaveProperty('language', 'uk')
+    expect(request).toHaveProperty('language', 'en')
     expect(request).not.toHaveProperty('accelerator')
     expect(harness.admission.reserveFileTranscription).not.toHaveBeenCalled()
   })
@@ -339,12 +496,15 @@ describe('file transcription service', () => {
     })
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await expect(service.startWithCurrentSettings({
-      filePath: 'C:/recording.mp4',
-      outputDirectory: 'C:/output',
-      ffmpegDirectory: null,
-      audioStreamIndex: null,
-    })).rejects.toThrow('native start failed')
+    await expect(
+      service.startWithCurrentSettings({
+        filePath: 'C:/recording.mp4',
+        outputDirectory: 'C:/output',
+        ffmpegDirectory: null,
+        audioStreamIndex: null,
+        modelId: DEFAULT_LOCAL_MODEL_ID,
+      }),
+    ).rejects.toThrow('native start failed')
 
     expect(harness.calls.indexOf('reserve')).toBeLessThan(harness.calls.indexOf('invoke:start_file_transcription'))
     expect(harness.calls.indexOf('invoke:start_file_transcription')).toBeLessThan(harness.calls.indexOf('release'))
@@ -370,6 +530,7 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      modelId: DEFAULT_LOCAL_MODEL_ID,
     })
 
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
@@ -386,11 +547,15 @@ describe('file transcription service', () => {
     })
     let rejectStart: (error: Error) => void = () => undefined
     let startInvoked: () => void = () => undefined
-    const startCalled = new Promise<void>((resolve) => { startInvoked = resolve })
+    const startCalled = new Promise<void>((resolve) => {
+      startInvoked = resolve
+    })
     harness.invoke.mockImplementation((command: string) => {
       if (command === 'start_file_transcription') {
         startInvoked()
-        return new Promise((_resolve, reject) => { rejectStart = reject })
+        return new Promise((_resolve, reject) => {
+          rejectStart = reject
+        })
       }
       if (command === 'list_available_models' || command === 'list_downloaded_models') return Promise.resolve([])
       return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
@@ -403,10 +568,18 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      modelId: DEFAULT_LOCAL_MODEL_ID,
     })
     await startCalled
     stateHandler?.({ payload: snapshot({ sequence: 1 }) })
-    stateHandler?.({ payload: snapshot({ sequence: 2, phase: 'failed', resourcesReleased: true, error: 'Failed to start file transcription worker' }) })
+    stateHandler?.({
+      payload: snapshot({
+        sequence: 2,
+        phase: 'failed',
+        resourcesReleased: true,
+        error: 'Failed to start file transcription worker',
+      }),
+    })
     rejectStart(new Error('Failed to start file transcription worker'))
     await expect(startPromise).rejects.toThrow('Failed to start file transcription worker')
 
@@ -422,11 +595,15 @@ describe('file transcription service', () => {
     })
     let rejectStart: (error: Error) => void = () => undefined
     let startInvoked: () => void = () => undefined
-    const startCalled = new Promise<void>((resolve) => { startInvoked = resolve })
+    const startCalled = new Promise<void>((resolve) => {
+      startInvoked = resolve
+    })
     harness.invoke.mockImplementation((command: string) => {
       if (command === 'start_file_transcription') {
         startInvoked()
-        return new Promise((_resolve, reject) => { rejectStart = reject })
+        return new Promise((_resolve, reject) => {
+          rejectStart = reject
+        })
       }
       if (command === 'list_available_models' || command === 'list_downloaded_models') return Promise.resolve([])
       return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
@@ -439,6 +616,7 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      modelId: DEFAULT_LOCAL_MODEL_ID,
     })
     await startCalled
     stateHandler?.({ payload: snapshot({ sequence: 1 }) })
@@ -446,7 +624,14 @@ describe('file transcription service', () => {
     await expect(startPromise).rejects.toThrow('Failed to start file transcription worker')
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
 
-    stateHandler?.({ payload: snapshot({ sequence: 2, phase: 'failed', resourcesReleased: true, error: 'Failed to start file transcription worker' }) })
+    stateHandler?.({
+      payload: snapshot({
+        sequence: 2,
+        phase: 'failed',
+        resourcesReleased: true,
+        error: 'Failed to start file transcription worker',
+      }),
+    })
     expect(harness.admission.releaseFileTranscription).toHaveBeenCalledTimes(1)
   })
 
@@ -459,11 +644,15 @@ describe('file transcription service', () => {
     })
     let rejectStart: (error: Error) => void = () => undefined
     let startInvoked: () => void = () => undefined
-    const startCalled = new Promise<void>((resolve) => { startInvoked = resolve })
+    const startCalled = new Promise<void>((resolve) => {
+      startInvoked = resolve
+    })
     harness.invoke.mockImplementation((command: string) => {
       if (command === 'start_file_transcription') {
         startInvoked()
-        return new Promise((_resolve, reject) => { rejectStart = reject })
+        return new Promise((_resolve, reject) => {
+          rejectStart = reject
+        })
       }
       if (command === 'list_available_models' || command === 'list_downloaded_models') return Promise.resolve([])
       return Promise.resolve(command === 'get_file_transcription_state' ? null : undefined)
@@ -476,6 +665,7 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      modelId: DEFAULT_LOCAL_MODEL_ID,
     })
     await startCalled
     stateHandler?.({ payload: snapshot({ sequence: 1 }) })
@@ -507,13 +697,15 @@ describe('file transcription service', () => {
       cloudProfileId: 'cloud-a',
     })
 
-    stateHandler?.({ payload: snapshot({
-      engine: 'cloud',
-      cloudLabel: 'Groq Whisper',
-      sequence: 2,
-      phase: 'completed',
-      resourcesReleased: true,
-    }) })
+    stateHandler?.({
+      payload: snapshot({
+        engine: 'cloud',
+        cloudLabel: 'Groq Whisper',
+        sequence: 2,
+        phase: 'completed',
+        resourcesReleased: true,
+      }),
+    })
 
     expect(service.getSnapshot()?.phase).toBe('completed')
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
@@ -526,10 +718,7 @@ describe('file transcription service', () => {
       stateHandler = handler as (event: { payload: FileTranscriptionSnapshot }) => void
       return () => undefined
     })
-    const starts = [
-      snapshot({ jobId: 'job-1', sequence: 1 }),
-      snapshot({ jobId: 'job-2', sequence: 3 }),
-    ]
+    const starts = [snapshot({ jobId: 'job-1', sequence: 1 }), snapshot({ jobId: 'job-2', sequence: 3 })]
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'start_file_transcription') return starts.shift()
       if (command === 'list_available_models' || command === 'list_downloaded_models') return []
@@ -542,6 +731,7 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      modelId: DEFAULT_LOCAL_MODEL_ID,
     })
     stateHandler?.({ payload: snapshot({ jobId: 'job-1', sequence: 1, resourcesReleased: true, phase: 'failed' }) })
     expect(harness.admission.releaseFileTranscription).not.toHaveBeenCalled()
@@ -551,6 +741,7 @@ describe('file transcription service', () => {
       outputDirectory: 'C:/output',
       ffmpegDirectory: null,
       audioStreamIndex: null,
+      modelId: DEFAULT_LOCAL_MODEL_ID,
     })
 
     stateHandler?.({ payload: snapshot({ jobId: 'job-1', sequence: 4, resourcesReleased: true, phase: 'failed' }) })
@@ -757,8 +948,12 @@ describe('file transcription service', () => {
   })
 
   it('normalizes classified inspection failures and preserves unclassified values', () => {
-    const ffmpegFailure = normalizeInspectionFailure({ kind: 'ffmpeg-tools', message: 'x' }) as Error & { inspectionKind?: string }
-    const mediaFailure = normalizeInspectionFailure({ kind: 'media', message: 'y' }) as Error & { inspectionKind?: string }
+    const ffmpegFailure = normalizeInspectionFailure({ kind: 'ffmpeg-tools', message: 'x' }) as Error & {
+      inspectionKind?: string
+    }
+    const mediaFailure = normalizeInspectionFailure({ kind: 'media', message: 'y' }) as Error & {
+      inspectionKind?: string
+    }
     const plainError = new Error('z')
 
     expect(ffmpegFailure).toBeInstanceOf(Error)
@@ -767,7 +962,9 @@ describe('file transcription service', () => {
     expect(mediaFailure.message).toBe('y')
     expect(mediaFailure.inspectionKind).toBe('media')
     expect(normalizeInspectionFailure(plainError)).toBe(plainError)
-    expect((normalizeInspectionFailure(plainError) as Error & { inspectionKind?: string }).inspectionKind).toBeUndefined()
+    expect(
+      (normalizeInspectionFailure(plainError) as Error & { inspectionKind?: string }).inspectionKind,
+    ).toBeUndefined()
     expect(normalizeInspectionFailure('plain failure')).toBe('plain failure')
   })
 

@@ -185,6 +185,16 @@ export const DEFAULTS: Record<string, unknown> = {
   // choose to release it after 10 / 30 / 60 idle minutes in the local mode settings.
   'localAsr.unloadIdleMinutes': 0,
 
+  // ── File transcription page (per-job selection) ──
+  // Last used setup of the Files page. These are page-level defaults only; the global
+  // dictation settings (localAsr.modelId, speechInput.language) are never written by
+  // the Files page. Empty string means "not chosen yet": loadJobOptions then falls
+  // back to the global selection (model, language) or the active cloud profile.
+  'fileTranscription.engine': 'local', // Options: 'local' | 'cloud'
+  'fileTranscription.modelId': '',
+  'fileTranscription.cloudProfileId': '',
+  'fileTranscription.language': '',
+
   // ── Server ──
   // Options: 'auto' | 'zh' | 'en'. Sent with every recognition to the server, where
   // asr.py's _resolve_language maps it to Chinese / English; 'auto' = let the model
