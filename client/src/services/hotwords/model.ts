@@ -24,6 +24,24 @@ export const BUILTIN_SETS: Record<string, { label: string; description: string; 
       'Vibe Coding', 'Typeless', 'Vibe',
     ],
   },
+  // Medium-sized on purpose: built-in sets are composed ahead of custom categories, Gemini and
+  // the Qwen audio stream take only the first 100 words, and Deepgram rejects keyterms above
+  // 500 tokens in total. Prefer names ASR tends to mangle over plain English words.
+  code: {
+    get label() { return t('dict.codeSet') },
+    get description() { return t('dict.codeSetDesc') },
+    words: [
+      'Git', 'GitHub', 'GitHub Actions', 'commit', 'rebase', 'cherry-pick',
+      'merge conflict', 'pull request', 'worktree', 'squash', 'monorepo', 'changelog',
+      'TypeScript', 'JavaScript', 'Python', 'Rust', 'C++', 'C#', 'Node.js', 'WebAssembly',
+      'React', 'Next.js', 'Svelte', 'Tailwind', 'Vite', 'Vitest', 'ESLint',
+      'npm', 'pnpm', 'Cargo', 'Tauri', 'VS Code', 'Neovim', 'JetBrains', 'PowerShell',
+      'Docker', 'Kubernetes', 'kubectl', 'Terraform', 'Nginx', 'Cloudflare', 'Vercel', 'CI/CD',
+      'PostgreSQL', 'SQLite', 'Redis', 'MongoDB', 'GraphQL', 'gRPC', 'REST API',
+      'WebSocket', 'JSON', 'YAML', 'OAuth', 'JWT', 'localhost',
+      'refactor', 'linter', 'regex', 'async', 'middleware', 'endpoint', 'stack trace', 'stderr',
+    ],
+  },
 }
 
 export const BUILTIN_WORD_SET = new Set(Object.values(BUILTIN_SETS).flatMap((set) => set.words))
@@ -101,6 +119,19 @@ export function normalizeBuiltinSetWords(value: unknown): Record<string, string[
     result[key] = uniqueWords(raw.map((v) => String(v))).filter((w) => allow.has(w))
   }
 
+  return result
+}
+
+/**
+ * Fills built-in sets that have no saved word list with their defaults. The store gets a set's
+ * words only after the user edits or resets it, so a set added in a later release is missing
+ * from existing installs while its saved active flag can already be on.
+ */
+export function withBuiltinSetDefaults(savedWords: Record<string, string[]>): Record<string, string[]> {
+  const result: Record<string, string[]> = {}
+  for (const [key, setDef] of Object.entries(BUILTIN_SETS)) {
+    result[key] = savedWords[key] ?? uniqueWords(setDef.words)
+  }
   return result
 }
 

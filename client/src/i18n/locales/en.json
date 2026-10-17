@@ -665,6 +665,8 @@
   "dict.noMatch": "No hotwords match your search.",
   "dict.aiSet": "AI terms",
   "dict.aiSetDesc": "Common AI models and terminology",
+  "dict.codeSet": "Programming",
+  "dict.codeSetDesc": "Languages, dev tools, Git, and common code terms",
   "dict.myTheme": "My category",
   "range.today": "Today",
   "range.7d": "7 days",
