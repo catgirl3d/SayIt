@@ -8,6 +8,13 @@ Sections are ordered by version, newest first.
 ### Changed
 #### Desktop Client
 - Scrollbars in the main window are now thin and follow the theme everywhere: dialogs, lists, and text fields no longer fall back to the browser's light default scrollbar.
+
+### Fixed
+#### Desktop Client
+- Dialogs no longer close when you select text in a field and release the mouse outside the dialog. Before, such a drag closed the dialog and discarded what you had typed.
+- With two dialogs open at once, such as the backup list under a restore confirmation, Esc now closes only the top one.
+- A long dialog title no longer runs under the close button.
+
 ## v0.3.0 — 2026-10-17
 
 ### Added
