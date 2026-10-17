@@ -209,10 +209,14 @@ export const NewOpenRouterServiceRecommended: Story = {
     tauri: { settings: settingsFor([openRouterProfile], openRouterProfile.id, 'cloud_api', 'managed') },
   },
   play: async ({ canvasElement }) => {
+    const body = bodyOf(canvasElement)
     // "New" starts from the active card's provider, so OpenRouter's curated models are offered right away.
     const dialog = await openNewDialog(canvasElement)
 
-    await expect(dialog.getByText('Recommended:')).toBeVisible()
+    // The crown alone labels the picks; hovering it shows the word.
+    await expect(dialog.queryByText('Recommended')).toBeNull()
+    await userEvent.hover(dialog.getByLabelText('Recommended'))
+    await expect(await body.findByText('Recommended')).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'deepseek/deepseek-v4.1-flash-1017' })).toBeVisible()
     await userEvent.click(dialog.getByRole('button', { name: 'anthropic/claude-haiku-5.5' }))
 

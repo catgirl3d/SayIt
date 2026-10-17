@@ -276,14 +276,14 @@ describe('AIProviderSection model field: recommended models', () => {
   it('offers the OpenRouter recommendations as one-click picks', async () => {
     await openNewOpenRouterDialog()
 
-    expect(screen.getByText(t('ai.modelRecommended'))).toBeTruthy()
+    expect(screen.getByLabelText(t('local.recommended'))).toBeTruthy()
     for (const id of recommended) expect(pick(id)).toBeTruthy()
   })
 
   it('does not show the row for a provider without recommendations', async () => {
     await openNewDialog()
 
-    expect(screen.queryByText(t('ai.modelRecommended'))).toBeNull()
+    expect(screen.queryByLabelText(t('local.recommended'))).toBeNull()
   })
 
   it('a pick in a new service becomes a chip and leaves the row', async () => {
@@ -303,7 +303,7 @@ describe('AIProviderSection model field: recommended models', () => {
     await openNewOpenRouterDialog()
     for (const id of recommended) fireEvent.click(pick(id))
 
-    expect(screen.queryByText(t('ai.modelRecommended'))).toBeNull()
+    expect(screen.queryByLabelText(t('local.recommended'))).toBeNull()
     expect(screen.getByRole('button', { name: t('ai.saveCount', { count: 2 }) })).toBeTruthy()
   })
 

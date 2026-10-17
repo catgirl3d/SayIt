@@ -1040,7 +1040,6 @@
   "ai.modelAddPlaceholder": "Add another…",
   "ai.modelListToggle": "Show model list",
   "ai.modelAddCustom": "Add “{model}”",
-  "ai.modelRecommended": "Recommended:",
   "ai.saveCount": "Save ({count})",
   "ai.multiModelHint": "Type a name and press Enter, or load the list and pick. Each model becomes its own card with the URL and key above.",
   "ai.fetchModels": "Load models",

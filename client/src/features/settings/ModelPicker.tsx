@@ -36,6 +36,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Crown, Plus, X } from 'lucide-react'
+import { Tooltip } from '@/components/ui/tooltip'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
 import type { RemoteModel } from './aiProviderCatalog'
@@ -630,7 +631,8 @@ export interface RecommendedModelsProps {
 /**
  * One-click picks under the model field. It works before the catalog is loaded, which is the point:
  * a new service starts without a model, and recommendations are the quickest way to give it one.
- * The row disappears once every recommendation is chosen.
+ * The row disappears once every recommendation is chosen. The crown alone labels the picks and its
+ * tooltip carries the word, matching the recommended marker used across the app.
  */
 export function RecommendedModels({ models, chosen, onPick, disabled = false }: RecommendedModelsProps) {
   const t = useT()
@@ -638,10 +640,14 @@ export function RecommendedModels({ models, chosen, onPick, disabled = false }: 
   if (offered.length === 0) return null
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-      <span className="inline-flex items-center gap-1 text-muted-foreground">
-        <Crown className="h-3 w-3 text-amber-500" aria-hidden />
-        {t('ai.modelRecommended')}
-      </span>
+      <Tooltip content={t('local.recommended')}>
+        <span
+          className="inline-flex shrink-0 cursor-help items-center text-amber-500"
+          aria-label={t('local.recommended')}
+        >
+          <Crown className="h-3 w-3" aria-hidden />
+        </span>
+      </Tooltip>
       {offered.map((id) => (
         <button
           key={id}

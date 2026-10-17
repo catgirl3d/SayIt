@@ -588,7 +588,7 @@ describe('RecommendedModels', () => {
     const onPick = vi.fn()
     render(<RecommendedModels models={['one/a', 'two/b']} chosen={[]} onPick={onPick} />)
 
-    expect(screen.getByText(t('ai.modelRecommended'))).toBeTruthy()
+    expect(screen.getByLabelText(t('local.recommended'))).toBeTruthy()
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['one/a', 'two/b'])
 
     fireEvent.click(screen.getByRole('button', { name: 'two/b' }))
@@ -600,13 +600,13 @@ describe('RecommendedModels', () => {
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['two/b'])
 
     rerender(<RecommendedModels models={['one/a', 'two/b']} chosen={['one/a', 'two/b']} onPick={vi.fn()} />)
-    expect(screen.queryByText(t('ai.modelRecommended'))).toBeNull()
+    expect(screen.queryByLabelText(t('local.recommended'))).toBeNull()
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
   it('renders nothing without recommendations and disables the buttons while busy', () => {
     const { rerender } = render(<RecommendedModels models={[]} chosen={[]} onPick={vi.fn()} />)
-    expect(screen.queryByText(t('ai.modelRecommended'))).toBeNull()
+    expect(screen.queryByLabelText(t('local.recommended'))).toBeNull()
 
     rerender(<RecommendedModels models={['one/a']} chosen={[]} onPick={vi.fn()} disabled />)
     expect((screen.getByRole('button', { name: 'one/a' }) as HTMLButtonElement).disabled).toBe(true)

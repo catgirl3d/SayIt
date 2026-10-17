@@ -1035,7 +1035,6 @@
   "ai.modelAddPlaceholder": "Додати ще…",
   "ai.modelListToggle": "Показати список моделей",
   "ai.modelAddCustom": "Додати «{model}»",
-  "ai.modelRecommended": "Рекомендовані:",
   "ai.saveCount": "Зберегти ({count})",
   "ai.multiModelHint": "Введіть назву й натисніть Enter або завантажте список і оберіть. Кожна модель стане окремою карткою зі спільними URL та ключем вище.",
   "ai.fetchModels": "Завантажити моделі",

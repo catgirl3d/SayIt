@@ -97,6 +97,15 @@ export const ChosenModel: Story = {}
 /** A preset with curated models: one-click picks under the field, and the crown on their rows in the list. */
 export const RecommendedPicks: Story = {
   args: { value: [], placeholder: 'Model id, or load the list', recommended: ['openai/gpt-5-mini', 'anthropic/claude-sonnet-4'] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = bodyOf(canvasElement)
+
+    // The crown alone labels the picks; the word lives in its tooltip.
+    await expect(canvas.queryByText('Recommended')).toBeNull()
+    await userEvent.hover(canvas.getByLabelText('Recommended'))
+    await expect(await body.findByText('Recommended')).toBeVisible()
+  },
 }
 
 export const PickRecommended: Story = {
