@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { ChevronDown, Monitor, Pause, Play, Square, RefreshCw } from 'lucide-react'
+import { ArrowRight, Captions, ChevronDown, Lock, Pause, Play, Square, RefreshCw, Stethoscope, type LucideIcon } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
-import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
+import SpeechLanguageSelect, { LANGUAGE_LABELS } from '@/components/SpeechLanguageSelect'
 import { Select, type SelectOption } from '@/components/ui/select'
 import { getLocale } from '@/i18n'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
@@ -13,13 +13,14 @@ import { getWorkMode } from '@/services/transcription'
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { addRuntimeEvent } from '@/services/debugLog'
 import { isLiveRecognitionProvider } from '@/lib/asrModels'
-import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
+import { isSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { getSystemAudioDualSubtitles, getSystemAudioMaxSegmentSeconds, getSystemAudioSourceLanguage, listSystemAudioDevices, systemAudioSession, type SubtitleTargetLanguage, type SystemAudioDevice, type SystemAudioState } from '@/services/systemAudio'
 import { DEFAULT_SEGMENT_SECONDS, MAX_SEGMENT_SECONDS, MIN_SEGMENT_SECONDS, SEGMENT_SECONDS_STEP } from '@/services/subtitleSegmentation'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { setPipelineDebugEnabled } from '@/services/pipelineTrace'
 import PipelineDebugPanel from '@/features/systemAudio/PipelineDebugPanel'
+import SessionStatusDot from '@/features/systemAudio/SessionStatusDot'
 import SettingsRow from '@/features/systemAudio/SettingsRow'
 import SubtitleSavingSettings from '@/features/systemAudio/SubtitleSavingSettings'
 import SystemAudioHelpContent from '@/features/systemAudio/SystemAudioHelpContent'
@@ -51,7 +52,9 @@ export function SystemAudioControls({ state, busy, onAction }: { state: SystemAu
         <>
           {state === 'listening' && <Button variant="outline" disabled={busy} onClick={() => onAction('pause')}><Pause className="mr-2 h-4 w-4" />{t('systemAudio.pause')}</Button>}
           {(state === 'paused' || state === 'error') && <Button disabled={busy} onClick={() => onAction('resume')}><Play className="mr-2 h-4 w-4" />{t('systemAudio.resume')}</Button>}
-          <Button variant="outline" disabled={state === 'stopping'} onClick={() => onAction('stop')}><Square className="mr-2 h-4 w-4" />{t('systemAudio.stop')}</Button>
+          {/* The short visible label keeps the session row on one line; the full action, which also
+              returns the app to dictation, stays in the accessible name and the hover hint. */}
+          <Button variant="outline" disabled={state === 'stopping'} onClick={() => onAction('stop')} aria-label={t('systemAudio.stop')} title={t('systemAudio.stop')}><Square className="mr-2 h-4 w-4" />{t('systemAudio.stopShort')}</Button>
         </>
       )}
     </div>
@@ -59,24 +62,28 @@ export function SystemAudioControls({ state, busy, onAction }: { state: SystemAu
 }
 
 // The content stays mounted and is hidden rather than unmounted, so the controls inside keep their
-// state and a collapsed group never changes what the page has loaded.
-function CollapsibleGroup({ id, title, description, open, onToggle, children }: { id: string; title: string; description: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+// state and a collapsed row never changes what the page has loaded.
+function CollapsibleRow({ id, icon: Icon, title, description, open, onToggle, children }: { id: string; icon: LucideIcon; title: string; description: string; open: boolean; onToggle: () => void; children: ReactNode }) {
   return (
-    <section className="space-y-4">
+    <div>
       <button
         type="button"
         aria-expanded={open}
         aria-controls={id}
         onClick={onToggle}
-        className="flex w-full items-center gap-2 rounded-md px-1 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
+        className="flex w-full items-center gap-4 px-6 py-3.5 text-left transition-colors hover:bg-accent"
       >
-        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-        <span className="shrink-0 font-medium">{title}</span>
-        <span className="min-w-0 truncate text-xs">{description}</span>
-        <span className="h-px flex-1 bg-border" aria-hidden />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
+          <Icon className="h-4 w-4" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium">{title}</span>
+          <span className="block truncate text-xs text-muted-foreground">{description}</span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
       </button>
-      <div id={id} hidden={!open} className="space-y-6">{children}</div>
-    </section>
+      <div id={id} hidden={!open} className="px-6 pb-4 pl-[4.5rem]">{children}</div>
+    </div>
   )
 }
 
@@ -160,7 +167,7 @@ export default function SystemAudio() {
       setPipelineDebugEnabled(debugPipeline)
       setAsrOnlyTest(asrOnly)
       // Recognition-only mode disables the translation controls above, so a saved "on" must stay
-      // visible instead of hiding behind a collapsed group.
+      // visible instead of hiding behind a collapsed row.
       if (debugPipeline || asrOnly) setDiagnosticsOpen(true)
       const options = buildTranslationOptions(presets)
       setPresets(presets)
@@ -199,6 +206,17 @@ export default function SystemAudio() {
     } catch { setLoadError(t('systemAudio.notReady')) } finally { setPending(false) }
   }
 
+  // Read-only summary of what the running session was started with; the page selects are locked meanwhile.
+  const deviceLabel = deviceOptions.find((option) => option.value === deviceId)?.label ?? ''
+  const sourceLanguageLabel = t(LANGUAGE_LABELS[sourceLanguage])
+  // The presets read "Translate to X"; the summary names just the language, falling back to the preset
+  // name for a target the speech-language list does not cover.
+  const targetLanguageLabel = asrOnlyTest
+    ? t('systemAudio.summaryRecognitionOnly')
+    : isSpeechInputLanguage(targetLanguage)
+      ? t(LANGUAGE_LABELS[targetLanguage])
+      : translationOptions.find((option) => option.value === targetLanguage)?.label ?? ''
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <header className="flex items-start justify-between gap-4">
@@ -209,132 +227,185 @@ export default function SystemAudio() {
           </h1>
           <p className="text-sm text-muted-foreground">{t('systemAudio.description')}</p>
         </div>
-        <PageHelp title={t('help.systemAudio.title')}>
-          <SystemAudioHelpContent />
-        </PageHelp>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">{t(mode === 'local' ? 'mode.local' : mode === 'cloud_api' ? 'mode.cloudApi' : 'mode.server')}</span>
+          <PageHelp title={t('help.systemAudio.title')}>
+            <SystemAudioHelpContent />
+          </PageHelp>
+        </div>
       </header>
       <Card>
-        <CardContent className="space-y-6 p-6">
-          <div className="flex items-center gap-3">
-            <Monitor className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
-            <p className="text-sm font-medium" role="status">{t(`systemAudio.status.${snapshot.state}`)}</p>
-            <span className="ml-auto rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">{t(mode === 'local' ? 'mode.local' : mode === 'cloud_api' ? 'mode.cloudApi' : 'mode.server')}</span>
-          </div>
-          <div className="min-w-0 space-y-2">
-            <label id="subtitle-output-label" className="text-sm font-medium">{t('systemAudio.source')}</label>
-            <div className="flex gap-2">
-              <Select
-                value={deviceId}
-                onChange={(value) => {
-                  setDeviceId(value)
-                  void setSetting('systemAudio.deviceId', value)
-                }}
-                options={deviceOptions}
-                labelledBy="subtitle-output-label"
-                disabled={active || pending || !ready}
-                className="min-w-0 flex-1"
-              />
-              <Button variant="outline" size="icon" disabled={active || pending} onClick={() => void refreshDevices()} aria-label={t('systemAudio.refreshDevices')}><RefreshCw className="h-4 w-4" /></Button>
+        <CardContent className="p-0">
+          {active ? (
+            <div className="space-y-3 p-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <SessionStatusDot state={snapshot.state} className="h-2.5 w-2.5" />
+                <p role="status" className="text-sm font-semibold">{t(`systemAudio.status.${snapshot.state}`)}</p>
+                <div className="ml-auto">
+                  <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
+                </div>
+              </div>
+              {/* Indented to the status text: the dot (h-2.5) plus the row gap (gap-3). */}
+              <p className="flex min-w-0 items-center gap-1.5 pl-[1.375rem] text-xs text-muted-foreground">
+                {/* Returning to the page mid-session remounts it; until the saved values load, the
+                    summary would name defaults the stored settings are about to replace. */}
+                {ready && (
+                  <>
+                    <span className="truncate">{deviceLabel}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0">{sourceLanguageLabel}</span>
+                    <ArrowRight className="h-3 w-3 shrink-0" aria-hidden />
+                    <span className="shrink-0">{targetLanguageLabel}</span>
+                  </>
+                )}
+                <span className="inline-flex shrink-0" title={t('systemAudio.lockedDuringSession')}>
+                  <Lock className="h-3 w-3" aria-hidden />
+                  <span className="sr-only">{t('systemAudio.lockedDuringSession')}</span>
+                </span>
+              </p>
             </div>
-          </div>
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div className="space-y-2">
-              <label id="subtitle-source-language-label" className="text-sm font-medium">{t('systemAudio.sourceLanguage')}</label>
-              <SpeechLanguageSelect
-                value={sourceLanguage}
-                onChange={(value) => {
-                  setSourceLanguage(value)
-                  void setSetting('systemAudio.sourceLanguage', value)
-                }}
-                labelledBy="subtitle-source-language-label"
-                disabled={active || pending}
-                className="w-full"
-              />
-            </div>
-            <div className="space-y-2">
-              <label id="subtitle-language-label" className="text-sm font-medium">{t('systemAudio.targetLanguage')}</label>
-              <Select
-                value={targetLanguage}
-                onChange={(value) => {
-                  setTargetLanguage(value)
-                  void setSetting('systemAudio.targetLanguage', value)
-                }}
-                options={translationOptions}
-                labelledBy="subtitle-language-label"
-                disabled={active || pending || asrOnlyTest}
-                className="w-full"
-              />
-            </div>
-          </div>
-          {error && <p role="alert" className="text-sm leading-6 text-destructive">{error}</p>}
-          {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
-          <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
-          {snapshot.liveRecognition && snapshot.liveOriginal && (
-            <div aria-live="polite" className="min-w-0 space-y-1 rounded-lg border-l-2 border-primary/40 bg-secondary/50 p-4">
-              <p className="text-xs font-medium text-muted-foreground">{t('systemAudio.liveOriginalLabel')}</p>
-              <p className="whitespace-pre-wrap break-words text-sm leading-6">{snapshot.liveOriginal}</p>
+          ) : (
+            <div className="flex flex-wrap items-end gap-3 p-5">
+              <div className="min-w-0 flex-[1.5_1_240px] space-y-2">
+                <label id="subtitle-output-label" className="text-sm font-medium">{t('systemAudio.source')}</label>
+                <div className="flex gap-2">
+                  <Select
+                    value={deviceId}
+                    onChange={(value) => {
+                      setDeviceId(value)
+                      void setSetting('systemAudio.deviceId', value)
+                    }}
+                    options={deviceOptions}
+                    labelledBy="subtitle-output-label"
+                    disabled={active || pending || !ready}
+                    className="min-w-0 flex-1"
+                  />
+                  <Button variant="outline" size="icon" disabled={active || pending} onClick={() => void refreshDevices()} aria-label={t('systemAudio.refreshDevices')}><RefreshCw className="h-4 w-4" /></Button>
+                </div>
+              </div>
+              <div className="min-w-0 flex-[1_1_150px] space-y-2">
+                <label id="subtitle-source-language-label" className="text-sm font-medium">{t('systemAudio.sourceLanguage')}</label>
+                <SpeechLanguageSelect
+                  value={sourceLanguage}
+                  onChange={(value) => {
+                    setSourceLanguage(value)
+                    void setSetting('systemAudio.sourceLanguage', value)
+                  }}
+                  labelledBy="subtitle-source-language-label"
+                  disabled={active || pending}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex h-9 items-center text-muted-foreground" aria-hidden>
+                <ArrowRight className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-[1.2_1_180px] space-y-2">
+                <label id="subtitle-language-label" className="text-sm font-medium">{t('systemAudio.targetLanguage')}</label>
+                <Select
+                  value={targetLanguage}
+                  onChange={(value) => {
+                    setTargetLanguage(value)
+                    void setSetting('systemAudio.targetLanguage', value)
+                  }}
+                  options={translationOptions}
+                  labelledBy="subtitle-language-label"
+                  disabled={active || pending || asrOnlyTest}
+                  className="w-full"
+                />
+              </div>
+              <SystemAudioControls state={snapshot.state} busy={pending || (!ready && !active)} onAction={(action) => void handleAction(action)} />
             </div>
           )}
-          {(snapshot.caption || snapshot.source) && (
-            <div aria-live="polite" className="space-y-1 rounded-lg bg-secondary p-4">
-              {snapshot.source && <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{snapshot.source}</p>}
-              {snapshot.caption && <p className="whitespace-pre-wrap text-base leading-7">{snapshot.caption}</p>}
+          {(error || snapshot.warning) && (
+            <div className="space-y-1 border-t border-border px-5 py-3">
+              {error && <p role="alert" className="text-sm leading-6 text-destructive">{error}</p>}
+              {snapshot.warning && <p role="status" className="text-sm leading-6 text-amber-600 dark:text-amber-300">{snapshot.warning}</p>}
+            </div>
+          )}
+          {((snapshot.liveRecognition && snapshot.liveOriginal) || snapshot.caption || snapshot.source) && (
+            <div className="space-y-3 border-t border-border p-5">
+              {snapshot.liveRecognition && snapshot.liveOriginal && (
+                <div aria-live="polite" className="min-w-0 space-y-1 rounded-lg border-l-2 border-primary/40 bg-secondary/50 p-4">
+                  <p className="text-xs font-medium text-muted-foreground">{t('systemAudio.liveOriginalLabel')}</p>
+                  <p className="whitespace-pre-wrap break-words text-sm leading-6">{snapshot.liveOriginal}</p>
+                </div>
+              )}
+              {(snapshot.caption || snapshot.source) && (
+                <div aria-live="polite" className="space-y-1 rounded-lg bg-secondary p-4">
+                  {snapshot.source && <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{snapshot.source}</p>}
+                  {snapshot.caption && <p className="whitespace-pre-wrap text-base leading-7">{snapshot.caption}</p>}
+                </div>
+              )}
+            </div>
+          )}
+          {!active && (
+            <div className="flex flex-wrap items-center gap-2.5 border-t border-border px-5 py-3 text-xs text-muted-foreground">
+              <SessionStatusDot state={snapshot.state} />
+              <p role="status" className="font-medium text-foreground">{t(`systemAudio.status.${snapshot.state}`)}</p>
+              <span aria-hidden>·</span>
+              <span>{t('systemAudio.dictationBlockedHint')}</span>
             </div>
           )}
         </CardContent>
       </Card>
       <Card>
-        <CardContent className="divide-y divide-border p-0">
-          <SettingsRow
-            title={t('systemAudio.captionsRow')}
-            summary={captionsSummary}
-            configureLabel={t('systemAudio.configureCaptions')}
-            onConfigure={() => setCaptionsOpen(true)}
-          />
-          <SubtitleSavingSettings active={active} pending={pending} onPendingChange={setPending} />
+        <CardContent className="p-0">
+          <h2 className="px-6 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('systemAudio.settingsHeading')}</h2>
+          <div className="divide-y divide-border border-t border-border">
+            <SettingsRow
+              icon={Captions}
+              title={t('systemAudio.captionsRow')}
+              summary={captionsSummary}
+              configureLabel={t('systemAudio.configureCaptions')}
+              locked={active}
+              onConfigure={() => setCaptionsOpen(true)}
+            />
+            <SubtitleSavingSettings active={active} pending={pending} onPendingChange={setPending} />
+            <CollapsibleRow
+              id="subtitle-diagnostics"
+              icon={Stethoscope}
+              title={t('systemAudio.diagnostics')}
+              description={t('systemAudio.diagnosticsDesc')}
+              open={diagnosticsOpen}
+              onToggle={() => setDiagnosticsOpen(!diagnosticsOpen)}
+            >
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={pipelineDebugEnabled}
+                      onChange={(event) => {
+                        const enabled = event.target.checked
+                        setPipelineDebugEnabledState(enabled)
+                        setPipelineDebugEnabled(enabled)
+                        void setSetting('systemAudio.debugPipeline', enabled)
+                      }}
+                      className="rounded"
+                    />
+                    {t('systemAudio.debug.toggle')}
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={asrOnlyTest}
+                      disabled={active || pending}
+                      onChange={(event) => {
+                        const enabled = event.target.checked
+                        setAsrOnlyTest(enabled)
+                        void setSetting('systemAudio.asrOnlyTest', enabled)
+                      }}
+                      className="rounded"
+                    />
+                    {t('systemAudio.asrOnlyTest')}
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
+              </div>
+            </CollapsibleRow>
+          </div>
         </CardContent>
       </Card>
-      <CollapsibleGroup
-        id="subtitle-diagnostics"
-        title={t('systemAudio.diagnostics')}
-        description={t('systemAudio.diagnosticsDesc')}
-        open={diagnosticsOpen}
-        onToggle={() => setDiagnosticsOpen(!diagnosticsOpen)}
-      >
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={pipelineDebugEnabled}
-                onChange={(event) => {
-                  const enabled = event.target.checked
-                  setPipelineDebugEnabledState(enabled)
-                  setPipelineDebugEnabled(enabled)
-                  void setSetting('systemAudio.debugPipeline', enabled)
-                }}
-                className="rounded"
-              />
-              {t('systemAudio.debug.toggle')}
-            </label>
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={asrOnlyTest}
-                disabled={active || pending}
-                onChange={(event) => {
-                  const enabled = event.target.checked
-                  setAsrOnlyTest(enabled)
-                  void setSetting('systemAudio.asrOnlyTest', enabled)
-                }}
-                className="rounded"
-              />
-              {t('systemAudio.asrOnlyTest')}
-            </label>
-          </div>
-          <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
-        </div>
-      </CollapsibleGroup>
       {pipelineDebugEnabled && <PipelineDebugPanel />}
       {/* The dialog sits last so the page-level alert stays the first one in the document. */}
       {captionsOpen && (

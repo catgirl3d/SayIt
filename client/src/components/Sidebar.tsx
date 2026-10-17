@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Home,
@@ -26,10 +26,12 @@ import { Tooltip } from '@/components/ui/tooltip'
 import AlphaBadge from '@/components/AlphaBadge'
 import { useConnectionStatus } from '@/hooks/useConnectionStatus'
 import { getModeStatus, refreshModeStatus, subscribeModeStatus } from '@/stores/modeStatus'
+import SessionStatusDot from '@/features/systemAudio/SessionStatusDot'
 import { hasAvailableUpdate } from '@/features/update/autoUpdate'
 import { useUpdateState } from '@/features/update/useUpdateState'
 import type { TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { systemAudioSession } from '@/services/systemAudio'
 
 interface NavItemDef {
   to: string
@@ -76,11 +78,14 @@ function NavItem({
   icon: Icon,
   label,
   alpha,
+  indicator,
 }: {
   to: string
   icon: typeof Home
   label: string
   alpha?: boolean
+  /** Replaces the alpha badge when present. */
+  indicator?: ReactNode
 }) {
   return (
     <NavLink
@@ -97,7 +102,7 @@ function NavItem({
     >
       <Icon className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">{label}</span>
-      {alpha && <AlphaBadge />}
+      {indicator ?? (alpha && <AlphaBadge />)}
     </NavLink>
   )
 }
@@ -223,6 +228,17 @@ function ModeIndicator() {
 
 export default function Sidebar() {
   const t = useT()
+  // The computer-subtitles session outlives its page, so its nav entry shows the live state.
+  const systemAudioState = useSyncExternalStore(systemAudioSession.subscribe, () => systemAudioSession.getSnapshot().state)
+  const systemAudioIndicator = systemAudioState === 'idle'
+    ? undefined
+    : (
+      <>
+        <SessionStatusDot state={systemAudioState} />
+        <span className="sr-only">{t(`systemAudio.status.${systemAudioState}`)}</span>
+      </>
+    )
+
   return (
     <nav className="flex w-52 flex-col border-r border-sidebar-border bg-sidebar py-3">
       <div className="custom-scrollbar flex-1 space-y-4 overflow-y-auto px-2">
@@ -232,7 +248,14 @@ export default function Sidebar() {
             {t('nav.section.workspace')}
           </div>
           {workspaceNavItems.map(({ to, icon, labelKey, alpha }) => (
-            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} alpha={alpha} />
+            <NavItem
+              key={to}
+              to={to}
+              icon={icon}
+              label={t(labelKey)}
+              alpha={alpha}
+              indicator={to === '/system-audio' ? systemAudioIndicator : undefined}
+            />
           ))}
         </div>
 

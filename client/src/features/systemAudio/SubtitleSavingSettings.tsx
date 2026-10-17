@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
+import { FolderOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { Switch } from '@/components/ui/switch'
@@ -103,9 +104,11 @@ export default function SubtitleSavingSettings({ active, pending, onPendingChang
     <>
       <div>
         <SettingsRow
+          icon={FolderOpen}
           title={t('systemAudio.savingRow')}
           summary={summary}
           configureLabel={t('systemAudio.configureSaving')}
+          locked={active}
           onConfigure={() => setDialogOpen(true)}
         />
         {/* Shown under the row as well as in the dialog: with the dialog closed this is the only place a load failure can appear. */}
