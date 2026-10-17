@@ -607,6 +607,38 @@ describe('history cloud ASR reprocessing', () => {
     }
   })
 
+  it('keeps the recognized local text when cleanup exceeds the shared timeout', async () => {
+    mockSettings({
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    mocks.invoke.mockImplementation((command: string) => (
+      command === 'cloud_polish'
+        ? new Promise(() => { /* the native request never settles */ })
+        : Promise.resolve({ text: 'local raw transcript', elapsed_ms: 18 })
+    ))
+
+    vi.useFakeTimers()
+    try {
+      const pending = reprocessViaLocal(new ArrayBuffer(32000), [], true, undefined, 'en')
+      await vi.advanceTimersByTimeAsync(8001)
+      const result = await pending
+
+      expect(result).toMatchObject({
+        asrText: 'local raw transcript',
+        llmText: 'local raw transcript',
+        llmMs: 0,
+        aiSource: 'custom',
+        aiStatus: 'failed',
+        aiProvider: 'openai_compat',
+        aiModel: 'model-a',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('serializes skipped AI metadata as explicit nulls to clear prior attribution', async () => {
     mockSettings(aiSettings('ollama', 'http://127.0.0.1:11434', '', 'model-b'))
     const metadata = await buildReprocessMetadata('cloud_api', {
@@ -901,6 +933,34 @@ describe('history server reprocessing', () => {
       aiProvider: 'openai_compat',
       aiModel: 'model-a',
     })
+  })
+
+  it('keeps the recognized server text when the custom cleanup exceeds the shared timeout', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+    mocks.invoke.mockImplementation(() => new Promise(() => { /* the native request never settles */ }))
+
+    vi.useFakeTimers()
+    try {
+      const pending = reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+      await vi.advanceTimersByTimeAsync(8001)
+      const result = await pending
+
+      expect(invokedCommands()).toEqual(['cloud_polish'])
+      expect(result).toMatchObject({
+        asrText: 'raw server transcript',
+        llmText: 'raw server transcript',
+        llmMs: 0,
+        aiSource: 'custom',
+        aiStatus: 'failed',
+        aiProvider: 'openai_compat',
+        aiModel: 'model-a',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('skips all cleanup and keeps the server text when AI is disabled with a custom source', async () => {
