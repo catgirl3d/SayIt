@@ -966,6 +966,13 @@ impl Storage {
     /// Migrate data from the Electron app's SQLite database (one-time).
     /// Looks for sayit.db in common Electron userData paths.
     pub fn migrate_from_electron(&self) -> Result<(), String> {
+        self.migrate_from_electron_with_path(Self::find_electron_db())
+    }
+
+    fn migrate_from_electron_with_path(
+        &self,
+        electron_db_path: Option<PathBuf>,
+    ) -> Result<(), String> {
         let db = self.db.lock().unwrap();
 
         // Check if already migrated
@@ -975,7 +982,7 @@ impl Storage {
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or(false);
+            .map_err(|error| format!("Failed to check Electron data migration marker: {error}"))?;
 
         if already {
             log::info!("Electron data migration already done, skipping");
@@ -983,7 +990,6 @@ impl Storage {
         }
 
         // Find the Electron DB
-        let electron_db_path = Self::find_electron_db();
         let electron_path = match electron_db_path {
             Some(p) => p,
             None => {
@@ -1001,92 +1007,90 @@ impl Storage {
         )
         .map_err(|e| format!("Failed to open Electron DB: {}", e))?;
 
-        // Migrate each table
+        let tx = db
+            .unchecked_transaction()
+            .map_err(|error| format!("Failed to start Electron data migration: {error}"))?;
+
+        // Migrate every table and usage data in one transaction. Any error
+        // drops the transaction before commit, rolling back the whole import.
         let mut migrated_counts: Vec<(String, usize)> = Vec::new();
 
         // 1. app_settings
-        let count = Self::migrate_table_settings(&src, &db);
+        let count = Self::migrate_table_settings(&src, &tx)
+            .map_err(|error| format!("Failed to migrate Electron table app_settings: {error}"))?;
         migrated_counts.push(("app_settings".into(), count));
 
         // 2. history_records
         let count = Self::migrate_table_generic(
             &src,
-            &db,
+            &tx,
             "history_records",
             "id, list_order, timestamp, favorite, char_count, duration_sec, is_empty, app_id, app_name, audio_file_path, raw_json",
-        );
+        )
+        .map_err(|error| format!("Failed to migrate Electron table history_records: {error}"))?;
         migrated_counts.push(("history_records".into(), count));
 
         // 3. manual_corrections
         let count = Self::migrate_table_generic(
             &src,
-            &db,
+            &tx,
             "manual_corrections",
             "id, list_order, created_at, history_id, raw_json",
-        );
+        )
+        .map_err(|error| format!("Failed to migrate Electron table manual_corrections: {error}"))?;
         migrated_counts.push(("manual_corrections".into(), count));
 
         // 4. feedback_queue
         let count = Self::migrate_table_generic(
             &src,
-            &db,
+            &tx,
             "feedback_queue",
             "id, list_order, created_at, history_id, status, raw_json",
-        );
+        )
+        .map_err(|error| format!("Failed to migrate Electron table feedback_queue: {error}"))?;
         migrated_counts.push(("feedback_queue".into(), count));
 
         // 5. prompt_presets
-        let count = Self::migrate_prompt_presets(&src, &db);
+        let count = Self::migrate_prompt_presets(&src, &tx)
+            .map_err(|error| format!("Failed to migrate Electron table prompt_presets: {error}"))?;
         migrated_counts.push(("prompt_presets".into(), count));
 
         // 6. app_prompt_rules
         let count = Self::migrate_table_generic(
             &src,
-            &db,
+            &tx,
             "app_prompt_rules",
             "id, list_order, app_id, name, enabled, priority, raw_json",
-        );
+        )
+        .map_err(|error| format!("Failed to migrate Electron table app_prompt_rules: {error}"))?;
         migrated_counts.push(("app_prompt_rules".into(), count));
 
         // 7. Usage events: migration 5 ran on the empty database before this
         //    import, so seed them from the imported history and counters now.
-        let tx = db
-            .unchecked_transaction()
-            .map_err(|e| format!("Failed to start usage statistics import: {}", e))?;
         usage::rebuild_usage_from_legacy(&tx)
-            .map_err(|e| format!("Failed to seed usage statistics from imported data: {}", e))?;
-        tx.commit()
-            .map_err(|e| format!("Failed to commit imported usage statistics: {}", e))?;
+            .map_err(|error| format!("Failed to rebuild imported usage statistics: {error}"))?;
 
         // Mark migration as done
         let now = chrono::Utc::now().timestamp_millis();
-        let _ = db.execute(
-            "INSERT INTO db_meta (key, value_json, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-            params![
-                "electron_data_migrated_v2",
-                now.to_string(),
-                now
-            ],
-        );
-        let _ = db.execute(
-            "INSERT INTO db_meta (key, value_json, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-            params![
-                "electron_data_migrated_at",
-                now.to_string(),
-                now
-            ],
-        );
-        let _ = db.execute(
-            "INSERT INTO db_meta (key, value_json, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-            params![
+        let markers = [
+            ("electron_data_migrated_v2", now.to_string()),
+            ("electron_data_migrated_at", now.to_string()),
+            (
                 "electron_db_source_path",
                 serde_json::json!(electron_path.to_string_lossy()).to_string(),
-                now
-            ],
-        );
+            ),
+        ];
+        for (key, value_json) in markers {
+            tx.execute(
+                "INSERT INTO db_meta (key, value_json, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+                params![key, value_json, now],
+            )
+            .map_err(|error| format!("Failed to write Electron migration marker {key}: {error}"))?;
+        }
+
+        tx.commit()
+            .map_err(|error| format!("Failed to commit Electron data migration: {error}"))?;
 
         log::info!("Electron data migration complete: {:?}", migrated_counts);
         Ok(())
@@ -1112,37 +1116,43 @@ impl Storage {
         None
     }
 
-    fn migrate_table_settings(src: &Connection, dst: &Connection) -> usize {
-        let mut count = 0usize;
-        let result = src.prepare("SELECT key, value_json, updated_at FROM app_settings");
-        let mut stmt = match result {
-            Ok(s) => s,
-            Err(_) => return 0,
-        };
+    fn source_table_exists(src: &Connection, table: &str) -> SqlResult<bool> {
+        src.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1
+            )",
+            params![table],
+            |row| row.get(0),
+        )
+    }
 
+    fn migrate_table_settings(src: &Connection, dst: &Connection) -> SqlResult<usize> {
+        if !Self::source_table_exists(src, "app_settings")? {
+            log::info!("Electron source table app_settings absent, skipping");
+            return Ok(0);
+        }
+
+        let mut stmt = src.prepare("SELECT key, value_json, updated_at FROM app_settings")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
             ))
-        });
+        })?;
 
-        if let Ok(rows) = rows {
-            for row in rows.flatten() {
-                let (key, value_json, updated_at) = row;
-                // Always overwrite: Electron data takes priority over seed defaults
-                let res = dst.execute(
-                    "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-                    params![key, value_json, updated_at],
-                );
-                if res.is_ok() {
-                    count += 1;
-                }
-            }
+        let mut count = 0usize;
+        for row in rows {
+            let (key, value_json, updated_at) = row?;
+            // Always overwrite: Electron data takes priority over seed defaults
+            dst.execute(
+                "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+                params![key, value_json, updated_at],
+            )?;
+            count += 1;
         }
-        count
+        Ok(count)
     }
 
     fn migrate_table_generic(
@@ -1150,104 +1160,114 @@ impl Storage {
         dst: &Connection,
         table: &str,
         columns: &str,
-    ) -> usize {
-        // Check if destination table already has data — skip if so
-        let dst_count: i64 = dst
-            .query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |row| {
-                row.get(0)
-            })
-            .unwrap_or(0);
+    ) -> SqlResult<usize> {
+        if !Self::source_table_exists(src, table)? {
+            log::info!("Electron source table {} absent, skipping", table);
+            return Ok(0);
+        }
 
+        let dst_count: i64 =
+            dst.query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |row| {
+                row.get(0)
+            })?;
         if dst_count > 0 {
-            log::info!("Table {} already has {} rows, skipping", table, dst_count);
-            return 0;
+            return Self::skip_non_empty_destination(src, table, dst_count);
         }
 
         let select_sql = format!("SELECT {} FROM {} ORDER BY list_order ASC", columns, table);
-        let mut stmt = match src.prepare(&select_sql) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("Cannot read source table {}: {}", table, e);
-                return 0;
-            }
-        };
+        let mut stmt = src.prepare(&select_sql)?;
 
         let col_count = columns.split(',').count();
         let placeholders: Vec<String> = (1..=col_count).map(|i| format!("?{}", i)).collect();
         let insert_sql = format!(
-            "INSERT OR IGNORE INTO {} ({}) VALUES ({})",
+            "INSERT INTO {} ({}) VALUES ({})",
             table,
             columns,
             placeholders.join(", ")
         );
 
-        let mut count = 0usize;
         let rows = stmt.query_map([], |row| {
             let mut values: Vec<rusqlite::types::Value> = Vec::with_capacity(col_count);
             for i in 0..col_count {
                 values.push(row.get(i)?);
             }
             Ok(values)
-        });
+        })?;
 
-        if let Ok(rows) = rows {
-            for row in rows.flatten() {
-                let params: Vec<&dyn rusqlite::types::ToSql> = row
-                    .iter()
-                    .map(|v| v as &dyn rusqlite::types::ToSql)
-                    .collect();
-                if dst.execute(&insert_sql, params.as_slice()).is_ok() {
-                    count += 1;
-                }
-            }
+        let mut count = 0usize;
+        for row in rows {
+            let row = row?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = row
+                .iter()
+                .map(|v| v as &dyn rusqlite::types::ToSql)
+                .collect();
+            dst.execute(&insert_sql, params.as_slice())?;
+            count += 1;
         }
-        count
+        Ok(count)
     }
 
-    fn migrate_prompt_presets(src: &Connection, dst: &Connection) -> usize {
-        let dst_count: i64 = dst
-            .query_row("SELECT COUNT(*) FROM prompt_presets", [], |row| row.get(0))
-            .unwrap_or(0);
-        if dst_count > 0 {
-            return 0;
+    /// Local rows written after a failed attempt must not make a skip look like
+    /// a finished import, so a non-empty destination is only skipped when the
+    /// source is empty too.
+    fn skip_non_empty_destination(
+        src: &Connection,
+        table: &str,
+        dst_count: i64,
+    ) -> SqlResult<usize> {
+        let src_count: i64 =
+            src.query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |row| {
+                row.get(0)
+            })?;
+        if src_count > 0 {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "{table} already has {dst_count} local rows while the Electron source has {src_count}; refusing to skip them, the migration stays pending"
+                    ),
+                ),
+            )));
+        }
+        log::info!("Table {} already has {} rows, skipping", table, dst_count);
+        Ok(0)
+    }
+
+    fn migrate_prompt_presets(src: &Connection, dst: &Connection) -> SqlResult<usize> {
+        if !Self::source_table_exists(src, "prompt_presets")? {
+            log::info!("Electron source table prompt_presets absent, skipping");
+            return Ok(0);
         }
 
-        let mut stmt = match src.prepare(
+        let dst_count: i64 =
+            dst.query_row("SELECT COUNT(*) FROM prompt_presets", [], |row| row.get(0))?;
+        if dst_count > 0 {
+            return Self::skip_non_empty_destination(src, "prompt_presets", dst_count);
+        }
+
+        let mut stmt = src.prepare(
             "SELECT id, list_order, name, raw_json FROM prompt_presets ORDER BY list_order ASC",
-        ) {
-            Ok(stmt) => stmt,
-            Err(error) => {
-                log::warn!("Cannot read source table prompt_presets: {}", error);
-                return 0;
-            }
-        };
-        let rows = match stmt.query_map([], |row| {
+        )?;
+        let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, String>(3)?,
             ))
-        }) {
-            Ok(rows) => rows,
-            Err(error) => {
-                log::warn!("Cannot read source prompt presets: {}", error);
-                return 0;
-            }
-        };
+        })?;
 
-        let mut count = 0;
-        for row in rows.flatten() {
-            let (id, list_order, name, raw_json) = row;
+        let mut count = 0usize;
+        for row in rows {
+            let (id, list_order, name, raw_json) = row?;
             let storage_key = prompt_preset_storage_key(&id, &raw_json);
-            if dst.execute(
-                "INSERT OR IGNORE INTO prompt_presets (storage_key, id, list_order, name, raw_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            dst.execute(
+                "INSERT INTO prompt_presets (storage_key, id, list_order, name, raw_json) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![storage_key, id, list_order, name, raw_json],
-            ).is_ok() {
-                count += 1;
-            }
+            )?;
+            count += 1;
         }
-        count
+        Ok(count)
     }
 }
 
@@ -1257,6 +1277,294 @@ mod tests {
 
     fn test_db_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sayit-{name}-{}.db", uuid::Uuid::new_v4()))
+    }
+
+    fn create_electron_source_schema(connection: &Connection) {
+        connection
+            .execute_batch(
+                "CREATE TABLE app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE history_records (
+                    id TEXT NOT NULL,
+                    list_order INTEGER NOT NULL,
+                    timestamp INTEGER NOT NULL DEFAULT 0,
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    char_count INTEGER NOT NULL DEFAULT 0,
+                    duration_sec REAL NOT NULL DEFAULT 0,
+                    is_empty INTEGER NOT NULL DEFAULT 0,
+                    app_id TEXT,
+                    app_name TEXT,
+                    audio_file_path TEXT,
+                    raw_json TEXT NOT NULL
+                );
+                CREATE TABLE manual_corrections (
+                    id TEXT NOT NULL,
+                    list_order INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT 0,
+                    history_id TEXT,
+                    raw_json TEXT NOT NULL
+                );
+                CREATE TABLE feedback_queue (
+                    id TEXT NOT NULL,
+                    list_order INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT 0,
+                    history_id TEXT,
+                    status TEXT,
+                    raw_json TEXT NOT NULL
+                );
+                CREATE TABLE prompt_presets (
+                    id TEXT NOT NULL,
+                    list_order INTEGER NOT NULL,
+                    name TEXT,
+                    raw_json TEXT NOT NULL
+                );
+                CREATE TABLE app_prompt_rules (
+                    id TEXT NOT NULL,
+                    list_order INTEGER NOT NULL,
+                    app_id TEXT,
+                    name TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    raw_json TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+    }
+
+    fn create_electron_source_db(name: &str) -> PathBuf {
+        let path = test_db_path(name);
+        let connection = Connection::open(&path).unwrap();
+        create_electron_source_schema(&connection);
+        drop(connection);
+        path
+    }
+
+    fn electron_marker_count(storage: &Storage) -> i64 {
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM db_meta WHERE key IN (
+                    'electron_data_migrated_v2',
+                    'electron_data_migrated_at',
+                    'electron_db_source_path'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn electron_migration_rolls_back_duplicate_source_and_retries_idempotently() {
+        let source_path = create_electron_source_db("electron-duplicate-history");
+        {
+            let source = Connection::open(&source_path).unwrap();
+            source
+                .execute_batch(
+                    r#"INSERT INTO app_settings (key, value_json, updated_at) VALUES
+                        ('cloudAi.model', '"source-model"', 1),
+                        ('stats', '{"totalChars":7,"totalDurationSec":3.0}', 1),
+                        ('userStats', '{"totalSessions":2}', 1);
+                    INSERT INTO history_records
+                        (id, list_order, timestamp, char_count, duration_sec, raw_json)
+                        VALUES
+                        ('duplicate-history', 0, 1000, 3, 1.0, '{"id":"duplicate-history"}'),
+                        ('duplicate-history', 1, 2000, 4, 2.0, '{"id":"duplicate-history"}');"#,
+                )
+                .unwrap();
+        }
+
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage
+            .set("cloudAi.model", &serde_json::json!("destination-model"))
+            .unwrap();
+
+        let error = storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap_err();
+        assert!(
+            error.contains("history_records"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(storage.get("cloudAi.model", None), "destination-model");
+        assert_eq!(storage.history_count(None, false).unwrap(), 0);
+        assert_eq!(storage.usage_summary(None).unwrap().takes, 0);
+        assert_eq!(electron_marker_count(&storage), 0);
+
+        let retry_error = storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap_err();
+        assert!(
+            retry_error.contains("history_records"),
+            "unexpected retry error: {retry_error}"
+        );
+        assert_eq!(storage.history_count(None, false).unwrap(), 0);
+        assert_eq!(electron_marker_count(&storage), 0);
+
+        {
+            let source = Connection::open(&source_path).unwrap();
+            source
+                .execute(
+                    "UPDATE history_records SET id = ?1, raw_json = ?2 WHERE list_order = 1",
+                    params!["history-2", r#"{"id":"history-2"}"#],
+                )
+                .unwrap();
+        }
+
+        storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap();
+        assert_eq!(storage.get("cloudAi.model", None), "source-model");
+        assert_eq!(storage.history_count(None, false).unwrap(), 2);
+        assert_eq!(storage.usage_summary(None).unwrap().takes, 2);
+        assert_eq!(storage.usage_summary(None).unwrap().total_chars, 7);
+        assert_eq!(electron_marker_count(&storage), 3);
+
+        storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap();
+        assert_eq!(storage.history_count(None, false).unwrap(), 2);
+        assert_eq!(storage.usage_summary(None).unwrap().takes, 2);
+        assert_eq!(electron_marker_count(&storage), 3);
+
+        drop(storage);
+        let _ = fs::remove_file(source_path);
+    }
+
+    #[test]
+    fn electron_migration_skips_absent_source_tables_and_marks_success() {
+        let source_path = create_electron_source_db("electron-absent-table");
+        {
+            let source = Connection::open(&source_path).unwrap();
+            source
+                .execute_batch(
+                    r#"DROP TABLE manual_corrections;
+                     DROP TABLE feedback_queue;
+                     DROP TABLE prompt_presets;
+                     DROP TABLE app_prompt_rules;
+                     INSERT INTO app_settings (key, value_json, updated_at) VALUES
+                         ('cloudAi.model', '"source-model"', 1),
+                         ('stats', '{"totalChars":3,"totalDurationSec":1.0}', 1),
+                         ('userStats', '{"totalSessions":1}', 1);
+                     INSERT INTO history_records
+                         (id, list_order, timestamp, char_count, duration_sec, raw_json)
+                         VALUES ('history-1', 0, 1000, 3, 1.0, '{"id":"history-1"}');"#,
+                )
+                .unwrap();
+        }
+
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap();
+
+        assert_eq!(storage.get("cloudAi.model", None), "source-model");
+        assert_eq!(storage.history_count(None, false).unwrap(), 1);
+        assert_eq!(storage.usage_summary(None).unwrap().takes, 1);
+        assert_eq!(electron_marker_count(&storage), 3);
+
+        drop(storage);
+        let _ = fs::remove_file(source_path);
+    }
+
+    #[test]
+    fn electron_migration_refuses_retry_when_local_rows_block_a_pending_import() {
+        let source_path = create_electron_source_db("electron-local-rows-retry");
+        {
+            let source = Connection::open(&source_path).unwrap();
+            source
+                .execute_batch(
+                    r#"INSERT INTO history_records
+                        (id, list_order, timestamp, char_count, duration_sec, raw_json)
+                        VALUES ('electron-history', 0, 1000, 3, 1.0, '{"id":"electron-history"}');
+                       INSERT INTO manual_corrections
+                        (id, list_order, created_at, raw_json)
+                        VALUES
+                        ('duplicate-correction', 0, 1, '{"id":"duplicate-correction"}'),
+                        ('duplicate-correction', 1, 2, '{"id":"duplicate-correction"}');"#,
+                )
+                .unwrap();
+        }
+
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let error = storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap_err();
+        assert!(
+            error.contains("manual_corrections"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(electron_marker_count(&storage), 0);
+        assert_eq!(storage.history_count(None, false).unwrap(), 0);
+
+        storage
+            .history_add(&serde_json::json!({
+                "id": "local-history",
+                "timestamp": 5,
+                "charCount": 2
+            }))
+            .unwrap();
+
+        {
+            let source = Connection::open(&source_path).unwrap();
+            source
+                .execute("DELETE FROM manual_corrections WHERE list_order = 1", [])
+                .unwrap();
+        }
+
+        let retry_error = storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap_err();
+        assert!(
+            retry_error.contains("history_records"),
+            "unexpected retry error: {retry_error}"
+        );
+        assert_eq!(electron_marker_count(&storage), 0);
+        assert_eq!(storage.history_count(None, false).unwrap(), 1);
+
+        drop(storage);
+        let _ = fs::remove_file(source_path);
+    }
+
+    #[test]
+    fn electron_migration_refuses_to_skip_source_presets_behind_local_ones() {
+        let source_path = create_electron_source_db("electron-local-presets");
+        {
+            let source = Connection::open(&source_path).unwrap();
+            source
+                .execute(
+                    "INSERT INTO prompt_presets (id, list_order, name, raw_json) VALUES (?1, 0, ?2, ?3)",
+                    params![
+                        "electron-preset",
+                        "Electron",
+                        r#"{"id":"electron-preset","name":"Electron","systemPrompt":"e"}"#
+                    ],
+                )
+                .unwrap();
+        }
+
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let local =
+            serde_json::json!([{ "id": "local-preset", "name": "Local", "systemPrompt": "l" }]);
+        storage.set("promptPresets", &local).unwrap();
+
+        let error = storage
+            .migrate_from_electron_with_path(Some(source_path.clone()))
+            .unwrap_err();
+        assert!(
+            error.contains("prompt_presets"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(electron_marker_count(&storage), 0);
+        assert_eq!(storage.get("promptPresets", None), local);
+
+        drop(storage);
+        let _ = fs::remove_file(source_path);
     }
 
     #[test]
