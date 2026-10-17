@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -20,7 +20,8 @@ vi.mock('@/services/store', () => ({
   getSetting: (...args: unknown[]) => mocks.getSetting(...args),
 }))
 
-import { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal } from '../History'
+import { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
+import { getRuntimeServerAiSource, setRuntimeServerAiSource } from '@/services/transcription/serverAiSource'
 
 function mockCloudProfile(provider = 'openai_transcribe') {
   mocks.loadActiveAsrProfile.mockResolvedValue({
@@ -48,6 +49,13 @@ function aiSettings(provider: string, apiUrl: string, apiKey: string, model: str
     'cloudAi.apiKey': apiKey,
     'cloudAi.model': model,
   }
+}
+
+/** Native commands without the sayit.log mirror that diagnostics-only events append. */
+function invokedCommands(): string[] {
+  return mocks.invoke.mock.calls
+    .map(([command]) => command as string)
+    .filter((command) => command !== 'append_debug_log')
 }
 
 describe('history cloud ASR reprocessing', () => {
@@ -309,6 +317,41 @@ describe('history cloud ASR reprocessing', () => {
     expect(metadata).toMatchObject({ aiProvider: 'openai_compat', aiModel: 'model-a' })
   })
 
+  it('uses the cleanup configuration active when ASR finishes for both the request and its attribution', async () => {
+    mockCloudProfile()
+    const switchSettings = mockSettings(aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'))
+    let resolveAsr!: (result: { text: string; elapsed_ms: number }) => void
+    let startAsr!: () => void
+    const asrStarted = new Promise<void>((resolve) => { startAsr = resolve })
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'cloud_transcribe') {
+        startAsr()
+        return new Promise((resolve) => { resolveAsr = resolve })
+      }
+      return Promise.resolve({ text: 'cleaned transcript', elapsed_ms: 7 })
+    })
+
+    const pending = reprocessViaCloudApi(new ArrayBuffer(32000), [], true, undefined, 'en')
+    await asrStarted
+    switchSettings(aiSettings('ollama', 'http://localhost:11434', '', 'model-b'))
+    resolveAsr({ text: 'raw transcript', elapsed_ms: 18 })
+    const result = await pending
+
+    expect(result).toMatchObject({
+      llmText: 'cleaned transcript',
+      aiSource: 'custom',
+      aiStatus: 'applied',
+      aiProvider: 'ollama',
+      aiModel: 'model-b',
+    })
+    expect(mocks.invoke).toHaveBeenCalledWith('cloud_polish', {
+      request: expect.objectContaining({
+        text: 'raw transcript',
+        ai_config: expect.objectContaining({ provider: 'ollama', model: 'model-b' }),
+      }),
+    })
+  })
+
   it('keeps local AI result and metadata tied to the configuration used by its request', async () => {
     const switchSettings = mockSettings({
       ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', '  model-a  '),
@@ -359,9 +402,12 @@ describe('history cloud ASR reprocessing', () => {
     })
   })
 
-  it('keeps the local Ollama request eligible when its model setting is empty', async () => {
+  it.each([
+    { name: 'empty', model: '' },
+    { name: 'whitespace-only', model: ' \t ' },
+  ])('keeps the local Ollama request eligible when its model setting is $name', async ({ model }) => {
     mockSettings({
-      ...aiSettings('ollama', 'http://127.0.0.1:11434', '', ''),
+      ...aiSettings('ollama', 'http://127.0.0.1:11434', '', model),
       'localAsr.modelId': 'local-model',
       'localAsr.accelerator': 'auto',
     })
@@ -385,31 +431,13 @@ describe('history cloud ASR reprocessing', () => {
       }),
     })
     expect(result).toMatchObject({ aiSource: 'custom', aiStatus: 'applied', aiProvider: 'ollama' })
+    expect(result.aiModel).toBeUndefined()
     expect(metadata.aiModel).toBeNull()
   })
 
   it.each([
-    {
-      name: 'a keyed provider has an empty model',
-      provider: 'openai_compat',
-      apiUrl: 'https://a.example/v1',
-      apiKey: 'key-a',
-      model: '',
-    },
-    {
-      name: 'a keyed provider has a whitespace-only model',
-      provider: 'openai_compat',
-      apiUrl: 'https://a.example/v1',
-      apiKey: 'key-a',
-      model: ' \t\n ',
-    },
-    {
-      name: 'Ollama has a whitespace-only model',
-      provider: 'ollama',
-      apiUrl: 'http://127.0.0.1:11434',
-      apiKey: '',
-      model: ' \t ',
-    },
+    { name: 'a keyed provider has an empty model', provider: 'openai_compat', apiUrl: 'https://a.example/v1', apiKey: 'key-a', model: '' },
+    { name: 'a keyed provider has a whitespace-only model', provider: 'openai_compat', apiUrl: 'https://a.example/v1', apiKey: 'key-a', model: ' \t\n ' },
   ])('does not polish local history when $name', async ({ provider, apiUrl, apiKey, model }) => {
     mockSettings({
       ...aiSettings(provider, apiUrl, apiKey, model),
@@ -424,8 +452,7 @@ describe('history cloud ASR reprocessing', () => {
 
     const result = await reprocessViaLocal(new ArrayBuffer(32000), [], true, undefined, 'en')
 
-    expect(mocks.invoke).toHaveBeenCalledTimes(1)
-    expect(mocks.invoke).toHaveBeenCalledWith('local_transcribe', expect.anything())
+    expect(invokedCommands()).toEqual(['local_transcribe'])
     expect(mocks.invoke).not.toHaveBeenCalledWith('cloud_polish', expect.anything())
     expect(result).toMatchObject({
       asrText: 'local raw transcript',
@@ -433,8 +460,8 @@ describe('history cloud ASR reprocessing', () => {
       llmMs: 0,
       aiSource: 'custom',
       aiStatus: 'unavailable',
+      aiProvider: provider,
     })
-    expect(result.aiProvider).toBeUndefined()
     expect(result.aiModel).toBeUndefined()
   })
 
@@ -445,12 +472,20 @@ describe('history cloud ASR reprocessing', () => {
     const result = await reprocessViaCloudApi(
       new ArrayBuffer(32000), [], true, undefined, 'en',
     )
+    const metadata = await buildReprocessMetadata('cloud_api', result)
 
-    expect(mocks.invoke).toHaveBeenCalledTimes(1)
-    expect(mocks.invoke).toHaveBeenCalledWith('cloud_transcribe', expect.anything())
-    expect(result).toMatchObject({ aiSource: 'custom', aiStatus: 'unavailable' })
-    expect(result.aiProvider).toBeUndefined()
-    expect(result.aiModel).toBeUndefined()
+    expect(invokedCommands()).toEqual(['cloud_transcribe'])
+    expect(mocks.invoke).not.toHaveBeenCalledWith('cloud_polish', expect.anything())
+    expect(mocks.invoke).toHaveBeenCalledWith('append_debug_log', {
+      payload: expect.objectContaining({ kind: 'runtime', level: 'warn', source: 'history' }),
+    })
+    expect(result).toMatchObject({
+      aiSource: 'custom',
+      aiStatus: 'unavailable',
+      aiProvider: 'openai_compat',
+      aiModel: 'model-a',
+    })
+    expect(metadata).toMatchObject({ aiProvider: 'openai_compat', aiModel: 'model-a' })
   })
 
   it.each([
@@ -473,9 +508,9 @@ describe('history cloud ASR reprocessing', () => {
   })
 
   it.each([
-    { name: 'rejects', response: () => Promise.reject(new Error('AI request failed')), elapsed: 0 },
-    { name: 'returns whitespace', response: () => Promise.resolve({ text: '  \n', elapsed_ms: 13 }), elapsed: 13 },
-  ])('falls back to new ASR text and attributes an attempted request that $name', async ({ response, elapsed }) => {
+    { name: 'the request fails', response: () => Promise.reject(new Error('AI request failed')) },
+    { name: 'the native layer rejects a blank completion', response: () => Promise.reject(new Error('sayit_error:connect_failed:AI returned no usable completion text')) },
+  ])('falls back to new ASR text and attributes an attempted request when $name', async ({ response }) => {
     mockCloudProfile()
     mockSettings(aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'))
     mocks.invoke.mockImplementation((command: string) => (
@@ -490,12 +525,119 @@ describe('history cloud ASR reprocessing', () => {
 
     expect(result).toMatchObject({
       llmText: 'new raw transcript',
-      llmMs: elapsed,
+      llmMs: 0,
       aiSource: 'custom',
       aiStatus: 'failed',
       aiProvider: 'openai_compat',
       aiModel: 'model-a',
     })
+  })
+
+  it.each([
+    { name: 'cloud API', run: () => reprocessViaCloudApi(new ArrayBuffer(32000), [], true, undefined, 'en'), asrCommand: 'cloud_transcribe' },
+    { name: 'local', run: () => reprocessViaLocal(new ArrayBuffer(32000), [], true, undefined, 'en'), asrCommand: 'local_transcribe' },
+  ])('skips cleanup below the minimum-duration threshold in $name reprocessing', async ({ run, asrCommand }) => {
+    mockCloudProfile()
+    mockSettings({
+      ...aiSettings('ollama', 'http://127.0.0.1:11434', '', 'qwen2.5:7b'),
+      'aiMinDurationSec': 10,
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    mocks.invoke.mockImplementation(async () => ({ text: 'raw transcript', elapsed_ms: 18 }))
+
+    const result = await run()
+
+    expect(mocks.invoke).toHaveBeenCalledTimes(1)
+    expect(mocks.invoke).toHaveBeenCalledWith(asrCommand, expect.anything())
+    expect(mocks.invoke).not.toHaveBeenCalledWith('cloud_polish', expect.anything())
+    expect(result).toMatchObject({
+      asrText: 'raw transcript',
+      llmText: 'raw transcript',
+      llmMs: 0,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+    expect(result.aiProvider).toBeUndefined()
+  })
+
+  it('runs cleanup when the audio exactly matches the minimum-duration threshold', async () => {
+    mockCloudProfile()
+    mockSettings({
+      ...aiSettings('ollama', 'http://127.0.0.1:11434', '', 'qwen2.5:7b'),
+      'aiMinDurationSec': 10,
+    })
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_polish'
+        ? { text: 'cleaned transcript', elapsed_ms: 7 }
+        : { text: 'raw transcript', elapsed_ms: 18 }
+    ))
+
+    // 10 seconds of 16 kHz mono PCM: the threshold skips only shorter audio.
+    const result = await reprocessViaCloudApi(new ArrayBuffer(320000), [], true, undefined, 'en')
+
+    expect(mocks.invoke).toHaveBeenCalledWith('cloud_polish', expect.anything())
+    expect(result).toMatchObject({ llmText: 'cleaned transcript', aiStatus: 'applied' })
+  })
+
+  it('keeps the raw transcript when cleanup exceeds the shared timeout', async () => {
+    mockCloudProfile()
+    mockSettings(aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'))
+    mocks.invoke.mockImplementation((command: string) => (
+      command === 'cloud_polish'
+        ? new Promise(() => { /* the native request never settles */ })
+        : Promise.resolve({ text: 'raw transcript', elapsed_ms: 18 })
+    ))
+
+    vi.useFakeTimers()
+    try {
+      const pending = reprocessViaCloudApi(new ArrayBuffer(32000), [], true, undefined, 'en')
+      await vi.advanceTimersByTimeAsync(8001)
+      const result = await pending
+
+      expect(result).toMatchObject({
+        llmText: 'raw transcript',
+        llmMs: 0,
+        aiSource: 'custom',
+        aiStatus: 'failed',
+        aiProvider: 'openai_compat',
+        aiModel: 'model-a',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the recognized local text when cleanup exceeds the shared timeout', async () => {
+    mockSettings({
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    mocks.invoke.mockImplementation((command: string) => (
+      command === 'cloud_polish'
+        ? new Promise(() => { /* the native request never settles */ })
+        : Promise.resolve({ text: 'local raw transcript', elapsed_ms: 18 })
+    ))
+
+    vi.useFakeTimers()
+    try {
+      const pending = reprocessViaLocal(new ArrayBuffer(32000), [], true, undefined, 'en')
+      await vi.advanceTimersByTimeAsync(8001)
+      const result = await pending
+
+      expect(result).toMatchObject({
+        asrText: 'local raw transcript',
+        llmText: 'local raw transcript',
+        llmMs: 0,
+        aiSource: 'custom',
+        aiStatus: 'failed',
+        aiProvider: 'openai_compat',
+        aiModel: 'model-a',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('serializes skipped AI metadata as explicit nulls to clear prior attribution', async () => {
@@ -516,5 +658,395 @@ describe('history cloud ASR reprocessing', () => {
       aiSource: 'none',
       aiStatus: 'skipped',
     })
+  })
+
+  it.each([
+    { name: 'cloud API', run: () => reprocessViaCloudApi(new ArrayBuffer(32000), [], true, undefined, 'en') },
+    { name: 'local', run: () => reprocessViaLocal(new ArrayBuffer(32000), [], true, undefined, 'en') },
+  ])('sends no selection context with the cleanup request in $name reprocessing', async ({ run }) => {
+    mockCloudProfile()
+    mockSettings({
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_polish'
+        ? { text: 'cleaned transcript', elapsed_ms: 7 }
+        : { text: 'raw transcript', elapsed_ms: 18 }
+    ))
+
+    const result = await run()
+
+    expect(mocks.invoke).toHaveBeenCalledWith('cloud_polish', {
+      request: expect.objectContaining({ text: 'raw transcript', text_context: null }),
+    })
+    expect(result).toMatchObject({ llmText: 'cleaned transcript', aiStatus: 'applied' })
+  })
+
+  it('keeps the recognized local text and skips cleanup when AI is disabled', async () => {
+    mockSettings({
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      'aiEnabled': false,
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'local_transcribe'
+        ? { text: 'local raw transcript', elapsed_ms: 18 }
+        : { text: 'unexpected cleaned transcript', elapsed_ms: 7 }
+    ))
+
+    const result = await reprocessViaLocal(new ArrayBuffer(32000), [], false, undefined, 'en')
+
+    expect(invokedCommands()).toEqual(['local_transcribe'])
+    expect(result).toMatchObject({
+      asrText: 'local raw transcript',
+      llmText: 'local raw transcript',
+      llmMs: 0,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+    expect(result.aiProvider).toBeUndefined()
+    expect(result.aiModel).toBeUndefined()
+  })
+
+  it('keeps the recognized cloud text when the keyed profile is incomplete', async () => {
+    mockCloudProfile()
+    mockSettings(aiSettings('openai_compat', 'https://a.example/v1', '', 'model-a'))
+
+    const result = await reprocessViaCloudApi(
+      new ArrayBuffer(32000), [], true, undefined, 'en',
+    )
+
+    expect(mocks.invoke).not.toHaveBeenCalledWith('cloud_polish', expect.anything())
+    expect(result).toMatchObject({
+      asrText: 'recognized again',
+      llmText: 'recognized again',
+      llmMs: 0,
+      aiSource: 'custom',
+      aiStatus: 'unavailable',
+    })
+  })
+
+  it('keeps the recognized local text when the cleanup request is rejected', async () => {
+    mockSettings({
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    mocks.invoke.mockImplementation((command: string) => (
+      command === 'cloud_polish'
+        ? Promise.reject(new Error('AI request failed'))
+        : Promise.resolve({ text: 'local raw transcript', elapsed_ms: 18 })
+    ))
+
+    const result = await reprocessViaLocal(new ArrayBuffer(32000), [], true, undefined, 'en')
+
+    expect(result).toMatchObject({
+      asrText: 'local raw transcript',
+      llmText: 'local raw transcript',
+      llmMs: 0,
+      aiSource: 'custom',
+      aiStatus: 'failed',
+      aiProvider: 'openai_compat',
+      aiModel: 'model-a',
+    })
+  })
+})
+
+/** 1 second of 16 kHz mono 16-bit PCM. */
+const ONE_SECOND_RECORDING_BYTES = 32000
+
+type FakeFinalPayload = Record<string, unknown>
+
+/** Minimal WebSocket: opens on the next microtask and answers {cmd:'stop'} with a configured 'final' message. */
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = []
+  static finalPayload: FakeFinalPayload = {}
+
+  readonly url: string
+  binaryType = 'blob'
+  onopen: (() => void) | null = null
+  onmessage: ((ev: { data: unknown }) => void) | null = null
+  onerror: (() => void) | null = null
+  onclose: ((ev: { code: number }) => void) | null = null
+  readonly sentText: string[] = []
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+    queueMicrotask(() => this.onopen?.())
+  }
+
+  send(data: string | ArrayBuffer): void {
+    if (typeof data !== 'string') return
+    this.sentText.push(data)
+    const message = JSON.parse(data) as { cmd?: string }
+    if (message.cmd === 'stop') {
+      queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ type: 'final', ...FakeWebSocket.finalPayload }) }))
+    }
+  }
+
+  close(): void {
+    this.onclose?.({ code: 1000 })
+  }
+}
+
+function setServerFinal(payload: FakeFinalPayload) {
+  FakeWebSocket.finalPayload = payload
+}
+
+function sentStartMessage(): Record<string, unknown> {
+  const first = FakeWebSocket.instances[0]?.sentText[0]
+  if (first === undefined) throw new Error('History server reprocessing did not send a start message')
+  return JSON.parse(first) as Record<string, unknown>
+}
+
+describe('history server reprocessing', () => {
+  beforeEach(() => {
+    mocks.invoke.mockReset()
+    mocks.getSetting.mockReset()
+    mocks.invoke.mockResolvedValue({ text: 'cleaned by custom', elapsed_ms: 7 })
+    FakeWebSocket.instances = []
+    setServerFinal({ asr_text: 'raw server transcript', llm_text: 'raw server transcript', asr_ms: 10, llm_ms: 0, duration_sec: 1 })
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    // The Node test environment has no window; reprocessViaServer only uses window.setTimeout.
+    vi.stubGlobal('window', globalThis)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    { name: 'an unset', source: undefined },
+    { name: 'a managed', source: 'managed' },
+  ])('sends the cleanup request to the managed server route for $name source', async ({ source }) => {
+    mockSettings({ 'server.aiSource': source })
+    setServerFinal({
+      asr_text: 'raw server transcript',
+      llm_text: 'cleaned server transcript',
+      asr_ms: 10,
+      llm_ms: 42,
+      duration_sec: 1,
+      asr_engine: 'whisper',
+      asr_model: 'base',
+    })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, 'Be concise', null, 'en')
+
+    expect(sentStartMessage()).toMatchObject({
+      cmd: 'start',
+      source: 'history_reprocess',
+      disable_ai: false,
+      language: 'en',
+      system_prompt: 'Be concise',
+    })
+    expect(result).toMatchObject({
+      asrText: 'raw server transcript',
+      llmText: 'cleaned server transcript',
+      llmMs: 42,
+      aiSource: 'server',
+      aiStatus: 'applied',
+      aiProvider: 'server',
+    })
+    expect(invokedCommands()).not.toContain('cloud_polish')
+  })
+
+  it('skips the managed server cleanup for a recording below the minimum duration', async () => {
+    mockSettings({ 'server.aiSource': 'managed', 'aiMinDurationSec': 10 })
+    setServerFinal({ asr_text: 'raw server transcript', llm_text: 'raw server transcript', asr_ms: 10, llm_ms: 0, duration_sec: 1 })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, 'Be concise', null, 'en')
+
+    expect(sentStartMessage()).toMatchObject({ disable_ai: true })
+    expect(sentStartMessage()).not.toHaveProperty('system_prompt')
+    expect(result).toMatchObject({
+      llmText: 'raw server transcript',
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+    expect(result.aiProvider).toBeUndefined()
+    expect(invokedCommands()).not.toContain('cloud_polish')
+  })
+
+  it('runs the client cleanup for a custom server source and keeps the server text as its input', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, 'Be concise', null, 'en')
+
+    expect(sentStartMessage()).toMatchObject({ disable_ai: true })
+    expect(sentStartMessage()).not.toHaveProperty('system_prompt')
+    expect(mocks.invoke).toHaveBeenCalledWith('cloud_polish', {
+      request: expect.objectContaining({
+        text: 'raw server transcript',
+        system_prompt: 'Be concise',
+        text_context: null,
+      }),
+    })
+    expect(result).toMatchObject({
+      llmText: 'cleaned by custom',
+      llmMs: 7,
+      aiSource: 'custom',
+      aiStatus: 'applied',
+      aiProvider: 'openai_compat',
+      aiModel: 'model-a',
+    })
+  })
+
+  it('keeps the server text and skips the client cleanup below the minimum duration for a custom source', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      'aiMinDurationSec': 10,
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+
+    expect(sentStartMessage()).toMatchObject({ disable_ai: true })
+    expect(invokedCommands()).not.toContain('cloud_polish')
+    expect(result).toMatchObject({
+      llmText: 'raw server transcript',
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('keeps the recognized server text when the custom cleanup request is rejected', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+    mocks.invoke.mockRejectedValue(new Error('AI request failed'))
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+
+    expect(invokedCommands()).toEqual(['cloud_polish'])
+    expect(result).toMatchObject({
+      llmText: 'raw server transcript',
+      llmMs: 0,
+      aiSource: 'custom',
+      aiStatus: 'failed',
+      aiProvider: 'openai_compat',
+      aiModel: 'model-a',
+    })
+  })
+
+  it('keeps the recognized server text when the custom cleanup exceeds the shared timeout', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+    mocks.invoke.mockImplementation(() => new Promise(() => { /* the native request never settles */ }))
+
+    vi.useFakeTimers()
+    try {
+      const pending = reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+      await vi.advanceTimersByTimeAsync(8001)
+      const result = await pending
+
+      expect(invokedCommands()).toEqual(['cloud_polish'])
+      expect(result).toMatchObject({
+        asrText: 'raw server transcript',
+        llmText: 'raw server transcript',
+        llmMs: 0,
+        aiSource: 'custom',
+        aiStatus: 'failed',
+        aiProvider: 'openai_compat',
+        aiModel: 'model-a',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips all cleanup and keeps the server text when AI is disabled with a custom source', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], false, 'Be concise', null, 'en')
+
+    expect(sentStartMessage()).toMatchObject({ disable_ai: true })
+    expect(invokedCommands()).not.toContain('cloud_polish')
+    expect(result).toMatchObject({
+      llmText: 'raw server transcript',
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+    expect(result.aiProvider).toBeUndefined()
+  })
+
+  it('treats an unknown stored server source as the managed route', async () => {
+    mockSettings({ 'server.aiSource': 'something-else' })
+    setServerFinal({
+      asr_text: 'raw server transcript',
+      llm_text: 'cleaned server transcript',
+      asr_ms: 10,
+      llm_ms: 42,
+      duration_sec: 1,
+    })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+
+    expect(sentStartMessage()).toMatchObject({ disable_ai: false })
+    expect(invokedCommands()).not.toContain('cloud_polish')
+    expect(result).toMatchObject({ llmText: 'cleaned server transcript', aiSource: 'server', aiStatus: 'applied' })
+  })
+
+  it('skips the client cleanup when the server recognized no text for a custom source', async () => {
+    mockSettings({
+      'server.aiSource': 'custom',
+      ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+    })
+    setServerFinal({ asr_text: '', llm_text: '', asr_ms: 10, llm_ms: 0, duration_sec: 1 })
+
+    const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+
+    expect(invokedCommands()).not.toContain('cloud_polish')
+    expect(result).toMatchObject({
+      llmText: '',
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('does not overwrite the runtime server AI source while reprocessing', async () => {
+    setRuntimeServerAiSource('managed')
+    try {
+      mockSettings({
+        'server.aiSource': 'custom',
+        ...aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'),
+      })
+
+      await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, null, 'en')
+
+      expect(getRuntimeServerAiSource()).toBe('managed')
+    } finally {
+      setRuntimeServerAiSource('managed')
+    }
+  })
+  it('keeps the recognized Qwen Omni text without a separate cleanup request', async () => {
+    mockCloudProfile('qwen_omni_flash')
+    mockSettings(aiSettings('openai_compat', 'https://a.example/v1', 'key-a', 'model-a'))
+    mocks.invoke.mockResolvedValue({ text: 'raw transcript', elapsed_ms: 18 })
+
+    const result = await reprocessViaCloudApi(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, undefined, 'en')
+
+    expect(invokedCommands()).toEqual(['cloud_transcribe'])
+    expect(result).toMatchObject({
+      asrText: 'raw transcript',
+      llmText: 'raw transcript',
+      llmMs: 0,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+    expect(result.aiProvider).toBeUndefined()
+    expect(result.aiModel).toBeUndefined()
   })
 })

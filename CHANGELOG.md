@@ -18,6 +18,7 @@ Sections are ordered by version, newest first.
 - Scrollbars in the main window are now thin and follow the theme everywhere: dialogs, lists, and text fields no longer fall back to the browser's light default scrollbar. The overlay's recognized-text and error cards get a matching dark scrollbar when their text is long.
 - The configuration export and import dialogs now behave like every other dialog: focus moves into them and returns when they close, Tab stays inside, and all dialogs share the same frosted theme-tinted backdrop instead of a mix of black and blurred variants.
 - The focus highlight is now clean and themed: text fields get the accent border with a soft halo, and other controls a single accent ring, instead of the browser's doubled blue-and-white outline.
+- History reprocessing now uses the same cleanup policy as live recording in Cloud API and Local modes: cleanup is skipped below the minimum-duration threshold, waits no longer than the same cleanup timeout, and keeps the raw transcript when the provider fails or returns nothing. A keyless provider such as Ollama may also run with a blank model in every path, using the built-in default model, and its service card is treated as complete for connection testing.
 
 ### Fixed
 #### Desktop Client

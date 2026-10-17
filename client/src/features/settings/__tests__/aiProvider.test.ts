@@ -3,6 +3,7 @@ import {
   AI_PROVIDERS,
   aiProvidersForDisplay,
   applyProviderSwitch,
+  assessAiConfig,
   blankProfile,
   buildAiProviderConfig,
   checkAiKeyFormat,
@@ -520,15 +521,55 @@ describe('一行的标题与副标题', () => {
 })
 
 describe('isProfileComplete', () => {
-  it('免密钥的 Ollama 不要求密钥，其余都要', () => {
+  it('does not require a key from keyless Ollama, and requires it from everyone else', () => {
     expect(isProfileComplete(profile({ apiKey: '' }))).toBe(false)
     expect(isProfileComplete(profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434' }))).toBe(true)
   })
 
-  it('缺地址或缺模型都算没填完', () => {
+  it('lets a keyless provider run with a blank model, since the native layer substitutes its default', () => {
+    expect(isProfileComplete(profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434', model: '' }))).toBe(true)
+    expect(isProfileComplete(profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434', model: ' \t ' }))).toBe(true)
+  })
+
+  it('still treats a missing URL, model, or key as incomplete for keyed providers', () => {
     expect(isProfileComplete(profile({ apiUrl: '' }))).toBe(false)
     expect(isProfileComplete(profile({ model: ' ' }))).toBe(false)
+    expect(isProfileComplete(profile({ provider: 'ollama', apiUrl: '' }))).toBe(false)
     expect(isProfileComplete(profile())).toBe(true)
+  })
+})
+
+describe('assessAiConfig', () => {
+  it('requires a key from a keyed provider', () => {
+    const result = assessAiConfig({ provider: 'openai_compat', apiUrl: 'https://api.openai.com', apiKey: '', model: 'gpt-4o-mini' })
+    expect(result.hasKey).toBe(false)
+    expect(result.complete).toBe(false)
+  })
+
+  it('treats a whitespace-only model as missing for a keyed provider', () => {
+    const result = assessAiConfig({ provider: 'openai_compat', apiUrl: 'https://api.openai.com', apiKey: 'sk-key', model: '   ' })
+    expect(result.hasModel).toBe(false)
+    expect(result.complete).toBe(false)
+  })
+
+  it('treats keyless Ollama with a URL as complete, without key or model', () => {
+    const result = assessAiConfig({ provider: 'ollama', apiUrl: 'http://127.0.0.1:11434', apiKey: '', model: '' })
+    expect(result.hasKey).toBe(true)
+    expect(result.hasModel).toBe(true)
+    expect(result.complete).toBe(true)
+  })
+
+  it('reports a missing URL for Ollama as incomplete', () => {
+    const result = assessAiConfig({ provider: 'ollama', apiUrl: '', apiKey: '', model: '' })
+    expect(result.hasUrl).toBe(false)
+    expect(result.complete).toBe(false)
+  })
+
+  it('agrees with isProfileComplete for a keyed and a keyless profile', () => {
+    const keyed = profile({ model: '' })
+    const keyless = profile({ provider: 'ollama', apiKey: '', apiUrl: 'http://127.0.0.1:11434', model: '' })
+    expect(isProfileComplete(keyed)).toBe(assessAiConfig(keyed).complete)
+    expect(isProfileComplete(keyless)).toBe(assessAiConfig(keyless).complete)
   })
 })
 

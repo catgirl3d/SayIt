@@ -1,28 +1,28 @@
-// 「AI 供应商」页的数据模型与纯函数。
+// The data model and pure functions for the "AI providers" page.
 //
-// 单独成文件的原因：这里每一条都曾经或可能悄悄漂移（默认值与示例不一致、密钥长度断言
-// 过期、老数据迁移），而它们全都是纯逻辑，值得被测试锁住。组件只负责渲染与副作用。
+// Why this lives in its own file: every entry here has drifted, or could silently drift (defaults that disagree with examples, key-length assertions that went stale, legacy data migration),
+// and all of it is pure logic, which is worth locking down with tests. The component only handles rendering and side effects.
 
 /**
- * 供应商清单 —— 这是唯一的真相来源。
+ * Provider catalog: the single source of truth.
  *
- * 默认地址与候选模型原来另有三张表（DEFAULT_URLS / DEFAULT_MODELS / DEFAULT_MODEL_LISTS）
- * 声明在组件函数体里，于是同一个供应商在示例文字和默认值之间漂移过：
- * 千问的示例写 `qwen-plus` 而实际种进去的是 `qwen3.6-flash`，
- * MiMo 的示例写 `mimo-v2.5-pro` 而默认选中的是 `mimo-v2.5`。
- * 合并成一张表后，示例直接由 defaultModels[0] 派生，漂移不可能再发生。
+ * Default URLs and candidate models used to live in three separate tables (DEFAULT_URLS / DEFAULT_MODELS / DEFAULT_MODEL_LISTS),
+ * declared inside the component function body. As a result, the same provider drifted between its example text and its defaults:
+ * Qwen's example wrote `qwen-plus` while the value actually seeded was `qwen3.6-flash`,
+ * MiMo's example wrote `mimo-v2.5-pro` while the default selection was `mimo-v2.5`.
+ * Merging everything into one table means examples are derived directly from defaultModels[0], so this drift can no longer happen.
  */
 import { getLocale, t } from '@/i18n'
 
 export interface AiProvider {
   value: string
   /**
-   * 展示名。品牌名用官方英文写法（Qwen / Doubao (Volcengine Ark) / Xiaomi MiMo），
-   * 不是直译 —— 中文语境习惯叫「通义千问」，所以它仍然要跟界面语言走。
+   * Display name. Brand names use the official English spelling (Qwen / Doubao (Volcengine Ark) / Xiaomi MiMo),
+   * not a literal translation. Chinese-language UI usually calls Qwen "Tongyi Qianwen", so it must still follow the interface language.
    *
-   * ⚠️ 表里几条用的是 **getter**，不是普通字符串字段。原因：这张表是模块级常量，
-   * 普通字段会在模块加载那一刻把当时的语言固化下来，切语言后不再变。改成 getter
-   * 就能保留 `.label` 这个读法 —— 二十多个调用点和三个测试文件都不用动。
+   * Note: several entries below use a **getter**, not a plain string field. Reason: this table is a module-level constant, and
+   * a plain field would freeze the language active at the moment the module loads, so it would never change after a language switch. A getter
+   * keeps the `.label` read syntax, so the twenty-odd call sites and three test files need no changes.
    */
   label: string
   defaultUrl: string
@@ -141,12 +141,12 @@ export const AI_PROVIDERS: AiProvider[] = [
   },
 ]
 
-/** 新建服务时的地区默认；只影响还没选择过供应商的场景。 */
+/** Regional default when creating a new service; it only affects cases where no provider has been selected yet. */
 export function preferredAiProviderValue(): string {
   return 'openai_compat'
 }
 
-/** 英文界面优先展示可直接接海外端点的通用入口，原数组顺序保持不变供迁移逻辑使用。 */
+/** The English UI shows the generic entry that connects directly to overseas endpoints first; the original array order stays unchanged for the migration logic. */
 export function aiProvidersForDisplay(): AiProvider[] {
   const preferred = preferredAiProviderValue()
   if (AI_PROVIDERS[0]?.value === preferred) return AI_PROVIDERS
@@ -160,16 +160,16 @@ export function findProvider(value: string): AiProvider {
   return AI_PROVIDERS.find((p) => p.value === value) ?? AI_PROVIDERS[0]
 }
 
-/** 每供应商独立存储的字段 */
+/** Fields stored separately for each provider */
 export type AiSettingField = 'apiUrl' | 'apiKey' | 'model' | 'models' | 'latency'
 
 /**
- * 每个供应商的配置键。
+ * Config keys for each provider.
  *
- * 键名格式是历史约定（`cloudAi.<provider>.<field>`），**不能随意改**：
- * 改了等于用户已存的地址与密钥全部读不到，界面上看着像被清空了。
- * 另有一组不带 provider 的 `cloudAi.provider/apiUrl/apiKey/model`，
- * 那是运行时实际生效的"当前配置"，由本页在保存/切换时同步过去。
+ * The key-name format is a historical convention (`cloudAi.<provider>.<field>`), **do not change it arbitrarily**:
+ * changing it would make every address and key users already saved unreadable, and the UI would look as if they had been cleared.
+ * There is also a separate set without a provider, `cloudAi.provider/apiUrl/apiKey/model`,
+ * which is the "current config" actually in effect at runtime; this page syncs it over when saving or switching.
  */
 export function aiSettingKey(provider: string, field: AiSettingField): string {
   return `cloudAi.${provider}.${field}`
@@ -180,30 +180,30 @@ export function providerLabel(value: string): string {
 }
 
 /**
- * 一条已配置的 AI 服务。
+ * A configured AI service.
  *
- * 为什么是这个形状：原来的模型是「供应商」为主轴、模型只是它下面的一串字符串，
- * 而地址和密钥挂在供应商上。后果有两个：
- *   1. 两个不同端点的「OpenAI 兼容」模型（比如一个 OpenAI、一个本地 vLLM）没法各自
- *      配置——切了模型却还在用同一个地址和密钥，其中一个必然打不通；
- *   2. 想在 DeepSeek 和千问之间换一下，得走下拉、改地址、改密钥，等于重配一遍。
- * 把「供应商 + 地址 + 密钥 + 模型」打包成一条可命名的服务后，切换就是点一下列表。
+ * Why this shape: the old model was organized around the "provider", with models just a string list beneath it,
+ * while the address and key were attached to the provider. That had two consequences:
+ *   1. Two "OpenAI-compatible" models on different endpoints (e.g. one OpenAI, one local vLLM) could not each be configured
+ *      separately: switching models kept the same address and key, so one of them was bound to fail to connect;
+ *   2. Switching between DeepSeek and Qwen meant going through the dropdown, changing the address and changing the key, which amounted to reconfiguring everything.
+ * Packaging "provider + address + key + model" into one named service makes switching a single click in the list.
  */
 /**
- * 一次可用性检测的结果。
+ * The result of one availability check.
  *
- * 为什么不是单独存一个 latencyMs：那样界面上只能说出「多快」，说不出「行不行」。
- * 而用户按下这个按钮时想知道的第一件事是"这份配置能不能用"——密钥对不对、模型开通了没、
- * 网络通不通；耗时是可用之后的第二个维度（口述场景里确实重要，但它不是结论）。
- * 失败也要留痕：卡上必须能显示「不可用」，而不是停在「未测试」装作没事。
+ * Why not store a separate latencyMs: that would let the UI say only "how fast", never "whether it works".
+ * When the user presses this button, the first thing they want to know is whether the config works: is the key valid, is the model enabled,
+ * whether the network is reachable. Latency is a second dimension that matters only after availability (it does matter for dictation, but it is not the verdict).
+ * Failures must be recorded too: the card has to show "unavailable", not sit at "untested" as if nothing happened.
  */
 export interface AiProfileCheck {
   ok: boolean
-  /** 检测完成的时间戳。用来说"多久之前测的"——一次通过不等于此刻还通 */
+  /** When the check completed. Used to say "how long ago it was checked": a pass does not mean it still works right now */
   at?: number
-  /** 成功时的一次往返耗时 */
+  /** Round-trip time of one successful request */
   latencyMs?: number
-  /** 失败时的一句话原因（已由 describeProviderError 归一化过） */
+  /** One-sentence reason for a failure (already normalized by describeProviderError) */
   reason?: string
 }
 
@@ -220,7 +220,7 @@ export interface AiProfile {
    */
   reasoningEffort?: string
   serviceTier?: string
-  /** 最近一次可用性检测。没有 = 还没测过 */
+  /** Most recent availability check. None = not checked yet */
   check?: AiProfileCheck
 }
 
@@ -295,7 +295,7 @@ export function makeProfileId(): string {
   return `p-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
-/** 新建一条服务时的初值 */
+/** Initial values when creating a new service */
 export function blankProfile(providerValue = preferredAiProviderValue()): AiProfile {
   const meta = findProvider(providerValue)
   return {
@@ -308,13 +308,13 @@ export function blankProfile(providerValue = preferredAiProviderValue()): AiProf
 }
 
 /**
- * 端点的主机名，且**只在它不是这家供应商的默认地址时**才返回，否则空串。
+ * The host name of the endpoint, returned **only when it is not this provider's default address**; otherwise an empty string.
  *
- * 卡片上要不要显示地址，取决于它能不能区分两张卡：用 DeepSeek 官方地址的那张，
- * 写出 `api.deepseek.com` 只是重复"DeepSeek"这三个字；而两个都叫「OpenAI 兼容」的
- * 端点，主机名是唯一能把它们分开的东西——那正是旧结构根本存不下第二份的那个场景。
- * 只给主机名不给完整 URL：路径（/v1、/compatible-mode）在窄卡片里会挤掉模型名，
- * 完整地址在编辑弹窗里看。
+ * Whether a card shows its address depends on whether the address can tell two cards apart. For a card using DeepSeek's official address,
+ * writing `api.deepseek.com` just repeats the word "DeepSeek". But for two endpoints both called "OpenAI-compatible",
+ * the host name is the only thing that separates them, which is exactly the case the old structure could not store a second copy for.
+ * Only the host name is shown, not the full URL: paths (/v1, /compatible-mode) would push the model name out of a narrow card,
+ * while the full address is visible in the edit dialog.
  */
 function profileCustomHost(profile: AiProfile): string {
   const hostOf = (url: string): string => {
@@ -329,23 +329,50 @@ function profileCustomHost(profile: AiProfile): string {
   return host && host !== defaultHost ? host : ''
 }
 
-/** 一条服务的一行式说法（供应商 · 主机名），用于读屏名称等只能给一串文字的地方 */
+/** One-line description of a service (provider · host name), for places such as screen-reader labels that can only take a single string */
 export function profileSubtitle(profile: AiProfile): string {
   const label = providerLabel(profile.provider)
   const host = profileCustomHost(profile)
   return host ? `${label} · ${host}` : label
 }
 
-/** 列表里一行的主标题。模型名就是标题；还没填的时候也得有字，否则那一行看着像坏了 */
+/** Main title of a row in the list. The model name is the title; when nothing is filled in yet it still needs text, or the row looks broken */
 export function profileTitle(profile: AiProfile): string {
   return profile.model.trim() || t('aiProvider.noModel')
 }
 
-/** 一条服务是否填齐了能用的东西 */
+/**
+ * Whether a service has everything it needs to run.
+ *
+ * Keyless providers may omit the model: the native layer substitutes its own
+ * default (Ollama uses qwen2.5:7b), matching the runtime cleanup path in
+ * clientAiPolish.
+ */
 export function isProfileComplete(profile: AiProfile): boolean {
-  if (!profile.apiUrl.trim() || !profile.model.trim()) return false
-  if (!findProvider(profile.provider).keyless && !profile.apiKey.trim()) return false
-  return true
+  return assessAiConfig(profile).complete
+}
+
+/** Which pieces of a client-side AI configuration are present, and whether the request can run. */
+export interface AiConfigCompleteness {
+  hasUrl: boolean
+  hasKey: boolean
+  hasModel: boolean
+  complete: boolean
+}
+
+/**
+ * The single completeness rule for a client-side AI configuration. The AI service card, the client
+ * cleanup executor and the server-mode readiness check all use it, so they cannot disagree.
+ * A keyless provider needs neither a key nor a model: the native layer substitutes its default model.
+ */
+export function assessAiConfig(
+  config: Pick<AiProfile, 'provider' | 'apiUrl' | 'apiKey' | 'model'>,
+): AiConfigCompleteness {
+  const keyless = Boolean(findProvider(config.provider).keyless)
+  const hasUrl = Boolean(config.apiUrl.trim())
+  const hasKey = keyless || Boolean(config.apiKey.trim())
+  const hasModel = keyless || Boolean(config.model.trim())
+  return { hasUrl, hasKey, hasModel, complete: hasUrl && hasKey && hasModel }
 }
 
 /**
@@ -410,11 +437,11 @@ export function normalizeRemoteModels(models: RemoteModel[]): RemoteModel[] {
 }
 
 /**
- * 把存储里读回来的东西还原成服务列表。
+ * Restore the value read back from storage into a list of services.
  *
- * 为什么要这么小心：这个值会经过配置导出/导入、用户手改数据库、以及将来版本的字段增减，
- * 任何一条脏数据都不该让整页白屏。所以规则是"能救的救、救不了的丢"，绝不抛异常。
- * id 重复同样要处理——单选和编辑都靠 id 定位，重复 id 会让你点 A 改到 B。
+ * Why be so careful: this value passes through config export/import, users hand-editing the database, and field additions and removals in future versions,
+ * so no single dirty entry should blank the whole page. The rule is "rescue what can be rescued, drop what cannot", and never throw.
+ * Duplicate ids must be handled too: selection and editing both locate entries by id, so a duplicate would make clicking A edit B.
  */
 export function parseProfiles(raw: unknown): AiProfile[] {
   if (!Array.isArray(raw)) return []
@@ -455,7 +482,7 @@ export function parseProfiles(raw: unknown): AiProfile[] {
   return out
 }
 
-/** 检测结果的容错解析。第二个参数是更早版本平铺在 profile 上的 latencyMs，只有测通才会写。 */
+/** Fault-tolerant parsing of a check result. The second argument is latencyMs, which earlier versions stored flat on the profile; it was only written when a check passed. */
 function parseCheck(
   raw: unknown,
   legacyLatency: unknown,
@@ -477,7 +504,7 @@ function parseCheck(
   return latency === undefined ? undefined : { ok: true, latencyMs: latency }
 }
 
-/** 当前启用的那条。id 失效（删掉了、导入的数据对不上）时回落到第一条，而不是"什么都没启用" */
+/** The currently enabled entry. If the id is no longer valid (deleted, or the imported data does not match), fall back to the first entry instead of "nothing enabled" */
 export function resolveActiveProfile(profiles: AiProfile[], activeId: string): AiProfile | null {
   if (profiles.length === 0) return null
   return profiles.find((p) => p.id === activeId) ?? profiles[0]
@@ -588,12 +615,12 @@ export function applyProviderSwitch(
 }
 
 /**
- * 检查 API Key 格式，返回提示文字（空字符串表示格式正常）。
+ * Checks the API key format and returns a hint text (an empty string means the format is fine).
  *
- * 只保留「几乎不会误报」的规则：粘贴时常带进来的空白字符，以及确定的前缀约定。
- * 原来还断言 DeepSeek / 通义千问「必须 35 位」、豆包「必须是 UUID」——供应商一改密钥
- * 长度，这里就开始对**合法**密钥报警，而用户看到警告的第一反应是去重新生成一个密钥。
- * 对合法密钥误报的代价高于漏报，所以长度断言去掉了。
+ * Only rules that almost never produce false alarms are kept: stray whitespace that often comes along when pasting, and fixed prefix conventions.
+ * The code also used to assert that DeepSeek / Tongyi Qianwen keys "must be 35 characters" and that Doubao keys "must be a UUID". Once a provider changes its key
+ * length, this starts warning about **valid** keys, and the user's first reaction to a warning is to go regenerate a key.
+ * A false alarm on a valid key costs more than a missed one, so the length assertions were removed.
  */
 export function checkAiKeyFormat(provider: string, key: string): string {
   if (!key.trim()) return ''
@@ -606,7 +633,7 @@ export function checkAiKeyFormat(provider: string, key: string): string {
   return ''
 }
 
-/** 地址是否像个能用的 base URL。原来这里零校验，填错要等到测试失败才知道。 */
+/** Whether an address looks like a usable base URL. There was no validation at all before, so a wrong address was only discovered once a test failed. */
 export function checkApiUrl(url: string): string {
   const u = url.trim()
   if (!u) return ''
@@ -623,15 +650,15 @@ export function checkApiUrl(url: string): string {
 }
 
 /**
- * 从后端 detail 里取那句「回复: xxx」。
+ * Extract the "Reply: xxx" sentence from the backend detail.
  *
- * detail 的完整内容是 `耗时/模型/发送/回复` 四行（见 ai_openai_compat.rs 的
- * test_connection），其中「发送」那行会把内部测试提示词
- * （`system="只回复「连接正常」四个字…"`）原样展示给用户——那是后端的调试信息，
- * 不该出现在成功提示里。这里只取「回复」，耗时和模型名走结构化字段。
+ * The full detail is four lines, `latency/model/sent/reply` (see test_connection in ai_openai_compat.rs), where the "sent" line
+ * shows the internal test prompt
+ * (`system="只回复「连接正常」四个字…"`, i.e. "reply with only the words 'Connection OK'") verbatim to the user, which is backend debug information.
+ * It must not appear in the success message. Only the "reply" is taken here; latency and model name come from structured fields.
  */
 export function extractTestReply(detail?: string): string {
-  const match = detail?.match(/^回复:\s*(.*)$/m) // i18n-allow: 匹配供应商返回的中文响应字段
+  const match = detail?.match(/^回复:\s*(.*)$/m) // i18n-allow: matches the Chinese response field returned by the provider
   return match?.[1]?.trim() ?? ''
 }
 
@@ -640,27 +667,27 @@ export function formatLatency(ms: number): string {
 }
 
 /**
- * 延迟分档。
+ * Latency tiers.
  *
- * 口述场景的判断标准和跑分不一样：用户松开热键站在原地等文字出现在光标处，
- * 一次往返超过 1 秒就已经能感觉到停顿，超过 2 秒基本没法用来干活。
- * 所以纯数字不够——1.4s 和 140ms 在界面上必须长得不一样。
+ * Dictation is judged differently from benchmarks: the user releases the hotkey, stands still and waits for the text to appear at the cursor,
+ * a round trip over 1 second is already noticeable as a pause, and anything over 2 seconds is basically unusable for getting work done.
+ * So raw numbers alone are not enough: 1.4s and 140ms must look different on screen.
  *
- * 分档只在"需要提醒"时才给词：够快的时候多一个「很快」是噪音，慢下来才值得占字。
- * 颜色只有 ok / warn 两档：红色在这一页已经被「不可用」占了，
- * 「能用但慢」不该和「根本用不了」撞成同一个颜色。
+ * Tiers attach a word only when a warning is needed: when it is fast enough, an extra "very fast" is just noise, and only a slowdown is worth the space.
+ * Colors have only two levels, ok / warn: red is already taken on this page by "unavailable",
+ * so "usable but slow" must not share a color with "not usable at all".
  */
 export type LatencyTier = 'instant' | 'fast' | 'normal' | 'slow' | 'tooSlow'
 
 export interface LatencyGrade {
   tier: LatencyTier
-  /** 一个词的结论，和数字一起显示 */
+  /** One-word verdict, shown together with the number */
   label: string
-  /** ok = 放心用，warn = 能用但拖，bad = 不建议用 */
+  /** ok = safe to use, warn = usable but sluggish, bad = not recommended */
   tone: 'ok' | 'warn' | 'bad'
 }
 
-/** 分界值集中在这里，想调手感只改这一处 */
+/** Threshold values are kept here; to tune the feel, change only this place */
 const LATENCY_THRESHOLDS = { instant: 200, fast: 500, normal: 1000, slow: 2000 } as const
 
 export function gradeLatency(ms: number): LatencyGrade {
@@ -672,33 +699,33 @@ export function gradeLatency(ms: number): LatencyGrade {
 }
 
 /**
- * 检测结论的保鲜期。
+ * Freshness window for a check result.
  *
- * 为什么需要这个：一次测通只是那一刻的事实。额度用光、密钥被吊销、模型下线、
- * 供应商限流都会让它悄悄失效，而界面上那枚绿色的「可用」会一直挂着，
- * 变成一句无限期的承诺——三天前测的绿灯，读起来和刚测的一模一样。
- * 过了保鲜期就把颜色收回中性：绿色只代表"刚刚验过，可以信"。
+ * Why this is needed: a passing check is only a fact about that moment. Used-up quota, a revoked key, a retired model,
+ * or provider rate limiting can all silently invalidate it, while the green "available" badge keeps showing,
+ * turning into an open-ended promise: a green light from three days ago reads exactly like one from a minute ago.
+ * Once the freshness window passes, the color goes back to neutral: green only means "verified just now, can be trusted".
  */
 export const CHECK_FRESH_MS = 24 * 60 * 60 * 1000
 
-/** 结论还新鲜吗。没有时间戳的（更早版本迁移来的）一律当过期，重测一次就好了 */
+/** Whether the result is still fresh. A result without a timestamp (migrated from an earlier version) always counts as stale, and one re-check fixes it */
 export function isCheckFresh(check: AiProfileCheck | undefined, now = Date.now()): boolean {
   if (!check?.at) return false
   return now - check.at < CHECK_FRESH_MS
 }
 
 /**
- * 「多久之前测的」。
+ * "How long ago it was checked".
  *
- * 为什么要显示这个：一次测通不代表此刻还通（额度用光、密钥被吊销、模型下线都会变）。
- * 卡上那枚「可用」标签如果不说清是什么时候测的，就变成了一句无限期的承诺。
- * now 作为参数传入，纯函数好测。
+ * Why show this: a passing check does not mean it still passes right now (used-up quota, a revoked key, or a retired model all change that).
+ * If the "available" tag on the card does not say when it was checked, it turns into an open-ended promise.
+ * now is passed in as a parameter, so the pure function is easy to test.
  */
 export function formatCheckedAt(at: number, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000))
   if (seconds < 60) return t('time.justNow')
-  // 用 Intl.RelativeTimeFormat 而不是自己拼字符串：英文的单复数（"1 minute ago"
-  // vs "5 minutes ago"）没法用一条模板覆盖，而这是最容易被忽略、也最显业余的细节。
+  // Use Intl.RelativeTimeFormat instead of concatenating strings by hand: English singular/plural forms ("1 minute ago"
+  // vs "5 minutes ago") cannot be covered by one template, and this is the detail most easily overlooked and most amateurish to get wrong.
   const rtf = new Intl.RelativeTimeFormat(getLocale(), { numeric: 'auto' })
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return rtf.format(-minutes, 'minute')
@@ -707,26 +734,26 @@ export function formatCheckedAt(at: number, now = Date.now()): string {
   return rtf.format(-Math.floor(hours / 24), 'day')
 }
 
-// ── 老数据迁移 ────────────────────────────────────────────────────────────
+// ── Legacy data migration ────────────────────────────────────────────────────────────
 
-/** 老结构：每个供应商一组配置，模型是一串逗号分隔的字符串 */
+/** Legacy shape: one config set per provider, with the model stored as a comma-separated string */
 export interface LegacyProviderData {
   provider: string
   apiUrl: string
   apiKey: string
-  /** 当时选中的模型 */
+  /** The model that was selected at the time */
   model: string
-  /** 候选模型列表 */
+  /** Candidate model list */
   models: string[]
-  /** `model=ms,model=ms` 解析后的耗时表 */
+  /** Latency table parsed from `model=ms,model=ms` */
   latencies: Record<string, number>
 }
 
 /**
- * 把 `model=ms,model=ms` 解析成表（老版本把整张延迟表存成一个字符串）。
+ * Parse `model=ms,model=ms` into a table (older versions stored the entire latency table as a single string).
  *
- * 只读不写：新结构把耗时放在每条服务的 latencyMs 上。损坏条目一律跳过——
- * 这只是给"哪个更快"排序用的展示数据，绝不该因为一条脏数据让迁移整体失败。
+ * Read-only, never written: the new structure keeps latency on each service's latencyMs field. Corrupt entries are always skipped:
+ * this is only display data used to sort by "which is faster", and one dirty entry must never make the whole migration fail.
  */
 export function parseLegacyLatencies(raw: string): Record<string, number> {
   const out: Record<string, number> = {}
@@ -741,11 +768,11 @@ export function parseLegacyLatencies(raw: string): Record<string, number> {
 }
 
 /**
- * 把老的「每供应商一组配置」摊平成服务列表。
+ * Flatten the legacy "one config set per provider" into a list of services.
  *
- * 规则：只迁移填齐了的（有地址、且有密钥或免密钥）；该供应商下的每个候选模型各成一条；
- * 老的「当前供应商 + 当前模型」成为启用项。老的存储键一律不删——降级回旧版本还能用，
- * 也不至于因为迁移出错就丢掉用户的密钥。
+ * Rules: only entries that are complete are migrated (they have an address, and either a key or no key requirement); each candidate model under that provider becomes its own entry;
+ * the legacy "current provider + current model" becomes the enabled entry. Legacy storage keys are never deleted, so rolling back to an older version still works,
+ * and a migration error does not cost the user their keys.
  */
 export function migrateLegacyProfiles(
   legacy: LegacyProviderData[],
@@ -760,7 +787,7 @@ export function migrateLegacyProfiles(
     if (!url) continue
     if (!meta.keyless && !entry.apiKey.trim()) continue
 
-    // 候选列表 + 当时选中的，去重后各成一条
+    // Candidate list plus the model selected at the time, de-duplicated, each becoming its own entry
     const models = [...entry.models]
     if (entry.model && !models.includes(entry.model)) models.unshift(entry.model)
     const unique = models.map((m) => m.trim()).filter(Boolean).filter((m, i, a) => a.indexOf(m) === i)
@@ -769,14 +796,14 @@ export function migrateLegacyProfiles(
     for (const model of unique) {
       const latencyMs = entry.latencies[model]
       profiles.push({
-        // 迁移用确定性 id，方便排查，也保证重复迁移不会产生两份
+        // Migration uses a deterministic id: easy to trace, and it guarantees that repeated migrations never create two copies
         id: `legacy-${entry.provider}-${model}`,
         provider: entry.provider,
         apiUrl: url,
         apiKey: entry.apiKey,
         model,
-        // 老版本只在测通之后才记耗时，所以有耗时就等于有过一次通过的检测；
-        // 但那是什么时候测的没人知道，所以不写 at（界面上就不会声称"刚测过"）
+        // Older versions only recorded latency after a successful check, so having latency means a check had passed once;
+        // but nobody knows when that check happened, so `at` is not written (the UI will not claim it was "just checked")
         check: latencyMs === undefined ? undefined : { ok: true, latencyMs },
       })
     }

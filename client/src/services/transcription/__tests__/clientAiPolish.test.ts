@@ -198,10 +198,10 @@ describe('client AI polish completion handling', () => {
   })
 
   it.each([
-    { provider: 'openai_compat', apiUrl: 'https://example.test/v1', model: 'fixture-model', hasKey: false, hasModel: true },
-    { provider: 'unknown-provider', apiUrl: 'https://example.test/v1', model: 'fixture-model', hasKey: false, hasModel: true },
-    { provider: 'ollama', apiUrl: 'http://127.0.0.1:11434', model: '', hasKey: true, hasModel: false },
-  ])('uses catalog key completeness for an incomplete $provider profile', async ({ provider, apiUrl, model, hasKey, hasModel }) => {
+    { provider: 'openai_compat', apiUrl: 'https://example.test/v1', model: 'fixture-model', hasUrl: true, hasKey: false, hasModel: true },
+    { provider: 'unknown-provider', apiUrl: 'https://example.test/v1', model: 'fixture-model', hasUrl: true, hasKey: false, hasModel: true },
+    { provider: 'ollama', apiUrl: '', model: '', hasUrl: false, hasKey: true, hasModel: true },
+  ])('uses catalog key completeness for an incomplete $provider profile', async ({ provider, apiUrl, model, hasUrl, hasKey, hasModel }) => {
     boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
       const settings: Record<string, string> = {
         'cloudAi.provider': provider,
@@ -232,8 +232,45 @@ describe('client AI polish completion handling', () => {
       'warn',
       'test',
       'Custom AI is selected but its active profile is incomplete',
-      { provider, hasUrl: true, hasKey, hasModel },
+      { provider, hasUrl, hasKey, hasModel },
     )
+  })
+
+  it.each([
+    { name: 'empty', model: '' },
+    { name: 'whitespace-only', model: ' \t ' },
+  ])('runs a keyless provider whose model is $name with the native default', async ({ model }) => {
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') return { text: 'polished', elapsed_ms: 12 }
+      return undefined
+    })
+    boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      const settings: Record<string, string> = {
+        'cloudAi.provider': 'ollama',
+        'cloudAi.apiUrl': 'http://127.0.0.1:11434',
+        'cloudAi.apiKey': '',
+        'cloudAi.model': model,
+      }
+      return settings[key] ?? fallback
+    })
+
+    const polished = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 6 },
+      logSource: 'test',
+    })
+
+    const call = boundaries.invoke.mock.calls.find(([command]) => command === 'cloud_polish')
+    expect(call?.[1]).toMatchObject({
+      request: { ai_config: { provider: 'ollama', model: '' } },
+    })
+    expect(polished).toMatchObject({
+      llmText: 'polished',
+      aiStatus: 'applied',
+      aiProvider: 'ollama',
+    })
+    expect(polished?.aiModel).toBeUndefined()
   })
 
   it('sends OpenAI request tuning with the openai provider', async () => {

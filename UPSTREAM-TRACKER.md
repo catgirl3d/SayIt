@@ -7,7 +7,7 @@ Covers upstream 0.2.1 (`8687e9b`) and 0.2.2 (`c704300`), plus follow-up fixes.
 - The local `dev-scripts/upstream-decisions/` journal remains the authoritative record for accept/reject decisions on upstream commits; this file mirrors progress in one readable list.
 - Update this file when a port lands or a decision changes. Keep one row per feature.
 
-Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits. PR ports are final, no re-porting planned: #87 → fork PR #22 and #85 → fork PR #25 (both merged); #86 declined; #83 not ported; server reasoning config and a separate chat-audio route also declined; all four upstream PR heads are kept on local `pr/*` branches).
+Last updated: 2026-10-18 (History AI policy unified with the live route, #33; journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits. PR ports are final, no re-porting planned: #87 → fork PR #22 and #85 → fork PR #25 (both merged); #86 declined; #83 not ported; server reasoning config and a separate chat-audio route also declined; all four upstream PR heads are kept on local `pr/*` branches).
 
 ## Ported
 
@@ -21,7 +21,7 @@ Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partia
 | Runtime single-key modifier guard (native hook + webview fallback) | `509efa4` |
 | Dismissible recognition failure cards (recognition / timeout / empty; failed recordings kept in History) | `1c87702` |
 | ASR provenance bound to the request profile in History | `5bf02c8` |
-| History/AI polish fixes: blank completion is an error, keyless providers via catalog, request-time attribution, blank keyed model guard | `6a5bfc5` |
+| History/AI polish fixes: blank completion is an error, keyless providers via catalog, request-time attribution, blank keyed model guard; reprocessing now shares the live AI route and cleanup executor (#33) | `6a5bfc5` |
 | Settings accessibility and AI state fixes | `2ad1715` |
 | Hotword capability matrix (Rust) + dynamic Dictionary support table + ignored-hotword diagnostics | `df2ef41` |
 | OpenRouter AI cleanup provider preset (upstream PR #87, via fork PR #22) | `f6275b9`, `3cef9c2` |
@@ -34,7 +34,6 @@ Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partia
 | Qwen models | Qwen Audio 3.0 selectable fallback; Omni HTTP/chat profile; legacy Omni alias migration for old profiles |
 | Microphones | Picker-only cleanup in `e0b376e`: duplicate default/identical IDs hidden, communications route labelled and hidden when redundant with the system default (kept when saved or targeting another device), saved routes preserved, last-listed default device shown only on an unambiguous match (not a live route guarantee). Recorder overlay label parity is unassessed; saved-ID migration is deliberately out of scope. |
 | Late ASR result | Opt-in suppression shipped in `02866a8` (+ `5faade0`): within the existing 15 s grace, no automatic insertion; History saves when enabled and successful, otherwise the text is discarded. Suppressed results do not update personalization statistics. Upstream per-run Esc abandonment remains unported. |
-| AI policy in History | Targeted fixes only; cloud/local reprocessing not fully unified (accepted divergence) |
 | Recorder failure lifecycle | Cards done; upstream stuck-insertion watchdog intentionally skipped so far |
 | Overlay live captions | Unconfirmed flicker risk when warning payloads lack `streaming`; verify visually before treating as a bug |
 | Updater card | Consent-based updater has no downloaded-waiting state; needs design before any port |

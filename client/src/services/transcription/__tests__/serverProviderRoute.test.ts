@@ -186,4 +186,42 @@ describe('ServerProvider AI route snapshots', () => {
 
     expect(onReady).toHaveBeenLastCalledWith({ connectionId: 'connection-2', asr: true, llm: true })
   })
+
+  it('reports custom readiness for keyless Ollama with a blank model, since the native layer substitutes its default', async () => {
+    mocks.storedSource = 'custom'
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'server.aiSource') return mocks.storedSource
+      if (key === 'cloudAi.provider') return 'ollama'
+      if (key === 'cloudAi.apiUrl') return 'http://127.0.0.1:11434'
+      if (key === 'cloudAi.apiKey') return ''
+      if (key === 'cloudAi.model') return ''
+      return fallback
+    })
+    const onReady = vi.fn()
+    const provider = new ServerProvider()
+
+    await provider.connect({ onReady })
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: false })
+
+    expect(onReady).toHaveBeenCalledWith({ connectionId: 'connection-1', asr: true, llm: true })
+  })
+
+  it('keeps custom readiness false for a keyed provider with a blank model', async () => {
+    mocks.storedSource = 'custom'
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'server.aiSource') return mocks.storedSource
+      if (key === 'cloudAi.provider') return 'openai_compat'
+      if (key === 'cloudAi.apiUrl') return 'https://api.openai.com'
+      if (key === 'cloudAi.apiKey') return 'sk-key'
+      if (key === 'cloudAi.model') return ''
+      return fallback
+    })
+    const onReady = vi.fn()
+    const provider = new ServerProvider()
+
+    await provider.connect({ onReady })
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: false })
+
+    expect(onReady).toHaveBeenCalledWith({ connectionId: 'connection-1', asr: true, llm: false })
+  })
 })
