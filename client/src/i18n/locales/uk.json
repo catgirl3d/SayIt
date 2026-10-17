@@ -1015,6 +1015,8 @@
   "ai.provider": "Провайдер",
   "ai.ollamaUrl": "URL Ollama",
   "ai.apiUrl": "API URL",
+  "ai.apiUrlOptional": "API URL (необов'язково)",
+  "ai.apiUrlOptionalHint": "Залиште порожнім, щоб використати офіційну адресу.",
   "ai.keyPlaceholder": "Вставте ваш API-ключ",
   "ai.keyReused": "Використовуються URL і ключ із попередньої конфігурації {provider}. Змініть модель за потреби.",
   "ai.openConsole": "Відкрити консоль {provider}",

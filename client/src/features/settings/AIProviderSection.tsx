@@ -50,6 +50,7 @@ import {
   buildAiProviderConfig,
   checkAiKeyFormat,
   checkApiUrl,
+  effectiveApiUrl,
   extractTestReply,
   findProvider,
   formatCheckedAt,
@@ -426,12 +427,13 @@ export default function AIProviderSection() {
    */
   async function handleFetchModels() {
     if (!draft || busy) return
-    const urlError = checkApiUrl(draft.apiUrl)
+    const apiUrl = effectiveApiUrl(draft.provider, draft.apiUrl)
+    const urlError = checkApiUrl(apiUrl)
     if (urlError) {
       setNotice({ tone: 'warning', scope: 'editor', message: urlError })
       return
     }
-    if (!draft.apiUrl.trim()) {
+    if (!apiUrl) {
       setNotice({
         tone: 'warning',
         scope: 'editor',
@@ -447,7 +449,7 @@ export default function AIProviderSection() {
       const result = await invoke<FetchModelsResult>('list_remote_models', {
         config: {
           provider: draft.provider,
-          api_url: draft.apiUrl,
+          api_url: apiUrl,
           api_key: draft.apiKey,
           model: '',
         },
@@ -565,7 +567,7 @@ export default function AIProviderSection() {
 
     const base = {
       provider: draft.provider,
-      apiUrl: draft.apiUrl.trim(),
+      apiUrl: effectiveApiUrl(draft.provider, draft.apiUrl),
       apiKey: draft.apiKey.trim(),
     }
     const urlError = checkApiUrl(base.apiUrl)
@@ -638,7 +640,7 @@ export default function AIProviderSection() {
 
     const base = {
       provider: draft.provider,
-      apiUrl: draft.apiUrl.trim(),
+      apiUrl: effectiveApiUrl(draft.provider, draft.apiUrl),
       apiKey: draft.apiKey.trim(),
       reasoningEffort: draft.reasoningEffort,
       serviceTier: draft.serviceTier,
@@ -986,7 +988,7 @@ export default function AIProviderSection() {
 
             <div>
               <label htmlFor="ai-api-url" className="mb-1 block text-sm text-muted-foreground">
-                {draftProvider.keyless ? t('ai.ollamaUrl') : t('ai.apiUrl')}
+                {draftProvider.urlOptional ? t('ai.apiUrlOptional') : draftProvider.keyless ? t('ai.ollamaUrl') : t('ai.apiUrl')}
               </label>
               <input
                 id="ai-api-url"
@@ -996,8 +998,12 @@ export default function AIProviderSection() {
                 onChange={(e) => patchDraft({ apiUrl: e.target.value })}
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleSave() }}
                 placeholder={draftProvider.defaultUrl}
+                aria-describedby={draftProvider.urlOptional ? 'ai-api-url-hint' : undefined}
                 className={inputClass}
               />
+              {draftProvider.urlOptional && (
+                <p id="ai-api-url-hint" className="mt-1 text-xs text-muted-foreground">{t('ai.apiUrlOptionalHint')}</p>
+              )}
               {draftUrlError && <FormatHint text={draftUrlError} />}
             </div>
 

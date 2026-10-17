@@ -1182,4 +1182,20 @@ mod tests {
             "https://opencode.ai/zen/go/v1/models"
         );
     }
+
+    #[test]
+    fn derives_openrouter_endpoints_from_the_preset_url() {
+        assert_eq!(
+            chat_completion_url("https://openrouter.ai/api/v1"),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+        assert_eq!(
+            models_url("https://openrouter.ai/api/v1"),
+            "https://openrouter.ai/api/v1/models"
+        );
+        assert_eq!(
+            models_url("https://openrouter.ai/api/v1/chat/completions"),
+            "https://openrouter.ai/api/v1/models"
+        );
+    }
 }

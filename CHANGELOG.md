@@ -5,6 +5,9 @@ Sections are ordered by version, newest first.
 
 ## v0.3.1 (unreleased)
 
+### Added
+- Added OpenRouter as a ready AI cleanup provider preset with DeepSeek V4.1 Flash as the default model and a link to its key page; the API URL is optional, and a blank field uses the official endpoint.
+
 ### Changed
 #### Desktop Client
 - Eight new themes are available in Appearance settings: Paper & Ink, Dark Jade, Orchid (soft pink-white), Twilight (deep violet), Espresso (warm brown-black with a copper accent), Frost (cool blue-grey), Moss (sage green) and Midnight (near-black, made for OLED screens).
