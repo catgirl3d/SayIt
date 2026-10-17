@@ -69,3 +69,5 @@ runtime/
 .mcp-brain/*
 docs/internal/*
 */plans/
+client/storybook-static/
+.playwright-mcp/
