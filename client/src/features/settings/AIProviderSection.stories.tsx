@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
 import AIProviderSection from './AIProviderSection'
 import type { AiProfile } from './aiProviderCatalog'
 
@@ -38,6 +39,14 @@ const profiles = [
   },
 ] satisfies AiProfile[]
 
+const openRouterProfile = {
+  id: 'ai-storybook-openrouter',
+  provider: 'openrouter',
+  apiUrl: 'https://openrouter.ai/api/v1',
+  apiKey: 'sk-or-v1-storybook',
+  model: 'google/gemma-4-26b-a4b-it:free',
+} satisfies AiProfile
+
 const settingsFor = (nextProfiles: AiProfile[], activeId: string, workMode: string, serverAiSource: string) => ({
   'cloudAi.profiles': nextProfiles,
   'cloudAi.activeProfileId': activeId,
@@ -45,6 +54,29 @@ const settingsFor = (nextProfiles: AiProfile[], activeId: string, workMode: stri
   workMode,
   'server.aiSource': serverAiSource,
 })
+
+const remoteCatalog = {
+  ok: true,
+  message: '',
+  models: [
+    { id: 'gpt-5-mini', name: 'GPT-5 mini', input_price_per_million: 0.25, output_price_per_million: 2 },
+    { id: 'gpt-5-nano', name: 'GPT-5 nano', input_price_per_million: 0.05, output_price_per_million: 0.4 },
+    { id: 'gpt-oss-20b', name: 'gpt-oss 20B', input_price_per_million: 0, output_price_per_million: 0 },
+    { id: 'custom-router', name: 'Custom router' },
+  ],
+}
+
+const emptySettings = settingsFor([], '', 'cloud_api', 'managed')
+
+/** The editor is a Modal portaled into document.body, outside the story canvas. */
+function bodyOf(canvasElement: HTMLElement) {
+  return within(canvasElement.ownerDocument.body)
+}
+
+async function openNewDialog(canvasElement: HTMLElement) {
+  await userEvent.click(await within(canvasElement).findByRole('button', { name: /^new$/i }))
+  return within(await bodyOf(canvasElement).findByRole('dialog', { name: /new ai service/i }))
+}
 
 const meta = {
   title: 'settings/AIProviderSection',
@@ -75,5 +107,116 @@ export const EmptyState: Story = {
     tauri: {
       settings: settingsFor([], '', 'cloud_api', 'managed'),
     },
+  },
+}
+
+export const NewServiceDialog: Story = {
+  parameters: { tauri: { settings: emptySettings } },
+  play: async ({ canvasElement }) => {
+    const dialog = await openNewDialog(canvasElement)
+
+    // No model is preselected: a preset would be saved next to whatever the user picks.
+    await expect(dialog.getByRole('textbox', { name: 'Model' })).toHaveValue('')
+    await expect(dialog.queryAllByRole('button', { name: /^remove /i })).toHaveLength(0)
+    await expect(dialog.getByText(/each model becomes its own card/i)).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Save' })).toBeVisible()
+  },
+}
+
+export const NewServiceSeveralModels: Story = {
+  parameters: { tauri: { settings: emptySettings } },
+  play: async ({ canvasElement }) => {
+    const dialog = await openNewDialog(canvasElement)
+
+    const field = dialog.getByRole('textbox', { name: 'Model' })
+    await userEvent.type(field, 'model-a{Enter}model-b{Enter}')
+
+    await expect(dialog.getByRole('button', { name: 'Remove model-a' })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Remove model-b' })).toBeVisible()
+    // Each chip becomes its own card, and the Save button says how many.
+    await expect(dialog.getByRole('button', { name: 'Save (2)' })).toBeVisible()
+  },
+}
+
+export const NewServiceLoadedCatalog: Story = {
+  parameters: {
+    tauri: {
+      settings: emptySettings,
+      commands: { list_remote_models: () => remoteCatalog },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const body = bodyOf(canvasElement)
+    const dialog = await openNewDialog(canvasElement)
+
+    await userEvent.type(dialog.getByRole('textbox', { name: 'Model' }), 'typed-model{Enter}')
+    await userEvent.click(dialog.getByRole('button', { name: 'Load models' }))
+
+    // The same field turns into a combobox over the loaded catalog; the typed chip stays.
+    const field = await dialog.findByRole('combobox', { name: 'Model' })
+    await expect(dialog.getByRole('button', { name: 'Remove typed-model' })).toBeVisible()
+
+    await userEvent.click(field)
+    const listbox = within(await body.findByRole('listbox'))
+    await expect(listbox.getAllByRole('option')).toHaveLength(remoteCatalog.models.length)
+    await expect(listbox.getByRole('option', { name: /gpt-oss 20b/i })).toHaveTextContent('Free')
+
+    await userEvent.click(listbox.getByRole('option', { name: /gpt-5 mini/i }))
+    await userEvent.click(listbox.getByRole('option', { name: /gpt-5 nano/i }))
+    await expect(dialog.getByRole('button', { name: 'Remove gpt-5-mini' })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Remove gpt-5-nano' })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Save (3)' })).toBeVisible()
+
+    // Un-choosing a row removes its chip again.
+    await userEvent.click(listbox.getByRole('option', { name: /gpt-5 nano/i }))
+    await waitFor(() => expect(dialog.queryByRole('button', { name: 'Remove gpt-5-nano' })).toBeNull())
+  },
+}
+
+export const EditServiceDialog: Story = {
+  parameters: {
+    tauri: {
+      settings: settingsFor(profiles, profiles[0].id, 'cloud_api', 'managed'),
+      commands: { list_remote_models: () => remoteCatalog },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const body = bodyOf(canvasElement)
+    // A card's actions appear on hover or focus, and synthetic pointer events do not trigger :hover, so focus reveals the button.
+    const editButton = await within(canvasElement).findByRole('button', { name: `Edit ${profiles[0].model}` })
+    editButton.focus()
+    await userEvent.click(editButton)
+    const dialog = within(await body.findByRole('dialog', { name: /edit ai service/i }))
+
+    // An existing card holds exactly one model, so the field is plain text: no chips, no extra hint.
+    await expect(dialog.getByRole('textbox', { name: 'Model' })).toHaveValue(profiles[0].model)
+    await expect(dialog.queryAllByRole('button', { name: /^remove /i })).toHaveLength(0)
+
+    await userEvent.click(dialog.getByRole('button', { name: 'Load models' }))
+    const field = await dialog.findByRole('combobox', { name: 'Model' })
+    await expect(field).toHaveValue(profiles[0].model)
+    await userEvent.click(field)
+    await userEvent.click(within(await body.findByRole('listbox')).getByRole('option', { name: /gpt-5 nano/i }))
+
+    // Picking replaces the text and closes the list.
+    await expect(field).toHaveValue('gpt-5-nano')
+    await waitFor(() => expect(body.queryByRole('listbox')).toBeNull())
+  },
+}
+
+export const NewOpenRouterServiceRecommended: Story = {
+  parameters: {
+    tauri: { settings: settingsFor([openRouterProfile], openRouterProfile.id, 'cloud_api', 'managed') },
+  },
+  play: async ({ canvasElement }) => {
+    // "New" starts from the active card's provider, so OpenRouter's curated models are offered right away.
+    const dialog = await openNewDialog(canvasElement)
+
+    await expect(dialog.getByText('Recommended:')).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'deepseek/deepseek-v4.1-flash-1017' })).toBeVisible()
+    await userEvent.click(dialog.getByRole('button', { name: 'anthropic/claude-haiku-5.5' }))
+
+    await expect(dialog.getByRole('button', { name: 'Remove anthropic/claude-haiku-5.5' })).toBeVisible()
+    await expect(dialog.queryByRole('button', { name: 'anthropic/claude-haiku-5.5' })).toBeNull()
   },
 }

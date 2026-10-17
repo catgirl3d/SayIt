@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import AIProviderSection from '../AIProviderSection'
@@ -140,12 +140,11 @@ describe('AIProviderSection optional API URL', () => {
       },
     }))
 
-    // A non-empty catalog swaps the manual model input for the searchable picker:
-    // the text input is gone, and the picker's search becomes available on open.
-    const picker = await screen.findByRole('button', { name: t('ai.model') })
-    expect(screen.queryByRole('textbox', { name: t('ai.model') })).toBeNull()
-    fireEvent.click(picker)
-    expect(await screen.findByLabelText(t('ai.modelSearch'))).toBeTruthy()
+    // A non-empty catalog turns the same model field into a combobox over the catalog.
+    const field = await screen.findByRole('combobox', { name: t('ai.model') })
+    fireEvent.click(field)
+    const listbox = await screen.findByRole('listbox')
+    expect(within(listbox).getByRole('option', { name: /DeepSeek V4\.1 Flash/ })).toBeTruthy()
   })
 
   it('keeps a trimmed custom URL when saving an optional provider', async () => {
