@@ -12,9 +12,10 @@ import {
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
-import { polishWithClientAi } from '@/services/transcription/clientAiPolish'
+import { polishWithClientAi, skippedPolishResult, type ClientAiPolishResult } from '@/services/transcription/clientAiPolish'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
-import { SERVER_AI_SOURCE_KEY } from '@/services/transcription/serverAiSource'
+import { loadServerAiSource } from '@/services/transcription/serverAiSource'
+import { resolveAiPolishRoute } from '@/services/transcription/aiPolicy'
 import type { AiExecutionSource, AiExecutionStatus, WorkMode } from '@/services/transcription'
 import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode } from '@/services/transcription/types'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -61,8 +62,8 @@ interface ReprocessResult {
   asrWarning?: AsrWarningCode
 }
 
-/** 服务器模式重新识别：通过独立 WebSocket 连接，避免干扰全局连接 */
-async function reprocessViaServer(
+/** Server-mode re-recognition: uses a separate WebSocket connection so it does not interfere with the global connection */
+export async function reprocessViaServer(
   chunk: ArrayBuffer,
   hotwords: string[],
   aiEnabled: boolean,
@@ -72,14 +73,15 @@ async function reprocessViaServer(
 ): Promise<ReprocessResult> {
   const { getWSUrl } = await import('@/services/runtimeConfig')
   const wsUrl = getWSUrl()
-  const [aiSource, rawAiMinDurationSec] = await Promise.all([
-    getSetting(SERVER_AI_SOURCE_KEY, 'managed') as Promise<string>,
+  const [serverAiSource, rawAiMinDurationSec] = await Promise.all([
+    loadServerAiSource(),
     getSetting('aiMinDurationSec', 0),
   ])
   const audioDurationSec = (chunk.byteLength / 2) / 16000
   const aiMinDurationSec = Math.max(0, Number(rawAiMinDurationSec) || 0)
   const skipAiForDuration = aiEnabled && aiMinDurationSec > 0 && audioDurationSec < aiMinDurationSec
-  const useCustomAi = aiEnabled && aiSource === 'custom'
+  const route = resolveAiPolishRoute({ workMode: 'server', serverAiSource, selectionAiChosen: false })
+  const useCustomAi = aiEnabled && route === 'client'
   const useManagedAi = aiEnabled && !useCustomAi && !skipAiForDuration
 
   const serverResult = await new Promise<ReprocessResult>((resolve, reject) => {
@@ -214,6 +216,28 @@ async function reprocessViaServer(
   return polished ? { ...serverResult, ...polished } : serverResult
 }
 
+/**
+ * Cleanup for a reprocess path that runs its AI stage on this client (cloud API and local).
+ * The executor owns the policy: disableAi, the minimum-duration threshold, the request timeout,
+ * keyless providers and the raw-ASR fallback. Reprocessing only supplies its settings snapshot.
+ */
+async function polishReprocessed(
+  asrText: string,
+  durationSec: number,
+  aiEnabled: boolean,
+  systemPrompt: string | undefined,
+): Promise<ClientAiPolishResult> {
+  const aiMinDurationSec = Math.max(0, Number(await getSetting('aiMinDurationSec', 0)) || 0)
+  const polish = await polishWithClientAi({
+    asrText,
+    durationSec,
+    startOptions: { runId: 1, systemPrompt, disableAi: !aiEnabled, aiMinDurationSec },
+    logSource: 'history',
+  })
+  // No isCurrent callback is passed, so the executor never reports a superseded run here.
+  return polish ?? skippedPolishResult(asrText)
+}
+
 /** Cloud API reprocessing: cloud_transcribe for ASR plus the shared client-AI cleanup policy. */
 export async function reprocessViaCloudApi(
   chunk: ArrayBuffer,
@@ -230,6 +254,12 @@ export async function reprocessViaCloudApi(
   const profile = { ...loadedProfile }
   const asrProvider = profile.provider
   const isQwenOmni = isQwenOmniProvider(asrProvider)
+  const route = resolveAiPolishRoute({
+    workMode: 'cloud_api',
+    integratedAsr: isQwenOmni,
+    requireTranslation: false,
+    selectionAiChosen: false,
+  })
   const asrConfig = buildAsrProviderConfig(profile, language)
 
   const asrStart = performance.now()
@@ -255,33 +285,10 @@ export async function reprocessViaCloudApi(
   const asrText = restoreHotwordSpacing(asrResult.text, hotwords)
   const asrMs = asrResult.elapsed_ms || Math.round(performance.now() - asrStart)
 
-  // Qwen Omni already includes its own cleanup; a second AI pass is unnecessary.
-  let llmText = asrText
-  let llmMs = 0
-  let aiSource: AiExecutionSource = 'none'
-  let aiStatus: AiExecutionStatus = 'skipped'
-  let requestAiProvider: string | undefined
-  let requestAiModel: string | undefined
-  if (asrText.trim() && aiEnabled && !isQwenOmni) {
-    // The live recording pipeline owns the client-AI policy (keyless providers, the
-    // duration threshold, the request timeout, and the raw-ASR fallback). Reprocessing
-    // only supplies its settings snapshot, so the two paths cannot drift apart again.
-    const aiMinDurationSec = Math.max(0, Number(await getSetting('aiMinDurationSec', 0)) || 0)
-    const polish = await polishWithClientAi({
-      asrText,
-      durationSec,
-      startOptions: { runId: 1, systemPrompt, aiMinDurationSec },
-      logSource: 'history',
-    })
-    if (polish) {
-      llmText = polish.llmText
-      llmMs = polish.llmMs
-      aiSource = polish.aiSource
-      aiStatus = polish.aiStatus
-      requestAiProvider = polish.aiProvider
-      requestAiModel = polish.aiModel
-    }
-  }
+  // The Omni engine already cleaned the text, so the AI stage is skipped.
+  const polish = route === 'integrated'
+    ? skippedPolishResult(asrText)
+    : await polishReprocessed(asrText, durationSec, aiEnabled, systemPrompt)
 
   // Stamp the model this snapshot actually used; the metadata writer must not
   // consult the runtime provider setting, which can change during reprocessing.
@@ -289,14 +296,14 @@ export async function reprocessViaCloudApi(
 
   return {
     asrText,
-    llmText,
+    llmText: polish.llmText,
     asrMs,
-    llmMs,
+    llmMs: polish.llmMs,
     durationSec,
-    aiSource,
-    aiStatus,
-    aiProvider: requestAiProvider,
-    aiModel: requestAiModel,
+    aiSource: polish.aiSource,
+    aiStatus: polish.aiStatus,
+    aiProvider: polish.aiProvider,
+    aiModel: polish.aiModel,
     ...(asrWarning && { asrWarning }),
     ...(requestModel && { asrEngine: requestEngine, asrModel: requestModel }),
   }
@@ -325,41 +332,18 @@ export async function reprocessViaLocal(
   const asrText = asrResult.text
   const asrMs = asrResult.elapsed_ms
 
-  let llmText = asrText
-  let llmMs = 0
-  let aiSource: AiExecutionSource = 'none'
-  let aiStatus: AiExecutionStatus = 'skipped'
-  let requestAiProvider: string | undefined
-  let requestAiModel: string | undefined
-  if (asrText.trim() && aiEnabled) {
-    // Same shared policy as the recording pipeline and the cloud reprocess path.
-    const aiMinDurationSec = Math.max(0, Number(await getSetting('aiMinDurationSec', 0)) || 0)
-    const polish = await polishWithClientAi({
-      asrText,
-      durationSec,
-      startOptions: { runId: 1, systemPrompt, aiMinDurationSec },
-      logSource: 'history',
-    })
-    if (polish) {
-      llmText = polish.llmText
-      llmMs = polish.llmMs
-      aiSource = polish.aiSource
-      aiStatus = polish.aiStatus
-      requestAiProvider = polish.aiProvider
-      requestAiModel = polish.aiModel
-    }
-  }
+  const polish = await polishReprocessed(asrText, durationSec, aiEnabled, systemPrompt)
 
   return {
     asrText,
-    llmText,
+    llmText: polish.llmText,
     asrMs,
-    llmMs,
+    llmMs: polish.llmMs,
     durationSec,
-    aiSource,
-    aiStatus,
-    aiProvider: requestAiProvider,
-    aiModel: requestAiModel,
+    aiSource: polish.aiSource,
+    aiStatus: polish.aiStatus,
+    aiProvider: polish.aiProvider,
+    aiModel: polish.aiModel,
   }
 }
 
