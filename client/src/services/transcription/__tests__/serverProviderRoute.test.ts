@@ -145,4 +145,45 @@ describe('ServerProvider AI route snapshots', () => {
 
     expect(onReady).toHaveBeenCalledWith({ connectionId: 'connection-1', asr: true, llm: expectedLlm })
   })
+
+  it('keeps reporting managed readiness on reconnect after a selection-edit run', async () => {
+    // An incomplete custom profile makes a leaked per-run client route visible as llm=false.
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'server.aiSource') return mocks.storedSource
+      if (key === 'cloudAi.provider') return 'openai'
+      if (key === 'cloudAi.apiUrl') return 'https://api.openai.com/v1'
+      if (key === 'cloudAi.apiKey') return ''
+      if (key === 'cloudAi.model') return ''
+      return fallback
+    })
+    mocks.polishWithClientAi.mockResolvedValue({
+      llmText: 'Edited',
+      llmMs: 20,
+      aiSource: 'custom',
+      aiStatus: 'applied',
+    })
+    const onReady = vi.fn()
+    const onDone = vi.fn()
+    const provider = new ServerProvider()
+    await provider.connect({ onReady, onFinal: vi.fn(), onDone })
+
+    expect(provider.start({
+      runId: 1,
+      selectionAiConfig: {
+        provider: 'openai', apiUrl: 'https://api.openai.com/v1', apiKey: 'sk-edit', model: 'gpt-edit',
+        reasoningEffort: '', serviceTier: '',
+      },
+    })).toBe(true)
+    expect(provider.stop()).toBe(true)
+    wireCallbacks?.onFinal?.(serverResult)
+    wireCallbacks?.onDone?.()
+    await flushPromises()
+    expect(mocks.polishWithClientAi).toHaveBeenCalledTimes(1)
+    expect(onDone).toHaveBeenCalledTimes(1)
+
+    // The websocket module re-fires onReady with the same callbacks after an automatic reconnect.
+    wireCallbacks?.onReady?.({ connectionId: 'connection-2', asr: true, llm: true })
+
+    expect(onReady).toHaveBeenLastCalledWith({ connectionId: 'connection-2', asr: true, llm: true })
+  })
 })
