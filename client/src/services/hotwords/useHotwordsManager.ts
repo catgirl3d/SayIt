@@ -5,7 +5,6 @@ import {
   BUILTIN_SETS,
   BUILTIN_SET_ACTIVE_KEY,
   BUILTIN_SET_WORDS_KEY,
-  BUILTIN_WORD_SET,
   CUSTOM_THEME_ACTIVE_KEY,
   CUSTOM_THEMES_KEY,
   LEGACY_MANUAL_WORDS_KEY,
@@ -13,6 +12,7 @@ import {
   collectAllSourceWords,
   composeHotwords,
   createThemeId,
+  legacyWordsToMigrate,
   normalizeBuiltinSetActive,
   normalizeBuiltinSetWords,
   normalizeCustomThemeActive,
@@ -99,7 +99,7 @@ export function useHotwordsManager() {
       }
 
       let nextCustomThemes = normalizeCustomThemes(rawCustomThemes)
-      const migratedManualWords = uniqueWords(legacyManualWords).filter((w) => !BUILTIN_WORD_SET.has(w))
+      const migratedManualWords = legacyWordsToMigrate(legacyManualWords, nextSetWords, nextSetActive)
 
       if (nextCustomThemes.length === 0 && migratedManualWords.length > 0) {
         nextCustomThemes = [

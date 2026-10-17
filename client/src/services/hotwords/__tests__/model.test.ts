@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { BUILTIN_SETS, normalizeBuiltinSetWords, withBuiltinSetDefaults } from '../model'
+import { BUILTIN_SETS, legacyWordsToMigrate, normalizeBuiltinSetWords, withBuiltinSetDefaults } from '../model'
 
 describe('built-in AI hotword set', () => {
   it('does not ship Chinese words', () => {
-    const chinese = BUILTIN_SETS.ai.words.filter((word) => /[㐀-䶿一-鿿]/.test(word))
+    const chinese = BUILTIN_SETS.ai.words.filter((word) => /[\u3400-\u4dbf\u4e00-\u9fff]/.test(word))
     expect(chinese).toEqual([])
   })
 
@@ -46,5 +46,15 @@ describe('built-in hotword sets', () => {
 
   it('keep a saved empty word list instead of restoring defaults', () => {
     expect(withBuiltinSetDefaults({ code: [] }).code).toEqual([])
+  })
+
+  it('migrate legacy words that only an inactive set covers', () => {
+    // GPT stays active through the AI set; Docker would be lost if the inactive code set counted.
+    const migrated = legacyWordsToMigrate(
+      ['Docker', 'GPT', 'my term'],
+      { ai: ['GPT'], code: ['Docker'] },
+      { ai: true, code: false },
+    )
+    expect(migrated).toEqual(['Docker', 'my term'])
   })
 })

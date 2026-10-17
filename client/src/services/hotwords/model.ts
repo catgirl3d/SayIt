@@ -44,8 +44,6 @@ export const BUILTIN_SETS: Record<string, { label: string; description: string; 
   },
 }
 
-export const BUILTIN_WORD_SET = new Set(Object.values(BUILTIN_SETS).flatMap((set) => set.words))
-
 export function uniqueWords(words: string[]) {
   return Array.from(new Set(words.map((w) => w.trim()).filter(Boolean)))
 }
@@ -87,6 +85,20 @@ export function collectActiveSourceWords(
   }
 
   return uniqueWords(activeWords)
+}
+
+/**
+ * Legacy manual hotwords that move into a custom category. Words of an active built-in set are
+ * skipped because they stay active through that set; words of an inactive set are kept, otherwise
+ * the migration would silently drop them.
+ */
+export function legacyWordsToMigrate(
+  legacyWords: string[],
+  builtinWordsMap: Record<string, string[]>,
+  builtinActiveMap: Record<string, boolean>,
+): string[] {
+  const covered = new Set(collectActiveSourceWords(builtinWordsMap, builtinActiveMap, [], {}))
+  return uniqueWords(legacyWords).filter((w) => !covered.has(w))
 }
 
 export function composeHotwords(
