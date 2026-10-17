@@ -293,6 +293,20 @@ export function removeThemeWord(themes: CustomTheme[], themeId: string, word: st
   ))
 }
 
+/**
+ * Adds `word` to custom category `themeId`, or removes it when the category already has it.
+ * A case-insensitive match counts as present, so picking "GitHub" never adds a second "github".
+ */
+export function toggleThemeWord(themes: CustomTheme[], themeId: string, word: string): CustomTheme[] {
+  const lower = word.toLowerCase()
+  return themes.map((theme) => {
+    if (theme.id !== themeId) return theme
+    const present = theme.words.some((w) => w.toLowerCase() === lower)
+    const words = present ? theme.words.filter((w) => w.toLowerCase() !== lower) : [...theme.words, word]
+    return { ...theme, words }
+  })
+}
+
 export function createThemeId() {
   return `theme_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
 }

@@ -74,3 +74,17 @@ export function getBlockedBuiltinSets(state: HotwordBudgetState, keys: string[])
   }
   return blocked
 }
+/**
+ * Whether adding `word` to a custom category keeps the active list within the token budget. An
+ * inactive category adds nothing to the active list, so anything fits there. The estimate is a sum
+ * over unique words, so a word that is already active costs nothing either.
+ */
+export function termAdditionFits(
+  categoryActive: boolean,
+  activeWords: ReadonlySet<string>,
+  activeTokens: number,
+  word: string,
+): boolean {
+  if (!categoryActive || activeWords.has(word)) return true
+  return activeTokens + estimateHotwordTokens([word]) <= HOTWORD_TOKEN_BUDGET
+}

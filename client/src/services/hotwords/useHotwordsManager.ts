@@ -19,6 +19,7 @@ import {
   normalizeCustomThemes,
   parseWordsInput,
   removeThemeWord,
+  toggleThemeWord,
   uniqueWords,
 } from './model'
 import {
@@ -26,6 +27,7 @@ import {
   composeWithBuiltinSetToggled,
   estimateHotwordTokens,
   getBlockedBuiltinSets,
+  termAdditionFits,
   type HotwordBudgetState,
 } from './budget'
 import { t } from '@/i18n'
@@ -507,6 +509,53 @@ export function useHotwordsManager() {
     () => getBlockedBuiltinSets(budgetState, Object.keys(BUILTIN_SETS)),
     [budgetState],
   )
+
+  /** Whether a suggested term can still be added to the category under the token budget. */
+  const canAddSuggestedTerm = useCallback(
+    (themeId: string, word: string) => termAdditionFits(!!customThemeActive[themeId], hotwordSet, hotwordTokens, word),
+    [customThemeActive, hotwordSet, hotwordTokens],
+  )
+
+  /**
+   * Adds a suggested term to a custom category, or removes it when the category already has it.
+   * Adding to an active category is refused when it would exceed the token budget, even if the UI
+   * did not disable the term; terms typed by hand are never refused.
+   */
+  const toggleSuggestedTerm = useCallback(async (themeId: string, word: string) => {
+    const theme = customThemes.find((item) => item.id === themeId)
+    if (!theme) return
+
+    const lower = word.toLowerCase()
+    const adding = !theme.words.some((w) => w.toLowerCase() === lower)
+    if (adding && !canAddSuggestedTerm(themeId, word)) return
+
+    const nextThemes = toggleThemeWord(customThemes, themeId, word)
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      builtinSetWords,
+      builtinSetActive,
+      nextThemes,
+      customThemeActive,
+    )
+
+    setSnapshot({ customThemes: nextThemes, hotwords: updated })
+
+    await Promise.all([
+      setSetting(CUSTOM_THEMES_KEY, nextThemes),
+      syncToBackend(updated),
+    ])
+  }, [
+    builtinSetActive,
+    builtinSetWords,
+    canAddSuggestedTerm,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    setSnapshot,
+    syncToBackend,
+  ])
   const allKnownWords = useMemo(() => collectAllSourceWords(builtinSetWords, customThemes), [builtinSetWords, customThemes])
   const unknownWords = useMemo(
     () => hotwords.filter((word) => !allKnownWords.has(word)),
@@ -570,6 +619,8 @@ export function useHotwordsManager() {
     removeWordFromTheme,
     removeWordFromBuiltinSet,
     removeLegacyWord,
+    canAddSuggestedTerm,
+    toggleSuggestedTerm,
     toggleBuiltinSet,
     resetBuiltinSet,
   }

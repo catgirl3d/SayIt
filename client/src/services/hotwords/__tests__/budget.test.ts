@@ -4,6 +4,7 @@ import {
   builtinSetActivationFits,
   estimateHotwordTokens,
   getBlockedBuiltinSets,
+  termAdditionFits,
   type HotwordBudgetState,
 } from '../budget'
 import { composeHotwords, type CustomTheme } from '../model'
@@ -156,5 +157,23 @@ describe('getBlockedBuiltinSets', () => {
       small: false,
       big: true,
     })
+  })
+})
+
+describe('termAdditionFits', () => {
+  it('allows a new term while the estimate stays within the budget', () => {
+    expect(termAdditionFits(true, new Set(['Git']), HOTWORD_TOKEN_BUDGET - 4, 'Kubernetes')).toBe(true)
+  })
+
+  it('refuses a new term that would exceed the budget', () => {
+    expect(termAdditionFits(true, new Set(['Git']), HOTWORD_TOKEN_BUDGET - 3, 'Kubernetes')).toBe(false)
+  })
+
+  it('allows a term that is already active, because it costs nothing', () => {
+    expect(termAdditionFits(true, new Set(['Kubernetes']), HOTWORD_TOKEN_BUDGET + 10, 'Kubernetes')).toBe(true)
+  })
+
+  it('allows any term in an inactive category, which adds nothing to the active list', () => {
+    expect(termAdditionFits(false, new Set(['Git']), HOTWORD_TOKEN_BUDGET + 10, 'Kubernetes')).toBe(true)
   })
 })

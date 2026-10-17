@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info } from 'lucide-react'
+import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -10,6 +10,7 @@ import { exportHotwords } from '@/services/exports'
 import { HOTWORD_TOKEN_BUDGET, HOTWORD_WORD_BUDGET } from '@/services/hotwords/budget'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
 import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
+import SuggestedTermsPicker from '@/components/SuggestedTermsPicker'
 import TextReplacementSection from '@/components/TextReplacementSection'
 import TextFormatSection from '@/components/TextFormatSection'
 import { useSortable, DragHandle } from '@/components/ui/sortable'
@@ -157,9 +158,13 @@ export default function Dictionary() {
     removeWordFromTheme,
     removeWordFromBuiltinSet,
     removeLegacyWord,
+    canAddSuggestedTerm,
+    toggleSuggestedTerm,
     toggleBuiltinSet,
     resetBuiltinSet,
   } = useHotwordsManager()
+  // Only one category shows the suggested-terms picker at a time.
+  const [pickerThemeId, setPickerThemeId] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -180,6 +185,18 @@ export default function Dictionary() {
   const tokensOverBudget = hotwordTokens > HOTWORD_TOKEN_BUDGET
   // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
   const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
+  const budgetText = t('dict.budgetLabel', {
+    tokens: hotwordTokens,
+    tokenBudget: HOTWORD_TOKEN_BUDGET,
+    words: hotwords.length,
+    wordBudget: HOTWORD_WORD_BUDGET,
+  })
+  // Suggestions always offer a set's full default list, even after terms were removed from the set.
+  const suggestionSets = Object.entries(BUILTIN_SETS).map(([key, setDef]) => ({
+    key,
+    label: setDef.label,
+    words: setDef.words,
+  }))
 
   // While searching, the list is filtered and its indices no longer match the full list, so drag-and-drop is disabled in the search state
   const themeSortable = useSortable({ onMove: (from, to) => void moveTheme(from, to) })
@@ -310,12 +327,7 @@ export default function Dictionary() {
                 <span className={cn(
                   tokensOverBudget ? 'text-destructive' : tokensNearBudget ? 'text-amber-500' : 'text-muted-foreground',
                 )}>
-                  {t('dict.budgetLabel', {
-                    tokens: hotwordTokens,
-                    tokenBudget: HOTWORD_TOKEN_BUDGET,
-                    words: hotwords.length,
-                    wordBudget: HOTWORD_WORD_BUDGET,
-                  })}
+                  {budgetText}
                 </span>
                 <Tooltip
                   variant="light"
@@ -472,6 +484,16 @@ export default function Dictionary() {
                               <Plus className="h-3.5 w-3.5" />
                               {t('dict.add')}
                             </Button>
+                            <Button
+                              onClick={() => setPickerThemeId(pickerThemeId === theme.id ? null : theme.id)}
+                              size="sm"
+                              variant={pickerThemeId === theme.id ? 'secondary' : 'outline'}
+                              aria-expanded={pickerThemeId === theme.id}
+                              className="shrink-0 gap-1.5"
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              {t('dict.suggestedOpen')}
+                            </Button>
                           </div>
 
                           {activeWords.length > 0 && (
@@ -479,6 +501,16 @@ export default function Dictionary() {
                               words={activeWords}
                               onRemove={(word) => void removeWordFromTheme(theme.id, word)}
                               expandAll={!!search}
+                            />
+                          )}
+
+                          {pickerThemeId === theme.id && (
+                            <SuggestedTermsPicker
+                              sets={suggestionSets}
+                              selected={theme.words}
+                              canAdd={(word) => canAddSuggestedTerm(theme.id, word)}
+                              onToggle={(word) => void toggleSuggestedTerm(theme.id, word)}
+                              budgetText={budgetText}
                             />
                           )}
                         </div>

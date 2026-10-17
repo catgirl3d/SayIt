@@ -6,6 +6,7 @@ import {
   legacyWordsToMigrate,
   normalizeBuiltinSetWords,
   removeThemeWord,
+  toggleThemeWord,
   withBuiltinSetDefaults,
   type CustomTheme,
 } from '../model'
@@ -117,5 +118,13 @@ describe('custom category word edits', () => {
 
     const fromBoth = composeHotwords([], { code: [] }, setActive, fromTheme, themeActive)
     expect(fromBoth).not.toContain('Docker')
+  })
+
+  it('adds a suggested term to the chosen category', () => {
+    expect(toggleThemeWord(themes, 'b', 'Kubernetes')[1].words).toEqual(['Docker', 'Kubernetes'])
+  })
+
+  it('treats a case-insensitive match as present and removes it', () => {
+    expect(toggleThemeWord(themes, 'a', 'GitHub')[0].words).toEqual(['Docker'])
   })
 })
