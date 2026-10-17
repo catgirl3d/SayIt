@@ -7,7 +7,7 @@ Covers upstream 0.2.1 (`8687e9b`) and 0.2.2 (`c704300`), plus follow-up fixes.
 - The local `dev-scripts/upstream-decisions/` journal remains the authoritative record for accept/reject decisions on upstream commits; this file mirrors progress in one readable list.
 - Update this file when a port lands or a decision changes. Keep one row per feature.
 
-Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits; PR #87 ported early and shipped in fork PR #22; PR #85 ported early as fork PR #25, draft; PR #83 and #85 still open upstream; #86 declined).
+Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits. PR ports are final, no re-porting planned: #87 → fork PR #22 and #85 → fork PR #25 (both merged); #86 declined; #83 not ported; server reasoning config and a separate chat-audio route also declined; all four upstream PR heads are kept on local `pr/*` branches).
 
 ## Ported
 
@@ -24,7 +24,8 @@ Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partia
 | History/AI polish fixes: blank completion is an error, keyless providers via catalog, request-time attribution, blank keyed model guard | `6a5bfc5` |
 | Settings accessibility and AI state fixes | `2ad1715` |
 | Hotword capability matrix (Rust) + dynamic Dictionary support table + ignored-hotword diagnostics | `df2ef41` |
-| OpenRouter AI cleanup provider preset (upstream PR #87, ported early via fork PR #22) | `f6275b9`, `3cef9c2` |
+| OpenRouter AI cleanup provider preset (upstream PR #87, via fork PR #22) | `f6275b9`, `3cef9c2` |
+| Selected-text editing model override (upstream PR #85, via fork PR #25) | `1f5d99b`, `0baee8f` |
 
 ## Partial
 
@@ -32,29 +33,20 @@ Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partia
 | --- | --- |
 | Qwen models | Qwen Audio 3.0 selectable fallback; Omni HTTP/chat profile; legacy Omni alias migration for old profiles |
 | Microphones | Picker-only cleanup in `e0b376e`: duplicate default/identical IDs hidden, communications route labelled and hidden when redundant with the system default (kept when saved or targeting another device), saved routes preserved, last-listed default device shown only on an unambiguous match (not a live route guarantee). Recorder overlay label parity is unassessed; saved-ID migration is deliberately out of scope. |
-| Paste | `WM_PASTE` is sent; effect (did the field change) is not verified |
 | Late ASR result | Opt-in suppression shipped in `02866a8` (+ `5faade0`): within the existing 15 s grace, no automatic insertion; History saves when enabled and successful, otherwise the text is discarded. Suppressed results do not update personalization statistics. Upstream per-run Esc abandonment remains unported. |
-| Server AI | Fixed temperature; no reasoning settings |
 | AI policy in History | Targeted fixes only; cloud/local reprocessing not fully unified (accepted divergence) |
 | Recorder failure lifecycle | Cards done; upstream stuck-insertion watchdog intentionally skipped so far |
 | Overlay live captions | Unconfirmed flicker risk when warning payloads lack `streaming`; verify visually before treating as a bug |
 | Updater card | Consent-based updater has no downloaded-waiting state; needs design before any port |
 | Documentation | README does not list all cloud ASR providers; hotword docs stay generic |
 
-## Open (not started)
-
-- Server reasoning config (skip temperature / `reasoning_effort`).
-- OpenAI Chat Audio as a separate route (distinct from the custom OpenAI-compatible `chat` protocol).
-- Fresh review of upstream topics not covered in the first pass: recorder/paste deltas (8687e9b:09), rust shell (10), UI misc (11), services misc (c704300:05c).
-
 ## Upstream watch (open PRs, not merged)
 
-Checked 2026-10-17: upstream `main` is still at `0ceba3e` (2026-10-09); the PRs below are open by @DemonMartin. Early ports do not wait for the upstream merge and are noted per row; the journal decision is recorded only after the upstream merge, on the squashed commit. PR #86 is declined in advance (see Won't do); PR #87 was ported early and shipped in fork PR #22 (see Ported).
+Checked 2026-10-17: upstream `main` is still at `0ceba3e` (2026-10-09); none of the four @DemonMartin PRs is merged. All four PR heads are kept locally on `pr/83`–`pr/87`. Fork ports are final: no re-porting when upstream later merges (see Ported and Won't do).
 
-| PR | Feature | Size | Early assessment |
+| PR | Feature | Size | Assessment |
 | --- | --- | --- | --- |
-| #85 | Custom model for selected-text editing | 424+/18−, 19 files | Ported early in fork PR #25 (draft, open): flat service setting plus a per-run frozen snapshot; fork `reasoningEffort`/`serviceTier` preserved; the upstream `aiPolicy` refactor is not ported. Journal entry after the upstream merge. |
-| #83 | Recognition fallback chains (local/cloud/server) | 2034+/192−, 36 files | High: resilience win, no Rust; wide recorder/timing refactor (timeout 30→60 s) — adapt carefully |
+| #83 | Recognition fallback chains (local/cloud/server) | 2034+/192−, 36 files | Not ported; commits kept on `pr/83`. High resilience win, no Rust; wide recorder/timing refactor (timeout 30→60 s) — adapt carefully if taken. |
 
 ## Deferred
 
@@ -73,4 +65,6 @@ Checked 2026-10-17: upstream `main` is still at `0ceba3e` (2026-10-09); the PRs 
 | Upstream release metadata (versions, changelogs, highlights files) | Fork owns versioning and release tooling |
 | Upstream-only docs and assets (community links, Chinese README images) | No functional value for the fork |
 | Standard `input_audio` chat protocol (PR #78, `0ceba3e`) | Already the fork's only custom chat format (`455ebc6`); the DashScope data-URL chat variant stays out — Qwen/DashScope goes through the native Qwen providers |
-| GitHub contributors list on About (PR #86) | Declined in advance: hardcodes the upstream repo/API, no functional value; not planned even if merged |
+| GitHub contributors list on About (PR #86) | Declined: hardcodes the upstream repo/API, no functional value; not planned even if merged upstream |
+| Server reasoning config (skip temperature / `reasoning_effort`) | Declined 2026-10-17: server AI keeps its fixed temperature; no reasoning settings are exposed |
+| OpenAI Chat Audio as a separate route (distinct from the custom OpenAI-compatible `chat` protocol) | Declined 2026-10-17: the per-profile `chat` protocol and the native Qwen providers cover this path |
