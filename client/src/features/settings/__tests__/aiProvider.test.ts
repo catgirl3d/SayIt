@@ -18,6 +18,7 @@ import {
   migrateLegacyProfiles,
   newDraftProfile,
   normalizeModelNames,
+  normalizeProfiles,
   parseLegacyLatencies,
   parseProfiles,
   profileSubtitle,
@@ -103,6 +104,24 @@ describe('effectiveApiUrl', () => {
 
   it('does not grant optional-URL semantics to an unknown provider id', () => {
     expect(effectiveApiUrl('unknown-provider', '')).toBe('')
+  })
+})
+
+describe('normalizeProfiles', () => {
+  it('resolves a blank URL of an optional-URL provider to the official endpoint', () => {
+    const [resolved] = normalizeProfiles([profile({ id: 'or', provider: 'openrouter', apiUrl: '  ' })])
+    expect(resolved.apiUrl).toBe('https://openrouter.ai/api/v1')
+  })
+
+  it('leaves blank URLs of providers that require one untouched', () => {
+    const source = [profile({ apiUrl: '' })]
+    expect(normalizeProfiles(source)).toBe(source)
+    expect(source[0].apiUrl).toBe('')
+  })
+
+  it('returns the same list when nothing needs resolving', () => {
+    const source = [profile({ provider: 'openrouter' }), profile({ id: 'd' })]
+    expect(normalizeProfiles(source)).toBe(source)
   })
 })
 

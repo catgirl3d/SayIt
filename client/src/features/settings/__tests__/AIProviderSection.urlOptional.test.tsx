@@ -13,7 +13,6 @@ import { blankProfile, type AiProfile } from '../aiProviderCatalog'
 const storeMocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
   setSetting: vi.fn(),
-  setSettings: vi.fn(),
 }))
 
 const profileStoreMocks = vi.hoisted(() => ({
@@ -26,7 +25,6 @@ const coreMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@/services/store', () => ({
   getSetting: storeMocks.getSetting,
   setSetting: storeMocks.setSetting,
-  setSettings: storeMocks.setSettings,
 }))
 
 vi.mock('../aiProfileStore', () => ({
@@ -56,7 +54,6 @@ async function openEditor(profile: AiProfile, urlLabel: string): Promise<HTMLInp
 beforeEach(() => {
   storeMocks.getSetting.mockReset()
   storeMocks.setSetting.mockReset()
-  storeMocks.setSettings.mockReset()
   profileStoreMocks.loadAiProfiles.mockReset()
   profileStoreMocks.saveAiProfiles.mockReset()
   coreMocks.invoke.mockReset()

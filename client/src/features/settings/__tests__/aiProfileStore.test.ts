@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { saveAiProfiles } from '../aiProfileStore'
+import { loadAiProfiles, saveAiProfiles } from '../aiProfileStore'
 import * as bridge from '@/services/bridge'
 import type { AiProfile } from '../aiProviderCatalog'
 
@@ -153,5 +153,35 @@ describe('profile save serialization', () => {
     await saveAiProfiles({ profiles: [next], activeId: next.id })
 
     expect(storedSettings.get('cloudAi.activeProfileId')).toBe(next.id)
+  })
+})
+
+// Profiles can reach storage without ever passing the editor (full-backup import,
+// a hand-edited database). The optional-URL promise belongs to reading a list, so
+// load normalizes those entries and refreshes the runtime mirror; providers that
+// require a URL keep the blank as the honest "incomplete" signal.
+describe('optional-URL normalization on load', () => {
+  it('resolves a blank OpenRouter URL and refreshes the runtime mirror', async () => {
+    const stored = profile('openrouter', { id: 'p-or', apiUrl: '' })
+    storedSettings.set('cloudAi.profiles', [stored])
+    storedSettings.set('cloudAi.activeProfileId', 'p-or')
+    storedSettings.set('cloudAi.profilesMigrated', true)
+
+    const state = await loadAiProfiles()
+
+    expect(state.profiles[0].apiUrl).toBe('https://openrouter.ai/api/v1')
+    expect((storedSettings.get('cloudAi.profiles') as AiProfile[])[0].apiUrl).toBe('https://openrouter.ai/api/v1')
+    expect(storedSettings.get('cloudAi.apiUrl')).toBe('https://openrouter.ai/api/v1')
+  })
+
+  it('leaves a blank URL of a required-URL provider untouched and writes nothing', async () => {
+    storedSettings.set('cloudAi.profiles', [profile('deepseek', { id: 'p-ds', apiUrl: '' })])
+    storedSettings.set('cloudAi.activeProfileId', 'p-ds')
+    storedSettings.set('cloudAi.profilesMigrated', true)
+
+    const state = await loadAiProfiles()
+
+    expect(state.profiles[0].apiUrl).toBe('')
+    expect(bridge.storeSetAppSettings).not.toHaveBeenCalled()
   })
 })

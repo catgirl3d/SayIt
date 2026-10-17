@@ -444,6 +444,31 @@ export function effectiveApiUrl(providerValue: string, apiUrl: string): string {
   return provider.urlOptional ? provider.defaultUrl : ''
 }
 
+/**
+ * Resolve blank URLs of optional-URL providers in a loaded list.
+ *
+ * Profiles can reach storage without ever passing the editor (full-backup import,
+ * a hand-edited database), where nothing resolved the blank. The optional-URL
+ * promise belongs to reading a list, not to one screen, so ingestion normalizes
+ * those entries to the official endpoint. Providers that require a URL keep
+ * whatever was stored: the incomplete card and the save-time error stay the
+ * honest signal there.
+ *
+ * Returns the same array instance when nothing needed resolving, so a caller can
+ * use a reference comparison to decide whether to write the list back.
+ */
+export function normalizeProfiles(profiles: AiProfile[]): AiProfile[] {
+  let changed = false
+  const out = profiles.map((profile) => {
+    if (profile.apiUrl.trim()) return profile
+    const meta = findProvider(profile.provider)
+    if (!meta.urlOptional) return profile
+    changed = true
+    return { ...profile, apiUrl: meta.defaultUrl }
+  })
+  return changed ? out : profiles
+}
+
 /** The most recently saved profile of a provider that has a URL — the source for reused credentials. */
 export function lastProfileOf(profiles: AiProfile[], providerValue: string): AiProfile | undefined {
   return [...profiles].reverse().find((p) => p.provider === providerValue && p.apiUrl.trim() !== '')
