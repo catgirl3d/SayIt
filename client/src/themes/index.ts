@@ -1,7 +1,7 @@
 /**
- * 主题注册表 + 切换逻辑
+ * Theme registry and switching logic.
  *
- * 用法：
+ * Usage:
  *   import { applyTheme, getTheme, themeList } from '@/themes'
  *   applyTheme('dark')
  */
@@ -37,50 +37,50 @@ const themes: Record<string, ThemeDefinition> = {
   midnight,
 }
 
-/** 主题列表（用于 UI 渲染） */
+/** Theme list (used for UI rendering) */
 export const themeList: ThemeDefinition[] = Object.values(themes)
 
-/** 获取主题定义，找不到则回退 light */
+/** Look up a theme definition; falls back to light when the ID is unknown */
 export function getTheme(id: string): ThemeDefinition {
   return themes[id] || themes.light
 }
 
-/** 当前已应用的主题 ID */
+/** ID of the currently applied theme */
 let currentThemeId: string = 'light'
 
-/** 获取当前主题 ID */
+/** Get the ID of the currently applied theme */
 export function getCurrentThemeId(): string {
   return currentThemeId
 }
 
-/** 默认字体（与 index.css body 一致） */
+/** Default font (matches the body rule in index.css) */
 const DEFAULT_FONT_BODY = '"Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Microsoft YaHei", sans-serif'
 
 /**
- * 应用主题：将 CSS 变量注入 :root，切换 dark class，设置字体
- * @returns 实际应用的主题 ID
+ * Apply a theme: inject the CSS variables into :root, toggle the dark class and set the font.
+ * @returns the ID of the theme that was actually applied
  */
 export function applyTheme(id: string): string {
   const theme = getTheme(id)
   const root = document.documentElement
 
-  // 注入全局变量
+  // Inject the global variables
   const allVars = { ...theme.vars, ...(theme.extras || {}) }
   for (const [key, value] of Object.entries(allVars)) {
     root.style.setProperty(key, value)
   }
 
-  // 切换字体
+  // Switch the font
   document.body.style.fontFamily = theme.fonts?.body || DEFAULT_FONT_BODY
 
-  // 切换 dark class（Tailwind dark: 前缀）
+  // Toggle the dark class (Tailwind dark: prefix)
   if (theme.isDark) {
     root.classList.add('dark')
   } else {
     root.classList.remove('dark')
   }
 
-  // 切换主题标识 class（方便主题特定 CSS）
+  // Toggle the theme marker class (for theme-specific CSS)
   for (const t of themeList) {
     root.classList.remove(`theme-${t.id}`)
   }
