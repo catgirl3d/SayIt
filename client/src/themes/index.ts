@@ -11,14 +11,30 @@ import dark from './dark'
 import claude from './claude'
 import teal from './teal'
 import tealDark from './teal-dark'
+import orchid from './orchid'
+import twilight from './twilight'
+import espresso from './espresso'
+import frost from './frost'
+import moss from './moss'
+import midnight from './midnight'
 
-/** 所有已注册主题（新增主题只需在此添加一行） */
+/**
+ * All registered themes (adding a theme only takes one line here).
+ * Insertion order is display order: the theme picker lists the themes of each
+ * brightness group in this order.
+ */
 const themes: Record<string, ThemeDefinition> = {
   light,
   dark,
   claude,
   teal,
   'teal-dark': tealDark,
+  orchid,
+  twilight,
+  espresso,
+  frost,
+  moss,
+  midnight,
 }
 
 /** 主题列表（用于 UI 渲染） */

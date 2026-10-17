@@ -102,5 +102,16 @@ export interface ThemeDefinition {
   fonts?: ThemeFonts
 }
 
-/** 主题 ID 类型 */
-export type ThemeId = 'light' | 'dark' | 'claude' | 'teal' | 'teal-dark'
+/** Theme ID type */
+export type ThemeId =
+  | 'light'
+  | 'dark'
+  | 'claude'
+  | 'teal'
+  | 'teal-dark'
+  | 'orchid'
+  | 'twilight'
+  | 'espresso'
+  | 'frost'
+  | 'moss'
+  | 'midnight'
