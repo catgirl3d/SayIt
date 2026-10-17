@@ -641,7 +641,6 @@ describe('history cloud ASR reprocessing', () => {
   })
 
   it('serializes skipped AI metadata as explicit nulls to clear prior attribution', async () => {
-    mockSettings(aiSettings('ollama', 'http://127.0.0.1:11434', '', 'model-b'))
     const metadata = await buildReprocessMetadata('cloud_api', {
       asrText: 'new raw transcript',
       llmText: 'new raw transcript',
