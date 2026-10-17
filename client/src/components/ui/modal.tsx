@@ -30,6 +30,16 @@ export interface ModalProps {
   showCloseButton?: boolean
   /** Panel width class, e.g. 'w-[520px]'. max-w-[calc(100vw-2rem)] is always applied so small windows do not overflow */
   panelClassName?: string
+  /**
+   * Icon shown before the title. Passing icon, description or footer switches the panel to the
+   * sectioned layout: header and footer stay in place and only the body scrolls. Without them the
+   * whole panel scrolls, with the title as its first line.
+   */
+  icon?: ReactNode
+  /** Secondary line under the title (sectioned layout) */
+  description?: ReactNode
+  /** Footer row, separated from the body by a divider (sectioned layout) */
+  footer?: ReactNode
   children: ReactNode
 }
 
@@ -39,12 +49,16 @@ export function Modal({
   locked,
   showCloseButton,
   panelClassName,
+  icon,
+  description,
+  footer,
   children,
 }: ModalProps) {
   const t = useT()
   const panelRef = useRef<HTMLDivElement>(null)
   const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2, 8)}`).current
   const stackToken = useRef(Symbol('modal')).current
+  const sectioned = icon != null || description != null || footer != null
 
   const requestClose = useCallback(() => {
     if (!locked) onClose()
@@ -147,14 +161,40 @@ export function Modal({
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          'relative max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border bg-card p-6 shadow-xl',
+          'relative max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] rounded-xl border bg-card shadow-xl',
+          sectioned ? 'flex flex-col overflow-hidden' : 'overflow-y-auto p-6',
           panelClassName,
         )}
       >
-        {showCloseButton && closeButton('absolute right-3 top-3')}
-        {/* pr-6 keeps a long title from running under the absolutely positioned close button */}
-        <h3 id={titleId} className={cn('text-base font-semibold', showCloseButton && 'pr-6')}>{title}</h3>
-        {children}
+        {sectioned ? (
+          <>
+            <header className="shrink-0 px-6 pb-4 pt-5">
+              <div className="flex items-start gap-3">
+                {icon}
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <h3 id={titleId} className="text-[15px] font-semibold leading-snug">{title}</h3>
+                  {description != null && (
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+                  )}
+                </div>
+                {showCloseButton && closeButton('-mr-1.5 -mt-1 shrink-0')}
+              </div>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-5">{children}</div>
+            {footer != null && (
+              <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 bg-muted/20 px-6 py-3.5">
+                {footer}
+              </footer>
+            )}
+          </>
+        ) : (
+          <>
+            {showCloseButton && closeButton('absolute right-3 top-3')}
+            {/* pr-6 keeps a long title from running under the absolutely positioned close button */}
+            <h3 id={titleId} className={cn('text-base font-semibold', showCloseButton && 'pr-6')}>{title}</h3>
+            {children}
+          </>
+        )}
       </div>
     </div>,
     document.body,

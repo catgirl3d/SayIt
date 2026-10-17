@@ -102,4 +102,28 @@ describe('Modal layout', () => {
 
     expect(screen.getByText('Without close').className).not.toContain('pr-6')
   })
+
+  it('renders icon, description and footer around the body in the sectioned layout', () => {
+    const onClose = vi.fn()
+    render(
+      <Modal
+        title="Export"
+        description="Pick what to export"
+        icon={<span data-testid="icon" />}
+        footer={<button type="button">Run export</button>}
+        onClose={onClose}
+        showCloseButton
+      >
+        <p>body text</p>
+      </Modal>,
+    )
+
+    expect(screen.getByText('Pick what to export')).toBeTruthy()
+    expect(screen.getByTestId('icon')).toBeTruthy()
+    expect(screen.getByText('body text')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Run export' }).closest('footer')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
 })
