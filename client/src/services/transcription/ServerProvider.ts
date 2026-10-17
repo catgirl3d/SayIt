@@ -1,4 +1,5 @@
-// 服务器模式 Provider：服务器负责 ASR，AI 可由服务器或客户端自定义供应商完成。
+// Server mode provider: the server performs ASR; the AI stage is done either by the server or by a custom
+// provider called from this client.
 
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
@@ -68,7 +69,8 @@ export class ServerProvider implements TranscriptionProvider {
           text: result.text,
           asrMs: result.asrMs,
           durationSec: result.durationSec,
-          // 空识别不会执行任何 AI；它会在录音器的专用空结果分支先于 final 落库。
+          // An empty recognition runs no AI; the recorder's dedicated empty-result branch persists it to
+          // history before the final result arrives.
           aiSource: isEmpty ? 'none' : undefined,
           aiStatus: isEmpty ? 'skipped' : undefined,
         })
@@ -101,7 +103,8 @@ export class ServerProvider implements TranscriptionProvider {
         const runId = this.activeRunId
         if (runId === 0) return
         if (this.customFinalPending) {
-          // 服务端 final 后会立刻发 done；客户端 AI 尚未完成时必须暂存，避免录音器先收尾。
+          // The server sends done right after final; while the client AI has not finished yet, done must be
+          // held back so the recorder does not wrap up the run first.
           this.serverDonePending = true
           return
         }

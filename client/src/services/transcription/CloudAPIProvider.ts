@@ -1,6 +1,6 @@
-// 云 API 模式 Provider
-// 豆包 ASR：边录边发（实时流式）
-// 其他 ASR：录完再发（BufferedProvider）
+// Cloud API mode provider
+// Streaming ASR (Doubao; Qwen and Deepgram when live captions are on): audio is sent while recording
+// Other ASR, or a stream that failed to open: the recording is sent after it ends (buffered, as in BufferedProvider)
 
 import { isLiveRecognitionProvider, isQwenOmniProvider, isStreamingDisplayReady } from '@/lib/asrModels'
 import {
@@ -109,13 +109,14 @@ function isNativeLiveResult(value: unknown): value is NativeLiveResult {
 }
 
 /**
- * 千问两个流式模型各有一组原生命令。
+ * Each of the two Qwen streaming models has its own set of native commands.
  *
- * 它们是**两套 WebSocket 协议**，不是同一个接口的两个模型名：
- *   · qwen_realtime      → OpenAI-Realtime 风格（/api-ws/v1/realtime）
- *   · qwen_audio_stream  → DashScope duplex run-task（/api-ws/v1/inference）
- * Rust 侧因此各有一份实现（asr_qwen_realtime.rs / asr_qwen_audio_stream.rs），
- * 这里要记住本次会话用的是哪一组，收尾时才不会去 finish 另一条没开的会话。
+ * They are **two separate WebSocket protocols**, not two model names behind one endpoint:
+ *   · qwen_realtime      → OpenAI-Realtime style (/api-ws/v1/realtime)
+ *   · qwen_audio_stream  → DashScope duplex run-task (/api-ws/v1/inference)
+ * The Rust side therefore has one implementation for each (asr_qwen_realtime.rs / asr_qwen_audio_stream.rs),
+ * and this side must remember which set the current session uses, so that finishing never calls finish on
+ * the other session, which was never opened.
  */
 const QWEN_STREAM_COMMANDS = {
   qwen_realtime: {
@@ -171,22 +172,24 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private doubaoStreamReady = false
   private qwenStreamReady = false
   private deepgramStreamReady = false
-  /** 本次会话用的千问命令组；没走千问流式时为 null */
+  /** The Qwen command set this session uses; null when the run does not take the Qwen streaming path */
   private qwenCommands: QwenStreamCommands | null = null
   private streamStartTime = 0
   private pendingChunks: ArrayBuffer[] = []
   private flushTimer: ReturnType<typeof setInterval> | null = null
 
-  // 流式实时显示：中间结果事件的取消监听函数
+  // Live streaming display: the unlisten function of the partial-result event subscription
   private partialUnlisten: (() => void) | null = null
 
-  // 流式发送串行化：所有音频包经此链路顺序发送，保证收尾负包一定排在最后，
-  // 避免「音频包在负包之后到达」导致服务端报 last packet has been received already。
+  // Streaming send serialization: every audio packet goes through this chain in order, so the closing last
+  // packet (Doubao's negative-sequence packet) is always sent last. Otherwise an audio packet could arrive
+  // after the last packet and the server would report "last packet has been received already".
   private sendLock: Promise<void> = Promise.resolve()
   private streamFinishing = false
 
-  // 原生流生命周期串行化：open / finish / close 共用 Provider 级队列。
-  // cancel 会先把 close 排入旧 open 之后；下一代 open 因而只能在旧 close 完成后执行。
+  // Native stream lifecycle serialization: open / finish / close share one provider-level queue.
+  // cancel() first queues the close behind the old open, so the next generation's open can only run after
+  // the old close has completed.
   private nativeLifecycleQueue: Promise<void> = Promise.resolve()
   private liveOwner: LiveOwner | null = null
   private streamStartup: Promise<void> | null = null
@@ -207,7 +210,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
       return false
     }
 
-    // 新会话不得复用旧会话的任何逻辑状态；旧 close 会先进入生命周期队列。
+    // A new session must not reuse any logical state of the old one; the old session's close enters the
+    // lifecycle queue first.
     if (this.activeRunId !== 0) this.cancel()
 
     const runOpts = this.snapshotStartOptions(opts)
@@ -231,7 +235,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.streamOpenFailure = null
     this.asrWarning = undefined
 
-    // 异步判断供应商并建连；所有异步步骤只使用本次 run 的 StartOptions 快照。
+    // Determine the provider and open the connection asynchronously; every async step uses only this run's
+    // StartOptions snapshot.
     this.streamStartup = this.tryStartRealtimeStream(runOpts.runId, runOpts, profileSnapshot)
 
     return true
@@ -298,7 +303,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private queueNativeClose(sendLockToDrain: Promise<void>, preserveLiveDeepgramOwner = false): Promise<void> {
     return this.enqueueNativeLifecycle(async () => {
       await sendLockToDrain.catch(() => { })
-      // 逐个关：每个 close 在没有会话时都是无操作，所以不需要先判断开了哪一个。
+      // Close them one by one: each close is a no-op when no session is open, so there is no need to check
+      // first which one was opened.
       await invoke('doubao_stream_close').catch(() => { })
       await invoke('qwen_stream_close').catch(() => { })
       await invoke('qwen_audio_stream_close').catch(() => { })
@@ -342,7 +348,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
     })
   }
 
-  /** 订阅 Rust 上抛的流式中间识别结果，实时转发给上层用于悬浮窗上屏 */
+  /**
+   * Subscribes to the streaming partial recognition results emitted by Rust and forwards them live
+   * to the upper layer for display in the overlay
+   */
   private async subscribePartials(runId: number): Promise<void> {
     if (this.partialUnlisten) return
     let partialCount = 0
@@ -351,7 +360,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
       if (!this.sessionActive && this.pcmBuffers.length === 0) return
       const text = event.payload?.text ?? ''
       partialCount++
-      // 只记录第一条，避免刷屏；证明前端确实收到了 Rust 上抛的中间结果
+      // Log only the first one to avoid flooding the log; it proves the frontend really receives the partial
+      // results emitted by Rust
       if (partialCount === 1) {
         addRuntimeEvent('info', 'cloud_api', 'First streaming partial received', { textLen: text.length })
       }
@@ -375,11 +385,11 @@ export class CloudAPIProvider implements TranscriptionProvider {
   sendAudio(buffer: ArrayBuffer): void {
     if (!this.sessionActive) return
 
-    // 始终缓存一份（用于非豆包场景 + 音频保存）
+    // Always keep a full copy (for the buffered path, including a stream fallback, and for saving the audio)
     this.pcmBuffers.push(buffer.slice(0))
 
-    // 豆包/千问流式：攒到 pendingChunks，由定时器批量发送。
-    // 收尾阶段不再接收新音频，确保负包之后不会再有音频包。
+    // Doubao / Qwen / Deepgram streaming: collect into pendingChunks, which a timer sends in batches.
+    // No new audio is accepted during the finish phase, so no audio packet can follow the last packet.
     if ((this.isDoubaoStream || this.isQwenStream || this.isDeepgramStream) && !this.streamFinishing) {
       this.pendingChunks.push(buffer.slice(0))
     }
@@ -806,7 +816,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
   }
 
 
-  // ── 豆包流式建连 ──
+  // ── Streaming connection setup (Doubao / Deepgram / Qwen) ──
 
   private async tryStartRealtimeStream(
     runId: number,
@@ -819,20 +829,21 @@ export class CloudAPIProvider implements TranscriptionProvider {
       const qwenWorkspaceId = profile?.workspaceId ?? ''
       if (!this.isRunCurrent(runId)) return
 
-      // 是否为本次会话开启「流式实时显示」：直接读设置（单一真源，避免录音器缓存过期），
-      // 结合本次 start 快照兜底，并要求当前供应商在当前配置下真正就绪（qwen 需 WorkspaceId）。
+      // Whether to enable live streaming display for this session: read the setting directly (single source
+      // of truth, so a stale recorder cache cannot decide), fall back to this start's snapshot, and require the
+      // current provider to be actually ready under its current configuration (qwen_realtime needs a WorkspaceId).
       const settingOn = Boolean(await getSetting('streamingDisplayEnabled', false))
       if (!this.isRunCurrent(runId)) return
       const realtime = (settingOn || Boolean(startOpts.streamingDisplay)) && isStreamingDisplayReady(asrProvider, qwenWorkspaceId)
       addRuntimeEvent('info', 'cloud_api', 'Streaming display decision', { asrProvider, settingOn, startOpt: Boolean(startOpts.streamingDisplay), hasWorkspace: Boolean(qwenWorkspaceId), realtime, runId })
       if (realtime) {
-        // 先订阅中间结果，避免建连后、订阅前丢帧
+        // Subscribe to partial results first, so no frames are lost between opening the connection and subscribing
         await this.subscribePartials(runId)
         if (!this.isRunCurrent(runId)) return
       }
 
       if (asrProvider === 'doubao_v2') {
-        // 豆包流式
+        // Doubao streaming
         if (!profile) return
         this.isDoubaoStream = true
         const credentials = effectiveAsrCredentials(profile)
@@ -898,16 +909,17 @@ export class CloudAPIProvider implements TranscriptionProvider {
         this.qwenStreamReady = true
         addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: ready', { asrProvider })
       } else {
-        // 其他情况（含未配置 WorkspaceId 的千问）走录完再发的一次性识别
+        // Everything else (including qwen_realtime without a configured WorkspaceId) uses one-shot recognition
+        // after the recording ends
         this.teardownPartials()
         return
       }
 
-      // 补发建连期间已缓存的音频
+      // Send the audio buffered while the connection was opening
       await this.flushPendingChunks(runId)
       if (!this.isRunCurrent(runId)) return
 
-      // 启动定时器，每 200ms 批量发送一次（收尾阶段不再触发新发送）
+      // Start a timer that sends one batch every 200ms (no new sends are triggered during the finish phase)
       this.flushTimer = setInterval(() => {
         if (!this.isRunCurrent(runId) || this.streamFinishing) return
         const ready = this.doubaoStreamReady || this.qwenStreamReady || this.deepgramStreamReady
@@ -934,9 +946,9 @@ export class CloudAPIProvider implements TranscriptionProvider {
     }
   }
 
-  /** 把一次批量发送排入串行链路，返回可 await 的 Promise。
-   *  链式串行保证多次 flush、以及收尾前的最终 flush 都严格按顺序送达 Rust，
-   *  绝不会出现音频包穿插到负包之后。 */
+  /** Queues one batch send onto the serial chain and returns a Promise that can be awaited.
+   *  The chain guarantees that repeated flushes, and the final flush before finishing, all reach Rust
+   *  strictly in order, so an audio packet can never slip in after the last packet. */
   private flushPendingChunks(runId: number): Promise<void> {
     const run = async () => {
       if (!this.isRunCurrent(runId) || this.pendingChunks.length === 0) return
@@ -968,19 +980,19 @@ export class CloudAPIProvider implements TranscriptionProvider {
         if (this.isDeepgramStream) this.deepgramStreamReady = false
       }
     }
-    // 接到发送链尾部，串行执行（无论前一个成功或失败都继续）
+    // Append to the tail of the send chain and run serially (continue whether the previous send succeeded or failed)
     this.sendLock = this.sendLock.then(run, run)
     return this.sendLock
   }
 
-  // ── 处理逻辑 ──
+  // ── Processing ──
 
   private async runProcess(
     runId: number,
     startOpts: Readonly<StartOptions>,
     profileSnapshot: Promise<AsrProfile | null>,
   ): Promise<void> {
-    const stopTime = performance.now() // stop 时刻，用于计算流式模式的等待时间
+    const stopTime = performance.now() // the moment stop ran; used to compute the wait time in streaming mode
     const startTime = this.streamStartTime || stopTime
 
     try {
@@ -1048,8 +1060,9 @@ export class CloudAPIProvider implements TranscriptionProvider {
           asrMs = Math.round(performance.now() - finishStart)
           addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: recognition complete', { asrMs, textLen: asrText.length })
         } else {
-          // 命令组在 qwenStreamReady 之前就已赋值，这里只是让类型收窄；
-          // 真为空就抛出去，而不是悄悄返回空文本（空结果会被显示成「没听到声音」）。
+          // The command set is assigned before qwenStreamReady is set; this only narrows the type.
+          // If it really is empty, throw instead of quietly returning empty text (an empty result would be
+          // shown as "no speech heard").
           const commands = this.qwenCommands
           if (!commands) throw new Error('Qwen streaming session has no native command set')
           addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: sending finish', { command: commands.finish })
@@ -1061,7 +1074,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
           addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: recognition complete', { asrMs, textLen: asrText.length })
         }
       } else {
-        // 非豆包 / 豆包建连失败：录完再发
+        // No ready stream (a non-streaming provider, or a stream that failed to open): send the recording
+        // after it ends
         const merged = new Uint8Array(totalBytes)
         let offset = 0
         for (const buf of this.pcmBuffers) {
@@ -1100,13 +1114,13 @@ export class CloudAPIProvider implements TranscriptionProvider {
       }
 
       this.pcmBuffers = []
-      // ASR 已拿到最终文本，后续不再有中间结果，撤下监听
+      // ASR has the final text and no more partial results will arrive, so remove the listener
       this.teardownPartials()
 
-      // 还原被 ASR 拆开加空格的无空格热词（如豆包把 "SayIt" 识别成 "Say It"）
+      // Restore space-free hotwords that the ASR split with a space (e.g. Doubao recognizing "SayIt" as "Say It")
       asrText = restoreHotwordSpacing(asrText, startOpts.hotwords ?? [])
 
-      // 发送 ASR 中间结果
+      // Report the intermediate ASR result (before the AI stage)
       this.callbacks.onASR?.({
         text: asrText,
         asrMs,
