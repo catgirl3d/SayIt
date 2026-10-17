@@ -20,6 +20,7 @@ import {
   AI_PROVIDERS,
   aiSettingKey,
   migrateLegacyProfiles,
+  normalizeProfiles,
   parseLegacyLatencies,
   parseProfiles,
   resolveActiveProfile,
@@ -98,9 +99,12 @@ async function loadAiProfilesUnlocked(): Promise<AiProfileState> {
     getSetting(AI_ACTIVE_PROFILE_KEY, '') as Promise<string>,
   ])
 
-  let profiles = parseProfiles(rawProfiles)
+  const parsedProfiles = parseProfiles(rawProfiles)
+  let profiles = normalizeProfiles(parsedProfiles)
   let activeId = storedActiveId
-  let needsWrite = false
+  // Normalized entries (and their runtime mirror) must be written back, not just
+  // shown: the flat keys are what the recording pipeline reads.
+  let needsWrite = profiles !== parsedProfiles
 
   if (!migrated) {
     // Existing users: flatten each provider's candidate models into individual services;

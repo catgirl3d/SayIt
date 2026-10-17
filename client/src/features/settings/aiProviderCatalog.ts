@@ -26,6 +26,14 @@ export interface AiProvider {
    */
   label: string
   defaultUrl: string
+  /**
+   * A blank URL means "use the official endpoint" for this provider.
+   *
+   * Only a provider whose endpoint is defined in this catalog can make that
+   * promise: a blank field must not silently disable saving, testing, or model
+   * loading, and every path resolves it through effectiveApiUrl().
+   */
+  urlOptional?: boolean
   /** 建议的模型，第一个作为新建时的默认值；同时作为表单里的快速选择 */
   defaultModels: string[]
   /** No API key required (currently only local Ollama) */
@@ -84,6 +92,18 @@ export const AI_PROVIDERS: AiProvider[] = [
     defaultUrl: 'https://opencode.ai/zen/go/v1',
     defaultModels: ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k2.6'],
     consoleUrl: 'https://opencode.ai/auth',
+  },
+  {
+    value: 'openrouter',
+    // Brand name, identical in every locale (same handling as DeepSeek and Groq).
+    label: 'OpenRouter',
+    // Rust appends /chat/completions and derives /models from it for the model list.
+    defaultUrl: 'https://openrouter.ai/api/v1',
+    // The only provider that accepts a blank URL: the field starts prefilled, and
+    // clearing it means "use the official endpoint" instead of blocking the save.
+    urlOptional: true,
+    defaultModels: ['deepseek/deepseek-v4.1-flash'],
+    consoleUrl: 'https://openrouter.ai/settings/keys',
   },
   {
     value: 'openai_compat',
@@ -406,6 +426,47 @@ export function resolveActiveProfile(profiles: AiProfile[], activeId: string): A
 export function newDraftProfile(profiles: AiProfile[], activeId: string): AiProfile {
   const active = resolveActiveProfile(profiles, activeId)
   return blankProfile(active?.provider)
+}
+
+/**
+ * Resolve the URL a save, a connection test, or a model-list request should use.
+ *
+ * A provider marked urlOptional treats a blank field as its official endpoint, so
+ * clearing the field must neither block the request nor change where it goes.
+ * The editor's save path and its live checks all call this, so they cannot drift;
+ * the stored profile always carries the resolved value, which keeps
+ * isProfileComplete() and the custom-host display working unchanged.
+ */
+export function effectiveApiUrl(providerValue: string, apiUrl: string): string {
+  const trimmed = apiUrl.trim()
+  if (trimmed) return trimmed
+  const provider = findProvider(providerValue)
+  return provider.urlOptional ? provider.defaultUrl : ''
+}
+
+/**
+ * Resolve blank URLs of optional-URL providers in a loaded list.
+ *
+ * Profiles can reach storage without ever passing the editor (full-backup import,
+ * a hand-edited database), where nothing resolved the blank. The optional-URL
+ * promise belongs to reading a list, not to one screen, so ingestion normalizes
+ * those entries to the official endpoint. Providers that require a URL keep
+ * whatever was stored: the incomplete card and the save-time error stay the
+ * honest signal there.
+ *
+ * Returns the same array instance when nothing needed resolving, so a caller can
+ * use a reference comparison to decide whether to write the list back.
+ */
+export function normalizeProfiles(profiles: AiProfile[]): AiProfile[] {
+  let changed = false
+  const out = profiles.map((profile) => {
+    if (profile.apiUrl.trim()) return profile
+    const meta = findProvider(profile.provider)
+    if (!meta.urlOptional) return profile
+    changed = true
+    return { ...profile, apiUrl: meta.defaultUrl }
+  })
+  return changed ? out : profiles
 }
 
 /** The most recently saved profile of a provider that has a URL — the source for reused credentials. */

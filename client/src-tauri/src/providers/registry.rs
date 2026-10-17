@@ -18,6 +18,7 @@ const OPENAI_COMPAT_PROVIDERS: &[&str] = &[
     "mimo",
     "groq",
     "opencode_go",
+    "openrouter",
 ];
 
 fn is_openai_compat_provider(provider: &str) -> bool {
@@ -246,6 +247,10 @@ mod tests {
         assert!(
             is_openai_compat_provider("openai"),
             "the openai preset must dispatch to the shared OpenAI-compatible implementation"
+        );
+        assert!(
+            is_openai_compat_provider("openrouter"),
+            "the openrouter preset must dispatch to the shared OpenAI-compatible implementation"
         );
         assert!(!is_openai_compat_provider("ollama"));
         assert!(!is_openai_compat_provider("unknown_provider"));

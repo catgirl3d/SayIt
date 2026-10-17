@@ -7,6 +7,7 @@ import {
   buildAiProviderConfig,
   checkAiKeyFormat,
   checkApiUrl,
+  effectiveApiUrl,
   extractTestReply,
   formatCheckedAt,
   formatLatency,
@@ -17,6 +18,7 @@ import {
   migrateLegacyProfiles,
   newDraftProfile,
   normalizeModelNames,
+  normalizeProfiles,
   parseLegacyLatencies,
   parseProfiles,
   profileSubtitle,
@@ -64,6 +66,62 @@ describe('OpenCode Go provider preset', () => {
     expect(findProvider('opencode_go').defaultUrl).toBe('https://opencode.ai/zen/go/v1')
     expect(blankProfile('opencode_go')).toMatchObject({ provider: 'opencode_go', model: 'deepseek-v4.1-flash' })
     expect(checkAiKeyFormat('opencode_go', 'anything')).toBe('')
+  })
+})
+
+describe('OpenRouter provider preset', () => {
+  it('uses the official endpoint, the V4.1 Flash default, the console link, and an optional URL', () => {
+    const openrouter = findProvider('openrouter')
+    expect(openrouter.defaultUrl).toBe('https://openrouter.ai/api/v1')
+    expect(openrouter.urlOptional).toBe(true)
+    expect(openrouter.consoleUrl).toBe('https://openrouter.ai/settings/keys')
+    expect(blankProfile('openrouter')).toMatchObject({
+      provider: 'openrouter',
+      apiUrl: 'https://openrouter.ai/api/v1',
+      model: 'deepseek/deepseek-v4.1-flash',
+    })
+  })
+
+  it('is the only provider whose URL may be left blank', () => {
+    expect(AI_PROVIDERS.filter((p) => p.urlOptional).map((p) => p.value)).toEqual(['openrouter'])
+  })
+})
+
+describe('effectiveApiUrl', () => {
+  it('falls back to the official endpoint for an optional-URL provider', () => {
+    expect(effectiveApiUrl('openrouter', '')).toBe('https://openrouter.ai/api/v1')
+    expect(effectiveApiUrl('openrouter', '   ')).toBe('https://openrouter.ai/api/v1')
+  })
+
+  it('keeps a custom URL and trims surrounding whitespace', () => {
+    expect(effectiveApiUrl('openrouter', ' https://proxy.example/v1 ')).toBe('https://proxy.example/v1')
+  })
+
+  it('leaves a blank URL blank for providers that require one', () => {
+    expect(effectiveApiUrl('deepseek', '')).toBe('')
+    expect(effectiveApiUrl('deepseek', '  ')).toBe('')
+  })
+
+  it('does not grant optional-URL semantics to an unknown provider id', () => {
+    expect(effectiveApiUrl('unknown-provider', '')).toBe('')
+  })
+})
+
+describe('normalizeProfiles', () => {
+  it('resolves a blank URL of an optional-URL provider to the official endpoint', () => {
+    const [resolved] = normalizeProfiles([profile({ id: 'or', provider: 'openrouter', apiUrl: '  ' })])
+    expect(resolved.apiUrl).toBe('https://openrouter.ai/api/v1')
+  })
+
+  it('leaves blank URLs of providers that require one untouched', () => {
+    const source = [profile({ apiUrl: '' })]
+    expect(normalizeProfiles(source)).toBe(source)
+    expect(source[0].apiUrl).toBe('')
+  })
+
+  it('returns the same list when nothing needs resolving', () => {
+    const source = [profile({ provider: 'openrouter' }), profile({ id: 'd' })]
+    expect(normalizeProfiles(source)).toBe(source)
   })
 })
 
@@ -388,6 +446,31 @@ describe('applyProviderSwitch', () => {
     expect(next.apiUrl).toBe('http://127.0.0.1:9000/v1')
     expect(next.apiKey).toBe('sk-mine')
     expect(next.models).toEqual(['my-local-model'])
+  })
+
+  it('seeds the target provider default when the optional URL was cleared', () => {
+    const draft = { ...blankProfile('openrouter'), apiUrl: '' }
+    const next = applyProviderSwitch(draft, ['deepseek/deepseek-v4.1-flash'], 'deepseek', [])
+    expect(next.apiUrl).toBe(findProvider('deepseek').defaultUrl)
+    expect(next.models).toEqual(['deepseek-v4-flash'])
+  })
+
+  it('switches into and out of OpenRouter without leaking a URL or key', () => {
+    const saved = { ...blankProfile('openrouter'), id: 'or', apiKey: 'sk-or-test' }
+    const draft = { ...blankProfile('openrouter'), apiKey: 'sk-or-test' }
+    const away = applyProviderSwitch(draft, ['deepseek/deepseek-v4.1-flash'], 'groq', [saved])
+    expect(away.apiUrl).toBe(findProvider('groq').defaultUrl)
+    expect(away.apiKey).toBe('')
+
+    const back = applyProviderSwitch(
+      { ...draft, provider: away.provider, apiUrl: away.apiUrl, apiKey: away.apiKey },
+      away.models,
+      'openrouter',
+      [saved],
+    )
+    expect(back.apiUrl).toBe(findProvider('openrouter').defaultUrl)
+    expect(back.apiKey).toBe('sk-or-test')
+    expect(back.models).toEqual(['deepseek/deepseek-v4.1-flash'])
   })
 })
 

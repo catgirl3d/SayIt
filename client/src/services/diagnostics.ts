@@ -34,6 +34,7 @@ const CLOUD_PROVIDERS = new Set([
   'doubao',
   'groq',
   'opencode_go',
+  'openrouter',
 ])
 
 function normalizeProvider(value: unknown, mode: string): 'local' | 'server' | 'cloud' | 'unknown' {
