@@ -39,6 +39,19 @@ vi.mock('@/services/bridge', async (importOriginal) => {
 
 import History from '../History'
 
+function makeRecord(id: string, text: string) {
+  return {
+    id,
+    timestamp: Date.now(),
+    asrText: text,
+    llmText: text,
+    asrMs: 10,
+    llmMs: 0,
+    durationSec: 1,
+    charCount: text.length,
+  }
+}
+
 async function openClearDialog() {
   fireEvent.click(screen.getByRole('button', { name: t('history.clear') }))
   return screen.getByRole('dialog')
@@ -58,16 +71,7 @@ describe('history clearing', () => {
   })
 
   it('shows a load error without claiming the history is empty, then restores records after retry', async () => {
-    const record = {
-      id: 'record-1',
-      timestamp: Date.now(),
-      asrText: 'recognized text',
-      llmText: 'recognized text',
-      asrMs: 10,
-      llmMs: 0,
-      durationSec: 1,
-      charCount: 16,
-    }
+    const record = makeRecord('record-1', 'recognized text')
     mocks.listHistory.mockReset().mockRejectedValueOnce(new Error('history unavailable')).mockResolvedValueOnce([record])
     mocks.countHistory.mockReset().mockResolvedValueOnce(0).mockResolvedValueOnce(1)
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
@@ -84,6 +88,27 @@ describe('history clearing', () => {
     await waitFor(() => expect(screen.getAllByText('recognized text').length).toBeGreaterThan(0))
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByText(t('history.empty'))).toBeNull()
+  })
+
+  it('drops rows from the previous filter when a filter change fails to load', async () => {
+    const record = makeRecord('record-2', 'all records text')
+    mocks.listHistory.mockReset().mockImplementation(async (query: { favoriteOnly?: boolean }) => {
+      if (query.favoriteOnly) throw new Error('favorites unavailable')
+      return [record]
+    })
+    mocks.countHistory.mockReset().mockResolvedValue(2)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    render(<History />)
+    await screen.findAllByText('all records text')
+    expect(screen.getByRole('button', { name: t('history.loadMore') })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: t('history.filterFavorites') }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(t('history.loadError'))
+    expect(screen.queryAllByText('all records text')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: t('history.loadMore') })).toBeNull()
   })
 
   it('reports an export failure and clears it after a successful retry', async () => {

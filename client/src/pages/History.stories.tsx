@@ -96,3 +96,15 @@ export const Empty: Story = {
     },
   },
 }
+
+export const LoadError: Story = {
+  parameters: {
+    tauri: {
+      commands: {
+        history_list: () => { throw new Error('history unavailable') },
+        history_count: () => 0,
+      },
+      settings,
+    },
+  },
+}

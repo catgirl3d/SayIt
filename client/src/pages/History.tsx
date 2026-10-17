@@ -402,7 +402,7 @@ export default function History() {
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
   const [totalCount, setTotalCount] = useState(0)
   const [exportResult, setExportResult] = useState<{ filePath: string | null; canceled: boolean } | null>(null)
-  const [exportError, setExportError] = useState(false)
+  const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'failed'>('idle')
   const [reprocessWarning, setReprocessWarning] = useState<AsrWarningCode | null>(null)
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
@@ -425,6 +425,9 @@ export default function History() {
     } catch (error) {
       if (requestGeneration !== loadRequestGeneration.current) return
       console.error('[history] Failed to load history:', error)
+      // Drop rows from the previous query so a failed load never shows records that may not match the current filter
+      setRecords([])
+      setTotalCount(0)
       setLoadError(true)
     }
   }, [])
@@ -490,16 +493,23 @@ export default function History() {
     setRecords((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
   }
 
+  // The export button is disabled while exporting, so attempts never overlap and need no generation guard.
+  useEffect(() => {
+    if (!exportResult || exportResult.canceled) return
+    const timer = setTimeout(() => setExportResult(null), 8000)
+    return () => clearTimeout(timer)
+  }, [exportResult])
+
   const handleExport = async () => {
-    setExportError(false)
+    setExportStatus('exporting')
     setExportResult(null)
     try {
       const result = await exportHistory({ keyword: debouncedKeyword })
       setExportResult(result)
-      if (!result.canceled) setTimeout(() => setExportResult(null), 8000)
+      setExportStatus('idle')
     } catch (error) {
       console.error('[history] Failed to export history:', error)
-      setExportError(true)
+      setExportStatus('failed')
     }
   }
 
@@ -659,6 +669,7 @@ export default function History() {
             <Button
               variant="ghost"
               size="icon"
+              disabled={exportStatus === 'exporting'}
               className="h-8 w-8 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
               onClick={() => void handleExport()}
               aria-label={t('history.export')}
@@ -700,7 +711,7 @@ export default function History() {
       {exportResult?.canceled && (
         <p className="mb-3 text-xs text-muted-foreground">{t('history.exportCanceled')}</p>
       )}
-      {exportError && <Feedback className="mb-3" tone="error" message={t('history.exportError')} />}
+      {exportStatus === 'failed' && <Feedback className="mb-3" tone="error" message={t('history.exportError')} />}
       {loadError && (
         <Feedback
           className="mb-3"
