@@ -1,6 +1,6 @@
-// 本地模式 Provider
-// 音频在本地积攒，stop 时调用 Rust 侧本地 ASR 推理
-// ASR 完成后可选调用云端 AI 校对
+// Local mode provider
+// Audio is buffered locally; stop triggers local ASR inference on the Rust side
+// After ASR completes, the shared client-AI executor may clean up the text
 
 import { invoke } from '@tauri-apps/api/core'
 import { getSetting } from '../store'

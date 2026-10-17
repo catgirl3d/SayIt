@@ -28,7 +28,8 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
 }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
-vi.mock('@/services/transcription/clientAiPolish', () => ({
+vi.mock('@/services/transcription/clientAiPolish', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/transcription/clientAiPolish')>(),
   polishWithClientAi: (...args: unknown[]) => harness.polish(...args),
 }))
 

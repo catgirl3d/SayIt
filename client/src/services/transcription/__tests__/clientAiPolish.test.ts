@@ -16,8 +16,10 @@ vi.mock('../../debugLog', () => ({
   addRuntimeEvent: (...args: unknown[]) => boundaries.addRuntimeEvent(...args),
 }))
 
+import type { TextContext } from '@/types/appContext'
 import { resolveContextAwareOutput } from '../../contextAware'
-import { polishWithClientAi } from '../clientAiPolish'
+import { polishWithClientAi, skippedPolishResult } from '../clientAiPolish'
+import type { StartOptions } from '../types'
 
 const ASR_COMMAND = 'make this more formal'
 const ORIGINAL_SELECTION = '\tOriginal selection\r\n  '
@@ -296,5 +298,83 @@ describe('client AI polish completion handling', () => {
     const call = boundaries.invoke.mock.calls.find(([command]) => command === 'cloud_polish')
     const aiConfig = (call?.[1] as { request: { ai_config: Record<string, unknown> } }).request.ai_config
     expect(aiConfig.extra).toBeUndefined()
+  })
+})
+
+const makeTextContext = (selectedText: string): TextContext => ({
+  source: 'uia',
+  textBefore: 'before',
+  selectedText,
+  textAfter: 'after',
+  selectionTruncated: false,
+})
+
+const makeStartOptions = (selectedText: string): Pick<StartOptions, 'textContext'> => ({
+  textContext: makeTextContext(selectedText),
+})
+
+describe('skippedPolishResult', () => {
+  it('uses ASR text and leaves contextApplied undefined without text context', () => {
+    expect(skippedPolishResult('recognized')).toStrictEqual({
+      llmText: 'recognized',
+      llmMs: 0,
+      contextApplied: undefined,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('uses ASR text when options exist without text context', () => {
+    expect(skippedPolishResult('recognized', {})).toStrictEqual({
+      llmText: 'recognized',
+      llmMs: 0,
+      contextApplied: undefined,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('uses non-empty selected text and marks context as not applied', () => {
+    expect(skippedPolishResult('recognized', makeStartOptions('selected'))).toStrictEqual({
+      llmText: 'selected',
+      llmMs: 0,
+      contextApplied: false,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('falls back to ASR text for an empty selected text value', () => {
+    expect(skippedPolishResult('recognized', makeStartOptions(''))).toStrictEqual({
+      llmText: 'recognized',
+      llmMs: 0,
+      contextApplied: false,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('preserves whitespace-only selected text', () => {
+    expect(skippedPolishResult('recognized', makeStartOptions('   '))).toStrictEqual({
+      llmText: '   ',
+      llmMs: 0,
+      contextApplied: false,
+      aiSource: 'none',
+      aiStatus: 'skipped',
+    })
+  })
+
+  it('does not mutate the input options or nested text context', () => {
+    const startOptions = makeStartOptions('selected')
+    const originalTextContext = startOptions.textContext
+    const before = {
+      ...startOptions,
+      textContext: { ...startOptions.textContext },
+    }
+
+    skippedPolishResult('recognized', startOptions)
+
+    expect(startOptions).toStrictEqual(before)
+    expect(startOptions.textContext).toBe(originalTextContext)
   })
 })

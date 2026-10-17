@@ -1,9 +1,11 @@
-// 服务器模式 Provider：服务器负责 ASR，AI 可由服务器或客户端自定义供应商完成。
+// Server mode provider: the server performs ASR; the AI stage is done either by the server or by a custom
+// provider called from this client.
 
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
+import { resolveAiPolishRoute, type AiPolishRoute } from './aiPolicy'
 import {
   getRuntimeServerAiSource,
   loadServerAiSource,
@@ -23,7 +25,11 @@ export class ServerProvider implements TranscriptionProvider {
   private callbacks: TranscriptionCallbacks = {}
   private activeRunId = 0
   private activeStartOpts: Readonly<StartOptions> | undefined
-  private aiSource: ServerAiSource = 'managed'
+  // Where the configured source runs the AI stage. Readiness reads only this: the websocket re-fires onReady after
+  // an automatic reconnect, and a per-run selection override must not decide the connection's llm state.
+  private sourceRoute: AiPolishRoute = 'server_managed'
+  // Captured in start() for the active run, including the selection-edit override.
+  private runRoute: AiPolishRoute = 'server_managed'
   private customAiReady = false
   private customFinalPending = false
   private serverDonePending = false
@@ -37,7 +43,7 @@ export class ServerProvider implements TranscriptionProvider {
       getSetting('cloudAi.apiKey', '') as Promise<string>,
       getSetting('cloudAi.model', '') as Promise<string>,
     ])
-    this.aiSource = storedSource === 'custom' ? 'custom' : 'managed'
+    this.sourceRoute = this.routeForSource(storedSource)
     this.customAiReady = Boolean(
       customUrl.trim()
       && customModel.trim()
@@ -52,8 +58,8 @@ export class ServerProvider implements TranscriptionProvider {
         callbacks.onReady?.({
           connectionId: data.connectionId,
           asr: data.asr,
-          // 自定义 AI 在本机执行；服务端 llm=false 不应把整条模式标成不可用。
-          llm: this.aiSource === 'custom' ? this.customAiReady : data.llm,
+          // Custom AI runs on this machine; server llm=false must not mark the whole mode unavailable.
+          llm: this.sourceRoute === 'client' ? this.customAiReady : data.llm,
         })
       },
       onASR: (result) => {
@@ -63,7 +69,8 @@ export class ServerProvider implements TranscriptionProvider {
           text: result.text,
           asrMs: result.asrMs,
           durationSec: result.durationSec,
-          // 空识别不会执行任何 AI；它会在录音器的专用空结果分支先于 final 落库。
+          // An empty recognition runs no AI; the recorder's dedicated empty-result branch persists it to
+          // history before the final result arrives.
           aiSource: isEmpty ? 'none' : undefined,
           aiStatus: isEmpty ? 'skipped' : undefined,
         })
@@ -71,7 +78,7 @@ export class ServerProvider implements TranscriptionProvider {
       onFinal: (result) => {
         const runId = this.activeRunId
         if (runId === 0) return
-        if (this.aiSource === 'custom') {
+        if (this.runRoute === 'client') {
           this.customFinalPending = true
           void this.handleCustomFinal(runId, result)
           return
@@ -96,7 +103,8 @@ export class ServerProvider implements TranscriptionProvider {
         const runId = this.activeRunId
         if (runId === 0) return
         if (this.customFinalPending) {
-          // 服务端 final 后会立刻发 done；客户端 AI 尚未完成时必须暂存，避免录音器先收尾。
+          // The server sends done right after final; while the client AI has not finished yet, done must be
+          // held back so the recorder does not wrap up the run first.
           this.serverDonePending = true
           return
         }
@@ -114,13 +122,19 @@ export class ServerProvider implements TranscriptionProvider {
   acceptsTextContext(): boolean {
     // A custom AI is called by this client with the context as a plain user-message section. The managed server
     // AI gets it over the wire; a legacy server only gets a compatibility capsule written for selection editing.
-    return getRuntimeServerAiSource() === 'custom' || ws.supportsTextContext()
+    return this.routeForSource(getRuntimeServerAiSource()) === 'client' || ws.supportsTextContext()
   }
 
   start(opts: StartOptions): boolean {
-    // A selection-edit service is called by this client for this run only; otherwise the
-    // source stays whatever the settings page last chose (it can change without a mode switch).
-    this.aiSource = opts.selectionAiConfig ? 'custom' : getRuntimeServerAiSource()
+    // The source is whatever the settings page last chose (it can change without a mode switch). A
+    // selection-edit service is called by this client for this run only, so it changes the run route alone.
+    const source = getRuntimeServerAiSource()
+    this.sourceRoute = this.routeForSource(source)
+    this.runRoute = resolveAiPolishRoute({
+      workMode: 'server',
+      serverAiSource: source,
+      selectionAiChosen: Boolean(opts.selectionAiConfig),
+    })
     this.activeRunId = opts.runId
     this.activeStartOpts = {
       ...opts,
@@ -130,7 +144,7 @@ export class ServerProvider implements TranscriptionProvider {
     this.customFinalPending = false
     this.serverDonePending = false
 
-    const wireOptions = this.aiSource === 'custom'
+    const wireOptions = this.runRoute === 'client'
       ? {
         ...opts,
         // Custom AI runs on this machine: the server only does ASR, so it must not receive
@@ -164,7 +178,7 @@ export class ServerProvider implements TranscriptionProvider {
     if (opts?.disableAi && this.activeStartOpts) {
       this.activeStartOpts = { ...this.activeStartOpts, disableAi: true }
     }
-    return ws.sendStop(this.aiSource === 'custom' ? { ...opts, disableAi: true } : opts)
+    return ws.sendStop(this.runRoute === 'client' ? { ...opts, disableAi: true } : opts)
   }
 
   disconnect(): void {
@@ -174,6 +188,10 @@ export class ServerProvider implements TranscriptionProvider {
 
   isReady(): boolean {
     return ws.isConnected()
+  }
+
+  private routeForSource(source: ServerAiSource): AiPolishRoute {
+    return resolveAiPolishRoute({ workMode: 'server', serverAiSource: source, selectionAiChosen: false })
   }
 
   private async handleCustomFinal(runId: number, result: FinalResult): Promise<void> {

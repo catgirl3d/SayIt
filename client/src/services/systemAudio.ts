@@ -55,6 +55,7 @@ import {
   updateSubtitleOverlay,
 } from './recorder'
 import { getProvider } from './transcription'
+import { resolveAiPolishRoute } from './transcription/aiPolicy'
 import { polishWithClientAi } from './transcription/clientAiPolish'
 import { getRuntimeServerAiSource } from './transcription/serverAiSource'
 import { loadActiveHotwords } from './hotwords/settings'
@@ -1194,12 +1195,19 @@ export class SystemAudioSession {
     return textBefore ? { source: SUBTITLE_CONTEXT_SOURCE, textBefore, selectedText: '', textAfter: '', selectionTruncated: false } : undefined
   }
 
-  // Client API, local and custom-AI server modes run their AI stage on this client, so it can be a lane
-  // of its own. A managed server run performs ASR and translation inside one server run.
+  // Cloud API, local and custom-AI server modes run their AI stage on this client, so it can be a lane
+  // of its own. A managed server run performs ASR and translation inside one server run. Only a translated
+  // (non-asrOnly) session reaches this check, and its runs always require translation, which keeps even an
+  // integrated-cleanup cloud engine (Qwen Omni) on the client route; so only server mode needs the route policy.
   private usesClientTranslation(): boolean {
     const provider = this.provider
     if (!provider) return false
-    return provider.mode !== 'server' || getRuntimeServerAiSource() === 'custom'
+    if (provider.mode !== 'server') return true
+    return resolveAiPolishRoute({
+      workMode: 'server',
+      serverAiSource: getRuntimeServerAiSource(),
+      selectionAiChosen: false,
+    }) === 'client'
   }
 
   private publishQueueDepth(): void {

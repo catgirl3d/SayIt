@@ -30,7 +30,10 @@ interface ClientAiPolishOptions {
   durationSec: number
   startOptions?: Readonly<StartOptions>
   logSource: string
-  /** 异步读设置和原生请求结束后都要验代；false 表示结果已经属于旧录音。 */
+  /**
+   * Checked for the run generation after both the async settings read and the native request
+   * finish; false means the result already belongs to an older recording.
+   */
   isCurrent?: () => boolean
   /**
    * When provided, the native request streams partial completion text through this callback while the
@@ -40,10 +43,28 @@ interface ClientAiPolishOptions {
   onPartial?: (text: string) => void
 }
 
-function safeFallbackText(asrText: string, startOptions?: Readonly<StartOptions>): string {
-  // 选区编辑依赖 AI 理解口述命令。AI 没有真正完成时，回填原选区才是安全 no-op；
-  // 直接回填 ASR 会把“改成更正式”这种命令本身覆盖进正文。
+function safeFallbackText(asrText: string, startOptions?: Readonly<Pick<StartOptions, 'textContext'>>): string {
+  // Selection editing relies on the AI understanding the spoken command. When the AI did not actually
+  // finish, putting the original selection back is the safe no-op; inserting the ASR text instead would
+  // overwrite the body with the command itself (e.g. "make it more formal").
   return startOptions?.textContext?.selectedText || asrText
+}
+
+/**
+ * Result of a run whose AI stage does not execute: empty recognition, AI disabled, a recording
+ * below the duration threshold, or an ASR engine with built-in cleanup (the integrated route).
+ */
+export function skippedPolishResult(
+  asrText: string,
+  startOptions?: Readonly<Pick<StartOptions, 'textContext'>>,
+): ClientAiPolishResult {
+  return {
+    llmText: safeFallbackText(asrText, startOptions),
+    llmMs: 0,
+    contextApplied: startOptions?.textContext ? false : undefined,
+    aiSource: 'none',
+    aiStatus: 'skipped',
+  }
 }
 
 /**
@@ -58,10 +79,11 @@ function classifyPolishFailure(error: unknown, timedOut: boolean): AiFailureReas
 }
 
 /**
- * 使用当前启用的客户端 AI 档案整理一段 ASR 文本。
+ * Cleans up one piece of ASR text with the currently active client AI profile.
  *
- * 服务器、云 API、本地三种识别来源共用这一处，避免 Ollama 免密、短语音门槛、
- * 选区编辑回退在三条链路里逐渐漂移。返回 null 表示录音代次已经失效。
+ * The server, cloud API and local recognition sources all share this one place, so that keyless Ollama
+ * access, the short-utterance threshold and the selection-editing fallback cannot gradually drift apart
+ * across three pipelines. Returns null when the recording's run generation is no longer current.
  */
 export async function polishWithClientAi(
   options: ClientAiPolishOptions,
@@ -71,38 +93,14 @@ export async function polishWithClientAi(
   const disableAi = startOptions?.disableAi ?? false
   const aiMinDurationSec = Math.max(0, Number(startOptions?.aiMinDurationSec) || 0)
 
-  if (!asrText.trim()) {
-    return {
-      llmText: safeFallbackText(asrText, startOptions),
-      llmMs: 0,
-      contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    }
-  }
-
-  if (disableAi) {
-    return {
-      llmText: safeFallbackText(asrText, startOptions),
-      llmMs: 0,
-      contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    }
-  }
+  if (!asrText.trim() || disableAi) return skippedPolishResult(asrText, startOptions)
 
   if (aiMinDurationSec > 0 && durationSec < aiMinDurationSec) {
     addRuntimeEvent('info', logSource, 'AI cleanup skipped below duration threshold', {
       durationSec,
       aiMinDurationSec,
     })
-    return {
-      llmText: safeFallbackText(asrText, startOptions),
-      llmMs: 0,
-      contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    }
+    return skippedPolishResult(asrText, startOptions)
   }
 
   // A frozen selection-edit snapshot wins over the active profile for this run; the

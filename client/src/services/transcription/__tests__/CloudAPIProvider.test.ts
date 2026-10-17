@@ -29,7 +29,8 @@ vi.mock('@/features/settings/asrProfileStore', () => ({
   loadActiveAsrProfile: (...args: unknown[]) => mocks.loadActiveAsrProfile(...args),
 }))
 vi.mock('../../debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => mocks.addRuntimeEvent(...args) }))
-vi.mock('../clientAiPolish', () => ({
+vi.mock('../clientAiPolish', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../clientAiPolish')>(),
   polishWithClientAi: (...args: unknown[]) => mocks.polishWithClientAi(...args),
 }))
 
@@ -1658,6 +1659,42 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
       llmText: 'Original',
       aiStatus: 'skipped',
+    }))
+  })
+
+  it('sends a translated Omni run through the client AI stage instead of the built-in cleanup', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'omni', provider: 'qwen_omni_38_realtime', model: 'qwen3-omni-flash-realtime', apiKey: 'key', omniPrompt: '',
+    })
+    mocks.polishWithClientAi.mockResolvedValue({
+      llmText: 'Translated speech', llmMs: 25, aiSource: 'custom', aiStatus: 'applied', aiModel: 'gpt-translate',
+    })
+    const provider = new CloudAPIProvider()
+    const onFinal = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onFinal, onDone: finish })
+
+    provider.start({
+      runId: 32,
+      disableStreaming: true,
+      requireTranslation: true,
+      systemPrompt: 'Translate into Russian',
+    })
+    provider.sendAudio(new ArrayBuffer(16000))
+    provider.stop()
+    await done
+
+    expect(mocks.polishWithClientAi).toHaveBeenCalledTimes(1)
+    const call = mocks.polishWithClientAi.mock.calls[0][0] as { asrText: string; startOptions: { requireTranslation?: boolean } }
+    expect(call.asrText).toBe('recognized')
+    expect(call.startOptions.requireTranslation).toBe(true)
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
+      asrText: 'recognized',
+      llmText: 'Translated speech',
+      asrEngine: 'qwen_omni',
+      aiSource: 'custom',
+      aiStatus: 'applied',
     }))
   })
 })
