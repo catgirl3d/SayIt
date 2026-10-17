@@ -19,20 +19,25 @@ import { AudioProgressBar } from './AudioProgressBar'
 import { AsrDiffPreview } from './AsrDiffPreview'
 
 /**
- * 「纠正识别」面板。
+ * The "correct recognition" panel.
  *
- * 三个刻意的设计，改之前先看 .kiro/decisions.md：
- * 1. 可编辑的那一栏初值是 **record.asrText（识别原文）**，绝不是 llmText。
- *    用户平时看到的是 AI 整理后的文本，如果照着它改（补标点、分段、改书面语），
- *    拿到的标注对 ASR 训练是噪声，因此纠正面板不展示 AI 整理后的文本。
- * 2. 音频读不到就不让提交。没有音频的样本对识别改进没有用。
- * 3. 首次提交必须过一次明确同意（不是一个信息图标）。上传的是用户的录音，
- *    比文本敏感得多。
+ * Three deliberate design decisions; read .kiro/decisions.md before changing them:
+ * 1. The initial value of the editable field is **record.asrText (the raw recognized text)**,
+ *    never llmText. What users normally see is the AI-polished text; if they edited that
+ *    (adding punctuation, splitting paragraphs, rewording into written style), the annotations we
+ *    would collect would be noise for ASR training, so the correction panel does not show the
+ *    AI-polished text.
+ * 2. Submission is blocked when the audio cannot be read. A sample without audio is of no use for
+ *    improving recognition.
+ * 3. The first submission must go through an explicit consent step (not just an info icon). What
+ *    gets uploaded is the user's recording, which is far more sensitive than text.
  */
 /**
- * 可编辑框的高度上限（px）。上面那块「识别原文」是 max-h-40（160px），这里给到 200px：
- * 两块的行高、字号、内边距完全一致，所以同样的文字在两块里占一样的高度，
- * 只是"要动手改"的那块允许多长一点。超过之后内部滚动，而不是把弹窗撑到屏幕外。
+ * Height cap of the editable field (px). The "recognized original" block above it is max-h-40
+ * (160px); here it is 200px. The two blocks have identical line height, font size and padding, so
+ * the same text takes the same height in both, and the block that is about to be edited is just
+ * allowed to be a bit longer. Past the cap it scrolls internally instead of stretching the dialog
+ * off the screen.
  */
 const EDITOR_MAX_HEIGHT_PX = 200
 
@@ -55,8 +60,9 @@ export function AsrCorrectionDialog({
   const [withdrawing, setWithdrawing] = useState(false)
   const [error, setError] = useState('')
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
-  // 用记录里存的音频时长做初值，这样没点播放也能看到总长（audioDurationSec 是音频真实
-  // 长度，durationSec 是按住快捷键的时长，只在老记录缺前者时兜底）
+  // Seed with the audio duration stored on the record, so the total length is visible even before
+  // play is pressed (audioDurationSec is the real audio length; durationSec is how long the hotkey
+  // was held, used only as a fallback for old records that lack the former)
   const playback = useRecordingPlayback(
     record.audioFilePath,
     record.audioDurationSec || record.durationSec || 0,
@@ -83,14 +89,16 @@ export function AsrCorrectionDialog({
   }, [record.audioFilePath])
 
   /**
-   * 让可编辑框跟着内容长高，行为对齐上面那块只读的「识别原文」：一行内容就是一行高，
-   * 到上限后内部滚动。
+   * Makes the editable field grow with its content, matching the read-only "recognized original"
+   * block above it: one line of content is one line tall, and past the cap it scrolls internally.
    *
-   * 不用 `rows={行数}` 那种算法：`rows` 只数换行符，一段没有换行但会折行的长文本
-   * 仍然只算一行，框会比内容矮一大截。所以按 scrollHeight 实测。
+   * Does not use the `rows={lineCount}` approach: `rows` only counts newline characters, so a long
+   * text with no newlines that still wraps counts as a single line and the box ends up far shorter
+   * than its content. So the height is measured from scrollHeight instead.
    *
-   * `+ extra` 是上下边框：box-sizing 是 border-box，height 含边框而 scrollHeight 不含，
-   * 少了它每次都会矮 2px，于是内容一进来就立刻出现滚动条。
+   * `+ extra` is the top and bottom border: box-sizing is border-box, so height includes the
+   * border while scrollHeight does not; without it the box would always be 2px too short, and a
+   * scrollbar would appear the moment any content arrives.
    */
   useEffect(() => {
     const el = editorRef.current
@@ -139,9 +147,10 @@ export function AsrCorrectionDialog({
         setError(t('asrCorrection.errorNetwork'))
         return
       }
-      // 本地也清掉，入口回到"可提交"。
-      // 必须写 null 而不是 undefined：patch 要过 JSON.stringify，undefined 的键会被丢掉，
-      // 结果是字段没被清、界面一直显示"已提交"（见 HistoryRecord 上的注释）。
+      // Clear it locally too, so the entry returns to "submittable".
+      // Must write null rather than undefined: the patch goes through JSON.stringify, which drops
+      // keys whose value is undefined, so the field would not be cleared and the UI would keep
+      // showing "submitted" (see the comment on HistoryRecord).
       onSubmitted({
         asrCorrectionId: null,
         asrCorrectionSubmittedAt: null,
@@ -155,7 +164,7 @@ export function AsrCorrectionDialog({
   return (
     <Modal title={t('asrCorrection.title')} onClose={onClose} showCloseButton panelClassName="w-[620px]">
       <div className="mt-3 space-y-3">
-        {/* 录音 */}
+        {/* Recording */}
         {audioState === 'missing' ? (
           <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />
@@ -182,19 +191,21 @@ export function AsrCorrectionDialog({
           </div>
         )}
 
-        {/* 识别原文 + 改动标记合成一块。
-            原本是"只读原文"和"改动预览"两个框，但 diff 本身就包含完整原文（删掉的部分
-            带删除线），两个框摆在一起是同一段话看两遍 —— 连上可编辑框一共三个框，
-            光是找"我该在哪儿打字"就要费一下。合成一块之后只剩「看」和「改」两块。 */}
+        {/* The recognized original and the change markers are merged into one block.
+            There used to be two boxes, a "read-only original" and a "change preview", but the diff
+            already contains the full original (the deleted parts are struck through), so two boxes
+            side by side showed the same passage twice. Together with the editable box that made
+            three boxes, and merely finding "where do I type" took a moment. With the merge only two
+            remain: one to look at and one to edit. */}
         <AsrDiffPreview original={originalText} corrected={correctedText} />
 
-        {/* 正确文本（可编辑） */}
+        {/* Corrected text (editable) */}
         <div>
           <div className="mb-1 flex items-center justify-between gap-2">
             <label htmlFor="asr-correction-input" className="block text-xs font-medium text-foreground">
               {t('asrCorrection.correctedLabel')}
             </label>
-            {/* 改乱了想重来时不用手抄一遍原文 */}
+            {/* Lets the user start over after a botched edit without retyping the original by hand */}
             <button
               type="button"
               onClick={() => setCorrectedText(originalText)}
@@ -205,8 +216,9 @@ export function AsrCorrectionDialog({
               {t('asrCorrection.reset')}
             </button>
           </div>
-          {/* 内边距/字号/行高与「识别原文」那块保持一致，两块才对得齐；
-              高度交给上面那个 effect 算，所以关掉手动拖拽（拖完一打字就会被算回去）。 */}
+          {/* Padding, font size and line height match the "recognized original" block so the two
+              line up; the height is computed by the effect above, so manual dragging is turned off
+              (it would be recomputed back as soon as the user typed after a drag). */}
           <textarea
             ref={editorRef}
             id="asr-correction-input"
@@ -220,7 +232,7 @@ export function AsrCorrectionDialog({
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{t('asrCorrection.correctedHint')}</p>
         </div>
 
-        {/* 同意：首次提交必须勾；之后只留一个信息图标 */}
+        {/* Consent: required on the first submission; afterwards only an info icon remains */}
         {!submitted && (consentNeeded ? (
           <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-2 text-xs leading-relaxed">
             <input
