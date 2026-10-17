@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { estimateHotwordTokens } from '../budget'
 import { BUILTIN_SETS, legacyWordsToMigrate, normalizeBuiltinSetWords, withBuiltinSetDefaults } from '../model'
+
+const PRESET_KEYS = ['agents', 'devops', 'data', 'product', 'design', 'business', 'office', 'creative']
 
 describe('built-in AI hotword set', () => {
   it('does not ship Chinese words', () => {
@@ -31,6 +34,16 @@ describe('built-in code hotword set', () => {
 })
 
 describe('built-in hotword sets', () => {
+  it('cover all ten sets', () => {
+    expect(Object.keys(BUILTIN_SETS)).toEqual(['ai', 'code', ...PRESET_KEYS])
+  })
+
+  it('ship printable ASCII terms only', () => {
+    for (const [key, set] of Object.entries(BUILTIN_SETS)) {
+      expect(set.words.filter((word) => !/^[\x20-\x7e]+$/.test(word)), key).toEqual([])
+    }
+  })
+
   it('do not repeat words within or across sets', () => {
     // Removing a word strips it from every set at once, so a shared word would vanish from both.
     const all = Object.values(BUILTIN_SETS).flatMap((set) => set.words.map((word) => word.toLowerCase()))
@@ -56,5 +69,18 @@ describe('built-in hotword sets', () => {
       { ai: true, code: false },
     )
     expect(migrated).toEqual(['Docker', 'my term'])
+  })
+})
+
+describe('built-in domain hotword presets', () => {
+  // Each preset must stay compact: the whole list is sent to Deepgram in one request, and only
+  // the first 100 words reach Gemini and the Qwen audio stream.
+  it.each(PRESET_KEYS)('%s has 30 to 45 words', (key) => {
+    expect(BUILTIN_SETS[key].words.length).toBeGreaterThanOrEqual(30)
+    expect(BUILTIN_SETS[key].words.length).toBeLessThanOrEqual(45)
+  })
+
+  it.each(PRESET_KEYS)('%s stays within the per-set token estimate', (key) => {
+    expect(estimateHotwordTokens(BUILTIN_SETS[key].words)).toBeLessThanOrEqual(140)
   })
 })
