@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TextContext } from '@/types/appContext'
-import type { StartOptions } from '../types'
 import {
-  createIntegratedSkipResult,
   resolveAiPolishRoute,
   type AiPolishRoute,
   type AiPolishRouteInput,
@@ -73,93 +70,10 @@ const routeCases: Array<{
     input: { workMode: 'cloud_api', integratedAsr: false, requireTranslation: true, selectionAiChosen: true },
     expected: 'client',
   },
-  {
-    name: 'routes local runs to the client',
-    input: { workMode: 'local' },
-    expected: 'client',
-  },
 ]
 
 describe('resolveAiPolishRoute', () => {
   it.each(routeCases)('$name', ({ input, expected }) => {
     expect(resolveAiPolishRoute(input)).toBe(expected)
-  })
-})
-
-const makeTextContext = (selectedText: string): TextContext => ({
-  source: 'uia',
-  textBefore: 'before',
-  selectedText,
-  textAfter: 'after',
-  selectionTruncated: false,
-})
-
-const makeStartOptions = (selectedText: string): Pick<StartOptions, 'textContext'> => ({
-  textContext: makeTextContext(selectedText),
-})
-
-describe('createIntegratedSkipResult', () => {
-  it('uses ASR text and leaves contextApplied undefined without text context', () => {
-    expect(createIntegratedSkipResult(undefined, 'recognized')).toStrictEqual({
-      llmText: 'recognized',
-      llmMs: 0,
-      contextApplied: undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    })
-  })
-
-  it('uses ASR text when options exist without text context', () => {
-    expect(createIntegratedSkipResult({}, 'recognized')).toStrictEqual({
-      llmText: 'recognized',
-      llmMs: 0,
-      contextApplied: undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    })
-  })
-
-  it('uses non-empty selected text and marks context as not applied', () => {
-    expect(createIntegratedSkipResult(makeStartOptions('selected'), 'recognized')).toStrictEqual({
-      llmText: 'selected',
-      llmMs: 0,
-      contextApplied: false,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    })
-  })
-
-  it('falls back to ASR text for an empty selected text value', () => {
-    expect(createIntegratedSkipResult(makeStartOptions(''), 'recognized')).toStrictEqual({
-      llmText: 'recognized',
-      llmMs: 0,
-      contextApplied: false,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    })
-  })
-
-  it('preserves whitespace-only selected text', () => {
-    expect(createIntegratedSkipResult(makeStartOptions('   '), 'recognized')).toStrictEqual({
-      llmText: '   ',
-      llmMs: 0,
-      contextApplied: false,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    })
-  })
-
-  it('does not mutate the input options or nested text context', () => {
-    const startOptions = makeStartOptions('selected')
-    const originalTextContext = startOptions.textContext
-    const before = {
-      ...startOptions,
-      textContext: { ...startOptions.textContext },
-    }
-
-    createIntegratedSkipResult(startOptions, 'recognized')
-
-    expect(startOptions).toStrictEqual(before)
-    expect(startOptions.textContext).toBe(originalTextContext)
   })
 })

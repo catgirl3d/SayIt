@@ -20,8 +20,8 @@ import { listen } from '@tauri-apps/api/event'
 import { getSetting } from '../store'
 import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
-import { createIntegratedSkipResult, resolveAiPolishRoute } from './aiPolicy'
-import { polishWithClientAi } from './clientAiPolish'
+import { resolveAiPolishRoute } from './aiPolicy'
+import { polishWithClientAi, skippedPolishResult } from './clientAiPolish'
 import { transcribeCustomAsr } from './customAsrRequest'
 import {
   DEEPGRAM_KEYTERM_LIMIT,
@@ -1145,7 +1145,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         selectionAiChosen: Boolean(startOpts.selectionAiConfig),
       })
       const polish = route === 'integrated'
-        ? createIntegratedSkipResult(startOpts, asrText)
+        ? skippedPolishResult(asrText, startOpts)
         : await polishWithClientAi({
           asrText,
           durationSec,

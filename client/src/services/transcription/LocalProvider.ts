@@ -7,7 +7,6 @@ import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
 import { checkLocalModelInstalled, getSelectedLocalModelId } from '../localModelStatus'
 import { BufferedProvider } from './BufferedProvider'
-import { createIntegratedSkipResult, resolveAiPolishRoute } from './aiPolicy'
 import { polishWithClientAi } from './clientAiPolish'
 import type { TranscriptionCallbacks } from './types'
 
@@ -107,17 +106,13 @@ export class LocalProvider extends BufferedProvider {
       return
     }
 
-    const route = resolveAiPolishRoute({ workMode: 'local' })
-    // Local mode resolves to 'client' today; a future local engine with built-in cleanup would use this branch.
-    const polish = route === 'integrated'
-      ? createIntegratedSkipResult(startOpts, asrText)
-      : await polishWithClientAi({
-        asrText,
-        durationSec,
-        startOptions: startOpts,
-        logSource: 'local',
-        isCurrent: () => this.isRunCurrent(runId),
-      })
+    const polish = await polishWithClientAi({
+      asrText,
+      durationSec,
+      startOptions: startOpts,
+      logSource: 'local',
+      isCurrent: () => this.isRunCurrent(runId),
+    })
     if (!polish || !this.isRunCurrent(runId)) return
 
     const totalMs = Math.round(performance.now() - startTime)

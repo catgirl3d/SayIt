@@ -40,10 +40,27 @@ interface ClientAiPolishOptions {
   onPartial?: (text: string) => void
 }
 
-function safeFallbackText(asrText: string, startOptions?: Readonly<StartOptions>): string {
+function safeFallbackText(asrText: string, startOptions?: Readonly<Pick<StartOptions, 'textContext'>>): string {
   // 选区编辑依赖 AI 理解口述命令。AI 没有真正完成时，回填原选区才是安全 no-op；
   // 直接回填 ASR 会把“改成更正式”这种命令本身覆盖进正文。
   return startOptions?.textContext?.selectedText || asrText
+}
+
+/**
+ * Result of a run whose AI stage does not execute: empty recognition, AI disabled, a recording
+ * below the duration threshold, or an ASR engine with built-in cleanup (the integrated route).
+ */
+export function skippedPolishResult(
+  asrText: string,
+  startOptions?: Readonly<Pick<StartOptions, 'textContext'>>,
+): ClientAiPolishResult {
+  return {
+    llmText: safeFallbackText(asrText, startOptions),
+    llmMs: 0,
+    contextApplied: startOptions?.textContext ? false : undefined,
+    aiSource: 'none',
+    aiStatus: 'skipped',
+  }
 }
 
 /**
@@ -71,38 +88,14 @@ export async function polishWithClientAi(
   const disableAi = startOptions?.disableAi ?? false
   const aiMinDurationSec = Math.max(0, Number(startOptions?.aiMinDurationSec) || 0)
 
-  if (!asrText.trim()) {
-    return {
-      llmText: safeFallbackText(asrText, startOptions),
-      llmMs: 0,
-      contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    }
-  }
-
-  if (disableAi) {
-    return {
-      llmText: safeFallbackText(asrText, startOptions),
-      llmMs: 0,
-      contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    }
-  }
+  if (!asrText.trim() || disableAi) return skippedPolishResult(asrText, startOptions)
 
   if (aiMinDurationSec > 0 && durationSec < aiMinDurationSec) {
     addRuntimeEvent('info', logSource, 'AI cleanup skipped below duration threshold', {
       durationSec,
       aiMinDurationSec,
     })
-    return {
-      llmText: safeFallbackText(asrText, startOptions),
-      llmMs: 0,
-      contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'none',
-      aiStatus: 'skipped',
-    }
+    return skippedPolishResult(asrText, startOptions)
   }
 
   // A frozen selection-edit snapshot wins over the active profile for this run; the

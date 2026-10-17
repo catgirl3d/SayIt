@@ -1195,9 +1195,10 @@ export class SystemAudioSession {
     return textBefore ? { source: SUBTITLE_CONTEXT_SOURCE, textBefore, selectedText: '', textAfter: '', selectionTruncated: false } : undefined
   }
 
-  // Client API, local and custom-AI server modes run their AI stage on this client, so it can be a lane
-  // of its own. A managed server run performs ASR and translation inside one server run. The server-source
-  // condition now comes from the shared route policy; client API and local runs always keep translation in this lane.
+  // Cloud API, local and custom-AI server modes run their AI stage on this client, so it can be a lane
+  // of its own. A managed server run performs ASR and translation inside one server run. Only a translated
+  // (non-asrOnly) session reaches this check, and its runs always require translation, which keeps even an
+  // integrated-cleanup cloud engine (Qwen Omni) on the client route; so only server mode needs the route policy.
   private usesClientTranslation(): boolean {
     const provider = this.provider
     if (!provider) return false
