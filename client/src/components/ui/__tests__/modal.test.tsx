@@ -126,4 +126,16 @@ describe('Modal layout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('points aria-describedby at the description, and only when there is one', () => {
+    const { unmount } = render(
+      <Modal title="Export" description="Pick what to export" footer={<span />} onClose={vi.fn()}>body</Modal>,
+    )
+    const described = screen.getByRole('dialog').getAttribute('aria-describedby')
+    expect(document.getElementById(described as string)?.textContent).toBe('Pick what to export')
+    unmount()
+
+    render(<Modal title="Plain" onClose={vi.fn()}>body</Modal>)
+    expect(screen.getByRole('dialog').hasAttribute('aria-describedby')).toBe(false)
+  })
 })

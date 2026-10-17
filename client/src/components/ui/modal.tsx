@@ -57,6 +57,7 @@ export function Modal({
   const t = useT()
   const panelRef = useRef<HTMLDivElement>(null)
   const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2, 8)}`).current
+  const descriptionId = `${titleId}-description`
   const stackToken = useRef(Symbol('modal')).current
   const sectioned = icon != null || description != null || footer != null
 
@@ -158,6 +159,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={description != null ? descriptionId : undefined}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={cn(
@@ -174,7 +176,7 @@ export function Modal({
                 <div className="min-w-0 flex-1 pt-0.5">
                   <h3 id={titleId} className="text-[15px] font-semibold leading-snug">{title}</h3>
                   {description != null && (
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+                    <p id={descriptionId} className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
                   )}
                 </div>
                 {showCloseButton && closeButton('-mr-1.5 -mt-1 shrink-0')}

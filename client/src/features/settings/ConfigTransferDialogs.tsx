@@ -10,7 +10,7 @@
 //    color scales.
 // 4. The entrance animation reuses animate-fade-in-scale from index.css.
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   AlertTriangle,
   Archive,
@@ -632,14 +632,32 @@ export function FullImportConfirmDialog({
 /** Import-success notice; the app restarts automatically shortly after. The centered-icon style matches the auto-update dialog. */
 export function ImportDoneDialog() {
   const t = useT()
+  const cardRef = useRef<HTMLDivElement>(null)
+  const titleId = useId()
+  const descriptionId = useId()
+
+  // Same reasoning as the installing overlay: a card without controls takes focus itself so the
+  // notice is announced and the page behind it is no longer where the keyboard sits.
+  useEffect(() => {
+    cardRef.current?.focus()
+  }, [])
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 p-6 backdrop-blur-sm">
-      <div className="animate-fade-in-scale w-[320px] rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
+      <div
+        ref={cardRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
+        className="animate-fade-in-scale w-[320px] rounded-2xl border border-border bg-card p-6 text-center shadow-2xl focus:outline-none"
+      >
         <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-success/10">
           <Check className="h-5 w-5 text-success" strokeWidth={2.5} />
         </span>
-        <h3 className="mt-3 text-[15px] font-semibold">{t('configTransfer.importDone')}</h3>
-        <p className="mt-1.5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+        <h3 id={titleId} className="mt-3 text-[15px] font-semibold">{t('configTransfer.importDone')}</h3>
+        <p id={descriptionId} className="mt-1.5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           {t('configTransfer.restarting')}
         </p>
