@@ -86,7 +86,7 @@ async function reprocessViaServer(
     const timeout = window.setTimeout(() => {
       try { socket.close() } catch { /* ignore */ }
       reject(new Error('Retranscription timed out'))
-    }, 30_000) // ASR 最多 30 秒
+    }, 30_000) // ASR gets at most 30 seconds
 
     const socket = new WebSocket(wsUrl)
     socket.binaryType = 'arraybuffer'
@@ -118,7 +118,7 @@ async function reprocessViaServer(
       if (hotwords.length > 0) startMsg.hotwords = hotwords
       socket.send(JSON.stringify(startMsg))
 
-      // 分片发送 PCM 数据
+      // Send the PCM data in chunks
       const CHUNK_SIZE = 32000
       const totalBytes = chunk.byteLength
       for (let offset = 0; offset < totalBytes; offset += CHUNK_SIZE) {
@@ -147,7 +147,7 @@ async function reprocessViaServer(
             asrModel: msg.asr_model || undefined,
           })
         } else if (msg.type === 'done' && !resolved) {
-          // 没有 final 就 done 了（后端判定为静音/无结果）
+          // "done" arrived without a "final" (the backend judged it silent or without a result)
           resolved = true
           clearTimeout(timeout)
           socket.close()
@@ -251,7 +251,7 @@ export async function reprocessViaCloudApi(
     && asrResult.warning === DEEPGRAM_KEYTERM_LIMIT
     ? DEEPGRAM_KEYTERM_LIMIT
     : undefined
-  // 还原被 ASR 拆开加空格的无空格热词（如豆包把 "SayIt" 识别成 "Say It"）
+  // Restore unspaced hotwords that the ASR split apart with a space (e.g. Doubao recognizes "SayIt" as "Say It")
   const asrText = restoreHotwordSpacing(asrResult.text, hotwords)
   const asrMs = asrResult.elapsed_ms || Math.round(performance.now() - asrStart)
 
@@ -316,8 +316,8 @@ export async function reprocessViaLocal(
   const modelId = await getSelectedLocalModelId()
   const accelerator = await getSetting('localAsr.accelerator', 'auto') as string
 
-  // hotwords 在 GGUF 引擎上不支持（transcribe.cpp 只有 whisper 族接 initial prompt），
-  // 参数留着是为了不改调用方签名，后端会忽略。
+  // hotwords are not supported on the GGUF engine (transcribe.cpp only wires the whisper family to the initial prompt),
+  // so the parameter is kept to avoid changing the caller signature; the backend ignores it.
   void hotwords
   const asrResult = await invoke<{ text: string; elapsed_ms: number }>('local_transcribe', {
     audioB64, modelId, language, accelerator,
@@ -437,7 +437,7 @@ export default function History() {
     setVisibleCount(HISTORY_PAGE_SIZE)
   }, [debouncedKeyword, favoriteOnly])
 
-  // 搜索防抖：输入停止 300ms 后才触发查询
+  // Search debounce: the query fires only after input has stopped for 300ms
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedKeyword(keyword), 300)
     return () => clearTimeout(timer)
@@ -447,7 +447,7 @@ export default function History() {
     void loadRecords(debouncedKeyword, visibleCount, favoriteOnly)
   }, [debouncedKeyword, favoriteOnly, loadRecords, visibleCount])
 
-  // 监听新记录写入，自动刷新列表
+  // Listen for new record writes and refresh the list automatically
   useEffect(() => {
     const unlisten = bridge.listen('history-updated', () => {
       void loadRecords(debouncedKeyword, visibleCount, favoriteOnly)
@@ -479,15 +479,15 @@ export default function History() {
       manualEditedAt: editedAt,
     }
     await updateHistoryRecord(id, patch)
-    // 局部更新，避免整页刷新丢失展开态/滚动位置
+    // Partial update, so that a full page refresh does not lose the expanded state or scroll position
     setRecords((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
   }
 
   /**
-   * 记下「这条的 ASR 纠错已提交 / 已撤回」。
+   * Records that this entry's ASR correction has been submitted / withdrawn.
    *
-   * 只写 asrCorrection* 三个字段，**不动 llmText / charCount / manualEditedAt** ——
-   * 纠正的是识别原文，正文和统计不该被它带着改（handleEdit 改的才是正文）。
+   * Writes only the three asrCorrection* fields, **does not touch llmText / charCount / manualEditedAt** —
+   * the correction applies to the recognized source text, so the body and the stats should not be changed along with it (handleEdit is what changes the body).
    */
   const handleSaveAsrCorrection = async (id: string, patch: Partial<HistoryRecord>) => {
     await updateHistoryRecord(id, patch)
@@ -558,7 +558,7 @@ export default function History() {
     const preset = await getActivePreset()
     const aiEnabled = await getSetting('aiEnabled', false)
 
-    // 加载热词
+    // Load hotwords
     let hotwords: string[] = []
     try {
       hotwords = await loadActiveHotwords()
@@ -566,14 +566,14 @@ export default function History() {
 
     const clientMeta = await bridge.getClientRuntimeInfo().catch(() => null)
 
-    // 按用户当前选择的工作模式重新识别，与实时录音保持一致
-    // （此前这里硬编码走服务器模式，导致云 API/本地模式下重新识别被错误地发回服务器）
+    // Re-recognize according to the user's currently selected work mode, consistent with live recording
+    // (this used to hard-code server mode, which wrongly sent re-recognition in cloud API/local mode back to the server)
     const workMode = getWorkMode()
     const speechLanguage = await getSpeechInputLanguage()
     let systemPrompt = aiEnabled ? preset.systemPrompt : undefined
     const speechLanguagePart = applySpeechLanguageToPrompt(preset, speechLanguage)
     if (systemPrompt && speechLanguagePart) systemPrompt = `${systemPrompt}\n\n${speechLanguagePart}`
-    // 与实时一致：开启"热词注入 AI 提示词"时，重新识别也把热词表注入系统提示词
+    // Consistent with live recording: when "Send hotwords to the AI prompt" is enabled, re-recognition also injects the hotword list into the system prompt
     if (systemPrompt && (await getSetting('injectHotwordsToPrompt', false))) {
       const part = buildHotwordInjectionPart(hotwords)
       if (part) systemPrompt = `${systemPrompt}\n\n${part}`
@@ -591,7 +591,7 @@ export default function History() {
       setReprocessWarning(result.asrWarning ?? null)
     }
 
-    // 新链路优先采用显式执行状态；旧的云/本地历史重跑尚未返回状态时才兼容文本比较。
+    // The new pipeline prefers the explicit execution status; text comparison is only a fallback for legacy cloud/local history reruns that have not returned a status yet.
     const rawAsr = result.aiStatus
       ? result.aiStatus !== 'applied'
       : !result.llmText || result.llmText === result.asrText
