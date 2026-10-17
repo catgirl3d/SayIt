@@ -200,7 +200,7 @@ export default function About() {
                 className={
                   notesExpanded
                     ? 'space-y-1.5'
-                    : 'custom-scrollbar max-h-72 space-y-1.5 overflow-y-auto pr-1'
+                    : 'max-h-72 space-y-1.5 overflow-y-auto pr-1'
                 }
               >
                 {releaseNotes.map((block, index) => {

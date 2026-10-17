@@ -195,7 +195,7 @@ export default function LogViewerPanel() {
           />
         </div>
 
-        <div className="custom-scrollbar max-h-[50vh] overflow-y-auto rounded-md border border-border bg-card">
+        <div className="max-h-[50vh] overflow-y-auto rounded-md border border-border bg-card">
           {loading ? (
             <div className="py-8 text-center text-sm text-muted-foreground">{t('logViewer.loading')}</div>
           ) : filtered.length === 0 ? (

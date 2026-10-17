@@ -3,12 +3,15 @@ import { computeAsrDiff, countAsrDiffChanges, hasAsrDiffChange } from '@/lib/asr
 import { t } from '@/i18n'
 
 /**
- * 原始识别文本 → 修正后文本的改动预览。
+ * Preview of the changes from the original recognized text to the corrected text.
  *
- * 用 <del>/<ins> 而不是两个 <span>：读屏会念出"删除/插入"，色盲用户也能靠删除线区分。
- * 只靠浅红/浅绿两种底色的话，这两类用户看到的是一段没有任何标记的普通文本。
+ * Uses <del>/<ins> rather than two <span> elements: screen readers announce "deletion/insertion",
+ * and color-blind users can still tell the two apart by the strikethrough. With only a light red
+ * and a light green background, both groups of users would see a run of plain text with no
+ * markup of any kind.
  *
- * 不在 textarea 里做高亮 —— textarea 内部无法放富文本，只能"可编辑框 + 只读预览"两块。
+ * The highlighting is not done inside the textarea: a textarea cannot hold rich text, so the UI
+ * has to be two blocks, an "editable box + read-only preview".
  */
 export function AsrDiffPreview({
   original,

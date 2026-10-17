@@ -115,7 +115,7 @@ export default function SubtitleSavingSettings({ active, pending, onPendingChang
         {error && <p role="alert" className="px-6 pb-4 text-sm leading-6 text-destructive">{error}</p>}
       </div>
       {dialogOpen && (
-        <Modal title={t('systemAudio.savingRow')} onClose={() => setDialogOpen(false)} showCloseButton panelClassName="custom-scrollbar w-[520px]">
+        <Modal title={t('systemAudio.savingRow')} onClose={() => setDialogOpen(false)} showCloseButton panelClassName="w-[520px]">
           <div className="mt-4 space-y-6">
             <div className="space-y-1">
               <Switch

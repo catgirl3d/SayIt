@@ -1,0 +1,35 @@
+/*
+ * Default scrollbar of the main window: thin and themed on every scroll container, so a new
+ * dialog, list or textarea does not fall back to the browser's light scrollbar and needs no
+ * opt-in class.
+ *
+ * Imported by main.tsx only. The overlay window has its own overlay/overlay-scrollbar.css, drawn
+ * from the --overlay-* palette: it is a dark pill that does not apply the app theme, and the
+ * muted-foreground fallback this thumb is drawn from would be nearly invisible on it. The tray
+ * menu does not scroll.
+ */
+
+/* Standard properties (Chromium 121+ ignores the ::-webkit-scrollbar rules below once they are set) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+/* Older WebView2 builds without the standard properties */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}

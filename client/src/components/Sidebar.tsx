@@ -241,7 +241,7 @@ export default function Sidebar() {
 
   return (
     <nav className="flex w-52 flex-col border-r border-sidebar-border bg-sidebar py-3">
-      <div className="custom-scrollbar flex-1 space-y-4 overflow-y-auto px-2">
+      <div className="flex-1 space-y-4 overflow-y-auto px-2">
         {/* Workspace */}
         <div className="space-y-1">
           <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">

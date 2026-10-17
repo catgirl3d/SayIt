@@ -122,7 +122,7 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
         }}
       >
         <div
-          className="custom-scrollbar overflow-y-auto py-1"
+          className="overflow-y-auto py-1"
           style={{ maxHeight: `${dropdownStyle.maxHeight - 2}px` }}
         >
           {parsedOptions.map((option) => (
