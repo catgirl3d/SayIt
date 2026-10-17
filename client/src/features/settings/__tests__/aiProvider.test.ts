@@ -17,7 +17,7 @@ import {
   isProfileComplete,
   migrateLegacyProfiles,
   newDraftProfile,
-  normalizeModelNames,
+  normalizeRemoteModels,
   normalizeProfiles,
   parseLegacyLatencies,
   parseProfiles,
@@ -553,10 +553,18 @@ describe('migrateLegacyProfiles', () => {
   })
 })
 
-describe('normalizeModelNames', () => {
-  it('trims, removes empty names, and de-duplicates the remote catalog', () => {
-    expect(normalizeModelNames([' model-a ', '', 'model-a', 'model-b', '  ']))
-      .toEqual(['model-a', 'model-b'])
+describe('normalizeRemoteModels', () => {
+  it('trims ids, removes empty entries, and keeps the first duplicate with its metadata', () => {
+    expect(normalizeRemoteModels([
+      { id: ' model-a ', name: 'Model A', input_price_per_million: 0.15 },
+      { id: '', name: 'broken' },
+      { id: 'model-a', name: 'Duplicate A' },
+      { id: 'model-b' },
+      { id: '  ' },
+    ])).toEqual([
+      { id: 'model-a', name: 'Model A', input_price_per_million: 0.15 },
+      { id: 'model-b' },
+    ])
   })
 })
 

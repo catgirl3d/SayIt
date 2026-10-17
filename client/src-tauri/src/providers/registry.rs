@@ -25,6 +25,19 @@ fn is_openai_compat_provider(provider: &str) -> bool {
     OPENAI_COMPAT_PROVIDERS.contains(&provider)
 }
 
+/// Wrap plain model IDs (Ollama's /api/tags reports names only) in the shared
+/// IPC shape, so the command exposes one result type to the frontend.
+fn models_without_metadata(ids: Vec<String>) -> Vec<RemoteModelInfo> {
+    ids.into_iter()
+        .map(|id| RemoteModelInfo {
+            id,
+            name: None,
+            input_price_per_million: None,
+            output_price_per_million: None,
+        })
+        .collect()
+}
+
 /// 云端 AI 校对（Tauri command）
 ///
 /// With `request.stream` set, the provider emits `cloud-polish-delta` events
@@ -121,7 +134,9 @@ pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListRes
         provider if is_openai_compat_provider(provider) => {
             ai_openai_compat::list_models(&config).await
         }
-        "ollama" => ai_ollama::list_models(&config).await,
+        "ollama" => ai_ollama::list_models(&config)
+            .await
+            .map(models_without_metadata),
         other => {
             return Err(error_protocol::encode(
                 "connect_failed",
@@ -254,6 +269,17 @@ mod tests {
         );
         assert!(!is_openai_compat_provider("ollama"));
         assert!(!is_openai_compat_provider("unknown_provider"));
+    }
+
+    #[test]
+    fn ollama_catalog_entries_carry_no_metadata() {
+        let models = models_without_metadata(vec!["qwen2.5:7b".to_string()]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "qwen2.5:7b");
+        assert_eq!(models[0].name, None);
+        assert_eq!(models[0].input_price_per_million, None);
+        assert_eq!(models[0].output_price_per_million, None);
     }
 
     #[tokio::test]

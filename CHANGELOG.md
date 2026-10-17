@@ -6,7 +6,7 @@ Sections are ordered by version, newest first.
 ## v0.3.1 (unreleased)
 
 ### Added
-- Added OpenRouter as a ready AI cleanup provider preset with DeepSeek V4.1 Flash as the default model and a link to its key page; the API URL is optional, and a blank field uses the official endpoint.
+- Added OpenRouter as a ready AI cleanup provider preset with DeepSeek V4.1 Flash as the default model and a link to its key page; the API URL is optional, and a blank field uses the official endpoint. The fetched model list can be searched and sorted by name or price, and shows input prices.
 
 ### Changed
 #### Desktop Client

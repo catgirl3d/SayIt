@@ -337,9 +337,29 @@ export function isProfileComplete(profile: AiProfile): boolean {
   return true
 }
 
-/** Normalize remote model names before exposing them in the selector. */
-export function normalizeModelNames(models: string[]): string[] {
-  return [...new Set(models.map((model) => model.trim()).filter(Boolean))]
+/**
+ * One model from a provider's remote catalog, as returned by `list_remote_models`.
+ * Prices are USD per million tokens; a missing price means the provider did not
+ * report a usable value.
+ */
+export interface RemoteModel {
+  id: string
+  name?: string
+  input_price_per_million?: number
+  output_price_per_million?: number
+}
+
+/** Normalize the remote model catalog before exposing it in the selector. */
+export function normalizeRemoteModels(models: RemoteModel[]): RemoteModel[] {
+  const seen = new Set<string>()
+  const out: RemoteModel[] = []
+  for (const model of models) {
+    const id = typeof model.id === 'string' ? model.id.trim() : ''
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({ ...model, id })
+  }
+  return out
 }
 
 /**
