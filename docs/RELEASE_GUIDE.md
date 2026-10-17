@@ -12,14 +12,14 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
 - The workflow builds the dispatched commit, recreates the `v<version>` tag and GitHub
   Release, and publishes the NSIS installer plus the `latest-win32-x64.json` update
   manifest. The tag always points at the exact commit that was built.
-- The GitHub release notes are the `CHANGELOG-FORK.md` section for the released version,
+- The GitHub release notes are the `CHANGELOG.md` section for the released version,
   extracted automatically. The workflow refuses to build when the version sources
   disagree or the section is missing or empty.
 - The same section travels inside the update manifest, so the app shows those notes on
   the About page the moment it finds the update; there is nothing to write for the
   in-app notes per release.
 - The About page follows the interface language: when the release has a Ukrainian
-  section in `CHANGELOG-FORK.uk.md`, it travels in the manifest as `notesLocalized.uk`.
+  section in `CHANGELOG.uk.md`, it travels in the manifest as `notesLocalized.uk`.
   A missing Ukrainian section is not fatal — the app falls back to the English notes —
   but the release then ships without localized notes.
 - Never edit the release body on GitHub by hand: the next dispatch of the same version
@@ -36,9 +36,9 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
    - `client/src-tauri/Cargo.toml`; let cargo refresh the root entry in `Cargo.lock`
      (never hand-edit the lockfile).
    Verify with `npm --prefix client run check:release-versions`.
-3. Freeze the changelog section in `CHANGELOG-FORK.md`: replace `(unreleased)` with the
+3. Freeze the changelog section in `CHANGELOG.md`: replace `(unreleased)` with the
    release date (`## vX.Y.Z — YYYY-MM-DD`). The section must be non-empty. Mirror the
-   frozen section in `CHANGELOG-FORK.uk.md` under the same `## vX.Y.Z` heading — the
+   frozen section in `CHANGELOG.uk.md` under the same `## vX.Y.Z` heading — the
    translation is written at freeze, not during development. If it is missing, the
    release proceeds with English-only notes.
 4. Run the release checks: `npm --prefix client run test:scripts` and
@@ -53,10 +53,10 @@ GitHub Actions run: `.github/workflows/publish-windows-release.yml` (`workflow_d
    - an installed older build is offered `X.Y.Z` by "Check for updates", and the About
      page shows the same release notes from the manifest;
    - with the interface language set to Ukrainian, the About page shows the Ukrainian
-     notes when the release has a `CHANGELOG-FORK.uk.md` section (English fallback
+     notes when the release has a `CHANGELOG.uk.md` section (English fallback
      otherwise).
 8. Next batch: add a new `## v<next> (unreleased)` section at the top of
-   `CHANGELOG-FORK.md` when the first entry appears.
+   `CHANGELOG.md` when the first entry appears.
 
 ## FFmpeg sidecar
 

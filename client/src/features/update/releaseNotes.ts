@@ -1,8 +1,8 @@
 /**
  * Release notes travel inside the update manifest: the manifest carries the
- * CHANGELOG-FORK.md section of the released version, so the About page can show the
+ * CHANGELOG.md section of the released version, so the About page can show the
  * real notes at the moment an update is found — no second request, no hand-written
- * highlight list. Localized sections (CHANGELOG-FORK.uk.md) ship in the same manifest
+ * highlight list. Localized sections (CHANGELOG.uk.md) ship in the same manifest
  * from the same commit, so a translation can never describe content other than the
  * source section it mirrors.
  *

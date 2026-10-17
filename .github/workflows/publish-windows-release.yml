@@ -95,7 +95,7 @@ jobs:
 
           $tag = "v$version"
 
-          # The release notes are exactly the CHANGELOG-FORK.md section for the version
+          # The release notes are exactly the CHANGELOG.md section for the version
           # being released (the delta since the previous release). The extractor fails
           # on a missing or empty section, so a build can never be published with notes
           # that do not describe it; the footer links the full fork changelog pinned to
@@ -103,7 +103,7 @@ jobs:
           $sectionPath = Join-Path $env:RUNNER_TEMP 'sayit-release-section.md'
           node client/scripts/extract-release-notes.mjs --version $version --output $sectionPath
           if ($LASTEXITCODE -ne 0) {
-            throw "Could not extract the CHANGELOG-FORK.md section for $tag"
+            throw "Could not extract the CHANGELOG.md section for $tag"
           }
 
           # The Ukrainian section is optional by design: the app falls back to the
@@ -112,9 +112,9 @@ jobs:
           # as notesLocalized.uk and the release body links the Ukrainian changelog.
           $ukSectionPath = Join-Path $env:RUNNER_TEMP 'sayit-release-section-uk.md'
           $ukSectionFile = ''
-          $ukChangelogExists = Test-Path -LiteralPath 'CHANGELOG-FORK.uk.md'
+          $ukChangelogExists = Test-Path -LiteralPath 'CHANGELOG.uk.md'
           if ($ukChangelogExists) {
-            node client/scripts/extract-release-notes.mjs --version $version --changelog 'CHANGELOG-FORK.uk.md' --output $ukSectionPath
+            node client/scripts/extract-release-notes.mjs --version $version --changelog 'CHANGELOG.uk.md' --output $ukSectionPath
             $ukExtractionFailed = $LASTEXITCODE -ne 0
             # Reset the native exit code: the failure below is handled (English-only
             # fallback), and GitHub Actions fails the step on the final $LASTEXITCODE
@@ -123,7 +123,7 @@ jobs:
             if (-not $ukExtractionFailed) {
               $ukSectionFile = $ukSectionPath
             } else {
-              Write-Warning "No CHANGELOG-FORK.uk.md section for $tag; publishing with English release notes only"
+              Write-Warning "No CHANGELOG.uk.md section for $tag; publishing with English release notes only"
             }
           }
 
@@ -132,9 +132,9 @@ jobs:
           $notes.Add('')
           $notes.Add((Get-Content -LiteralPath $sectionPath -Raw).Trim())
           $notes.Add('')
-          $notes.Add("Full fork changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG-FORK.md")
+          $notes.Add("Full fork changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG.md")
           if ($ukChangelogExists) {
-            $notes.Add("Ukrainian changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG-FORK.uk.md")
+            $notes.Add("Ukrainian changelog: https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_SHA)/CHANGELOG.uk.md")
           }
 
           $notesPath = Join-Path $env:RUNNER_TEMP 'sayit-release-notes.md'

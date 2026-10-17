@@ -20,7 +20,8 @@ This fork is a hard fork.
   both bypass the per-commit decision record.
 - The fork owns its versioning, release metadata, and documentation formats.
   Upstream release chores, changelogs, and upstream-only docs are never
-  ported.
+  ported. The root `CHANGELOG.md` is the fork's own: upstream changes to their
+  file of the same name are dropped, not merged into it.
 
 ## Sources of truth
 
@@ -29,7 +30,7 @@ This fork is a hard fork.
 | `dev-scripts/upstream-decisions/` | Authoritative journal of decisions for upstream commits, with its tooling (local, git-ignored). Tool usage: `dev-scripts/upstream-decisions/upstream-decisions.md`. |
 | `dev-scripts/upstream-slices/` | Read-only review evidence for large upstream commits (local, git-ignored). Packet format and reviewer contract: `dev-scripts/upstream-slices/README.md`. |
 | `UPSTREAM-TRACKER.md` | Committed mirror of porting progress, one row per feature. Update it when a port lands or a decision changes. |
-| `CHANGELOG-FORK.md` | Release-facing summary of user-visible fork changes; `CHANGELOG-FORK.uk.md` is its Ukrainian mirror, frozen together at release. Release-note discipline: `AGENTS.md` section 4. |
+| `CHANGELOG.md` | Release-facing summary of user-visible fork changes; `CHANGELOG.uk.md` is its Ukrainian mirror, frozen together at release. Release-note discipline: `AGENTS.md` section 4. |
 | `docs/RELEASE_GUIDE.md` | Release runbook: version bump, changelog freeze, workflow dispatch, verification. Also available as the `/release` command. |
 | `AGENTS.md` | Repository-wide engineering rules. |
 
@@ -55,7 +56,7 @@ the authoritative record. If they disagree, fix the mirror.
    none.
 6. Record the decision with `mark`, linking evidence commits that are already
    reachable from `main`. Commit the fork work first, then mark.
-7. Update `UPSTREAM-TRACKER.md`, and `CHANGELOG-FORK.md` when the port is a
+7. Update `UPSTREAM-TRACKER.md`, and `CHANGELOG.md` when the port is a
    user-facing feature.
 8. Re-run `status`; processed commits must stop being `PENDING`.
 
@@ -100,7 +101,7 @@ journal: its `data/` folder resolves relative to the script file.
   Windows GigaAM environment.
 - The release workflow requires matching versions in `client/package.json` and
   `client/src-tauri/tauri.conf.json`, installs with `npm ci`, and refuses to
-  publish without a non-empty `CHANGELOG-FORK.md` section for the released
+  publish without a non-empty `CHANGELOG.md` section for the released
   version. Preserve those contracts when a port touches release-related files.
 - Treat manifests, version fields, workflows, and server configuration as
   substantive even when they look like metadata.
@@ -138,7 +139,7 @@ pre-existing follow-up.
 - The journal shows no `PENDING` for reviewed commits; evidence commits are
   reachable from `main` (no `[STALE]` flags left unresolved).
 - Every landed port has a journal record, an `UPSTREAM-TRACKER.md` row, and a
-  `CHANGELOG-FORK.md` entry when it is user-visible.
+  `CHANGELOG.md` entry when it is user-visible.
 - Relevant validation has passed; verification gaps are explicitly stated.
 - Fork commits follow repository message style and explain the "why" in the
   body when it is not obvious.

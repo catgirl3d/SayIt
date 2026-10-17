@@ -1,7 +1,7 @@
 # SayIt Changelog
 
 Release history and notable changes for the SayIt fork.
-Sections are ordered by version, newest first. For upstream history prior to the fork, see [CHANGELOG.md](CHANGELOG.md).
+Sections are ordered by version, newest first.
 
 ## v0.3.0 — 2026-10-17
 
@@ -26,7 +26,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 
 #### Desktop Client
 - Added a Help button to the Voice engine and AI providers pages: a short guide to choosing a recognition mode and a cloud service, with direct links to the pages that issue API keys. Groq (generous free tier, one key for recognition and AI cleanup) and Deepgram ($200 free credit, strong live captions) are marked as recommended and listed first; each explains why, and Groq also suggests models.
-- The About page shows release notes in the interface language: a release can carry a Ukrainian translation of its changelog section ([CHANGELOG-FORK.uk.md](CHANGELOG-FORK.uk.md)), and the app falls back to English when none exists. Releases published earlier keep their English notes.
+- The About page shows release notes in the interface language: a release can carry a Ukrainian translation of its changelog section ([CHANGELOG.uk.md](CHANGELOG.uk.md)), and the app falls back to English when none exists. Releases published earlier keep their English notes.
 
 ### Changed
 #### Computer Subtitles

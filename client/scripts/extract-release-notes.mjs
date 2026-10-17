@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Release guard and generator: extracts the CHANGELOG-FORK.md section for the
+ * Release guard and generator: extracts the CHANGELOG.md section for the
  * version being released.
  *
  * The GitHub release notes body is the changelog section of exactly the
@@ -14,7 +14,7 @@
  * `(unreleased)` or a release date lives in the file but is normalized away in
  * the output, so the published heading is always the plain version.
  *
- * The same extractor serves the Ukrainian CHANGELOG-FORK.uk.md via --changelog:
+ * The same extractor serves the Ukrainian CHANGELOG.uk.md via --changelog:
  * the format is identical, and error messages name the actual source file.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -30,7 +30,7 @@ const NUMERIC_VERSION = /^\d+\.\d+\.\d+$/
 // headings like `## v0.2.2.1` or `## v0.2.2-rc1` cannot be published as version 0.2.2.
 const VERSION_HEADING = /^## v(\d+\.\d+\.\d+)(?=\s|$)/
 
-export function extractReleaseNotes(changelogText, version, sourceName = 'CHANGELOG-FORK.md') {
+export function extractReleaseNotes(changelogText, version, sourceName = 'CHANGELOG.md') {
   if (typeof version !== 'string' || !NUMERIC_VERSION.test(version)) {
     throw new Error(`Invalid release version '${version}' (expected numeric major.minor.patch)`)
   }
@@ -82,7 +82,7 @@ function main(args) {
   const options = parseArgs(args)
   if (!options.version) throw new Error('Missing required option --version')
 
-  const changelogPath = options.changelog ?? join(REPO_ROOT, 'CHANGELOG-FORK.md')
+  const changelogPath = options.changelog ?? join(REPO_ROOT, 'CHANGELOG.md')
   const sourceName = changelogPath.replace(/^.*[\\/]/, '')
   const section = extractReleaseNotes(readFileSync(changelogPath, 'utf8'), options.version, sourceName)
 

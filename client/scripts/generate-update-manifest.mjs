@@ -9,10 +9,10 @@
  * 64 bytes. This generator enforces the same rules, so a malformed manifest can
  * never be published in the first place.
  *
- * The manifest also carries the release notes for the version — the CHANGELOG-FORK.md
+ * The manifest also carries the release notes for the version — the CHANGELOG.md
  * section that the release workflow already extracts — so the desktop app can show
  * what changed at the moment it discovers the update, without a second request. Translated
- * sections (CHANGELOG-FORK.uk.md) ride in `notesLocalized` keyed by interface locale; the
+ * sections (CHANGELOG.uk.md) ride in `notesLocalized` keyed by interface locale; the
  * English `notes` stays the required source and the app's fallback, and the field is
  * omitted entirely when no translations exist.
  *
@@ -60,10 +60,10 @@ export function buildUpdateManifest({ version, repository, installerName, instal
     throw new Error('installerBytes must be a Buffer with the exact installer file bytes')
   }
   // The release notes ride inside the manifest so the app can show what changed at the
-  // moment it finds the update. They are the CHANGELOG-FORK.md section for this version;
+  // moment it finds the update. They are the CHANGELOG.md section for this version;
   // a manifest without them would leave the About page silent, so this fails closed.
   if (typeof notes !== 'string' || notes.trim() === '') {
-    throw new Error('Invalid release notes (expected the CHANGELOG-FORK.md section for this version)')
+    throw new Error('Invalid release notes (expected the CHANGELOG.md section for this version)')
   }
   // Localized sections are additive display data for non-English interface locales.
   // The base `notes` above stays the English source and the app's fallback, so a blank
