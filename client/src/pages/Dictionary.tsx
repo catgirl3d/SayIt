@@ -141,6 +141,7 @@ export default function Dictionary() {
     showUnknown,
     hotwordTokens,
     builtinSetBlocked,
+    customThemeBlocked,
     builtinSetCopyable,
     filtered,
     filteredUnknown,
@@ -422,6 +423,7 @@ export default function Dictionary() {
               {visibleCustomThemes.map((theme, themeIndex) => {
                 const canSort = !search && customThemes.length > 1
                 const active = !!customThemeActive[theme.id]
+                const blocked = !!customThemeBlocked[theme.id]
                 const activeWords = getThemeWordsInHotwords(theme)
                 const totalWords = theme.words.length
 
@@ -438,6 +440,7 @@ export default function Dictionary() {
                           <Switch
                             checked={active}
                             onChange={() => void toggleCustomTheme(theme.id)}
+                            disabled={blocked}
                             size="sm"
                           />
                           <div className="min-w-0">
@@ -445,6 +448,11 @@ export default function Dictionary() {
                             <p className="text-xs text-muted-foreground">
                               {t('dict.customCount', { active: activeWords.length, total: totalWords })}
                             </p>
+                            {blocked && (
+                              <p className="mt-1 text-xs text-amber-500">
+                                {tokensFull ? t('dict.budgetFullBlocked') : t('dict.budgetNoFit')}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center">

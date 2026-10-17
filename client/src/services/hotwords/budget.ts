@@ -84,6 +84,39 @@ export function builtinSetCopyAllowed(state: HotwordBudgetState, key: string): b
   return (state.builtinSetWords[key] ?? []).length > 0 && builtinSetActivationFits(state, key)
 }
 
+/** Composes the active list that results from flipping custom category `themeId`, as the manager does. */
+export function composeWithCustomThemeToggled(state: HotwordBudgetState, themeId: string): string[] {
+  const currentAllSourceWords = collectAllSourceWords(state.builtinSetWords, state.customThemes)
+  const preservedWords = state.hotwords.filter((w) => !currentAllSourceWords.has(w))
+  return composeHotwords(
+    preservedWords,
+    state.builtinSetWords,
+    state.builtinSetActive,
+    state.customThemes,
+    { ...state.customThemeActive, [themeId]: !state.customThemeActive[themeId] },
+  )
+}
+
+/**
+ * Whether switching custom category `themeId` ON fits the token budget. Custom categories are gated
+ * like built-in sets, otherwise copies of built-in sets could be switched on past the limit.
+ * Switching a category OFF always fits.
+ */
+export function customThemeActivationFits(state: HotwordBudgetState, themeId: string): boolean {
+  if (state.customThemeActive[themeId]) return true
+  return estimateHotwordTokens(composeWithCustomThemeToggled(state, themeId)) <= HOTWORD_TOKEN_BUDGET
+}
+
+/** Maps each inactive custom category id to whether switching it ON is blocked. */
+export function getBlockedCustomThemes(state: HotwordBudgetState): Record<string, boolean> {
+  const blocked: Record<string, boolean> = {}
+  for (const theme of state.customThemes) {
+    if (state.customThemeActive[theme.id]) continue
+    blocked[theme.id] = !customThemeActivationFits(state, theme.id)
+  }
+  return blocked
+}
+
 /**
  * Whether adding `word` to a custom category keeps the active list within the token budget. An
  * inactive category adds nothing to the active list, so anything fits there. The estimate is a sum

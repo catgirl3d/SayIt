@@ -27,8 +27,11 @@ import {
   builtinSetActivationFits,
   builtinSetCopyAllowed,
   composeWithBuiltinSetToggled,
+  composeWithCustomThemeToggled,
+  customThemeActivationFits,
   estimateHotwordTokens,
   getBlockedBuiltinSets,
+  getBlockedCustomThemes,
   termAdditionFits,
   type HotwordBudgetState,
 } from './budget'
@@ -175,6 +178,14 @@ export function useHotwordsManager() {
   useEffect(() => {
     void loadHotwords()
   }, [loadHotwords])
+
+  const budgetState = useMemo<HotwordBudgetState>(() => ({
+    hotwords,
+    builtinSetWords,
+    builtinSetActive,
+    customThemes,
+    customThemeActive,
+  }), [builtinSetActive, builtinSetWords, customThemeActive, customThemes, hotwords])
 
   const addTheme = useCallback(async () => {
     const name = newThemeName.trim()
@@ -338,20 +349,15 @@ export function useHotwordsManager() {
   ])
 
   const toggleCustomTheme = useCallback(async (themeId: string) => {
+    // Switching a category ON is refused when it would exceed the token budget, even if the UI did
+    // not disable the control. Switching OFF is never refused.
+    if (!customThemeActivationFits(budgetState, themeId)) return
+
     const nextActiveMap = {
       ...customThemeActive,
       [themeId]: !customThemeActive[themeId],
     }
-
-    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
-    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
-    const updated = composeHotwords(
-      preservedWords,
-      builtinSetWords,
-      builtinSetActive,
-      customThemes,
-      nextActiveMap,
-    )
+    const updated = composeWithCustomThemeToggled(budgetState, themeId)
 
     setSnapshot({
       customThemeActive: nextActiveMap,
@@ -362,15 +368,7 @@ export function useHotwordsManager() {
       setSetting(CUSTOM_THEME_ACTIVE_KEY, nextActiveMap),
       syncToBackend(updated),
     ])
-  }, [
-    builtinSetActive,
-    builtinSetWords,
-    customThemeActive,
-    customThemes,
-    hotwords,
-    setSnapshot,
-    syncToBackend,
-  ])
+  }, [budgetState, customThemeActive, setSnapshot, syncToBackend])
 
   /**
    * Removes a word from one custom category only. The word stays active when another active
@@ -442,14 +440,6 @@ export function useHotwordsManager() {
     setSnapshot({ hotwords: updated })
     await syncToBackend(updated)
   }, [hotwords, setSnapshot, syncToBackend])
-
-  const budgetState = useMemo<HotwordBudgetState>(() => ({
-    hotwords,
-    builtinSetWords,
-    builtinSetActive,
-    customThemes,
-    customThemeActive,
-  }), [builtinSetActive, builtinSetWords, customThemeActive, customThemes, hotwords])
 
   const toggleBuiltinSet = useCallback(async (key: string) => {
     // Switching a set ON is refused when the list it would produce exceeds the token budget,
@@ -566,7 +556,7 @@ export function useHotwordsManager() {
     () => getBlockedBuiltinSets(budgetState, Object.keys(BUILTIN_SETS)),
     [budgetState],
   )
-
+  const customThemeBlocked = useMemo(() => getBlockedCustomThemes(budgetState), [budgetState])
   const builtinSetCopyable = useMemo(() => {
     const copyable: Record<string, boolean> = {}
     for (const key of Object.keys(BUILTIN_SETS)) copyable[key] = builtinSetCopyAllowed(budgetState, key)
@@ -665,6 +655,7 @@ export function useHotwordsManager() {
     showUnknown,
     hotwordTokens,
     builtinSetBlocked,
+    customThemeBlocked,
     builtinSetCopyable,
     filtered,
     filteredUnknown,

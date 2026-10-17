@@ -3,8 +3,10 @@ import {
   HOTWORD_TOKEN_BUDGET,
   builtinSetActivationFits,
   builtinSetCopyAllowed,
+  customThemeActivationFits,
   estimateHotwordTokens,
   getBlockedBuiltinSets,
+  getBlockedCustomThemes,
   termAdditionFits,
   type HotwordBudgetState,
 } from '../budget'
@@ -199,3 +201,62 @@ describe('builtinSetCopyAllowed', () => {
   })
 })
 
+describe('customThemeActivationFits', () => {
+  it('allows switching on a category that keeps the projection within the budget', () => {
+    const state = buildState({
+      builtin: {},
+      builtinActive: {},
+      themes: [{ id: 't1', name: 'Mine', words: makeWords('c', 10, 3) }],
+      themeActive: { t1: false },
+    })
+    expect(customThemeActivationFits(state, 't1')).toBe(true)
+  })
+
+  it('refuses switching on a category whose projection exceeds the budget', () => {
+    // A copy of a built-in set is a custom category, so this gate keeps copies within the limit too.
+    const state = buildState({
+      builtin: { a: makeWords('a', HOTWORD_TOKEN_BUDGET - 5, 3) },
+      builtinActive: { a: true },
+      themes: [{ id: 't1', name: 'Copy', words: makeWords('c', 6, 3) }],
+      themeActive: { t1: false },
+    })
+    expect(customThemeActivationFits(state, 't1')).toBe(false)
+  })
+
+  it('counts words shared with an active set once', () => {
+    const shared = makeWords('a', HOTWORD_TOKEN_BUDGET, 3)
+    const state = buildState({
+      builtin: { a: shared },
+      builtinActive: { a: true },
+      themes: [{ id: 't1', name: 'Copy', words: shared.slice(0, 50) }],
+      themeActive: { t1: false },
+    })
+    expect(customThemeActivationFits(state, 't1')).toBe(true)
+  })
+
+  it('always allows switching off, even when the active list is over budget', () => {
+    const state = buildState({
+      builtin: {},
+      builtinActive: {},
+      themes: [{ id: 't1', name: 'Mine', words: makeWords('c', HOTWORD_TOKEN_BUDGET + 50, 3) }],
+      themeActive: { t1: true },
+    })
+    expect(customThemeActivationFits(state, 't1')).toBe(true)
+  })
+})
+
+describe('getBlockedCustomThemes', () => {
+  it('reports only inactive categories, marking those that would not fit', () => {
+    const state = buildState({
+      builtin: {},
+      builtinActive: {},
+      themes: [
+        { id: 'small', name: 'Small', words: makeWords('s', 5, 3) },
+        { id: 'big', name: 'Big', words: makeWords('g', HOTWORD_TOKEN_BUDGET + 1, 3) },
+        { id: 'on', name: 'On', words: makeWords('o', 3, 3) },
+      ],
+      themeActive: { small: false, big: false, on: true },
+    })
+    expect(getBlockedCustomThemes(state)).toEqual({ small: false, big: true })
+  })
+})
