@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import Overlay from './Overlay'
 import '../index.css'
+import './overlay-scrollbar.css'
 
 // Transparent background for overlay window
 const style = document.createElement('style')

@@ -1,0 +1,33 @@
+/*
+ * Scrollbar of the overlay window. The overlay is a dark pill that does not apply the app theme,
+ * so it draws its scrollbar from the fixed --overlay-* palette instead of the theme tokens used
+ * by app-scrollbar.css: a thumb taken from the light-theme muted-foreground would be nearly
+ * invisible on the near-black card, and the browser default would be a light bar on a dark one.
+ *
+ * Imported by overlay/main.tsx only. The values otherwise mirror app-scrollbar.css.
+ */
+
+/* Standard properties (Chromium 121+ ignores the ::-webkit-scrollbar rules below once they are set) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--overlay-text-dim) transparent;
+}
+
+/* Older WebView2 builds without the standard properties */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--overlay-text-dim);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--overlay-text-muted);
+}
