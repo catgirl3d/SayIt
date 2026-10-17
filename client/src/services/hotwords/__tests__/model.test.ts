@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { estimateHotwordTokens } from '../budget'
-import { BUILTIN_SETS, legacyWordsToMigrate, normalizeBuiltinSetWords, withBuiltinSetDefaults } from '../model'
+import {
+  BUILTIN_SETS,
+  composeHotwords,
+  legacyWordsToMigrate,
+  normalizeBuiltinSetWords,
+  removeThemeWord,
+  withBuiltinSetDefaults,
+  type CustomTheme,
+} from '../model'
 
 const PRESET_KEYS = ['agents', 'devops', 'data', 'product', 'design', 'business', 'office', 'creative']
 
@@ -82,5 +90,32 @@ describe('built-in domain hotword presets', () => {
 
   it.each(PRESET_KEYS)('%s stays within the per-set token estimate', (key) => {
     expect(estimateHotwordTokens(BUILTIN_SETS[key].words)).toBeLessThanOrEqual(140)
+  })
+})
+
+describe('custom category word edits', () => {
+  const themes: CustomTheme[] = [
+    { id: 'a', name: 'Mine', words: ['Docker', 'github'] },
+    { id: 'b', name: 'Other', words: ['Docker'] },
+  ]
+
+  it('removes a word from one category only', () => {
+    expect(removeThemeWord(themes, 'a', 'Docker')).toEqual([
+      { id: 'a', name: 'Mine', words: ['github'] },
+      { id: 'b', name: 'Other', words: ['Docker'] },
+    ])
+  })
+
+  it('keeps a word active while another active source still has it', () => {
+    // Removing a term from one card must not strip it from a preset or another category.
+    const setWords = { code: ['Docker'] }
+    const setActive = { code: true }
+    const themeActive = { a: true, b: false }
+
+    const fromTheme = removeThemeWord(themes, 'a', 'Docker')
+    expect(composeHotwords([], setWords, setActive, fromTheme, themeActive)).toContain('Docker')
+
+    const fromBoth = composeHotwords([], { code: [] }, setActive, fromTheme, themeActive)
+    expect(fromBoth).not.toContain('Docker')
   })
 })

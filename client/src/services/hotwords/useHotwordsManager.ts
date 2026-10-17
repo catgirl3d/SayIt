@@ -18,6 +18,7 @@ import {
   normalizeCustomThemeActive,
   normalizeCustomThemes,
   parseWordsInput,
+  removeThemeWord,
   uniqueWords,
 } from './model'
 import {
@@ -367,42 +368,76 @@ export function useHotwordsManager() {
     syncToBackend,
   ])
 
-  const removeWord = useCallback(async (word: string) => {
+  /**
+   * Removes a word from one custom category only. The word stays active when another active
+   * category or built-in set still has it.
+   */
+  const removeWordFromTheme = useCallback(async (themeId: string, word: string) => {
+    const nextThemes = removeThemeWord(customThemes, themeId, word)
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      builtinSetWords,
+      builtinSetActive,
+      nextThemes,
+      customThemeActive,
+    )
+
+    setSnapshot({ customThemes: nextThemes, hotwords: updated })
+
+    await Promise.all([
+      setSetting(CUSTOM_THEMES_KEY, nextThemes),
+      syncToBackend(updated),
+    ])
+  }, [
+    builtinSetActive,
+    builtinSetWords,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    setSnapshot,
+    syncToBackend,
+  ])
+
+  /** Removes a word from one built-in set only; Reset brings it back. */
+  const removeWordFromBuiltinSet = useCallback(async (key: string, word: string) => {
+    const nextSetWords = {
+      ...builtinSetWords,
+      [key]: (builtinSetWords[key] || []).filter((w) => w !== word),
+    }
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      nextSetWords,
+      builtinSetActive,
+      customThemes,
+      customThemeActive,
+    )
+
+    setSnapshot({ builtinSetWords: nextSetWords, hotwords: updated })
+
+    await Promise.all([
+      setSetting(BUILTIN_SET_WORDS_KEY, nextSetWords),
+      syncToBackend(updated),
+    ])
+  }, [
+    builtinSetActive,
+    builtinSetWords,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    setSnapshot,
+    syncToBackend,
+  ])
+
+  /** Removes a legacy word that belongs to no built-in set or custom category. */
+  const removeLegacyWord = useCallback(async (word: string) => {
     const updated = hotwords.filter((w) => w !== word)
-    let nextSetWords = builtinSetWords
-    let setWordsChanged = false
-
-    for (const key of Object.keys(BUILTIN_SETS)) {
-      const setWords = nextSetWords[key] || []
-      if (!setWords.includes(word)) continue
-      if (!setWordsChanged) {
-        nextSetWords = { ...nextSetWords }
-        setWordsChanged = true
-      }
-      nextSetWords[key] = setWords.filter((w) => w !== word)
-    }
-
-    let nextThemes = customThemes
-    let customThemesChanged = false
-    if (customThemes.some((theme) => theme.words.includes(word))) {
-      customThemesChanged = true
-      nextThemes = customThemes.map((theme) => ({
-        ...theme,
-        words: theme.words.filter((w) => w !== word),
-      }))
-    }
-
-    setSnapshot({
-      hotwords: updated,
-      ...(setWordsChanged ? { builtinSetWords: nextSetWords } : {}),
-      ...(customThemesChanged ? { customThemes: nextThemes } : {}),
-    })
-
-    const tasks: Promise<unknown>[] = [syncToBackend(updated)]
-    if (setWordsChanged) tasks.push(setSetting(BUILTIN_SET_WORDS_KEY, nextSetWords))
-    if (customThemesChanged) tasks.push(setSetting(CUSTOM_THEMES_KEY, nextThemes))
-    await Promise.all(tasks)
-  }, [builtinSetWords, customThemes, hotwords, setSnapshot, syncToBackend])
+    setSnapshot({ hotwords: updated })
+    await syncToBackend(updated)
+  }, [hotwords, setSnapshot, syncToBackend])
 
   const budgetState = useMemo<HotwordBudgetState>(() => ({
     hotwords,
@@ -532,7 +567,9 @@ export function useHotwordsManager() {
     removeTheme,
     moveTheme,
     toggleCustomTheme,
-    removeWord,
+    removeWordFromTheme,
+    removeWordFromBuiltinSet,
+    removeLegacyWord,
     toggleBuiltinSet,
     resetBuiltinSet,
   }

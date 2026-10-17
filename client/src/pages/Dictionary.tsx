@@ -154,7 +154,9 @@ export default function Dictionary() {
     removeTheme,
     moveTheme,
     toggleCustomTheme,
-    removeWord,
+    removeWordFromTheme,
+    removeWordFromBuiltinSet,
+    removeLegacyWord,
     toggleBuiltinSet,
     resetBuiltinSet,
   } = useHotwordsManager()
@@ -473,7 +475,11 @@ export default function Dictionary() {
                           </div>
 
                           {activeWords.length > 0 && (
-                            <WordChips words={activeWords} onRemove={removeWord} expandAll={!!search} />
+                            <WordChips
+                              words={activeWords}
+                              onRemove={(word) => void removeWordFromTheme(theme.id, word)}
+                              expandAll={!!search}
+                            />
                           )}
                         </div>
                       )}
@@ -527,7 +533,11 @@ export default function Dictionary() {
                       </div>
 
                       {active && activeWords.length > 0 && (
-                        <WordChips words={activeWords} onRemove={removeWord} expandAll={!!search} />
+                        <WordChips
+                          words={activeWords}
+                          onRemove={(word) => void removeWordFromBuiltinSet(key, word)}
+                          expandAll={!!search}
+                        />
                       )}
                     </CardContent>
                   </Card>
@@ -555,7 +565,7 @@ export default function Dictionary() {
                     </button>
 
                     {showUnknown && (
-                      <WordChips words={filteredUnknown} onRemove={removeWord} expandAll={!!search} />
+                      <WordChips words={filteredUnknown} onRemove={(word) => void removeLegacyWord(word)} expandAll={!!search} />
                     )}
                   </CardContent>
                 </Card>

@@ -286,6 +286,13 @@ export function normalizeCustomThemeActive(value: unknown, themes: CustomTheme[]
   return result
 }
 
+/** Removes `word` from one custom category only; other categories and built-in sets keep it. */
+export function removeThemeWord(themes: CustomTheme[], themeId: string, word: string): CustomTheme[] {
+  return themes.map((theme) => (
+    theme.id === themeId ? { ...theme, words: theme.words.filter((w) => w !== word) } : theme
+  ))
+}
+
 export function createThemeId() {
   return `theme_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
 }
