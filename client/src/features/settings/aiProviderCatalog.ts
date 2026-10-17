@@ -349,9 +349,30 @@ export function profileTitle(profile: AiProfile): string {
  * clientAiPolish.
  */
 export function isProfileComplete(profile: AiProfile): boolean {
-  if (!profile.apiUrl.trim()) return false
-  if (findProvider(profile.provider).keyless) return true
-  return Boolean(profile.model.trim() && profile.apiKey.trim())
+  return assessAiConfig(profile).complete
+}
+
+/** Which pieces of a client-side AI configuration are present, and whether the request can run. */
+export interface AiConfigCompleteness {
+  hasUrl: boolean
+  hasKey: boolean
+  hasModel: boolean
+  complete: boolean
+}
+
+/**
+ * The single completeness rule for a client-side AI configuration. The AI service card, the client
+ * cleanup executor and the server-mode readiness check all use it, so they cannot disagree.
+ * A keyless provider needs neither a key nor a model: the native layer substitutes its default model.
+ */
+export function assessAiConfig(
+  config: Pick<AiProfile, 'provider' | 'apiUrl' | 'apiKey' | 'model'>,
+): AiConfigCompleteness {
+  const keyless = Boolean(findProvider(config.provider).keyless)
+  const hasUrl = Boolean(config.apiUrl.trim())
+  const hasKey = keyless || Boolean(config.apiKey.trim())
+  const hasModel = keyless || Boolean(config.model.trim())
+  return { hasUrl, hasKey, hasModel, complete: hasUrl && hasKey && hasModel }
 }
 
 /**

@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { addRuntimeEvent } from '../debugLog'
 import { loadRuntimeAiConfig } from '../aiRuntimeConfig'
-import { buildAiProviderConfig, findProvider } from '@/features/settings/aiProviderCatalog'
+import { assessAiConfig, buildAiProviderConfig } from '@/features/settings/aiProviderCatalog'
 import { errorProtocolCode } from '@/lib/errorMessages'
 import type { AiExecutionSource, AiExecutionStatus, AiFailureReason, StartOptions } from './types'
 
@@ -108,22 +108,17 @@ export async function polishWithClientAi(
   const config = startOptions?.selectionAiConfig ?? await loadRuntimeAiConfig()
   if (!isCurrent()) return null
 
-  const keyless = Boolean(findProvider(config.provider).keyless)
   // A blank model is normalized to the empty string the native layer reads as
   // "use this provider's default" (Ollama falls back to qwen2.5:7b), so only keyed
   // providers treat it as a hard stop. The backend, not this check, owns the default.
   const model = config.model.trim() ? config.model : ''
-  const complete = Boolean(
-    config.apiUrl.trim()
-    && (model || keyless)
-    && (config.apiKey.trim() || keyless),
-  )
+  const { complete, hasUrl, hasKey, hasModel } = assessAiConfig(config)
   if (!complete) {
     addRuntimeEvent('warn', logSource, 'Custom AI is selected but its active profile is incomplete', {
       provider: config.provider || undefined,
-      hasUrl: Boolean(config.apiUrl.trim()),
-      hasKey: Boolean(config.apiKey.trim()) || keyless,
-      hasModel: Boolean(model) || keyless,
+      hasUrl,
+      hasKey,
+      hasModel,
     })
     return {
       llmText: safeFallbackText(asrText, startOptions),

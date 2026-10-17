@@ -3,6 +3,7 @@
 
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
+import { assessAiConfig } from '@/features/settings/aiProviderCatalog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
 import { resolveAiPolishRoute, type AiPolishRoute } from './aiPolicy'
@@ -44,11 +45,12 @@ export class ServerProvider implements TranscriptionProvider {
       getSetting('cloudAi.model', '') as Promise<string>,
     ])
     this.sourceRoute = this.routeForSource(storedSource)
-    this.customAiReady = Boolean(
-      customUrl.trim()
-      && customModel.trim()
-      && (customKey.trim() || customProvider === 'ollama'),
-    )
+    this.customAiReady = assessAiConfig({
+      provider: customProvider,
+      apiUrl: customUrl,
+      apiKey: customKey,
+      model: customModel,
+    }).complete
 
     await ws.connect({
       onStateChange: (state) => {
