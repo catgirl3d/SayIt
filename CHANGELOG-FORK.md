@@ -7,6 +7,7 @@ Sections are ordered by version, newest first. For upstream history prior to the
 
 ### Features and Improvements
 
+- The Files page now keeps its own transcription setup instead of mirroring the global voice mode: choose the local model (from installed ones), the recognition language for both local and cloud jobs, and Local or Cloud right on the page. The page remembers the last used setup across restarts, and none of these choices change the global dictation settings.
 - Added a Files page that transcribes one audio or video file into TXT and Markdown with the local speech engine: choose the file and an output folder, pick the audio track when a video has several, watch preparation and recognition progress, cancel with a confirmation, and retry a failed export. Recognized text lives in a draft that survives cancel, errors, or a crash, and nothing is inserted into the active window.
 - The Files page can also transcribe through a configured Cloud API profile: switch the Engine card to Cloud and pick the profile. An incompletely configured profile keeps Start off and names what is missing, and cloud jobs leave the local engine free — local dictation and computer subtitles keep working.
 - SayIt ships a bundled FFmpeg and FFprobe pair, so file transcription works out of the box with no manual install and no PATH setup; a different FFmpeg folder can still be selected on the Files page.
