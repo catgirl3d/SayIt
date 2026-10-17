@@ -24,9 +24,111 @@ export const BUILTIN_SETS: Record<string, { label: string; description: string; 
       'Vibe Coding', 'Typeless', 'Vibe',
     ],
   },
+  // Medium-sized on purpose: built-in sets are composed ahead of custom categories, Gemini and
+  // the Qwen audio stream take only the first 100 words, and Deepgram rejects keyterms above
+  // 500 tokens in total. Prefer names ASR tends to mangle over plain English words.
+  code: {
+    get label() { return t('dict.codeSet') },
+    get description() { return t('dict.codeSetDesc') },
+    words: [
+      'Git', 'GitHub', 'GitHub Actions', 'commit', 'rebase', 'cherry-pick',
+      'merge conflict', 'pull request', 'worktree', 'squash', 'monorepo', 'changelog',
+      'TypeScript', 'JavaScript', 'Python', 'Rust', 'C++', 'C#', 'Node.js', 'WebAssembly',
+      'React', 'Next.js', 'Svelte', 'Tailwind', 'Vite', 'Vitest', 'ESLint',
+      'npm', 'pnpm', 'Cargo', 'Tauri', 'VS Code', 'Neovim', 'JetBrains', 'PowerShell',
+      'Docker', 'Kubernetes', 'kubectl', 'Terraform', 'Nginx', 'Cloudflare', 'Vercel', 'CI/CD',
+      'PostgreSQL', 'SQLite', 'Redis', 'MongoDB', 'GraphQL', 'gRPC', 'REST API',
+      'WebSocket', 'JSON', 'YAML', 'OAuth', 'JWT', 'localhost',
+      'refactor', 'linter', 'regex', 'async', 'middleware', 'endpoint', 'stack trace', 'stderr',
+    ],
+  },
+  // Domain presets below follow the same word and token budgets as `code`; model.test.ts enforces them.
+  agents: {
+    get label() { return t('dict.agentsSet') },
+    get description() { return t('dict.agentsSetDesc') },
+    words: [
+      'MCP', 'subagent', 'tool call', 'system prompt', 'context window', 'slash command',
+      'Windsurf', 'Cline', 'Kilo Code', 'GitHub Copilot', 'Gemini CLI', 'Aider',
+      'OpenRouter', 'Groq', 'Grok', 'Hugging Face', 'Llama', 'Qwen', 'Mistral', 'Anthropic',
+      'vLLM', 'GGUF', 'LoRA', 'RLHF', 'KV cache', 'fine-tuning', 'RAG', 'LangChain', 'LlamaIndex',
+      'Replit', 'Devin', 'Tabnine', 'Sourcegraph', 'MoE',
+    ],
+  },
+  devops: {
+    get label() { return t('dict.devopsSet') },
+    get description() { return t('dict.devopsSetDesc') },
+    words: [
+      'AWS', 'Azure', 'GCP', 'S3', 'EC2', 'Lambda', 'Helm', 'Argo CD', 'Ansible', 'Pulumi',
+      'Grafana', 'Prometheus', 'Loki', 'OpenTelemetry', 'CloudWatch', 'Datadog', 'Sentry', 'PagerDuty',
+      'Kafka', 'RabbitMQ', 'Elasticsearch', 'Istio', 'Traefik', 'Jenkins', 'GitLab', 'Podman',
+      'Okta', 'Keycloak', 'systemd', 'SSH', 'DNS', 'TLS', 'CDN', 'load balancer', 'autoscaling',
+      'SLA', 'SRE', 'DevOps', 'IaC',
+    ],
+  },
+  data: {
+    get label() { return t('dict.dataSet') },
+    get description() { return t('dict.dataSetDesc') },
+    words: [
+      'pandas', 'NumPy', 'PyTorch', 'TensorFlow', 'Jupyter', 'scikit-learn', 'Matplotlib', 'DataFrame',
+      'ETL', 'SQL', 'BigQuery', 'Snowflake', 'Databricks', 'Redshift', 'dbt', 'Airflow',
+      'Apache Spark', 'Parquet', 'vector database', 'CUDA', 'GPU', 'NVIDIA', 'Pydantic', 'LightGBM',
+      'XGBoost', 'MLflow', 'MLOps', 'AutoML', 'BERT', 'CNN', 'LSTM', 'Kaggle',
+      'Colab', 'OpenCV', 'Plotly', 'Tableau', 'Power BI', 'Looker', 'Metabase', 'Anaconda',
+    ],
+  },
+  product: {
+    get label() { return t('dict.productSet') },
+    get description() { return t('dict.productSetDesc') },
+    words: [
+      'Jira', 'Confluence', 'Notion', 'Trello', 'Asana', 'Miro', 'ClickUp', 'Basecamp', 'Wrike',
+      'Airtable', 'Smartsheet', 'Productboard', 'Mixpanel', 'Amplitude', 'Hotjar', 'Pendo',
+      'Zendesk', 'Intercom', 'Typeform', 'Gantt', 'Kanban', 'Scrum', 'MVP', 'OKR', 'KPI',
+      'PRD', 'NPS', 'DAU', 'MAU', 'POC', 'QA', 'UAT', 'ETA', 'WIP',
+    ],
+  },
+  design: {
+    get label() { return t('dict.designSet') },
+    get description() { return t('dict.designSetDesc') },
+    words: [
+      'Figma', 'FigJam', 'Framer', 'Webflow', 'Storybook', 'Zeplin', 'Adobe XD', 'Affinity Designer',
+      'Procreate', 'Photoshop', 'Illustrator', 'InDesign', 'Canva', 'Lottie', 'Rive', 'Dribbble',
+      'Behance', 'Pantone', 'SVG', 'RGB', 'CSS', 'WCAG', 'UI/UX', 'wireframe', 'mockup',
+      'design system', 'viewport', 'breakpoint', 'dark mode', 'Radix UI', 'shadcn/ui', 'Material UI',
+    ],
+  },
+  business: {
+    get label() { return t('dict.businessSet') },
+    get description() { return t('dict.businessSetDesc') },
+    words: [
+      'SaaS', 'B2B', 'B2C', 'ARR', 'MRR', 'churn', 'CAC', 'LTV', 'ROI', 'EBITDA', 'P&L',
+      'SEO', 'SMM', 'CTR', 'CPC', 'PPC', 'CRO', 'ROAS', 'UTM', 'A/B test', 'ICP', 'MQL', 'CRM',
+      'GMV', 'COGS', 'CapEx', 'landing page', 'HubSpot', 'Salesforce', 'Pipedrive', 'Mailchimp',
+      'QuickBooks', 'Shopify', 'Zapier', 'Google Ads', 'Google Analytics', 'Meta Ads', 'TikTok', 'LinkedIn',
+    ],
+  },
+  office: {
+    get label() { return t('dict.officeSet') },
+    get description() { return t('dict.officeSetDesc') },
+    words: [
+      'Zoom', 'Google Meet', 'Microsoft Teams', 'Slack', 'Webex', 'Telegram', 'WhatsApp', 'Viber',
+      'Gmail', 'Google Docs', 'Google Sheets', 'Google Slides', 'Google Forms', 'Google Drive',
+      'Google Calendar', 'Google Workspace', 'PowerPoint', 'OneDrive', 'OneNote', 'SharePoint',
+      'Dropbox', 'Loom', 'Calendly', 'Zoho', 'Lucidchart', 'Mentimeter', 'Kahoot', 'Grammarly',
+      'DocuSign', 'Evernote', 'Otter.ai',
+    ],
+  },
+  creative: {
+    get label() { return t('dict.creativeSet') },
+    get description() { return t('dict.creativeSetDesc') },
+    words: [
+      'OBS', 'Streamlabs', 'StreamElements', 'Restream', 'Elgato', 'Twitch', 'YouTube', 'Discord',
+      'VTuber', 'Unity', 'Unreal Engine', 'Godot', 'Blender', 'DaVinci Resolve', 'Premiere Pro',
+      'After Effects', 'Final Cut Pro', 'Audacity', 'Ableton', 'FL Studio', 'Cubase', 'Pro Tools',
+      'Kontakt', 'Lightroom', 'Inkscape', 'GIMP', 'Krita', 'Midjourney', 'Stable Diffusion', 'ComfyUI',
+      'ffmpeg', 'VST', 'bitrate', 'codec', 'FPS', 'HDR', '1080p', 'Roblox', 'Minecraft', 'Xbox',
+    ],
+  },
 }
-
-export const BUILTIN_WORD_SET = new Set(Object.values(BUILTIN_SETS).flatMap((set) => set.words))
 
 export function uniqueWords(words: string[]) {
   return Array.from(new Set(words.map((w) => w.trim()).filter(Boolean)))
@@ -71,6 +173,20 @@ export function collectActiveSourceWords(
   return uniqueWords(activeWords)
 }
 
+/**
+ * Legacy manual hotwords that move into a custom category. Words of an active built-in set are
+ * skipped because they stay active through that set; words of an inactive set are kept, otherwise
+ * the migration would silently drop them.
+ */
+export function legacyWordsToMigrate(
+  legacyWords: string[],
+  builtinWordsMap: Record<string, string[]>,
+  builtinActiveMap: Record<string, boolean>,
+): string[] {
+  const covered = new Set(collectActiveSourceWords(builtinWordsMap, builtinActiveMap, [], {}))
+  return uniqueWords(legacyWords).filter((w) => !covered.has(w))
+}
+
 export function composeHotwords(
   preservedWords: string[],
   builtinWordsMap: Record<string, string[]>,
@@ -101,6 +217,19 @@ export function normalizeBuiltinSetWords(value: unknown): Record<string, string[
     result[key] = uniqueWords(raw.map((v) => String(v))).filter((w) => allow.has(w))
   }
 
+  return result
+}
+
+/**
+ * Fills built-in sets that have no saved word list with their defaults. The store gets a set's
+ * words only after the user edits or resets it, so a set added in a later release is missing
+ * from existing installs while its saved active flag can already be on.
+ */
+export function withBuiltinSetDefaults(savedWords: Record<string, string[]>): Record<string, string[]> {
+  const result: Record<string, string[]> = {}
+  for (const [key, setDef] of Object.entries(BUILTIN_SETS)) {
+    result[key] = savedWords[key] ?? uniqueWords(setDef.words)
+  }
   return result
 }
 
@@ -155,6 +284,37 @@ export function normalizeCustomThemeActive(value: unknown, themes: CustomTheme[]
   }
 
   return result
+}
+
+/** Removes `word` from one custom category only; other categories and built-in sets keep it. */
+export function removeThemeWord(themes: CustomTheme[], themeId: string, word: string): CustomTheme[] {
+  return themes.map((theme) => (
+    theme.id === themeId ? { ...theme, words: theme.words.filter((w) => w !== word) } : theme
+  ))
+}
+
+/**
+ * Adds `word` to custom category `themeId`, or removes it when the category already has it.
+ * A case-insensitive match counts as present, so picking "GitHub" never adds a second "github".
+ */
+export function toggleThemeWord(themes: CustomTheme[], themeId: string, word: string): CustomTheme[] {
+  const lower = word.toLowerCase()
+  return themes.map((theme) => {
+    if (theme.id !== themeId) return theme
+    const present = theme.words.some((w) => w.toLowerCase() === lower)
+    const words = present ? theme.words.filter((w) => w.toLowerCase() !== lower) : [...theme.words, word]
+    return { ...theme, words }
+  })
+}
+
+/** A category name that no custom category uses yet; names compare case-insensitively, as in addTheme. */
+export function uniqueThemeName(themes: CustomTheme[], base: string): string {
+  const taken = new Set(themes.map((theme) => theme.name.toLowerCase()))
+  if (!taken.has(base.toLowerCase())) return base
+  for (let n = 2; ; n++) {
+    const name = `${base} (${n})`
+    if (!taken.has(name.toLowerCase())) return name
+  }
 }
 
 export function createThemeId() {

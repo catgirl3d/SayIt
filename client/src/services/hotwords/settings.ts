@@ -9,6 +9,7 @@ import {
   normalizeBuiltinSetWords,
   normalizeCustomThemeActive,
   normalizeCustomThemes,
+  withBuiltinSetDefaults,
 } from './model'
 
 /** Canonical active hotword list shared by dictation, re-recognition, and subtitle sessions. */
@@ -19,7 +20,7 @@ export async function loadActiveHotwords(): Promise<string[]> {
     getSetting(CUSTOM_THEMES_KEY, []),
     getSetting(CUSTOM_THEME_ACTIVE_KEY, {}),
   ])
-  const setWords = normalizeBuiltinSetWords(rawSetWords as Record<string, unknown>)
+  const setWords = withBuiltinSetDefaults(normalizeBuiltinSetWords(rawSetWords as Record<string, unknown>))
   const setActive = normalizeBuiltinSetActive(rawSetActive as Record<string, unknown>)
   const themes = normalizeCustomThemes(rawCustomThemes)
   const themeActive = normalizeCustomThemeActive(rawCustomThemeActive as Record<string, unknown>, themes)

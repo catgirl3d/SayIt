@@ -5,7 +5,6 @@ import {
   BUILTIN_SETS,
   BUILTIN_SET_ACTIVE_KEY,
   BUILTIN_SET_WORDS_KEY,
-  BUILTIN_WORD_SET,
   CUSTOM_THEME_ACTIVE_KEY,
   CUSTOM_THEMES_KEY,
   LEGACY_MANUAL_WORDS_KEY,
@@ -13,13 +12,29 @@ import {
   collectAllSourceWords,
   composeHotwords,
   createThemeId,
+  legacyWordsToMigrate,
   normalizeBuiltinSetActive,
   normalizeBuiltinSetWords,
   normalizeCustomThemeActive,
   normalizeCustomThemes,
   parseWordsInput,
+  removeThemeWord,
+  toggleThemeWord,
+  uniqueThemeName,
   uniqueWords,
 } from './model'
+import {
+  builtinSetActivationFits,
+  builtinSetCopyAllowed,
+  composeWithBuiltinSetToggled,
+  composeWithCustomThemeToggled,
+  customThemeActivationFits,
+  estimateHotwordTokens,
+  getBlockedBuiltinSets,
+  getBlockedCustomThemes,
+  termAdditionFits,
+  type HotwordBudgetState,
+} from './budget'
 import { t } from '@/i18n'
 import { hotwordsReducer, initialHotwordsState } from './stateMachine'
 
@@ -63,7 +78,8 @@ export function useHotwordsManager() {
   }, [])
 
   const syncToBackend = useCallback(async (words: string[]) => {
-    // 热词不再写入后端全局文件；直接刷新录音器快照，由下一次会话随 start 消息传递。
+    // Hotwords are no longer written to a global file on the backend. This only refreshes the
+    // recorder's snapshot, and the next session delivers it with its start message.
     setHotwordsCache(words)
   }, [])
 
@@ -83,7 +99,7 @@ export function useHotwordsManager() {
         getSetting<string[]>(LEGACY_MANUAL_WORDS_KEY, []),
       ])
 
-      // 热词全部从本地 store 加载，不依赖远程服务器
+      // All hotwords are loaded from the local store and do not depend on the remote server
       const savedSetWords = normalizeBuiltinSetWords(rawSetWords)
       const savedSetActive = normalizeBuiltinSetActive(rawSetActive)
 
@@ -99,7 +115,7 @@ export function useHotwordsManager() {
       }
 
       let nextCustomThemes = normalizeCustomThemes(rawCustomThemes)
-      const migratedManualWords = uniqueWords(legacyManualWords).filter((w) => !BUILTIN_WORD_SET.has(w))
+      const migratedManualWords = legacyWordsToMigrate(legacyManualWords, nextSetWords, nextSetActive)
 
       if (nextCustomThemes.length === 0 && migratedManualWords.length > 0) {
         nextCustomThemes = [
@@ -120,7 +136,7 @@ export function useHotwordsManager() {
           : false
       }
 
-      // 从本地状态组合出当前生效的热词列表
+      // Compose the currently active hotword list from the local state
       const composed = composeHotwords(
         [],
         nextSetWords,
@@ -162,6 +178,14 @@ export function useHotwordsManager() {
   useEffect(() => {
     void loadHotwords()
   }, [loadHotwords])
+
+  const budgetState = useMemo<HotwordBudgetState>(() => ({
+    hotwords,
+    builtinSetWords,
+    builtinSetActive,
+    customThemes,
+    customThemeActive,
+  }), [builtinSetActive, builtinSetWords, customThemeActive, customThemes, hotwords])
 
   const addTheme = useCallback(async () => {
     const name = newThemeName.trim()
@@ -244,9 +268,10 @@ export function useHotwordsManager() {
   ])
 
   /**
-   * 拖拽调整自定义热词分类的顺序。
-   * 顺序不只是好看：合并后的热词表会按顺序截断到 MAX_HOTWORDS，且部分模型只吃前一小段，
-   * 所以越靠前的分类越容易真正生效。
+   * Drag-and-drop reordering of custom hotword categories.
+   * Order is not just cosmetic: the merged hotword list is truncated to MAX_HOTWORDS in order, and
+   * some models consume only a small leading segment, so the categories higher up are the ones
+   * that actually take effect.
    */
   const moveTheme = useCallback(async (from: number, to: number) => {
     if (from === to || from < 0 || to < 0 || from >= customThemes.length || to >= customThemes.length) return
@@ -324,20 +349,15 @@ export function useHotwordsManager() {
   ])
 
   const toggleCustomTheme = useCallback(async (themeId: string) => {
+    // Switching a category ON is refused when it would exceed the token budget, even if the UI did
+    // not disable the control. Switching OFF is never refused.
+    if (!customThemeActivationFits(budgetState, themeId)) return
+
     const nextActiveMap = {
       ...customThemeActive,
       [themeId]: !customThemeActive[themeId],
     }
-
-    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
-    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
-    const updated = composeHotwords(
-      preservedWords,
-      builtinSetWords,
-      builtinSetActive,
-      customThemes,
-      nextActiveMap,
-    )
+    const updated = composeWithCustomThemeToggled(budgetState, themeId)
 
     setSnapshot({
       customThemeActive: nextActiveMap,
@@ -346,6 +366,30 @@ export function useHotwordsManager() {
 
     await Promise.all([
       setSetting(CUSTOM_THEME_ACTIVE_KEY, nextActiveMap),
+      syncToBackend(updated),
+    ])
+  }, [budgetState, customThemeActive, setSnapshot, syncToBackend])
+
+  /**
+   * Removes a word from one custom category only. The word stays active when another active
+   * category or built-in set still has it.
+   */
+  const removeWordFromTheme = useCallback(async (themeId: string, word: string) => {
+    const nextThemes = removeThemeWord(customThemes, themeId, word)
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      builtinSetWords,
+      builtinSetActive,
+      nextThemes,
+      customThemeActive,
+    )
+
+    setSnapshot({ customThemes: nextThemes, hotwords: updated })
+
+    await Promise.all([
+      setSetting(CUSTOM_THEMES_KEY, nextThemes),
       syncToBackend(updated),
     ])
   }, [
@@ -358,54 +402,52 @@ export function useHotwordsManager() {
     syncToBackend,
   ])
 
-  const removeWord = useCallback(async (word: string) => {
-    const updated = hotwords.filter((w) => w !== word)
-    let nextSetWords = builtinSetWords
-    let setWordsChanged = false
-
-    for (const key of Object.keys(BUILTIN_SETS)) {
-      const setWords = nextSetWords[key] || []
-      if (!setWords.includes(word)) continue
-      if (!setWordsChanged) {
-        nextSetWords = { ...nextSetWords }
-        setWordsChanged = true
-      }
-      nextSetWords[key] = setWords.filter((w) => w !== word)
+  /** Removes a word from one built-in set only; Reset brings it back. */
+  const removeWordFromBuiltinSet = useCallback(async (key: string, word: string) => {
+    const nextSetWords = {
+      ...builtinSetWords,
+      [key]: (builtinSetWords[key] || []).filter((w) => w !== word),
     }
-
-    let nextThemes = customThemes
-    let customThemesChanged = false
-    if (customThemes.some((theme) => theme.words.includes(word))) {
-      customThemesChanged = true
-      nextThemes = customThemes.map((theme) => ({
-        ...theme,
-        words: theme.words.filter((w) => w !== word),
-      }))
-    }
-
-    setSnapshot({
-      hotwords: updated,
-      ...(setWordsChanged ? { builtinSetWords: nextSetWords } : {}),
-      ...(customThemesChanged ? { customThemes: nextThemes } : {}),
-    })
-
-    const tasks: Promise<unknown>[] = [syncToBackend(updated)]
-    if (setWordsChanged) tasks.push(setSetting(BUILTIN_SET_WORDS_KEY, nextSetWords))
-    if (customThemesChanged) tasks.push(setSetting(CUSTOM_THEMES_KEY, nextThemes))
-    await Promise.all(tasks)
-  }, [builtinSetWords, customThemes, hotwords, setSnapshot, syncToBackend])
-
-  const toggleBuiltinSet = useCallback(async (key: string) => {
-    const nextActiveMap = { ...builtinSetActive, [key]: !builtinSetActive[key] }
     const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
     const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
     const updated = composeHotwords(
       preservedWords,
-      builtinSetWords,
-      nextActiveMap,
+      nextSetWords,
+      builtinSetActive,
       customThemes,
       customThemeActive,
     )
+
+    setSnapshot({ builtinSetWords: nextSetWords, hotwords: updated })
+
+    await Promise.all([
+      setSetting(BUILTIN_SET_WORDS_KEY, nextSetWords),
+      syncToBackend(updated),
+    ])
+  }, [
+    builtinSetActive,
+    builtinSetWords,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    setSnapshot,
+    syncToBackend,
+  ])
+
+  /** Removes a legacy word that belongs to no built-in set or custom category. */
+  const removeLegacyWord = useCallback(async (word: string) => {
+    const updated = hotwords.filter((w) => w !== word)
+    setSnapshot({ hotwords: updated })
+    await syncToBackend(updated)
+  }, [hotwords, setSnapshot, syncToBackend])
+
+  const toggleBuiltinSet = useCallback(async (key: string) => {
+    // Switching a set ON is refused when the list it would produce exceeds the token budget,
+    // even if the UI did not disable the control. Switching OFF is never refused.
+    if (!builtinSetActivationFits(budgetState, key)) return
+
+    const nextActiveMap = { ...builtinSetActive, [key]: !builtinSetActive[key] }
+    const updated = composeWithBuiltinSetToggled(budgetState, key)
 
     setSnapshot({
       builtinSetActive: nextActiveMap,
@@ -416,7 +458,7 @@ export function useHotwordsManager() {
       setSetting(BUILTIN_SET_ACTIVE_KEY, nextActiveMap),
       syncToBackend(updated),
     ])
-  }, [builtinSetActive, builtinSetWords, customThemeActive, customThemes, hotwords, setSnapshot, syncToBackend])
+  }, [budgetState, builtinSetActive, setSnapshot, syncToBackend])
 
   const resetBuiltinSet = useCallback(async (key: string) => {
     const setDef = BUILTIN_SETS[key]
@@ -453,7 +495,120 @@ export function useHotwordsManager() {
     syncToBackend,
   ])
 
+  /**
+   * Copies a built-in set into a new, active custom category so its terms can be curated one by
+   * one. The copy takes over from the set: an active set is switched off, otherwise removing a term
+   * from the copy would leave it active through the set. A copy holds exactly the set's current
+   * words, so it is refused when the set is empty or switching it on would not fit the budget.
+   */
+  const copyBuiltinSetToTheme = useCallback(async (key: string) => {
+    const setDef = BUILTIN_SETS[key]
+    if (!setDef || !builtinSetCopyAllowed(budgetState, key)) return
+
+    const nextTheme: CustomTheme = {
+      id: createThemeId(),
+      name: uniqueThemeName(customThemes, setDef.label),
+      words: builtinSetWords[key],
+    }
+    const nextThemes = [nextTheme, ...customThemes]
+    const nextThemeActive = { ...customThemeActive, [nextTheme.id]: true }
+    const nextSetActive = { ...builtinSetActive, [key]: false }
+
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      builtinSetWords,
+      nextSetActive,
+      nextThemes,
+      nextThemeActive,
+    )
+
+    setSnapshot({
+      customThemes: nextThemes,
+      customThemeActive: nextThemeActive,
+      builtinSetActive: nextSetActive,
+      hotwords: updated,
+      themeInputs: { ...themeInputs, [nextTheme.id]: '' },
+    })
+
+    await Promise.all([
+      persistCustomThemeStates(nextThemes, nextThemeActive),
+      setSetting(BUILTIN_SET_ACTIVE_KEY, nextSetActive),
+      syncToBackend(updated),
+    ])
+  }, [
+    budgetState,
+    builtinSetActive,
+    builtinSetWords,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    persistCustomThemeStates,
+    setSnapshot,
+    syncToBackend,
+    themeInputs,
+  ])
+
   const hotwordSet = useMemo(() => new Set(hotwords), [hotwords])
+  const hotwordTokens = useMemo(() => estimateHotwordTokens(hotwords), [hotwords])
+  const builtinSetBlocked = useMemo(
+    () => getBlockedBuiltinSets(budgetState, Object.keys(BUILTIN_SETS)),
+    [budgetState],
+  )
+  const customThemeBlocked = useMemo(() => getBlockedCustomThemes(budgetState), [budgetState])
+  const builtinSetCopyable = useMemo(() => {
+    const copyable: Record<string, boolean> = {}
+    for (const key of Object.keys(BUILTIN_SETS)) copyable[key] = builtinSetCopyAllowed(budgetState, key)
+    return copyable
+  }, [budgetState])
+
+  /** Whether a suggested term can still be added to the category under the token budget. */
+  const canAddSuggestedTerm = useCallback(
+    (themeId: string, word: string) => termAdditionFits(!!customThemeActive[themeId], hotwordSet, hotwordTokens, word),
+    [customThemeActive, hotwordSet, hotwordTokens],
+  )
+
+  /**
+   * Adds a suggested term to a custom category, or removes it when the category already has it.
+   * Adding to an active category is refused when it would exceed the token budget, even if the UI
+   * did not disable the term; terms typed by hand are never refused.
+   */
+  const toggleSuggestedTerm = useCallback(async (themeId: string, word: string) => {
+    const theme = customThemes.find((item) => item.id === themeId)
+    if (!theme) return
+
+    const lower = word.toLowerCase()
+    const adding = !theme.words.some((w) => w.toLowerCase() === lower)
+    if (adding && !canAddSuggestedTerm(themeId, word)) return
+
+    const nextThemes = toggleThemeWord(customThemes, themeId, word)
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      builtinSetWords,
+      builtinSetActive,
+      nextThemes,
+      customThemeActive,
+    )
+
+    setSnapshot({ customThemes: nextThemes, hotwords: updated })
+
+    await Promise.all([
+      setSetting(CUSTOM_THEMES_KEY, nextThemes),
+      syncToBackend(updated),
+    ])
+  }, [
+    builtinSetActive,
+    builtinSetWords,
+    canAddSuggestedTerm,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    setSnapshot,
+    syncToBackend,
+  ])
   const allKnownWords = useMemo(() => collectAllSourceWords(builtinSetWords, customThemes), [builtinSetWords, customThemes])
   const unknownWords = useMemo(
     () => hotwords.filter((word) => !allKnownWords.has(word)),
@@ -498,6 +653,10 @@ export function useHotwordsManager() {
     search,
     loading,
     showUnknown,
+    hotwordTokens,
+    builtinSetBlocked,
+    customThemeBlocked,
+    builtinSetCopyable,
     filtered,
     filteredUnknown,
     visibleCustomThemes,
@@ -512,8 +671,13 @@ export function useHotwordsManager() {
     removeTheme,
     moveTheme,
     toggleCustomTheme,
-    removeWord,
+    removeWordFromTheme,
+    removeWordFromBuiltinSet,
+    removeLegacyWord,
+    canAddSuggestedTerm,
+    toggleSuggestedTerm,
     toggleBuiltinSet,
     resetBuiltinSet,
+    copyBuiltinSetToTheme,
   }
 }

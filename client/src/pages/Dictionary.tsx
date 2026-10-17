@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info } from 'lucide-react'
+import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { exportHotwords } from '@/services/exports'
+import { HOTWORD_TOKEN_BUDGET, HOTWORD_WORD_BUDGET } from '@/services/hotwords/budget'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
 import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
+import SuggestedTermsPicker from '@/components/SuggestedTermsPicker'
 import TextReplacementSection from '@/components/TextReplacementSection'
 import TextFormatSection from '@/components/TextFormatSection'
 import { useSortable, DragHandle } from '@/components/ui/sortable'
@@ -65,12 +67,15 @@ function buildHotwordCapabilityRows(
   return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label))
 }
 
-/** 超过该数量的热词总数时，给出"过多可能反而降低准确率"的软提示 */
+/** Above this total hotword count, show a soft hint that too many terms can counterintuitively lower accuracy. */
 const HOTWORD_SOFT_LIMIT = 200
-/** 单个分类内词条超过该数量时折叠，只显示前 N 个 + 展开按钮，避免一大片平铺 */
+/**
+ * When one category holds more terms than this, collapse it: show only the first N plus an
+ * expand button, so a single category does not spread out as a flat wall of chips.
+ */
 const CHIPS_COLLAPSE_LIMIT = 30
 
-/** 词条标签列表：数量多时折叠（搜索中不折叠，避免藏起匹配项）。 */
+/** Term chip list. It collapses when there are many terms; searching does not collapse it, so matching items are never hidden. */
 function WordChips({
   words,
   onRemove,
@@ -134,6 +139,10 @@ export default function Dictionary() {
     search,
     loading,
     showUnknown,
+    hotwordTokens,
+    builtinSetBlocked,
+    customThemeBlocked,
+    builtinSetCopyable,
     filtered,
     filteredUnknown,
     visibleCustomThemes,
@@ -148,10 +157,17 @@ export default function Dictionary() {
     removeTheme,
     moveTheme,
     toggleCustomTheme,
-    removeWord,
+    removeWordFromTheme,
+    removeWordFromBuiltinSet,
+    removeLegacyWord,
+    canAddSuggestedTerm,
+    toggleSuggestedTerm,
     toggleBuiltinSet,
     resetBuiltinSet,
+    copyBuiltinSetToTheme,
   } = useHotwordsManager()
+  // Only one category shows the suggested-terms picker at a time.
+  const [pickerThemeId, setPickerThemeId] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -168,8 +184,24 @@ export default function Dictionary() {
   }, [])
 
   const capabilityRows = buildHotwordCapabilityRows(hotwordCapabilities)
+  const tokensNearBudget = hotwordTokens >= HOTWORD_TOKEN_BUDGET * 0.8
+  const tokensOverBudget = hotwordTokens > HOTWORD_TOKEN_BUDGET
+  // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
+  const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
+  const budgetText = t('dict.budgetLabel', {
+    tokens: hotwordTokens,
+    tokenBudget: HOTWORD_TOKEN_BUDGET,
+    words: hotwords.length,
+    wordBudget: HOTWORD_WORD_BUDGET,
+  })
+  // Suggestions always offer a set's full default list, even after terms were removed from the set.
+  const suggestionSets = Object.entries(BUILTIN_SETS).map(([key, setDef]) => ({
+    key,
+    label: setDef.label,
+    words: setDef.words,
+  }))
 
-  // 搜索时列表是过滤后的，序号对不上完整列表，因此搜索状态下不启用拖拽
+  // While searching, the list is filtered and its indices no longer match the full list, so drag-and-drop is disabled in the search state
   const themeSortable = useSortable({ onMove: (from, to) => void moveTheme(from, to) })
 
   const handleExport = async () => {
@@ -179,7 +211,7 @@ export default function Dictionary() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      {/* 标题栏 + Tab */}
+      {/* Title bar and tabs */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">{t('nav.hotwords')}</h1>
@@ -203,7 +235,7 @@ export default function Dictionary() {
           </div>
         </div>
 
-        {/* 热词 Tab 的搜索和导出 */}
+        {/* Search and export on the hotwords tab */}
         {tab === 'hotwords' && (
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">
@@ -237,7 +269,7 @@ export default function Dictionary() {
         <p className="mb-2 text-sm text-muted-foreground">{exportMessage}</p>
       )}
 
-      {/* ===== 文本处理 Tab ===== */}
+      {/* ===== Text processing tab ===== */}
       {tab === 'replacement' && (
         <>
           <TextFormatSection />
@@ -245,7 +277,7 @@ export default function Dictionary() {
         </>
       )}
 
-      {/* ===== 热词 Tab ===== */}
+      {/* ===== Hotwords tab ===== */}
       {tab === 'hotwords' && (
         <>
           <p className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -292,6 +324,49 @@ export default function Dictionary() {
             </Tooltip>
           </p>
 
+          {!loading && (
+            <div className="mb-4 -mt-2 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className={cn(
+                  tokensOverBudget ? 'text-destructive' : tokensNearBudget ? 'text-amber-500' : 'text-muted-foreground',
+                )}>
+                  {budgetText}
+                </span>
+                <Tooltip
+                  variant="light"
+                  content={
+                    <div className="text-left">
+                      <p className="max-w-[380px] text-xs leading-relaxed">{t('dict.budgetTooltipApprox')}</p>
+                      <p className="mt-1.5 max-w-[380px] text-xs leading-relaxed">
+                        {t('dict.budgetTooltipDeepgram', { tokenBudget: HOTWORD_TOKEN_BUDGET })}
+                      </p>
+                      <p className="mt-1.5 max-w-[380px] text-xs leading-relaxed">
+                        {t('dict.budgetTooltipWords', { wordBudget: HOTWORD_WORD_BUDGET })}
+                      </p>
+                      <p className="mt-1.5 max-w-[380px] text-xs leading-relaxed">{t('dict.budgetTooltipOrder')}</p>
+                    </div>
+                  }
+                >
+                  <Info className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground" />
+                </Tooltip>
+              </div>
+              <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    'h-full rounded-full transition-[width]',
+                    tokensOverBudget ? 'bg-destructive' : tokensNearBudget ? 'bg-amber-500' : 'bg-primary/60',
+                  )}
+                  style={{ width: `${Math.min(100, (hotwordTokens / HOTWORD_TOKEN_BUDGET) * 100)}%` }}
+                />
+              </div>
+              {hotwords.length > HOTWORD_WORD_BUDGET && (
+                <p className="text-xs text-amber-500">
+                  {t('dict.budgetWordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
+                </p>
+              )}
+            </div>
+          )}
+
           {hotwords.length > HOTWORD_SOFT_LIMIT && !warnDismissed && (
             <div className="mb-4 -mt-2 flex items-start gap-2 text-xs text-amber-500">
               <p>
@@ -308,7 +383,7 @@ export default function Dictionary() {
             </div>
           )}
 
-          {/* 新建热词分类 */}
+          {/* New hotword category */}
           <div className="mb-4 flex items-center gap-2">
             <FolderPlus className="h-4 w-4 shrink-0 text-muted-foreground" />
             <input
@@ -339,7 +414,7 @@ export default function Dictionary() {
             <p className="py-8 text-center text-muted-foreground">{t('dict.loading')}</p>
           ) : (
             <div className="space-y-4">
-              {/* 自定义分类 */}
+              {/* Custom categories */}
               {customThemes.length > 1 && !search && (
                 <p className="text-xs text-muted-foreground/70">
                   {t('dict.orderHint')}
@@ -348,6 +423,7 @@ export default function Dictionary() {
               {visibleCustomThemes.map((theme, themeIndex) => {
                 const canSort = !search && customThemes.length > 1
                 const active = !!customThemeActive[theme.id]
+                const blocked = !!customThemeBlocked[theme.id]
                 const activeWords = getThemeWordsInHotwords(theme)
                 const totalWords = theme.words.length
 
@@ -364,6 +440,7 @@ export default function Dictionary() {
                           <Switch
                             checked={active}
                             onChange={() => void toggleCustomTheme(theme.id)}
+                            disabled={blocked}
                             size="sm"
                           />
                           <div className="min-w-0">
@@ -371,6 +448,11 @@ export default function Dictionary() {
                             <p className="text-xs text-muted-foreground">
                               {t('dict.customCount', { active: activeWords.length, total: totalWords })}
                             </p>
+                            {blocked && (
+                              <p className="mt-1 text-xs text-amber-500">
+                                {tokensFull ? t('dict.budgetFullBlocked') : t('dict.budgetNoFit')}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center">
@@ -412,10 +494,34 @@ export default function Dictionary() {
                               <Plus className="h-3.5 w-3.5" />
                               {t('dict.add')}
                             </Button>
+                            <Button
+                              onClick={() => setPickerThemeId(pickerThemeId === theme.id ? null : theme.id)}
+                              size="sm"
+                              variant={pickerThemeId === theme.id ? 'secondary' : 'outline'}
+                              aria-expanded={pickerThemeId === theme.id}
+                              className="shrink-0 gap-1.5"
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              {t('dict.suggestedOpen')}
+                            </Button>
                           </div>
 
                           {activeWords.length > 0 && (
-                            <WordChips words={activeWords} onRemove={removeWord} expandAll={!!search} />
+                            <WordChips
+                              words={activeWords}
+                              onRemove={(word) => void removeWordFromTheme(theme.id, word)}
+                              expandAll={!!search}
+                            />
+                          )}
+
+                          {pickerThemeId === theme.id && (
+                            <SuggestedTermsPicker
+                              sets={suggestionSets}
+                              selected={theme.words}
+                              canAdd={(word) => canAddSuggestedTerm(theme.id, word)}
+                              onToggle={(word) => void toggleSuggestedTerm(theme.id, word)}
+                              budgetText={budgetText}
+                            />
                           )}
                         </div>
                       )}
@@ -424,9 +530,10 @@ export default function Dictionary() {
                 )
               })}
 
-              {/* 内置分类 */}
+              {/* Built-in categories */}
               {Object.entries(BUILTIN_SETS).map(([key, setDef]) => {
                 const active = !!builtinSetActive[key]
+                const blocked = !!builtinSetBlocked[key]
                 const activeWords = getSetWordsInHotwords(key)
                 const totalWords = (builtinSetWords[key] || []).length
 
@@ -442,6 +549,7 @@ export default function Dictionary() {
                           <Switch
                             checked={active}
                             onChange={() => void toggleBuiltinSet(key)}
+                            disabled={blocked}
                             size="sm"
                           />
                           <div className="min-w-0">
@@ -449,27 +557,49 @@ export default function Dictionary() {
                             <p className="text-xs text-muted-foreground">
                               {t('dict.builtinCount', { desc: setDef.description, active: activeWords.length, total: totalWords })}
                             </p>
+                            {blocked && (
+                              <p className="mt-1 text-xs text-amber-500">
+                                {tokensFull ? t('dict.budgetFullBlocked') : t('dict.budgetNoFit')}
+                              </p>
+                            )}
                           </div>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={() => void resetBuiltinSet(key)}
-                        >
-                          <RotateCcw className="h-3 w-3" /> {t('dict.reset')}
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <Tooltip content={t('dict.copyPresetHint')}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1 px-2 text-xs"
+                              disabled={!builtinSetCopyable[key]}
+                              onClick={() => void copyBuiltinSetToTheme(key)}
+                            >
+                              <CopyPlus className="h-3 w-3" /> {t('dict.copyPreset')}
+                            </Button>
+                          </Tooltip>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 px-2 text-xs"
+                            onClick={() => void resetBuiltinSet(key)}
+                          >
+                            <RotateCcw className="h-3 w-3" /> {t('dict.reset')}
+                          </Button>
+                        </div>
                       </div>
 
                       {active && activeWords.length > 0 && (
-                        <WordChips words={activeWords} onRemove={removeWord} expandAll={!!search} />
+                        <WordChips
+                          words={activeWords}
+                          onRemove={(word) => void removeWordFromBuiltinSet(key, word)}
+                          expandAll={!!search}
+                        />
                       )}
                     </CardContent>
                   </Card>
                 )
               })}
 
-              {/* 历史未分类词汇 */}
+              {/* Legacy uncategorized terms */}
               {filteredUnknown.length > 0 && (
                 <Card>
                   <CardContent className="p-4">
@@ -490,7 +620,7 @@ export default function Dictionary() {
                     </button>
 
                     {showUnknown && (
-                      <WordChips words={filteredUnknown} onRemove={removeWord} expandAll={!!search} />
+                      <WordChips words={filteredUnknown} onRemove={(word) => void removeLegacyWord(word)} expandAll={!!search} />
                     )}
                   </CardContent>
                 </Card>
