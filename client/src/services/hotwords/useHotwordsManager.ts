@@ -70,7 +70,8 @@ export function useHotwordsManager() {
   }, [])
 
   const syncToBackend = useCallback(async (words: string[]) => {
-    // 热词不再写入后端全局文件；直接刷新录音器快照，由下一次会话随 start 消息传递。
+    // Hotwords are no longer written to a global file on the backend. This only refreshes the
+    // recorder's snapshot, and the next session delivers it with its start message.
     setHotwordsCache(words)
   }, [])
 
@@ -90,7 +91,7 @@ export function useHotwordsManager() {
         getSetting<string[]>(LEGACY_MANUAL_WORDS_KEY, []),
       ])
 
-      // 热词全部从本地 store 加载，不依赖远程服务器
+      // All hotwords are loaded from the local store and do not depend on the remote server
       const savedSetWords = normalizeBuiltinSetWords(rawSetWords)
       const savedSetActive = normalizeBuiltinSetActive(rawSetActive)
 
@@ -127,7 +128,7 @@ export function useHotwordsManager() {
           : false
       }
 
-      // 从本地状态组合出当前生效的热词列表
+      // Compose the currently active hotword list from the local state
       const composed = composeHotwords(
         [],
         nextSetWords,
@@ -251,9 +252,10 @@ export function useHotwordsManager() {
   ])
 
   /**
-   * 拖拽调整自定义热词分类的顺序。
-   * 顺序不只是好看：合并后的热词表会按顺序截断到 MAX_HOTWORDS，且部分模型只吃前一小段，
-   * 所以越靠前的分类越容易真正生效。
+   * Drag-and-drop reordering of custom hotword categories.
+   * Order is not just cosmetic: the merged hotword list is truncated to MAX_HOTWORDS in order, and
+   * some models consume only a small leading segment, so the categories higher up are the ones
+   * that actually take effect.
    */
   const moveTheme = useCallback(async (from: number, to: number) => {
     if (from === to || from < 0 || to < 0 || from >= customThemes.length || to >= customThemes.length) return

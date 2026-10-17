@@ -66,12 +66,15 @@ function buildHotwordCapabilityRows(
   return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label))
 }
 
-/** 超过该数量的热词总数时，给出"过多可能反而降低准确率"的软提示 */
+/** Above this total hotword count, show a soft hint that too many terms can counterintuitively lower accuracy. */
 const HOTWORD_SOFT_LIMIT = 200
-/** 单个分类内词条超过该数量时折叠，只显示前 N 个 + 展开按钮，避免一大片平铺 */
+/**
+ * When one category holds more terms than this, collapse it: show only the first N plus an
+ * expand button, so a single category does not spread out as a flat wall of chips.
+ */
 const CHIPS_COLLAPSE_LIMIT = 30
 
-/** 词条标签列表：数量多时折叠（搜索中不折叠，避免藏起匹配项）。 */
+/** Term chip list. It collapses when there are many terms; searching does not collapse it, so matching items are never hidden. */
 function WordChips({
   words,
   onRemove,
@@ -176,7 +179,7 @@ export default function Dictionary() {
   // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
   const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
 
-  // 搜索时列表是过滤后的，序号对不上完整列表，因此搜索状态下不启用拖拽
+  // While searching, the list is filtered and its indices no longer match the full list, so drag-and-drop is disabled in the search state
   const themeSortable = useSortable({ onMove: (from, to) => void moveTheme(from, to) })
 
   const handleExport = async () => {
@@ -186,7 +189,7 @@ export default function Dictionary() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      {/* 标题栏 + Tab */}
+      {/* Title bar and tabs */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">{t('nav.hotwords')}</h1>
@@ -210,7 +213,7 @@ export default function Dictionary() {
           </div>
         </div>
 
-        {/* 热词 Tab 的搜索和导出 */}
+        {/* Search and export on the hotwords tab */}
         {tab === 'hotwords' && (
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">
@@ -244,7 +247,7 @@ export default function Dictionary() {
         <p className="mb-2 text-sm text-muted-foreground">{exportMessage}</p>
       )}
 
-      {/* ===== 文本处理 Tab ===== */}
+      {/* ===== Text processing tab ===== */}
       {tab === 'replacement' && (
         <>
           <TextFormatSection />
@@ -252,7 +255,7 @@ export default function Dictionary() {
         </>
       )}
 
-      {/* ===== 热词 Tab ===== */}
+      {/* ===== Hotwords tab ===== */}
       {tab === 'hotwords' && (
         <>
           <p className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -363,7 +366,7 @@ export default function Dictionary() {
             </div>
           )}
 
-          {/* 新建热词分类 */}
+          {/* New hotword category */}
           <div className="mb-4 flex items-center gap-2">
             <FolderPlus className="h-4 w-4 shrink-0 text-muted-foreground" />
             <input
@@ -394,7 +397,7 @@ export default function Dictionary() {
             <p className="py-8 text-center text-muted-foreground">{t('dict.loading')}</p>
           ) : (
             <div className="space-y-4">
-              {/* 自定义分类 */}
+              {/* Custom categories */}
               {customThemes.length > 1 && !search && (
                 <p className="text-xs text-muted-foreground/70">
                   {t('dict.orderHint')}
@@ -479,7 +482,7 @@ export default function Dictionary() {
                 )
               })}
 
-              {/* 内置分类 */}
+              {/* Built-in categories */}
               {Object.entries(BUILTIN_SETS).map(([key, setDef]) => {
                 const active = !!builtinSetActive[key]
                 const blocked = !!builtinSetBlocked[key]
@@ -531,7 +534,7 @@ export default function Dictionary() {
                 )
               })}
 
-              {/* 历史未分类词汇 */}
+              {/* Legacy uncategorized terms */}
               {filteredUnknown.length > 0 && (
                 <Card>
                   <CardContent className="p-4">
