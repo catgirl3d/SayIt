@@ -67,7 +67,7 @@ The bundled pair is part of every release:
   pinned in `client/ffmpeg.lock.json`, verify its SHA256 before unpacking, place the pair
   where the bundle picks it up. A mismatch must fail the build; never fall back to any
   other FFmpeg.
-- The changelog records the delivery change: the `v0.2.3 (unreleased)` bullet claiming
+- The changelog records the delivery change: the `v0.3.0 (unreleased)` bullet claiming
   FFmpeg is user-installed ("File transcription uses FFmpeg and FFprobe that you install
   yourself ...") was replaced with the bundled wording inside the same section — that
   bullet describes the same feature's final behavior, not a new entry.
