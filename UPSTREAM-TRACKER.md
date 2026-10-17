@@ -7,7 +7,7 @@ Covers upstream 0.2.1 (`8687e9b`) and 0.2.2 (`c704300`), plus follow-up fixes.
 - The local `dev-scripts/upstream-decisions/` journal remains the authoritative record for accept/reject decisions on upstream commits; this file mirrors progress in one readable list.
 - Update this file when a port lands or a decision changes. Keep one row per feature.
 
-Last updated: 2026-10-05 (audit base `e65cf5e`; later commits already moved several items to Ported).
+Last updated: 2026-10-17 (journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits; open PRs #83/#85/#87 tracked in Upstream watch, #86 declined).
 
 ## Ported
 
@@ -32,7 +32,7 @@ Last updated: 2026-10-05 (audit base `e65cf5e`; later commits already moved seve
 | Qwen models | Qwen Audio 3.0 selectable fallback; Omni HTTP/chat profile; legacy Omni alias migration for old profiles |
 | Microphones | Picker-only cleanup in `e0b376e`: duplicate default/identical IDs hidden, communications route labelled and hidden when redundant with the system default (kept when saved or targeting another device), saved routes preserved, last-listed default device shown only on an unambiguous match (not a live route guarantee). Recorder overlay label parity is unassessed; saved-ID migration is deliberately out of scope. |
 | Paste | `WM_PASTE` is sent; effect (did the field change) is not verified |
-| Late ASR result | Opt-in permanent suppression in uncommitted working tree: within the existing 15 s grace, no automatic insertion; History saves when enabled and successful, otherwise the text is discarded. Suppressed results do not update personalization statistics. Upstream per-run Esc abandonment remains unported. |
+| Late ASR result | Opt-in suppression shipped in `02866a8` (+ `5faade0`): within the existing 15 s grace, no automatic insertion; History saves when enabled and successful, otherwise the text is discarded. Suppressed results do not update personalization statistics. Upstream per-run Esc abandonment remains unported. |
 | Server AI | Fixed temperature; no reasoning settings |
 | AI policy in History | Targeted fixes only; cloud/local reprocessing not fully unified (accepted divergence) |
 | Recorder failure lifecycle | Cards done; upstream stuck-insertion watchdog intentionally skipped so far |
@@ -45,7 +45,16 @@ Last updated: 2026-10-05 (audit base `e65cf5e`; later commits already moved seve
 - Server reasoning config (skip temperature / `reasoning_effort`).
 - OpenAI Chat Audio as a separate route (distinct from the custom OpenAI-compatible `chat` protocol).
 - Fresh review of upstream topics not covered in the first pass: recorder/paste deltas (8687e9b:09), rust shell (10), UI misc (11), services misc (c704300:05c).
-- Fork release notes: reflect 0.2.2 feature highlights.
+
+## Upstream watch (open PRs, not merged)
+
+Checked 2026-10-17: upstream `main` is still at `0ceba3e` (2026-10-09); the PRs below are open (@DemonMartin) and stay out of the 0.2.1/0.2.2 port scope until merged. PR #86 is declined in advance (see Won't do). Early review done; journal decisions are recorded only after merge, on the squashed commit.
+
+| PR | Feature | Size | Early assessment |
+| --- | --- | --- | --- |
+| #87 | OpenRouter as an AI provider (reuses the OpenAI-compatible path) | 28+/8−, 5 files | Medium: UX preset on top of the generic `openai_compat` route; small adaptation |
+| #85 | Custom model for selected-text editing | 424+/18−, 19 files | High: fills a missing per-context choice; not cherry-pickable, keep fork's `reasoningEffort`/`serviceTier` in profiles |
+| #83 | Recognition fallback chains (local/cloud/server) | 2034+/192−, 36 files | High: resilience win, no Rust; wide recorder/timing refactor (timeout 30→60 s) — adapt carefully |
 
 ## Deferred
 
@@ -63,3 +72,5 @@ Last updated: 2026-10-05 (audit base `e65cf5e`; later commits already moved seve
 | ASR catalog redesign / one-card-per-platform UI | Fork keeps its service-profile model (deliberate UX choice) |
 | Upstream release metadata (versions, changelogs, highlights files) | Fork owns versioning and release tooling |
 | Upstream-only docs and assets (community links, Chinese README images) | No functional value for the fork |
+| Standard `input_audio` chat protocol (PR #78, `0ceba3e`) | Already the fork's only custom chat format (`455ebc6`); the DashScope data-URL chat variant stays out — Qwen/DashScope goes through the native Qwen providers |
+| GitHub contributors list on About (PR #86) | Declined in advance: hardcodes the upstream repo/API, no functional value; not planned even if merged |
