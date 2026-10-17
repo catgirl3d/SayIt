@@ -77,6 +77,17 @@ fn collection_table(key: &str) -> Option<&'static str> {
     }
 }
 
+fn json_conversion_error(context: impl Into<String>, error: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: {}", context.into(), error),
+        )),
+    )
+}
+
 /// The migration versions this binary applies. `apply_migrations` decides its
 /// branches from these same bindings and `pending_migration_versions` tests
 /// them as one set, so the pending decision cannot drift from what runs.
@@ -482,6 +493,8 @@ impl Storage {
 
     // ─── Get / Set / Delete ───
 
+    /// Tolerant read for normal settings and legacy consumers. Checked export
+    /// paths use `export_collection` or `export_app_settings` instead.
     pub fn get(&self, key: &str, fallback: Option<&Value>) -> Value {
         if is_collection_key(key) {
             return self.read_collection(key).unwrap_or(Value::Array(vec![]));
@@ -558,7 +571,7 @@ impl Storage {
         favorite_only: bool,
         limit: Option<i64>,
         offset: Option<i64>,
-    ) -> Vec<Value> {
+    ) -> SqlResult<Vec<Value>> {
         let db = self.db.lock().unwrap();
         let mut where_clauses = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -595,20 +608,24 @@ impl Storage {
 
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = db.prepare(&sql).unwrap();
-        let rows = stmt
+        let mut stmt = db.prepare(&sql)?;
+        let rows: Vec<String> = stmt
             .query_map(params_ref.as_slice(), |row| {
                 let json_str: String = row.get(0)?;
                 Ok(json_str)
-            })
-            .unwrap();
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
 
-        rows.filter_map(|r| r.ok())
-            .filter_map(|s| serde_json::from_str(&s).ok())
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, json_str)| {
+                serde_json::from_str(&json_str)
+                    .map_err(|error| json_conversion_error(format!("history row {index}"), error))
+            })
             .collect()
     }
 
-    pub fn history_count(&self, keyword: Option<&str>, favorite_only: bool) -> i64 {
+    pub fn history_count(&self, keyword: Option<&str>, favorite_only: bool) -> SqlResult<i64> {
         let db = self.db.lock().unwrap();
         let mut where_clauses = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -635,7 +652,6 @@ impl Storage {
             param_values.iter().map(|p| p.as_ref()).collect();
 
         db.query_row(&sql, params_ref.as_slice(), |row| row.get(0))
-            .unwrap_or(0)
     }
 
     pub fn history_add(&self, record: &Value) -> SqlResult<()> {
@@ -814,12 +830,22 @@ impl Storage {
             Ok(s)
         })?;
 
-        let items: Vec<Value> = rows
-            .filter_map(|r| r.ok())
-            .filter_map(|s| serde_json::from_str(&s).ok())
-            .collect();
+        let rows: Vec<String> = rows.collect::<SqlResult<Vec<_>>>()?;
+        let items = rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, json_str)| {
+                serde_json::from_str(&json_str).map_err(|error| {
+                    json_conversion_error(format!("collection '{key}' row {index}"), error)
+                })
+            })
+            .collect::<SqlResult<Vec<Value>>>()?;
 
         Ok(Value::Array(items))
+    }
+
+    pub fn export_collection(&self, key: &str) -> SqlResult<Value> {
+        self.read_collection(key)
     }
 
     fn replace_collection_on(db: &Connection, key: &str, items: &[Value]) -> SqlResult<()> {
@@ -930,12 +956,9 @@ impl Storage {
 
     fn replace_collection(&self, key: &str, items: &[Value]) -> SqlResult<()> {
         let mut db = self.db.lock().unwrap();
-        if key == "promptPresets" {
-            let tx = db.transaction()?;
-            Self::replace_collection_on(&tx, key, items)?;
-            return tx.commit();
-        }
-        Self::replace_collection_on(&db, key, items)
+        let tx = db.transaction()?;
+        Self::replace_collection_on(&tx, key, items)?;
+        tx.commit()
     }
 }
 
@@ -1303,7 +1326,7 @@ mod tests {
         storage
             .set("cloudAi.model", &serde_json::json!("original-model"))
             .unwrap();
-        let before = storage.export_app_settings(&[]);
+        let before = storage.export_app_settings(&[]).unwrap();
         for key in COLLECTION_KEYS {
             let collection = storage.get(key, None);
             let mut settings = serde_json::Map::new();
@@ -1311,7 +1334,7 @@ mod tests {
             settings.insert((*key).to_owned(), serde_json::json!([]));
 
             assert!(storage.set_app_settings(&settings).is_err());
-            assert_eq!(storage.export_app_settings(&[]), before);
+            assert_eq!(storage.export_app_settings(&[]).unwrap(), before);
             assert_eq!(storage.get(key, None), collection);
         }
     }
@@ -1416,6 +1439,124 @@ mod tests {
     }
 
     #[test]
+    fn history_replace_rolls_back_on_duplicate_id() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let original = serde_json::json!([{
+            "id": "history-original",
+            "timestamp": 1,
+            "charCount": 3,
+        }]);
+        storage.set("history", &original).unwrap();
+
+        let invalid = serde_json::json!([
+            { "id": "duplicate-history", "timestamp": 2 },
+            { "id": "duplicate-history", "timestamp": 3 },
+        ]);
+        assert!(storage.set("history", &invalid).is_err());
+
+        assert_eq!(
+            storage.history_list(None, false, None, None).unwrap(),
+            original.as_array().unwrap().to_vec()
+        );
+    }
+
+    #[test]
+    fn history_list_returns_error_for_invalid_json() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO history_records (id, list_order, raw_json) VALUES (?1, ?2, ?3)",
+                params!["broken-history", 0, "{not json"],
+            )
+            .unwrap();
+
+        let error = storage.history_list(None, false, None, None).unwrap_err();
+        assert!(error.to_string().contains("history row 0"));
+    }
+
+    #[test]
+    fn export_collection_returns_valid_values_and_rejects_invalid_json() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let expected = serde_json::json!([{
+            "id": "correction-1",
+            "createdAt": 42,
+            "historyId": "history-1",
+        }]);
+        storage.set("manualCorrections", &expected).unwrap();
+
+        assert_eq!(
+            storage.export_collection("manualCorrections").unwrap(),
+            expected
+        );
+
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO manual_corrections (id, list_order, raw_json) VALUES (?1, ?2, ?3)",
+                params!["broken-correction", 1, "{not json"],
+            )
+            .unwrap();
+
+        let error = storage.export_collection("manualCorrections").unwrap_err();
+        assert!(error.to_string().contains("manualCorrections"));
+        assert!(error.to_string().contains("row 1"));
+    }
+
+    #[test]
+    fn export_app_settings_returns_valid_values_and_rejects_invalid_json() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage
+            .set("cloudAi.model", &serde_json::json!("valid-model"))
+            .unwrap();
+
+        let exported = storage.export_app_settings(&[]).unwrap();
+        assert_eq!(exported["cloudAi.model"], "valid-model");
+
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE app_settings SET value_json = ?1 WHERE key = ?2",
+                params!["{not json", "cloudAi.model"],
+            )
+            .unwrap();
+
+        let error = storage.export_app_settings(&[]).unwrap_err();
+        assert!(error.to_string().contains("cloudAi.model"));
+    }
+
+    #[test]
+    fn history_count_returns_honest_counts() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        assert_eq!(storage.history_count(None, false).unwrap(), 0);
+
+        storage
+            .history_add(&serde_json::json!({
+                "id": "count-1",
+                "asrText": "alpha",
+                "favorite": false,
+            }))
+            .unwrap();
+        storage
+            .history_add(&serde_json::json!({
+                "id": "count-2",
+                "asrText": "beta",
+                "favorite": true,
+            }))
+            .unwrap();
+
+        assert_eq!(storage.history_count(None, false).unwrap(), 2);
+        assert_eq!(storage.history_count(Some("beta"), false).unwrap(), 1);
+        assert_eq!(storage.history_count(None, true).unwrap(), 1);
+    }
+
+    #[test]
     fn history_clear_removes_all_records_including_favorites_and_returns_audio_paths() {
         let path = test_db_path("history-clear");
         let storage = Storage::new(path.clone()).unwrap();
@@ -1460,8 +1601,13 @@ mod tests {
                 "C:/audio/plain-1.wav".to_string()
             ]
         );
-        assert!(storage.history_list(None, false, None, None).is_empty());
-        assert_eq!(storage.history_count(None, false), 0);
+        assert!(
+            storage
+                .history_list(None, false, None, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(storage.history_count(None, false).unwrap(), 0);
 
         drop(storage);
         let _ = fs::remove_file(path);
@@ -1505,7 +1651,12 @@ mod tests {
             summary.audio_file_paths,
             vec!["C:/audio/restored-1.wav".to_string()]
         );
-        assert!(storage.history_list(None, false, None, None).is_empty());
+        assert!(
+            storage
+                .history_list(None, false, None, None)
+                .unwrap()
+                .is_empty()
+        );
 
         drop(storage);
         let _ = fs::remove_file(path);
@@ -1544,7 +1695,10 @@ mod tests {
         drop(storage);
 
         let storage = Storage::new(path.clone()).unwrap();
-        let record = storage.history_list(None, false, None, None).remove(0);
+        let record = storage
+            .history_list(None, false, None, None)
+            .unwrap()
+            .remove(0);
 
         assert_eq!(record.get("aiProvider"), Some(&Value::Null));
         assert_eq!(record.get("aiModel"), Some(&Value::Null));
@@ -2105,7 +2259,7 @@ mod tests {
             serde_json::json!("committed-to-wal"),
             "the old settings must survive the renamed snapshot"
         );
-        let history = restored.history_list(None, false, None, None);
+        let history = restored.history_list(None, false, None, None).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0]["id"], "legacy-record-1");
         let summary = restored.usage_summary(None).unwrap();
@@ -2133,31 +2287,30 @@ mod tests {
     }
 }
 
-// ─── 备份 / 恢复辅助（导入导出用）───
+// ─── Backup / restore helpers (for import and export) ───
 impl Storage {
-    /// 导出 app_settings 为 { key: value } 对象；exclude 中的 key 会被跳过。
-    pub fn export_app_settings(&self, exclude: &[&str]) -> Value {
+    /// Exports app_settings as a { key: value } object; excluded keys are skipped.
+    pub fn export_app_settings(&self, exclude: &[&str]) -> SqlResult<Value> {
         let db = self.db.lock().unwrap();
         let mut map = serde_json::Map::new();
-        if let Ok(mut stmt) = db.prepare("SELECT key, value_json FROM app_settings") {
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            });
-            if let Ok(rows) = rows {
-                for row in rows.flatten() {
-                    let (key, value_json) = row;
-                    if exclude.contains(&key.as_str()) {
-                        continue;
-                    }
-                    let val: Value = serde_json::from_str(&value_json).unwrap_or(Value::Null);
-                    map.insert(key, val);
-                }
+        let mut stmt = db.prepare("SELECT key, value_json FROM app_settings")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, value_json) = row?;
+            if exclude.contains(&key.as_str()) {
+                continue;
             }
+            let value = serde_json::from_str(&value_json)
+                .map_err(|error| json_conversion_error(format!("app setting '{key}'"), error))?;
+            map.insert(key, value);
         }
-        Value::Object(map)
+        Ok(Value::Object(map))
     }
 
-    /// 原子应用一组配置：设置 key 与可选集合要么全部成功，要么全部回滚。
+    /// Applies settings and optional collections atomically: they either all
+    /// succeed or all roll back.
     pub fn apply_config_transaction(
         &self,
         app_settings: &serde_json::Map<String, Value>,

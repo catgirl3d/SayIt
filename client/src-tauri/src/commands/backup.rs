@@ -152,16 +152,20 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
-fn build_config_value(storage: &Storage) -> Value {
-    json!({
+fn build_config_value(storage: &Storage) -> Result<Value, String> {
+    let app_settings = storage
+        .export_app_settings(CONFIG_EXCLUDE)
+        .map_err(|error| format!("Failed to export app settings: {}", error))?;
+
+    Ok(json!({
         "kind": "config",
         "formatVersion": FORMAT_VERSION,
         "appVersion": app_version(),
         "exportedAt": chrono::Utc::now().to_rfc3339(),
-        "appSettings": storage.export_app_settings(CONFIG_EXCLUDE),
+        "appSettings": app_settings,
         "promptPresets": storage.get("promptPresets", None),
         "appPromptRules": storage.get("appPromptRules", None),
-    })
+    }))
 }
 
 fn normalized_strings(value: Option<&Value>) -> Vec<String> {
@@ -316,7 +320,9 @@ fn build_full_value(storage: &Storage, scope: BackupScope) -> Result<Value, Stri
             "includeHistory": scope.include_history,
             "includeAudio": scope.include_audio,
         },
-        "appSettings": storage.export_app_settings(&[]),
+        "appSettings": storage
+            .export_app_settings(&[])
+            .map_err(|error| format!("Failed to export app settings: {}", error))?,
         "promptPresets": storage.get("promptPresets", None),
         "appPromptRules": storage.get("appPromptRules", None),
         // Usage travels with every full backup, the config-only WebDAV profile
@@ -826,7 +832,7 @@ pub async fn export_config(
             .map_err(|e| format!("Failed to create backup directory: {}", e))?;
     }
     let payload = match selection.mode.as_str() {
-        "full" => build_config_value(storage.inner()),
+        "full" => build_config_value(storage.inner())?,
         "selected" => build_selected_config_value(storage.inner(), &selection)?,
         _ => return Err("Unsupported configuration export mode".to_string()),
     };
@@ -1805,7 +1811,7 @@ mod tests {
                 (0, 0, 0.0, None)
             );
             assert!(before.apps.is_empty());
-            assert_eq!(destination.history_count(None, false), 0);
+            assert_eq!(destination.history_count(None, false).unwrap(), 0);
 
             apply_full_backup(&destination, &archive_path.to_string_lossy()).unwrap();
 
@@ -1847,7 +1853,7 @@ mod tests {
                 }
             }
             assert_eq!(
-                destination.history_count(None, false),
+                destination.history_count(None, false).unwrap(),
                 if include_history { 1 } else { 0 }
             );
 

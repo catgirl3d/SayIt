@@ -58,13 +58,17 @@ pub fn usage_clear(storage: State<Storage>) -> Result<(), String> {
 #[tauri::command]
 pub fn history_list(query: Option<Value>, storage: State<Storage>) -> Result<Vec<Value>, String> {
     let (keyword, favorite_only, limit, offset) = parse_history_query(&query);
-    Ok(storage.history_list(keyword.as_deref(), favorite_only, limit, offset))
+    storage
+        .history_list(keyword.as_deref(), favorite_only, limit, offset)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn history_count(query: Option<Value>, storage: State<Storage>) -> Result<i64, String> {
     let (keyword, favorite_only, _, _) = parse_history_query(&query);
-    Ok(storage.history_count(keyword.as_deref(), favorite_only))
+    storage
+        .history_count(keyword.as_deref(), favorite_only)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

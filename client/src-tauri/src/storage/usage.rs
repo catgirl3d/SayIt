@@ -1189,7 +1189,7 @@ mod tests {
             "cleared usage must not be re-backfilled from retained history and legacy counters"
         );
         assert_eq!(summary.first_used_at, Some(first_used));
-        assert_eq!(storage.history_count(None, false), 1);
+        assert_eq!(storage.history_count(None, false).unwrap(), 1);
         drop(storage);
 
         let storage = Storage::new(path.clone()).unwrap();
