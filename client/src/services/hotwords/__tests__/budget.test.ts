@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HOTWORD_TOKEN_BUDGET,
   builtinSetActivationFits,
+  builtinSetCopyAllowed,
   estimateHotwordTokens,
   getBlockedBuiltinSets,
   termAdditionFits,
@@ -177,3 +178,24 @@ describe('termAdditionFits', () => {
     expect(termAdditionFits(false, new Set(['Git']), HOTWORD_TOKEN_BUDGET + 10, 'Kubernetes')).toBe(true)
   })
 })
+
+describe('builtinSetCopyAllowed', () => {
+  it('allows copying a set that fits the budget', () => {
+    const state = buildState({ builtin: { a: makeWords('a', 10, 3) }, builtinActive: { a: false } })
+    expect(builtinSetCopyAllowed(state, 'a')).toBe(true)
+  })
+
+  it('refuses a set whose saved word list is empty, instead of creating an empty category', () => {
+    const state = buildState({ builtin: { a: [] }, builtinActive: { a: true } })
+    expect(builtinSetCopyAllowed(state, 'a')).toBe(false)
+  })
+
+  it('refuses a set that would not fit the budget', () => {
+    const state = buildState({
+      builtin: { a: makeWords('a', HOTWORD_TOKEN_BUDGET + 1, 3) },
+      builtinActive: { a: false },
+    })
+    expect(builtinSetCopyAllowed(state, 'a')).toBe(false)
+  })
+})
+

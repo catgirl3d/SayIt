@@ -74,6 +74,16 @@ export function getBlockedBuiltinSets(state: HotwordBudgetState, keys: string[])
   }
   return blocked
 }
+
+/**
+ * Whether built-in set `key` can be copied into a new active custom category. The copy holds the
+ * set's current words, so the set must still have some, and the copy must fit the budget exactly
+ * as switching the set on would.
+ */
+export function builtinSetCopyAllowed(state: HotwordBudgetState, key: string): boolean {
+  return (state.builtinSetWords[key] ?? []).length > 0 && builtinSetActivationFits(state, key)
+}
+
 /**
  * Whether adding `word` to a custom category keeps the active list within the token budget. An
  * inactive category adds nothing to the active list, so anything fits there. The estimate is a sum

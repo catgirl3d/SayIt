@@ -307,6 +307,16 @@ export function toggleThemeWord(themes: CustomTheme[], themeId: string, word: st
   })
 }
 
+/** A category name that no custom category uses yet; names compare case-insensitively, as in addTheme. */
+export function uniqueThemeName(themes: CustomTheme[], base: string): string {
+  const taken = new Set(themes.map((theme) => theme.name.toLowerCase()))
+  if (!taken.has(base.toLowerCase())) return base
+  for (let n = 2; ; n++) {
+    const name = `${base} (${n})`
+    if (!taken.has(name.toLowerCase())) return name
+  }
+}
+
 export function createThemeId() {
   return `theme_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
 }

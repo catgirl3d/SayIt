@@ -20,10 +20,12 @@ import {
   parseWordsInput,
   removeThemeWord,
   toggleThemeWord,
+  uniqueThemeName,
   uniqueWords,
 } from './model'
 import {
   builtinSetActivationFits,
+  builtinSetCopyAllowed,
   composeWithBuiltinSetToggled,
   estimateHotwordTokens,
   getBlockedBuiltinSets,
@@ -503,12 +505,73 @@ export function useHotwordsManager() {
     syncToBackend,
   ])
 
+  /**
+   * Copies a built-in set into a new, active custom category so its terms can be curated one by
+   * one. The copy takes over from the set: an active set is switched off, otherwise removing a term
+   * from the copy would leave it active through the set. A copy holds exactly the set's current
+   * words, so it is refused when the set is empty or switching it on would not fit the budget.
+   */
+  const copyBuiltinSetToTheme = useCallback(async (key: string) => {
+    const setDef = BUILTIN_SETS[key]
+    if (!setDef || !builtinSetCopyAllowed(budgetState, key)) return
+
+    const nextTheme: CustomTheme = {
+      id: createThemeId(),
+      name: uniqueThemeName(customThemes, setDef.label),
+      words: builtinSetWords[key],
+    }
+    const nextThemes = [nextTheme, ...customThemes]
+    const nextThemeActive = { ...customThemeActive, [nextTheme.id]: true }
+    const nextSetActive = { ...builtinSetActive, [key]: false }
+
+    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
+    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const updated = composeHotwords(
+      preservedWords,
+      builtinSetWords,
+      nextSetActive,
+      nextThemes,
+      nextThemeActive,
+    )
+
+    setSnapshot({
+      customThemes: nextThemes,
+      customThemeActive: nextThemeActive,
+      builtinSetActive: nextSetActive,
+      hotwords: updated,
+      themeInputs: { ...themeInputs, [nextTheme.id]: '' },
+    })
+
+    await Promise.all([
+      persistCustomThemeStates(nextThemes, nextThemeActive),
+      setSetting(BUILTIN_SET_ACTIVE_KEY, nextSetActive),
+      syncToBackend(updated),
+    ])
+  }, [
+    budgetState,
+    builtinSetActive,
+    builtinSetWords,
+    customThemeActive,
+    customThemes,
+    hotwords,
+    persistCustomThemeStates,
+    setSnapshot,
+    syncToBackend,
+    themeInputs,
+  ])
+
   const hotwordSet = useMemo(() => new Set(hotwords), [hotwords])
   const hotwordTokens = useMemo(() => estimateHotwordTokens(hotwords), [hotwords])
   const builtinSetBlocked = useMemo(
     () => getBlockedBuiltinSets(budgetState, Object.keys(BUILTIN_SETS)),
     [budgetState],
   )
+
+  const builtinSetCopyable = useMemo(() => {
+    const copyable: Record<string, boolean> = {}
+    for (const key of Object.keys(BUILTIN_SETS)) copyable[key] = builtinSetCopyAllowed(budgetState, key)
+    return copyable
+  }, [budgetState])
 
   /** Whether a suggested term can still be added to the category under the token budget. */
   const canAddSuggestedTerm = useCallback(
@@ -602,6 +665,7 @@ export function useHotwordsManager() {
     showUnknown,
     hotwordTokens,
     builtinSetBlocked,
+    builtinSetCopyable,
     filtered,
     filteredUnknown,
     visibleCustomThemes,
@@ -623,5 +687,6 @@ export function useHotwordsManager() {
     toggleSuggestedTerm,
     toggleBuiltinSet,
     resetBuiltinSet,
+    copyBuiltinSetToTheme,
   }
 }

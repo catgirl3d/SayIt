@@ -676,6 +676,8 @@
   "dict.suggestedSearch": "Search all suggestions",
   "dict.suggestedNoMatch": "No suggested terms match your search.",
   "dict.suggestedBlocked": "Greyed-out terms would exceed the token budget. Turn off another category or remove some terms first.",
+  "dict.copyPreset": "Copy",
+  "dict.copyPresetHint": "Copy into your categories to keep only the terms you need",
   "dict.aiSet": "AI terms",
   "dict.aiSetDesc": "Common AI models and terminology",
   "dict.codeSet": "Programming",

@@ -7,6 +7,7 @@ import {
   normalizeBuiltinSetWords,
   removeThemeWord,
   toggleThemeWord,
+  uniqueThemeName,
   withBuiltinSetDefaults,
   type CustomTheme,
 } from '../model'
@@ -126,5 +127,11 @@ describe('custom category word edits', () => {
 
   it('treats a case-insensitive match as present and removes it', () => {
     expect(toggleThemeWord(themes, 'a', 'GitHub')[0].words).toEqual(['Docker'])
+  })
+
+  it('picks a free category name for a copy', () => {
+    expect(uniqueThemeName(themes, 'Programming')).toBe('Programming')
+    expect(uniqueThemeName(themes, 'mine')).toBe('mine (2)')
+    expect(uniqueThemeName([...themes, { id: 'c', name: 'Mine (2)', words: [] }], 'Mine')).toBe('Mine (3)')
   })
 })

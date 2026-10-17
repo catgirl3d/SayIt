@@ -141,6 +141,7 @@ export default function Dictionary() {
     showUnknown,
     hotwordTokens,
     builtinSetBlocked,
+    builtinSetCopyable,
     filtered,
     filteredUnknown,
     visibleCustomThemes,
@@ -162,6 +163,7 @@ export default function Dictionary() {
     toggleSuggestedTerm,
     toggleBuiltinSet,
     resetBuiltinSet,
+    copyBuiltinSetToTheme,
   } = useHotwordsManager()
   // Only one category shows the suggested-terms picker at a time.
   const [pickerThemeId, setPickerThemeId] = useState<string | null>(null)
@@ -554,14 +556,27 @@ export default function Dictionary() {
                             )}
                           </div>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={() => void resetBuiltinSet(key)}
-                        >
-                          <RotateCcw className="h-3 w-3" /> {t('dict.reset')}
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <Tooltip content={t('dict.copyPresetHint')}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1 px-2 text-xs"
+                              disabled={!builtinSetCopyable[key]}
+                              onClick={() => void copyBuiltinSetToTheme(key)}
+                            >
+                              <CopyPlus className="h-3 w-3" /> {t('dict.copyPreset')}
+                            </Button>
+                          </Tooltip>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 px-2 text-xs"
+                            onClick={() => void resetBuiltinSet(key)}
+                          >
+                            <RotateCcw className="h-3 w-3" /> {t('dict.reset')}
+                          </Button>
+                        </div>
                       </div>
 
                       {active && activeWords.length > 0 && (
