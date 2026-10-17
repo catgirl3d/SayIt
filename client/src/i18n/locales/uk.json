@@ -1286,7 +1286,6 @@
   "appPrompt.delete": "Видалити",
   "appPrompt.saving": "Збереження…",
   "appPrompt.saveRule": "Зберегти правило",
-  "configTransfer.close": "Закрити",
   "configTransfer.readFailed": "Не вдалося прочитати налаштування: {message}",
   "configTransfer.reading": "Читання налаштувань…",
   "configTransfer.singleJson": "Експортується як один файл JSON",

@@ -1349,7 +1349,6 @@
   "appPrompt.delete": "Delete",
   "appPrompt.saving": "Saving…",
   "appPrompt.saveRule": "Save rule",
-  "configTransfer.close": "Close",
   "configTransfer.readFailed": "Couldn't read the settings: {message}",
   "configTransfer.reading": "Reading settings…",
   "configTransfer.singleJson": "Exports as one JSON file",
