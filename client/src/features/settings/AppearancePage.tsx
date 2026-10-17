@@ -14,6 +14,7 @@ import { OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recor
 import { type OverlayWaveTheme } from './utils'
 import { type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { ThemePicker } from './ThemePicker'
 
 const OVERLAY_OPTIONS: Array<{
   theme: OverlayWaveTheme
@@ -261,31 +262,13 @@ export default function AppearancePage() {
       <div className="space-y-6">
         <Card>
           <CardContent className="p-6">
-            <h2 className="mb-4 text-lg font-semibold">{t('appearance.appTheme')}</h2>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {themeList.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  onClick={() => void handleThemeChange(theme.id)}
-                  className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${activeTheme === theme.id
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-accent'
-                    }`}
-                >
-                  <div className="flex gap-1">
-                    {Object.values(theme.previewColors).map((color, i) => (
-                      <span
-                        key={i}
-                        className="h-5 w-5 rounded-full border border-border/50"
-                        style={{ backgroundColor: color }}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-sm font-medium">{theme.name}</span>
-                </button>
-              ))}
-            </div>
+            <h2 id="app-theme-heading" className="mb-4 text-lg font-semibold">{t('appearance.appTheme')}</h2>
+            <ThemePicker
+              themes={themeList}
+              value={activeTheme}
+              onChange={(themeId) => void handleThemeChange(themeId)}
+              labelledBy="app-theme-heading"
+            />
           </CardContent>
         </Card>
 
