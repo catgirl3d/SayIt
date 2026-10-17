@@ -1,21 +1,29 @@
 #!/usr/bin/env node
 /**
- * 硬编码中文扫描 —— i18n 的防回归闸门。
+ * Hardcoded-Chinese scan — the i18n anti-regression gate.
  *
- * 为什么必须有：P1 是一边翻译一边还在开发新功能。没有这道闸门，
- * 翻译永远收不了口（翻完一片，另一片又进来新的中文串）。
+ * Why the gate must exist: during P1 we keep shipping features while
+ * translating, so Chinese strings keep arriving. Without this gate the
+ * translation work never converges (finish one area — new Chinese lands in
+ * another).
  *
- * 为什么用 Node 而不是 .ps1：这个脚本要进 CI，也要能被任何人在任何 shell 里跑；
- * 而且本机的 PowerShell 5.1 对 UTF-8 无 BOM 的 .ps1 会按 GBK 读，中文注释一乱码
- * 就是语法错误（见 pitfalls 9）。Node 读文件永远按 UTF-8。
+ * Why Node instead of .ps1: the script must run in CI and from any shell on
+ * any machine; this workstation's PowerShell 5.1 reads UTF-8-without-BOM .ps1
+ * files as GBK, so Chinese comments turn into mojibake and become syntax
+ * errors (see pitfalls 9). Node always reads files as UTF-8.
  *
- * 只报**代码里的**中文：注释里的中文有 1700 多行，是项目的正常风格，全报出来
- * 就没人看了。所以先剥注释，再在剩下的部分里找。
+ * It reports Chinese in **code** only: comments carry 1700+ lines of Chinese,
+ * which is the project's normal style, and dumping all of them would drown
+ * the real findings. So comments are stripped first, then what remains is
+ * searched.
  *
- * 用法：
- *   node scripts/check-i18n.mjs            # 只看未迁移的文件清单（摘要）
- *   node scripts/check-i18n.mjs --all      # 逐行列出
- *   node scripts/check-i18n.mjs --strict   # 白名单外只要有一处就退出码 1（CI 用）
+ * It also validates the active locales (en/uk): no Chinese in values, the
+ * same leaf keys on both sides, and identical sorted lists of placeholder occurrences per key.
+ *
+ * Usage:
+ *   node scripts/check-i18n.mjs            # summary of files not yet migrated
+ *   node scripts/check-i18n.mjs --all      # list every line
+ *   node scripts/check-i18n.mjs --strict   # any finding outside the allowlist exits 1 (CI)
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -27,24 +35,27 @@ const CLIENT_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff5e]/
 
 /**
- * 允许含中文的路径（前缀匹配，相对 client/）。
+ * Paths allowed to contain Chinese (prefix match, relative to client/).
  *
- * 加白名单前先问一句：这里的中文是**给用户看的文案**，还是**被处理的数据**？
- * 是文案就该进 locale 文件，不该进这个列表。
+ * Before adding anything here, ask: is this Chinese **user-facing copy** or
+ * **data being processed**? Copy belongs in locale files and must not enter
+ * this list.
  */
 const ALLOWLIST = [
-  // locale 文件本身就是中文的家
+  // Locale files are where Chinese copy lives.
   'src/i18n/locales/',
 ]
 
 /**
- * 测试整体不扫。
+ * Tests are skipped as a whole.
  *
- * 测试里的中文分两种，两种都不该由这个脚本管：中文文本处理的**被测数据**
- * （textPostProcess / textReplacement / textSegmenter）翻掉等于废掉测试；
- * 中文的 describe/it 标题是项目既有风格，也不是用户可见文案。
- * 真正要处理的是「断言了用户可见文案」的那几个测试 —— 它们由 i18n-todo.md 的
- * P1「每片都要遵守的三条」逐片改成断言 key，不靠这里扫。
+ * Chinese in tests comes in two kinds, and neither is this script's business:
+ * **test data** for Chinese text processing (textPostProcess / textReplacement
+ * / textSegmenter — translating it would disable the tests), and Chinese
+ * describe/it titles, which are the project's established style rather than
+ * user-facing copy. What does need handling are the few tests that assert
+ * user-facing copy — those move to key assertions slice by slice under the P1
+ * rule "every slice follows the three rules", not through this scan.
  */
 const SKIP_DIRS = ['__tests__']
 
@@ -53,13 +64,15 @@ const showAll = args.has('--all')
 const strict = args.has('--strict')
 
 /**
- * 少量中文是算法输入、错误匹配词或 Prompt，不是界面文案。它们必须就地标明边界：
- *   // i18n-allow-start: 原因
+ * A few Chinese strings are algorithm inputs, error-match words, or prompts
+ * rather than UI copy. They must declare their boundary in place:
+ *   // i18n-allow-start: reason
  *   ...
  *   // i18n-allow-end
- * 或在单行末尾写 `// i18n-allow: 原因`。
+ * or `// i18n-allow: reason` at the end of a single line.
  *
- * 不使用整文件白名单：同一个文件以后新增 UI 文案时，闸门仍然必须能拦住。
+ * There is no whole-file allowlist: when such a file later gains new UI copy,
+ * the gate must still catch it.
  */
 function collectAllowedLines(file, source) {
   const allowed = new Set()
@@ -89,7 +102,7 @@ function isTextBearingNode(node) {
     || node.kind === ts.SyntaxKind.TemplateTail
 }
 
-/** 用 TypeScript AST 找字符串、模板、正则与 JSX 文本；注释天然不会进入结果。 */
+/** Walks the TypeScript AST for strings, templates, regexes, and JSX text; comments never enter the results. */
 function findChinese(file, source) {
   const scriptKind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKind)
@@ -137,23 +150,100 @@ function isAllowed(relPath) {
   return ALLOWLIST.some((prefix) => posix.startsWith(prefix))
 }
 
-const findings = []
-const activeLocaleFindings = []
-for (const name of ['en.json', 'uk.json']) {
-  const file = join(CLIENT_ROOT, 'src/i18n/locales', name)
+// --- Active locale checks (en/uk) ---
+
+const LOCALE_DIR = 'src/i18n/locales'
+const LOCALE_NAMES = ['en.json', 'uk.json']
+const PLACEHOLDER = /\{(\w+)\}/g
+
+/** Collect every leaf of a locale table as `path -> value`; objects join with '.', array items get `[index]` suffixes. */
+function collectLeaves(value, path, out) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectLeaves(item, `${path}[${index}]`, out))
+    return
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      collectLeaves(child, path === '' ? key : `${path}.${key}`, out)
+    }
+    return
+  }
+  out.set(path, value)
+}
+
+/** Line for a leaf path: the literal key first, then the closest matching parent segment (nested tables hold no dotted literals). */
+function locateKeyLine(source, path) {
+  const segments = path.split(/\.|\[\d+\]/).filter(Boolean)
+  for (let end = segments.length; end >= 1; end--) {
+    const offset = source.indexOf(JSON.stringify(segments.slice(0, end).join('.')))
+    if (offset !== -1) return source.slice(0, offset).split('\n').length
+  }
+  return 1
+}
+
+/** Uses the same grammar and occurrence-exact sorted list as runtime interpolation in src/i18n/index.ts and src/i18n/__tests__/locales.test.ts; null for non-string leaves. */
+function placeholders(value) {
+  if (typeof value !== 'string') return null
+  return (value.match(PLACEHOLDER) ?? []).sort()
+}
+
+const localeFindings = []
+const localeTables = new Map()
+
+for (const name of LOCALE_NAMES) {
+  const file = join(CLIENT_ROOT, LOCALE_DIR, name)
   const source = readFileSync(file, 'utf8')
-  const table = JSON.parse(source)
-  for (const [key, value] of Object.entries(table)) {
-    if (!CJK.test(value)) continue
-    const keyOffset = source.indexOf(JSON.stringify(key))
-    activeLocaleFindings.push({
-      file: `src/i18n/locales/${name}`,
-      line: source.slice(0, keyOffset).split('\n').length,
-      text: `${key}: ${value}`,
+  const leaves = new Map()
+  collectLeaves(JSON.parse(source), '', leaves)
+  localeTables.set(name, { relPath: `${LOCALE_DIR}/${name}`, source, leaves })
+
+  for (const [key, value] of leaves) {
+    if (!CJK.test(String(value))) continue
+    localeFindings.push({
+      file: `${LOCALE_DIR}/${name}`,
+      line: locateKeyLine(source, key),
+      text: `${key}: ${String(value)}`,
     })
   }
 }
 
+// The active locales must stay aligned: identical leaf keys and identical sorted
+// lists of placeholder occurrences. A renamed or dropped {placeholder} silently breaks the UI,
+// and a key present on one side only means a missing or orphaned string.
+const enTable = localeTables.get('en.json')
+const ukTable = localeTables.get('uk.json')
+for (const key of enTable.leaves.keys()) {
+  if (!ukTable.leaves.has(key)) {
+    localeFindings.push({
+      file: enTable.relPath,
+      line: locateKeyLine(enTable.source, key),
+      text: `missing in uk.json: ${key}`,
+    })
+  }
+}
+for (const key of ukTable.leaves.keys()) {
+  if (!enTable.leaves.has(key)) {
+    localeFindings.push({
+      file: ukTable.relPath,
+      line: locateKeyLine(ukTable.source, key),
+      text: `missing in en.json: ${key}`,
+    })
+  }
+}
+for (const [key, enValue] of enTable.leaves) {
+  if (!ukTable.leaves.has(key)) continue
+  const enPlaceholders = placeholders(enValue)
+  const ukPlaceholders = placeholders(ukTable.leaves.get(key))
+  if (enPlaceholders === null || ukPlaceholders === null) continue
+  if (enPlaceholders.join(' ') === ukPlaceholders.join(' ')) continue
+  localeFindings.push({
+    file: ukTable.relPath,
+    line: locateKeyLine(ukTable.source, key),
+    text: `placeholder mismatch: ${key} (en: ${enPlaceholders.join(', ') || 'none'} | uk: ${ukPlaceholders.join(', ') || 'none'})`,
+  })
+}
+
+const findings = []
 for (const file of walk(SRC_ROOT)) {
   const relPath = relative(CLIENT_ROOT, file)
   if (isAllowed(relPath)) continue
@@ -162,10 +252,10 @@ for (const file of walk(SRC_ROOT)) {
     findings.push({ file: relPath.split(sep).join('/'), ...item })
   }
 }
-findings.push(...activeLocaleFindings)
+findings.push(...localeFindings)
 
 if (findings.length === 0) {
-  console.log('check-i18n: no hardcoded Chinese found outside the allowlist.')
+  console.log('check-i18n: no hardcoded Chinese outside the allowlist; en/uk locales are consistent.')
   process.exit(0)
 }
 
@@ -184,7 +274,7 @@ if (showAll) {
   }
 }
 
-console.log(`\ncheck-i18n: ${findings.length} line(s) in ${byFile.size} file(s) still hold Chinese in code.`)
+console.log(`\ncheck-i18n: ${findings.length} finding(s) in ${byFile.size} file(s).`)
 if (strict) {
   console.error('check-i18n: --strict is on, failing.')
   process.exit(1)
