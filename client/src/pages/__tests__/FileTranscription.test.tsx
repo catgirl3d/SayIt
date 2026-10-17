@@ -79,6 +79,11 @@ function renderPage() {
   return render(<MemoryRouter><FileTranscription /></MemoryRouter>)
 }
 
+// The FFmpeg folder controls live behind the collapsed Advanced section.
+function openAdvanced() {
+  fireEvent.click(screen.getByRole('button', { name: /Advanced/ }))
+}
+
 function fileSnapshot(overrides: Partial<FileTranscriptionSnapshot> = {}): FileTranscriptionSnapshot {
   const { sequence = 1, ...rest } = overrides
   return {
@@ -141,6 +146,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect(screen.getByText('English')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Model' })).toBeTruthy()
+    expect(screen.getByText('Supported: mp3, wav, m4a, flac, ogg, mp4, mkv, webm, mov, avi')).toBeTruthy()
   })
 
   it('lists only installed models, starts with the chosen model, and remembers it on the page', async () => {
@@ -171,7 +177,7 @@ describe('file transcription page', () => {
     expect(native.storeWrites).not.toContainEqual(expect.objectContaining({ key: 'localAsr.modelId' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
-    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
@@ -204,7 +210,7 @@ describe('file transcription page', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' }).getAttribute('aria-pressed')).toBe('true'))
     expect(screen.getByRole('button', { name: 'Language' }).textContent).toContain('Auto')
-    expect(screen.getByText('whisper-1')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Cloud profile' }).textContent).toContain('whisper-1')
 
     fireEvent.click(screen.getByRole('button', { name: 'Local' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('Custom installed'))
@@ -250,12 +256,21 @@ describe('file transcription page', () => {
     expect(heading.textContent).toContain('Alpha')
   })
 
-  it('uses the bundled FFmpeg by default without offering a PATH mode', async () => {
+  it('keeps the bundled FFmpeg behind the Advanced section without offering a PATH mode', async () => {
     renderPage()
 
-    await waitFor(() => expect(screen.getByText("Using SayIt's built-in FFmpeg and FFprobe")).toBeTruthy())
+    const toggle = screen.getByRole('button', { name: /Advanced/ })
+    expect(toggle.textContent).toContain('FFmpeg: built-in')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText(/SayIt includes built-in FFmpeg and FFprobe/)).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText(/SayIt includes built-in FFmpeg and FFprobe/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /path/i })).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(screen.queryByText(/SayIt includes built-in FFmpeg and FFprobe/)).toBeNull()
   })
 
   it('shows bundled resolver errors in the page error alert', async () => {
@@ -281,6 +296,7 @@ describe('file transcription page', () => {
     })
     renderPage()
 
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
     await waitFor(() => expect(screen.getByText('C:/broken/ffmpeg')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
@@ -288,7 +304,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(`Could not inspect this file: ${message}`))
   })
 
-  it('renders the cloud profile selector with provider, model, and label details', async () => {
+  it('shows the provider and model once, in the cloud profile selector', async () => {
     cloudProfiles.loadAsrProfiles.mockResolvedValue({
       profiles: [cloudProfile()],
       activeId: 'cloud-profile-1',
@@ -298,9 +314,10 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
 
-    expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy()
-    expect(screen.getByText('Deepgram')).toBeTruthy()
-    expect(screen.getByText('nova-3')).toBeTruthy()
+    const profileSelect = screen.getByRole('button', { name: 'Cloud profile' })
+    expect(profileSelect.textContent).toContain('Deepgram')
+    expect(profileSelect.textContent).toContain('nova-3')
+    expect(screen.getAllByText(/nova-3/)).toHaveLength(1)
   })
 
   it('selects the active cloud profile instead of the first profile', async () => {
@@ -316,8 +333,10 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
 
-    expect(screen.getByText('OpenAI transcription')).toBeTruthy()
-    expect(screen.getByText('whisper-1')).toBeTruthy()
+    const profileSelect = screen.getByRole('button', { name: 'Cloud profile' })
+    expect(profileSelect.textContent).toContain('OpenAI transcription')
+    expect(profileSelect.textContent).toContain('whisper-1')
+    expect(profileSelect.textContent).not.toContain('nova-3')
     expect(screen.queryByText('openai_transcribe')).toBeNull()
   })
 
@@ -362,7 +381,7 @@ describe('file transcription page', () => {
     expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudProfileId', value: 'cloud-profile-2' })
     expect(native.storeWrites).not.toContainEqual(expect.objectContaining({ key: 'speechInput.language' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
-    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
@@ -591,7 +610,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     await waitFor(() => expect(stateListener).not.toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
-    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
@@ -880,6 +899,7 @@ describe('file transcription page', () => {
     dialog.open.mockResolvedValue('C:/manual/ffmpeg')
     renderPage()
 
+    openAdvanced()
     fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
 
     await waitFor(() => expect(screen.getByText('C:/manual/ffmpeg')).toBeTruthy())
@@ -1061,7 +1081,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByText('The selected cloud profile is not ready: no API key yet')).toBeTruthy())
 
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
-    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
@@ -1087,7 +1107,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
     fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
-    expect(screen.getByText('whisper-1')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Cloud profile' }).textContent).toContain('whisper-1')
 
     act(() => { setLocale('uk') })
 
@@ -1095,7 +1115,7 @@ describe('file transcription page', () => {
       native.invoke.mock.calls.filter(([command]) => command === 'list_downloaded_models').length,
     ).toBeGreaterThan(downloadsBefore))
     await waitFor(() => expect(cloudProfiles.loadAsrProfiles.mock.calls.length).toBeGreaterThan(loadsBefore))
-    await waitFor(() => expect(screen.getByText('whisper-1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Хмарний профіль' }).textContent).toContain('whisper-1'))
   })
 
   it('ignores a stale cloud profile response that arrives after the language change', async () => {
@@ -1115,13 +1135,167 @@ describe('file transcription page', () => {
     act(() => { setLocale('uk') })
 
     await waitFor(() => expect(cloudProfiles.loadAsrProfiles).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(screen.getByText('whisper-1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Хмарний профіль' }).textContent).toContain('whisper-1'))
 
     resolveFirst({ profiles: [cloudProfile()], activeId: 'cloud-profile-1' })
     await act(async () => {})
 
-    expect(screen.getByText('whisper-1')).toBeTruthy()
-    expect(screen.queryByText('nova-3')).toBeNull()
+    const profileTrigger = screen.getByRole('button', { name: 'Хмарний профіль' })
+    expect(profileTrigger.textContent).toContain('whisper-1')
+    expect(profileTrigger.textContent).not.toContain('nova-3')
+  })
+
+  it('saves next to the chosen file until an output folder is picked', async () => {
+    dialog.open.mockResolvedValueOnce('C:/media/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'start_file_transcription'
+        ? fileSnapshot({ phase: 'completed', error: null })
+        : native.defaultInvoke(command, args),
+    )
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    expect(screen.getByText('Next to the source file')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    // The folder shows once under the file name and once in the output field.
+    expect(screen.getAllByText('C:/media')).toHaveLength(2)
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'C:/media/recording.mp4',
+      outputDirectory: 'C:/media',
+    })))
+  })
+
+  it('lets an explicitly chosen output folder override the folder of the file', async () => {
+    dialog.open.mockResolvedValueOnce('C:/media/recording.mp4').mockResolvedValueOnce('D:/results')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'start_file_transcription'
+        ? fileSnapshot({ phase: 'completed', error: null })
+        : native.defaultInvoke(command, args),
+    )
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('D:/results')).toBeTruthy())
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      outputDirectory: 'D:/results',
+    })))
+  })
+
+  it('asks for a file under a disabled Start, then reports a file that could not be inspected', async () => {
+    dialog.open.mockResolvedValueOnce('C:/media/recording.mp4')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Choose a file to start.')).toBeTruthy()
+
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'inspect_transcription_file') throw new Error('probe failed')
+      return native.defaultInvoke(command, args)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+
+    await waitFor(() => expect(screen.getByText('Could not inspect this file')).toBeTruthy())
+    expect(screen.queryByText('Choose a file to start.')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('asks to set up the engine under a disabled Start once the file is readable', async () => {
+    dialog.open.mockResolvedValueOnce('C:/media/recording.mp4')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === 'list_downloaded_models' ? [] : native.defaultInvoke(command, args),
+    )
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('No local models are installed. Download one in Voice Engine first.')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+
+    await waitFor(() => expect(screen.getByText('Set up the engine first.')).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('locks the settings and says so while a job runs, then unlocks them', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    await waitFor(() => expect(stateListener).not.toBeNull())
+    expect((screen.getByRole('button', { name: 'Cloud' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByText('Locked until the run ends.')).toBeNull()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-lock',
+        sequence: 80,
+        phase: 'transcribing',
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+
+    expect(screen.getByText('Locked until the run ends.')).toBeTruthy()
+    for (const name of ['Local', 'Cloud', 'Language', 'Model', 'Choose output folder', 'Choose audio or video file']) {
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
+    }
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-lock',
+        sequence: 81,
+        phase: 'completed',
+        error: null,
+        resourcesReleased: true,
+      }) })
+    })
+
+    expect(screen.queryByText('Locked until the run ends.')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Cloud' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Choose output folder' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows the text placeholder only while a running job has no text yet', async () => {
+    renderPage()
+    await waitFor(() => expect(stateListener).not.toBeNull())
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-text',
+        sequence: 90,
+        phase: 'loading',
+        text: '',
+        draftPath: null,
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+    expect(screen.getByText('The recognized text will appear here.')).toBeTruthy()
+
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        jobId: 'job-text',
+        sequence: 91,
+        phase: 'transcribing',
+        text: 'First recognized words',
+        error: null,
+        resourcesReleased: false,
+      }) })
+    })
+    expect(screen.queryByText('The recognized text will appear here.')).toBeNull()
+    expect(screen.getByText('First recognized words')).toBeTruthy()
   })
 
   it('restarts the copy reset timer when copying again', async () => {
