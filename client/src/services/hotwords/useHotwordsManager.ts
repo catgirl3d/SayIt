@@ -20,6 +20,13 @@ import {
   parseWordsInput,
   uniqueWords,
 } from './model'
+import {
+  builtinSetActivationFits,
+  composeWithBuiltinSetToggled,
+  estimateHotwordTokens,
+  getBlockedBuiltinSets,
+  type HotwordBudgetState,
+} from './budget'
 import { t } from '@/i18n'
 import { hotwordsReducer, initialHotwordsState } from './stateMachine'
 
@@ -395,17 +402,21 @@ export function useHotwordsManager() {
     await Promise.all(tasks)
   }, [builtinSetWords, customThemes, hotwords, setSnapshot, syncToBackend])
 
+  const budgetState = useMemo<HotwordBudgetState>(() => ({
+    hotwords,
+    builtinSetWords,
+    builtinSetActive,
+    customThemes,
+    customThemeActive,
+  }), [builtinSetActive, builtinSetWords, customThemeActive, customThemes, hotwords])
+
   const toggleBuiltinSet = useCallback(async (key: string) => {
+    // Switching a set ON is refused when the list it would produce exceeds the token budget,
+    // even if the UI did not disable the control. Switching OFF is never refused.
+    if (!builtinSetActivationFits(budgetState, key)) return
+
     const nextActiveMap = { ...builtinSetActive, [key]: !builtinSetActive[key] }
-    const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
-    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
-    const updated = composeHotwords(
-      preservedWords,
-      builtinSetWords,
-      nextActiveMap,
-      customThemes,
-      customThemeActive,
-    )
+    const updated = composeWithBuiltinSetToggled(budgetState, key)
 
     setSnapshot({
       builtinSetActive: nextActiveMap,
@@ -416,7 +427,7 @@ export function useHotwordsManager() {
       setSetting(BUILTIN_SET_ACTIVE_KEY, nextActiveMap),
       syncToBackend(updated),
     ])
-  }, [builtinSetActive, builtinSetWords, customThemeActive, customThemes, hotwords, setSnapshot, syncToBackend])
+  }, [budgetState, builtinSetActive, setSnapshot, syncToBackend])
 
   const resetBuiltinSet = useCallback(async (key: string) => {
     const setDef = BUILTIN_SETS[key]
@@ -454,6 +465,11 @@ export function useHotwordsManager() {
   ])
 
   const hotwordSet = useMemo(() => new Set(hotwords), [hotwords])
+  const hotwordTokens = useMemo(() => estimateHotwordTokens(hotwords), [hotwords])
+  const builtinSetBlocked = useMemo(
+    () => getBlockedBuiltinSets(budgetState, Object.keys(BUILTIN_SETS)),
+    [budgetState],
+  )
   const allKnownWords = useMemo(() => collectAllSourceWords(builtinSetWords, customThemes), [builtinSetWords, customThemes])
   const unknownWords = useMemo(
     () => hotwords.filter((word) => !allKnownWords.has(word)),
@@ -498,6 +514,8 @@ export function useHotwordsManager() {
     search,
     loading,
     showUnknown,
+    hotwordTokens,
+    builtinSetBlocked,
     filtered,
     filteredUnknown,
     visibleCustomThemes,

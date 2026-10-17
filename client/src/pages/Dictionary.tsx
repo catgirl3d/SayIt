@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { exportHotwords } from '@/services/exports'
+import { HOTWORD_TOKEN_BUDGET, HOTWORD_WORD_BUDGET } from '@/services/hotwords/budget'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
 import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
 import TextReplacementSection from '@/components/TextReplacementSection'
@@ -134,6 +135,8 @@ export default function Dictionary() {
     search,
     loading,
     showUnknown,
+    hotwordTokens,
+    builtinSetBlocked,
     filtered,
     filteredUnknown,
     visibleCustomThemes,
@@ -168,6 +171,10 @@ export default function Dictionary() {
   }, [])
 
   const capabilityRows = buildHotwordCapabilityRows(hotwordCapabilities)
+  const tokensNearBudget = hotwordTokens >= HOTWORD_TOKEN_BUDGET * 0.8
+  const tokensOverBudget = hotwordTokens > HOTWORD_TOKEN_BUDGET
+  // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
+  const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
 
   // 搜索时列表是过滤后的，序号对不上完整列表，因此搜索状态下不启用拖拽
   const themeSortable = useSortable({ onMove: (from, to) => void moveTheme(from, to) })
@@ -291,6 +298,54 @@ export default function Dictionary() {
               <Info className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground" />
             </Tooltip>
           </p>
+
+          {!loading && (
+            <div className="mb-4 -mt-2 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className={cn(
+                  tokensOverBudget ? 'text-destructive' : tokensNearBudget ? 'text-amber-500' : 'text-muted-foreground',
+                )}>
+                  {t('dict.budgetLabel', {
+                    tokens: hotwordTokens,
+                    tokenBudget: HOTWORD_TOKEN_BUDGET,
+                    words: hotwords.length,
+                    wordBudget: HOTWORD_WORD_BUDGET,
+                  })}
+                </span>
+                <Tooltip
+                  variant="light"
+                  content={
+                    <div className="text-left">
+                      <p className="max-w-[380px] text-xs leading-relaxed">{t('dict.budgetTooltipApprox')}</p>
+                      <p className="mt-1.5 max-w-[380px] text-xs leading-relaxed">
+                        {t('dict.budgetTooltipDeepgram', { tokenBudget: HOTWORD_TOKEN_BUDGET })}
+                      </p>
+                      <p className="mt-1.5 max-w-[380px] text-xs leading-relaxed">
+                        {t('dict.budgetTooltipWords', { wordBudget: HOTWORD_WORD_BUDGET })}
+                      </p>
+                      <p className="mt-1.5 max-w-[380px] text-xs leading-relaxed">{t('dict.budgetTooltipOrder')}</p>
+                    </div>
+                  }
+                >
+                  <Info className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground" />
+                </Tooltip>
+              </div>
+              <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    'h-full rounded-full transition-[width]',
+                    tokensOverBudget ? 'bg-destructive' : tokensNearBudget ? 'bg-amber-500' : 'bg-primary/60',
+                  )}
+                  style={{ width: `${Math.min(100, (hotwordTokens / HOTWORD_TOKEN_BUDGET) * 100)}%` }}
+                />
+              </div>
+              {hotwords.length > HOTWORD_WORD_BUDGET && (
+                <p className="text-xs text-amber-500">
+                  {t('dict.budgetWordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
+                </p>
+              )}
+            </div>
+          )}
 
           {hotwords.length > HOTWORD_SOFT_LIMIT && !warnDismissed && (
             <div className="mb-4 -mt-2 flex items-start gap-2 text-xs text-amber-500">
@@ -427,6 +482,7 @@ export default function Dictionary() {
               {/* 内置分类 */}
               {Object.entries(BUILTIN_SETS).map(([key, setDef]) => {
                 const active = !!builtinSetActive[key]
+                const blocked = !!builtinSetBlocked[key]
                 const activeWords = getSetWordsInHotwords(key)
                 const totalWords = (builtinSetWords[key] || []).length
 
@@ -442,6 +498,7 @@ export default function Dictionary() {
                           <Switch
                             checked={active}
                             onChange={() => void toggleBuiltinSet(key)}
+                            disabled={blocked}
                             size="sm"
                           />
                           <div className="min-w-0">
@@ -449,6 +506,11 @@ export default function Dictionary() {
                             <p className="text-xs text-muted-foreground">
                               {t('dict.builtinCount', { desc: setDef.description, active: activeWords.length, total: totalWords })}
                             </p>
+                            {blocked && (
+                              <p className="mt-1 text-xs text-amber-500">
+                                {tokensFull ? t('dict.budgetFullBlocked') : t('dict.budgetNoFit')}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <Button
