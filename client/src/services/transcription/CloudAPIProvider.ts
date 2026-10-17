@@ -1134,8 +1134,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
         return
       }
 
-      // Omni normally provides its own cleanup; subtitles still need the requested translation stage.
-      const polish = isQwenOmni && !startOpts.requireTranslation
+      // Omni normally provides its own cleanup; subtitles still need the requested translation
+      // stage, but a chosen selection-edit service overrides the built-in cleanup for
+      // selected-text edits — the model the user picked must do the edit.
+      const polish = isQwenOmni && !startOpts.requireTranslation && !startOpts.selectionAiConfig
         ? {
           llmText: startOpts.textContext?.selectedText || asrText,
           llmMs: 0,

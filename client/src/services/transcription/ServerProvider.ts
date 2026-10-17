@@ -118,8 +118,9 @@ export class ServerProvider implements TranscriptionProvider {
   }
 
   start(opts: StartOptions): boolean {
-    // 设置页可在不切换工作模式的情况下改变来源；每次 start 都同步取运行时真值。
-    this.aiSource = getRuntimeServerAiSource()
+    // A selection-edit service is called by this client for this run only; otherwise the
+    // source stays whatever the settings page last chose (it can change without a mode switch).
+    this.aiSource = opts.selectionAiConfig ? 'custom' : getRuntimeServerAiSource()
     this.activeRunId = opts.runId
     this.activeStartOpts = {
       ...opts,
@@ -132,12 +133,19 @@ export class ServerProvider implements TranscriptionProvider {
     const wireOptions = this.aiSource === 'custom'
       ? {
         ...opts,
-        // 自定义 AI 由本机调用：服务端只做 ASR，也不需要收到 Prompt 或编辑器正文。
+        // Custom AI runs on this machine: the server only does ASR, so it must not receive
+        // the prompt, the editor text (top-level or the copy inside appContext), or the
+        // selection-edit credentials, which carry an API key.
         disableAi: true,
+        selectionAiConfig: undefined,
         systemPrompt: undefined,
         textContext: undefined,
+        appContext: opts.appContext
+          ? { ...opts.appContext, textContext: undefined }
+          : opts.appContext,
       }
-      : opts
+      // The run-local snapshot belongs to this client in every route; never put it on the wire.
+      : { ...opts, selectionAiConfig: undefined }
     const started = ws.sendStart(wireOptions)
     if (!started) this.resetRun()
     return started

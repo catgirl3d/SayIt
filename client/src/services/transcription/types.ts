@@ -3,6 +3,7 @@
 
 import type { ActiveAppContext, TextContext } from '../../types/appContext'
 import type { ClientRuntimeInfo } from '../../types/appApi'
+import type { SelectionAiConfig } from './selectionAi'
 
 export type WorkMode = 'server' | 'cloud_api' | 'local'
 
@@ -118,6 +119,8 @@ export interface StartOptions {
   appContext?: ActiveAppContext | null
   /** Bounded editor text captured at recording start. Never persisted in history/logs. */
   textContext?: TextContext | null
+  /** Frozen selection-edit credentials for this run only. Never persist or log this snapshot. */
+  selectionAiConfig?: SelectionAiConfig | null
   source?: 'live' | 'history_reprocess'
   hotwords?: string[]
   language?: string

@@ -109,6 +109,8 @@ export const DEFAULTS: Record<string, unknown> = {
   // Read text around the cursor / the selection and hand it to the AI for context-aware
   // continuation and voice editing. Reads document content, so it is off by default.
   contextAwareWritingEnabled: false,
+  // Empty = selection edits reuse the active dictation AI service; otherwise an AiProfile id.
+  contextSelectionAiProfileId: '',
   aiPromptAppend: '', // Global appended prompt
   'ai.builtinPromptLanguage': DEFAULT_BUILTIN_PROMPT_LANGUAGE, // First-run default follows the UI locale; saved choices remain independent.
 

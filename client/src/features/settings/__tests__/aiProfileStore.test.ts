@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadAiProfiles, saveAiProfiles } from '../aiProfileStore'
 import * as bridge from '@/services/bridge'
@@ -79,6 +80,17 @@ describe('runtime tuning mirror', () => {
 
     expect(storedSettings.get('cloudAi.reasoningEffort')).toBe('')
     expect(storedSettings.get('cloudAi.serviceTier')).toBe('')
+  })
+
+  it('notifies listeners after a save so settings UIs can refresh', async () => {
+    const listener = vi.fn()
+    window.addEventListener('ai-profiles-changed', listener)
+    try {
+      await saveAiProfiles({ profiles: [], activeId: '' })
+      expect(listener).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('ai-profiles-changed', listener)
+    }
   })
 })
 
