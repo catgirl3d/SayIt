@@ -224,8 +224,8 @@ python -m pytest backend/tests/ -v
 {"cmd": "stop", "usage_meta": {"ptt_hold_ms": 1500}}
 
 // ← Server responds
-{"type": "asr", "text": "你好世界", "asr_ms": 450}
-{"type": "final", "asr_text": "你好世界", "llm_text": "你好，世界。", "asr_ms": 450, "llm_ms": 320}
+{"type": "asr", "text": "hello world", "asr_ms": 450}
+{"type": "final", "asr_text": "hello world", "llm_text": "Hello, world.", "asr_ms": 450, "llm_ms": 320}
 {"type": "done"}
 ```
 
