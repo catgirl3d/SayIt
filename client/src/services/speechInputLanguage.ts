@@ -5,10 +5,12 @@ export type SpeechInputLanguage = 'auto' | 'ru' | 'uk' | 'en' | 'zh'
 
 export const SPEECH_INPUT_LANGUAGES = ['auto', 'ru', 'uk', 'en', 'zh'] as const
 
-export function normalizeSpeechInputLanguage(value: unknown): SpeechInputLanguage {
+export function isSpeechInputLanguage(value: unknown): value is SpeechInputLanguage {
   return typeof value === 'string' && (SPEECH_INPUT_LANGUAGES as readonly string[]).includes(value)
-    ? value as SpeechInputLanguage
-    : 'auto'
+}
+
+export function normalizeSpeechInputLanguage(value: unknown): SpeechInputLanguage {
+  return isSpeechInputLanguage(value) ? value : 'auto'
 }
 
 export async function getSpeechInputLanguage(): Promise<SpeechInputLanguage> {

@@ -191,6 +191,16 @@ describe('subtitle session controls', () => {
     if (state !== 'idle') expect(markup).toContain('Stop and return to dictation')
   })
 
+  it('shows a short Stop label and keeps the full action as its accessible name and hint', () => {
+    const markup = renderToStaticMarkup(createElement(SystemAudioControls, { state: 'listening', busy: false, onAction: () => undefined }))
+    const stopButton = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
+      .map(([buttonMarkup]) => buttonMarkup)
+      .find((buttonMarkup) => buttonMarkup.includes('aria-label="Stop and return to dictation"'))
+
+    expect(stopButton).toContain('title="Stop and return to dictation"')
+    expect(stopButton).toMatch(/<\/svg>Stop<\/button>$/)
+  })
+
   it('keeps Stop available during startup but prevents duplicate stop requests during handback', () => {
     for (const state of ['starting', 'stopping'] as const) {
       const markup = renderToStaticMarkup(createElement(SystemAudioControls, { state, busy: true, onAction: () => undefined }))
@@ -615,7 +625,7 @@ describe('live system-audio recognition setting', () => {
 describe('settings rows and dialogs', () => {
   const page = () => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
 
-  async function renderRows(settings: Record<string, unknown> = {}) {
+  async function renderRows(settings: Record<string, unknown> = {}, presets: PromptPreset[] = []) {
     pageMocks.effects.length = 0
     pageMocks.switchProps.length = 0
     pageMocks.buttonProps.length = 0
@@ -624,7 +634,7 @@ describe('settings rows and dialogs', () => {
     pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
       key in settings ? settings[key] : fallback
     ))
-    pageMocks.getPromptPresets.mockResolvedValue([])
+    pageMocks.getPromptPresets.mockResolvedValue(presets)
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
     const beforeLoad = page()
@@ -707,5 +717,102 @@ describe('settings rows and dialogs', () => {
     expect(loaded).not.toMatch(/<p role="alert"/)
     expect(pageMocks.getSetting).not.toHaveBeenCalledWith('systemAudio.transcriptEnabled', expect.anything())
     expect(pageMocks.getSetting).not.toHaveBeenCalledWith('systemAudio.transcriptDir', expect.anything())
+  })
+
+  it('renders the idle session bar with the mode badge inside the header', async () => {
+    const { loaded } = await renderRows()
+
+    const header = loaded.slice(loaded.indexOf('<header'), loaded.indexOf('</header>'))
+    expect(header).toContain('Cloud API mode')
+    for (const text of [
+      'Output device',
+      'Audio language',
+      'Translation language',
+      'Start subtitles',
+      'Dictation available',
+      'Microphone dictation is unavailable while subtitles run.',
+    ]) {
+      expect(loaded).toContain(text)
+    }
+    expect(loaded).not.toContain('Locked while subtitles run')
+  })
+
+  it('locks the running session into a status row and read-only chips', async () => {
+    const presets: PromptPreset[] = [{ id: 'translate_uk', name: 'x', systemPrompt: 'x', builtin: true }]
+    await renderRows({ 'systemAudio.targetLanguage': 'uk' }, presets)
+    const current = systemAudioSession.getSnapshot()
+    const getSnapshot = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...current, state: 'listening' })
+
+    try {
+      pageMocks.stateCursor = 0
+      const markup = page()
+      expect(markup).toContain('Listening to computer audio')
+      expect(markup).toContain('Pause')
+      expect(markup).toContain('Stop and return to dictation')
+      expect(markup).toContain('Locked while subtitles run')
+      expect(markup).toContain('System default device (resolved at session start)')
+      expect(markup).toContain('>Auto<')
+      expect(markup).toContain('>Ukrainian<')
+      expect(markup).not.toContain('Translate to Ukrainian')
+      expect(markup).not.toContain('Start subtitles')
+      expect(markup).not.toContain('id="subtitle-output-label"')
+    } finally {
+      getSnapshot.mockRestore()
+    }
+  })
+
+  it('leaves the session chips out until the saved values have loaded', () => {
+    pageMocks.effects.length = 0
+    pageMocks.stateValues.length = 0
+    pageMocks.stateCursor = 0
+    const current = systemAudioSession.getSnapshot()
+    const getSnapshot = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...current, state: 'listening' })
+
+    try {
+      const markup = page()
+      expect(markup).toContain('Locked while subtitles run')
+      expect(markup).not.toContain('System default device (resolved at session start)')
+      expect(markup).not.toContain('>Auto<')
+    } finally {
+      getSnapshot.mockRestore()
+    }
+  })
+
+  it('shows recognition only in the language chip when the test mode is on', async () => {
+    const presets: PromptPreset[] = [{ id: 'translate_uk', name: 'x', systemPrompt: 'x', builtin: true }]
+    await renderRows({ 'systemAudio.targetLanguage': 'uk', 'systemAudio.asrOnlyTest': true }, presets)
+    const current = systemAudioSession.getSnapshot()
+    const getSnapshot = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...current, state: 'listening' })
+
+    try {
+      pageMocks.stateCursor = 0
+      const markup = page()
+      expect(markup).toContain('>recognition only<')
+      expect(markup).not.toContain('>Ukrainian<')
+    } finally {
+      getSnapshot.mockRestore()
+    }
+  })
+
+  it('shows a lock instead of a chevron on the settings rows while a session runs', async () => {
+    const rowMarkup = (markup: string, configureLabel: string) => markup.match(new RegExp(`<button\\b[^>]*aria-label="${configureLabel}"[\\s\\S]*?</button>`))?.[0] ?? ''
+    const { loaded } = await renderRows()
+    for (const label of ['Configure captions', 'Configure saving subtitles']) {
+      expect(rowMarkup(loaded, label)).toContain('lucide-chevron-right')
+      expect(rowMarkup(loaded, label)).not.toContain('lucide-lock')
+    }
+
+    const current = systemAudioSession.getSnapshot()
+    const getSnapshot = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...current, state: 'listening' })
+    try {
+      pageMocks.stateCursor = 0
+      const markup = page()
+      for (const label of ['Configure captions', 'Configure saving subtitles']) {
+        expect(rowMarkup(markup, label)).toContain('lucide-lock')
+        expect(rowMarkup(markup, label)).not.toContain('lucide-chevron-right')
+      }
+    } finally {
+      getSnapshot.mockRestore()
+    }
   })
 })

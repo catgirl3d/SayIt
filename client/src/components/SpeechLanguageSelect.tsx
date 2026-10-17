@@ -11,7 +11,7 @@ interface Props {
   className?: string
 }
 
-const LANGUAGE_LABELS: Record<SpeechInputLanguage, TranslationKey> = {
+export const LANGUAGE_LABELS: Record<SpeechInputLanguage, TranslationKey> = {
   auto: 'common.auto',
   ru: 'local.lang.ru',
   uk: 'local.lang.uk',
