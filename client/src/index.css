@@ -78,14 +78,46 @@
     @apply border-border;
   }
 
-  /* Global focus-visible indicator — a focus ring visible to keyboard users */
+  /*
+   * Global focus-visible indicator — a focus ring visible to keyboard users.
+   * `outline` (style: solid) has to be spelled out: width, offset and color alone leave the
+   * browser's default `auto` style, which draws a two-tone ring (the accent color plus a white
+   * rim) that ignores the theme and looks doubled against a bordered control.
+   */
   :focus-visible {
-    @apply outline-2 outline-offset-2 outline-ring;
+    @apply outline outline-2 outline-offset-2 outline-ring;
   }
 
   /* Components that already have a ring style (such as the shadcn Button) do not get an extra outline */
   [class*="focus-visible:ring"]:focus-visible {
     outline: none;
+  }
+
+  /*
+   * Text-entry controls show focus as the themed border plus a soft halo instead of the offset
+   * outline, the same pair the select trigger uses. Controls that style their own focus (an
+   * outline-none or ring class) are left alone. The halo rule sits inside :where() so it weighs
+   * one class and any utility can still override it.
+   */
+  :where(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+    textarea
+  ):where(:not([class*="outline-none"], [class*="focus:ring"], [class*="focus-visible:ring"])):focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--input-focus-ring) / 0.2);
+  }
+
+  /*
+   * The standard form-control border switches to the focus color. It is keyed on the border class
+   * itself because the border-input-border utility weighs one class and comes later in the output,
+   * so a rule on the element alone would never beat it; the attribute selector lifts this one
+   * above it, while a focus: variant on the control (same weight, later) still wins.
+   */
+  :where(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+    textarea
+  )[class~="border-input-border"]:focus-visible {
+    border-color: hsl(var(--input-focus-border));
   }
 
   /* Typographic hierarchy: page titles */
