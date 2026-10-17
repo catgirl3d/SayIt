@@ -235,30 +235,35 @@ impl Storage {
     pub fn usage_restore(&self, backup: Option<&UsageBackup>) -> SqlResult<()> {
         let db = self.db.lock().unwrap();
         let tx = db.unchecked_transaction()?;
-        match backup {
-            Some(backup) => {
-                tx.execute("DELETE FROM usage_events", [])?;
-                for row in &backup.events {
-                    insert_row(&tx, row)?;
-                }
-                match backup.first_used_at {
-                    Some(ts) => write_first_used_at(&tx, ts)?,
-                    None => {
-                        tx.execute(
-                            "DELETE FROM db_meta WHERE key = ?1",
-                            params![FIRST_USED_AT_META_KEY],
-                        )?;
-                    }
-                }
-                // The section supersedes any legacy counters inside the
-                // restored appSettings; keeping them would let a later rebuild
-                // resurrect numbers the user already cleared.
-                delete_legacy_counters(&tx)?;
-            }
-            None => rebuild_usage_from_legacy(&tx)?,
-        }
+        usage_restore_on(&tx, backup)?;
         tx.commit()
     }
+}
+
+pub(crate) fn usage_restore_on(tx: &Connection, backup: Option<&UsageBackup>) -> SqlResult<()> {
+    match backup {
+        Some(backup) => {
+            tx.execute("DELETE FROM usage_events", [])?;
+            for row in &backup.events {
+                insert_row(tx, row)?;
+            }
+            match backup.first_used_at {
+                Some(ts) => write_first_used_at(tx, ts)?,
+                None => {
+                    tx.execute(
+                        "DELETE FROM db_meta WHERE key = ?1",
+                        params![FIRST_USED_AT_META_KEY],
+                    )?;
+                }
+            }
+            // The section supersedes any legacy counters inside the
+            // restored appSettings; keeping them would let a later rebuild
+            // resurrect numbers the user already cleared.
+            delete_legacy_counters(tx)?;
+        }
+        None => rebuild_usage_from_legacy(tx)?,
+    }
+    Ok(())
 }
 
 /// Seeds usage rows from history and the legacy counters when the table is

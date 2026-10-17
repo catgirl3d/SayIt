@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 mod usage;
 
-pub use usage::{UsageEventInput, UsageSummary, parse_usage_backup};
+pub use usage::{UsageBackup, UsageEventInput, UsageSummary, parse_usage_backup};
 
 /// Default settings values (mirrors electron-app/electron/store.ts)
 const DEFAULT_SETTINGS: &[(&str, &str)] = &[
@@ -1461,6 +1461,121 @@ mod tests {
     }
 
     #[test]
+    fn full_restore_transaction_rolls_back_duplicate_history() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        let original_settings = serde_json::json!({
+            "cloudAi.model": "original-model",
+        });
+        for (key, value) in original_settings.as_object().unwrap() {
+            storage.set(key, value).unwrap();
+        }
+        let original_history = serde_json::json!([{
+            "id": "original-history",
+            "timestamp": 1,
+            "charCount": 3,
+        }]);
+        storage.set("history", &original_history).unwrap();
+
+        let replacement_settings = serde_json::json!({
+            "cloudAi.model": "replacement-model",
+        });
+        let replacement_history = vec![
+            serde_json::json!({ "id": "duplicate-history", "timestamp": 2 }),
+            serde_json::json!({ "id": "duplicate-history", "timestamp": 3 }),
+        ];
+
+        assert!(
+            storage
+                .restore_full_transaction(
+                    replacement_settings.as_object().unwrap(),
+                    &[],
+                    None,
+                    None,
+                    Some(&replacement_history),
+                    None,
+                    None,
+                    None,
+                )
+                .is_err()
+        );
+
+        assert_eq!(
+            storage.export_app_settings(&[]).unwrap()["cloudAi.model"],
+            "original-model"
+        );
+        assert_eq!(storage.get("history", None), original_history);
+    }
+
+    #[test]
+    fn full_restore_transaction_rolls_back_when_usage_fails_late() {
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage
+            .set("cloudAi.model", &serde_json::json!("original-model"))
+            .unwrap();
+        let original_history = serde_json::json!([{
+            "id": "original-history",
+            "timestamp": 1,
+            "charCount": 3,
+        }]);
+        storage.set("history", &original_history).unwrap();
+        storage
+            .usage_record(
+                0,
+                &UsageEventInput {
+                    char_count: 5,
+                    duration_sec: 1.0,
+                    app_id: None,
+                    work_mode: None,
+                    prompt_preset_id: None,
+                },
+            )
+            .unwrap();
+        let original_usage = storage.usage_backup().unwrap();
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_restore_usage BEFORE INSERT ON usage_events
+                 BEGIN SELECT RAISE(ABORT, 'injected usage restore failure'); END;",
+            )
+            .unwrap();
+
+        let replacement_settings = serde_json::json!({
+            "cloudAi.model": "replacement-model",
+        });
+        let replacement_history =
+            vec![serde_json::json!({ "id": "replacement-history", "timestamp": 2 })];
+        let error = storage
+            .restore_full_transaction(
+                replacement_settings.as_object().unwrap(),
+                &[],
+                None,
+                None,
+                Some(&replacement_history),
+                None,
+                None,
+                Some(&original_usage),
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("injected usage restore failure"));
+        assert_eq!(
+            storage.get("cloudAi.model", None),
+            serde_json::json!("original-model")
+        );
+        assert_eq!(storage.get("history", None), original_history);
+        assert_eq!(storage.usage_backup().unwrap(), original_usage);
+
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_restore_usage")
+            .unwrap();
+    }
+
+    #[test]
     fn history_list_returns_error_for_invalid_json() {
         let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
         storage
@@ -2311,15 +2426,13 @@ impl Storage {
 
     /// Applies settings and optional collections atomically: they either all
     /// succeed or all roll back.
-    pub fn apply_config_transaction(
-        &self,
+    fn apply_config_on(
+        tx: &Connection,
         app_settings: &serde_json::Map<String, Value>,
         exclude: &[&str],
         prompt_presets: Option<&[Value]>,
         app_prompt_rules: Option<&[Value]>,
     ) -> SqlResult<()> {
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction()?;
         let now = chrono::Utc::now().timestamp_millis();
 
         for (key, value) in app_settings {
@@ -2335,11 +2448,53 @@ impl Storage {
         }
 
         if let Some(items) = prompt_presets {
-            Self::replace_collection_on(&tx, "promptPresets", items)?;
+            Self::replace_collection_on(tx, "promptPresets", items)?;
         }
         if let Some(items) = app_prompt_rules {
-            Self::replace_collection_on(&tx, "appPromptRules", items)?;
+            Self::replace_collection_on(tx, "appPromptRules", items)?;
         }
+
+        Ok(())
+    }
+
+    pub fn apply_config_transaction(
+        &self,
+        app_settings: &serde_json::Map<String, Value>,
+        exclude: &[&str],
+        prompt_presets: Option<&[Value]>,
+        app_prompt_rules: Option<&[Value]>,
+    ) -> SqlResult<()> {
+        let mut db = self.db.lock().unwrap();
+        let tx = db.transaction()?;
+        Self::apply_config_on(&tx, app_settings, exclude, prompt_presets, app_prompt_rules)?;
+        tx.commit()
+    }
+
+    pub fn restore_full_transaction(
+        &self,
+        app_settings: &serde_json::Map<String, Value>,
+        exclude: &[&str],
+        prompt_presets: Option<&[Value]>,
+        app_prompt_rules: Option<&[Value]>,
+        history: Option<&[Value]>,
+        manual_corrections: Option<&[Value]>,
+        feedback_queue: Option<&[Value]>,
+        usage: Option<&UsageBackup>,
+    ) -> SqlResult<()> {
+        let db = self.db.lock().unwrap();
+        let tx = db.unchecked_transaction()?;
+
+        Self::apply_config_on(&tx, app_settings, exclude, prompt_presets, app_prompt_rules)?;
+        if let Some(items) = history {
+            Self::replace_collection_on(&tx, "history", items)?;
+        }
+        if let Some(items) = manual_corrections {
+            Self::replace_collection_on(&tx, "manualCorrections", items)?;
+        }
+        if let Some(items) = feedback_queue {
+            Self::replace_collection_on(&tx, "feedbackQueue", items)?;
+        }
+        usage::usage_restore_on(&tx, usage)?;
 
         tx.commit()
     }
