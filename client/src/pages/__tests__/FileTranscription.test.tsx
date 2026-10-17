@@ -5,20 +5,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
 import { setLocale } from '@/i18n'
 import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
-import { fileTranscriptionService, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
+import { fileTranscriptionService, type FileTranscriptionJobOptions, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
 import { releaseFileTranscription, reserveFileTranscription } from '@/services/recorder'
 
 const native = vi.hoisted(() => {
+  const settings = new Map<string, unknown>()
+  const storeWrites: Array<{ key: string; value: unknown }> = []
   const defaultInvoke = async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
     if (command === 'get_file_transcription_state') return null
     if (command === 'store_get') {
+      if (settings.has(args?.key as string)) return settings.get(args?.key as string)
       if (args?.key === 'speechInput.language') return 'en'
       if (args?.key === 'localAsr.modelId') return 'sensevoice-small-gguf'
       if (args?.key === 'localAsr.accelerator') return 'auto'
       return null
     }
-    if (command === 'list_available_models') return [{ id: 'sensevoice-small-gguf', name: 'SenseVoice Small' }]
-    if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', complete: true }]
+    if (command === 'store_set') {
+      const key = args?.key as string
+      const value = args?.value
+      settings.set(key, value)
+      storeWrites.push({ key, value })
+      return undefined
+    }
+    if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', name: 'SenseVoice Small', complete: true }]
     if (command === 'detect_ffmpeg_directory') return detectedFfmpegDirectory
     if (command === 'inspect_transcription_file') return {
       durationMs: 12_000,
@@ -33,6 +42,8 @@ const native = vi.hoisted(() => {
     defaultInvoke,
     invoke: vi.fn(defaultInvoke),
     listen: vi.fn(async (_event: string, _handler: (event: { payload: unknown }) => void): Promise<() => void> => () => undefined),
+    settings,
+    storeWrites,
   }
 })
 
@@ -118,16 +129,117 @@ describe('file transcription page', () => {
     snapshotSequenceBase += 100
     cloudProfiles.loadAsrProfiles.mockReset()
     cloudProfiles.loadAsrProfiles.mockResolvedValue({ profiles: [], activeId: '' })
+    native.settings.clear()
+    native.storeWrites.length = 0
   })
 
-  it('shows the file picker workflow and existing local engine summary', async () => {
+  it('shows the file picker workflow with installed model and language selects', async () => {
     renderPage()
 
     expect(screen.getByRole('heading', { name: /Transcribe a file/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Choose audio or video file' })).toBeTruthy()
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect(screen.getByText('English')).toBeTruthy()
-    expect(screen.getByText('Auto')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Model' })).toBeTruthy()
+  })
+
+  it('lists only installed models, starts with the chosen model, and remembers it on the page', async () => {
+    const downloadedModels = [
+      { id: 'sensevoice-small-gguf', name: 'SenseVoice Small', complete: true },
+      { id: 'custom-installed', name: 'Custom installed', complete: true },
+      { id: 'partial-model', name: 'Partial model', complete: false },
+    ]
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return downloadedModels
+      if (command === 'start_file_transcription') return fileSnapshot({ phase: 'completed', error: null })
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    expect(screen.getByRole('button', { name: 'Custom installed' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Partial model' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Custom installed' }))
+
+    await waitFor(() => expect(native.storeWrites).toContainEqual({
+      key: 'fileTranscription.modelId',
+      value: 'custom-installed',
+    }))
+    expect(native.storeWrites).not.toContainEqual(expect.objectContaining({ key: 'localAsr.modelId' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'local',
+      modelId: 'custom-installed',
+    })))
+  })
+
+  it('applies remembered engine, model, language, and cloud profile values on open', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.modelId', 'custom-installed')
+    native.settings.set('fileTranscription.language', 'auto')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-2')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') {
+        return [{ id: 'custom-installed', name: 'Custom installed', complete: true }]
+      }
+      return native.defaultInvoke(command, args)
+    })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile(),
+        cloudProfile({ id: 'cloud-profile-2', provider: 'openai_transcribe', model: 'whisper-1' }),
+      ],
+      activeId: 'cloud-profile-1',
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' }).getAttribute('aria-pressed')).toBe('true'))
+    expect(screen.getByRole('button', { name: 'Language' }).textContent).toContain('Auto')
+    expect(screen.getByText('whisper-1')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Local' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('Custom installed'))
+  })
+
+  it('disables engine and language controls until the first options load resolves', async () => {
+    let resolveOptions: (value: FileTranscriptionJobOptions) => void = () => undefined
+    const pendingOptions = new Promise<FileTranscriptionJobOptions>((resolve) => { resolveOptions = resolve })
+    vi.spyOn(fileTranscriptionService, 'loadJobOptions').mockReturnValue(pendingOptions)
+    renderPage()
+
+    const localButton = screen.getByRole('button', { name: 'Local' })
+    const cloudButton = screen.getByRole('button', { name: 'Cloud' })
+    const languageButton = screen.getByRole('button', { name: 'Language' })
+    expect((localButton as HTMLButtonElement).disabled).toBe(true)
+    expect((cloudButton as HTMLButtonElement).disabled).toBe(true)
+    expect((languageButton as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(cloudButton)
+    fireEvent.click(languageButton)
+    await act(async () => {
+      resolveOptions({
+        engine: 'cloud',
+        models: [{ id: 'local-model', name: 'Local model' }],
+        modelsError: '',
+        modelId: 'local-model',
+        language: 'uk',
+        accelerator: 'auto',
+        cloudProfiles: [],
+        cloudProfilesError: '',
+        cloudProfileId: '',
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    await waitFor(() => expect(cloudButton.getAttribute('aria-pressed')).toBe('true'))
+    expect(languageButton.textContent).toContain('Ukrainian')
   })
 
   it('marks the page title with the shared alpha badge', () => {
@@ -235,10 +347,20 @@ describe('file transcription page', () => {
     const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
     fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Language' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ukrainian' }))
+    await waitFor(() => expect(native.storeWrites).toContainEqual({
+      key: 'fileTranscription.language',
+      value: 'uk',
+    }))
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.engine', value: 'cloud' })
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudProfileId', value: 'cloud-profile-2' })
+    expect(native.storeWrites).not.toContainEqual(expect.objectContaining({ key: 'speechInput.language' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
     await waitFor(() => expect(screen.getByText('C:/recording.mp4')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
@@ -251,6 +373,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
       engine: 'cloud',
       cloudProfileId: 'cloud-profile-2',
+      language: 'uk',
     })))
     await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
       request: expect.objectContaining({
@@ -259,6 +382,7 @@ describe('file transcription page', () => {
           label: 'OpenAI transcription',
           config: expect.objectContaining({
             provider: 'openai_transcribe',
+            extra: expect.objectContaining({ language: 'uk' }),
           }),
         },
       }),
@@ -294,18 +418,49 @@ describe('file transcription page', () => {
     expect(screen.queryByText('Could not read local engine settings: engine offline')).toBeNull()
   })
 
-  it('keeps the local settings readable and fail-closed when the catalog fails', async () => {
+  it('drops a stale retry response when a newer locale load has completed', async () => {
+    let modelCall = 0
+    let resolveRetryModels: (models: Array<{ id: string; name: string; complete: boolean }>) => void = () => undefined
+    const retryModels = new Promise<Array<{ id: string; name: string; complete: boolean }>>((resolve) => {
+      resolveRetryModels = resolve
+    })
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      if (command === 'list_available_models') throw new Error('catalog offline')
+      if (command === 'list_downloaded_models') {
+        modelCall += 1
+        if (modelCall === 1) throw new Error('initial engine offline')
+        if (modelCall === 2) return retryModels
+        return [{ id: 'newer-model', name: 'Newer model', complete: true }]
+      }
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Could not read local engine settings: initial engine offline')).toBeTruthy())
+    const retryButton = screen.getByRole('button', { name: 'Retry' })
+    fireEvent.click(retryButton)
+    await waitFor(() => expect(modelCall).toBe(2))
+    expect((retryButton as HTMLButtonElement).disabled).toBe(true)
+
+    act(() => { setLocale('uk') })
+    await waitFor(() => expect(modelCall).toBe(3))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Модель' }).textContent).toContain('Newer model'))
+
+    resolveRetryModels([{ id: 'stale-model', name: 'Stale model', complete: true }])
+    await act(async () => {})
+    expect(screen.getByRole('button', { name: 'Модель' }).textContent).toContain('Newer model')
+    expect(screen.queryByText('Stale model')).toBeNull()
+  })
+
+  it('shows the no-installed-model notice and keeps Start disabled', async () => {
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'list_downloaded_models') return []
       return native.defaultInvoke(command, args)
     })
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
-    expect(screen.getByText('The selected local model is not installed.')).toBeTruthy()
-    expect(screen.queryByText(/Could not read local engine settings/)).toBeNull()
+    await waitFor(() => expect(screen.getByText('No local models are installed. Download one in Voice Engine first.')).toBeTruthy())
+    expect(screen.getByRole('link', { name: 'Open Voice Engine settings' })).toBeTruthy()
     const startButton = screen.getByRole('button', { name: 'Start transcription' })
     expect((startButton as HTMLButtonElement).disabled).toBe(true)
   })
@@ -747,8 +902,7 @@ describe('file transcription page', () => {
         if (args?.key === 'localAsr.accelerator') return 'auto'
         return null
       }
-      if (command === 'list_available_models') return [{ id: 'sensevoice-small-gguf', name: 'SenseVoice Small' }]
-      if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', complete: true }]
+      if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', name: 'SenseVoice Small', complete: true }]
       if (command === 'get_file_transcription_state') return null
       return undefined
     })
@@ -945,6 +1099,7 @@ describe('file transcription page', () => {
   })
 
   it('ignores a stale cloud profile response that arrives after the language change', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
     let resolveFirst: (value: { profiles: AsrProfile[]; activeId: string }) => void = () => undefined
     const firstLoad = new Promise<{ profiles: AsrProfile[]; activeId: string }>((resolve) => { resolveFirst = resolve })
     cloudProfiles.loadAsrProfiles
@@ -956,7 +1111,6 @@ describe('file transcription page', () => {
     renderPage()
 
     await waitFor(() => expect(cloudProfiles.loadAsrProfiles).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
 
     act(() => { setLocale('uk') })
 
