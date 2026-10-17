@@ -1,6 +1,7 @@
 import * as bridge from '../bridge'
 import { startCapture, stopCapture } from '../audio'
 import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult, type WorkMode } from '../transcription'
+import { loadSelectionAiConfig } from '../transcription/selectionAi'
 import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode, type AiFailureReason } from '../transcription/types'
 import {
   CUSTOM_ASR_PROVIDER,
@@ -1798,6 +1799,13 @@ export class RecorderOrchestrator {
       })
     }
 
+    // Freeze the selection-edit service for this run: editing settings mid-recording must not
+    // change the model an in-flight request uses. The lookup needs a usable selection, so the
+    // common dictation path pays only the selection check. A run canceled or superseded while
+    // the lookup is in flight must not continue to start the provider.
+    const selectionAiConfig = this.cachedAiEnabled ? await loadSelectionAiConfig(textContext) : null
+    if (!this.isRunCurrent(runId)) return
+
     addRuntimeEvent('info', 'recorder', 'Recording started', {
       micId: this.cachedMicId || 'default',
       preset: this.currentPromptResolution.preset.id || this.currentPromptResolution.preset.name || 'none',
@@ -1871,6 +1879,7 @@ export class RecorderOrchestrator {
         clientMeta: this.cachedClientRuntimeInfo,
         appContext: activeAppContext,
         textContext,
+        selectionAiConfig,
         hotwords: this.cachedHotwords.length > 0 ? this.cachedHotwords : undefined,
         language: this.cachedLanguage,
         streamingDisplay: this.cachedStreamingDisplay,
@@ -1882,6 +1891,7 @@ export class RecorderOrchestrator {
         clientMeta: this.cachedClientRuntimeInfo,
         appContext: activeAppContext,
         textContext,
+        selectionAiConfig,
         hotwords: this.cachedHotwords.length > 0 ? this.cachedHotwords : undefined,
         language: this.cachedLanguage,
         streamingDisplay: this.cachedStreamingDisplay,

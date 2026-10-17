@@ -19,6 +19,7 @@ import {
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
   normalizeContextSelectionEditPrompt,
 } from '@/services/contextAware'
+import ContextSelectionModelSetting from './ContextSelectionModelSetting'
 
 const LANGUAGE_OPTIONS = [
   { value: 'auto', labelKey: 'language.auto' },
@@ -269,6 +270,7 @@ export default function GeneralSettingsPage() {
                 {t('settings.contextAware.editPrompt')}
               </button>
             </div>
+            <ContextSelectionModelSetting />
           </CardContent>
         </Card>
 

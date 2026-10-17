@@ -1592,4 +1592,72 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
       await provider.closeLive()
     }
   })
+
+  it('runs a selected-text edit through the chosen service even when the ASR provider is Qwen Omni', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'omni', provider: 'qwen_omni_38_realtime', model: 'qwen3-omni-flash-realtime', apiKey: 'key', omniPrompt: '',
+    })
+    mocks.polishWithClientAi.mockResolvedValue({
+      llmText: 'Edited by the chosen service', llmMs: 30, contextApplied: true,
+      aiSource: 'custom', aiStatus: 'applied', aiModel: 'gpt-edit',
+    })
+    const provider = new CloudAPIProvider()
+    const onFinal = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onFinal, onDone: finish })
+
+    const selectionAiConfig = {
+      provider: 'openai', apiUrl: 'https://api.openai.com/v1', apiKey: 'sk-edit', model: 'gpt-edit',
+      reasoningEffort: 'high', serviceTier: 'priority',
+    }
+    provider.start({
+      runId: 30,
+      disableStreaming: true,
+      selectionAiConfig,
+      textContext: { source: 'uia', textBefore: '', selectedText: 'Original', textAfter: '', selectionTruncated: false },
+      systemPrompt: 'Edit selected text',
+    })
+    provider.sendAudio(new ArrayBuffer(16000))
+    provider.stop()
+    await done
+
+    expect(mocks.polishWithClientAi).toHaveBeenCalledTimes(1)
+    const call = mocks.polishWithClientAi.mock.calls[0][0] as { startOptions: { selectionAiConfig: unknown } }
+    expect(call.startOptions.selectionAiConfig).toEqual(selectionAiConfig)
+    // ASR attribution stays Omni; AI attribution must describe the chosen service.
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
+      llmText: 'Edited by the chosen service',
+      asrText: 'recognized',
+      asrEngine: 'qwen_omni',
+      aiSource: 'custom',
+      aiModel: 'gpt-edit',
+    }))
+  })
+
+  it('keeps the built-in Omni skip and preserves the selection when no service is chosen', async () => {
+    mocks.loadActiveAsrProfile.mockResolvedValue({
+      id: 'omni', provider: 'qwen_omni_38_realtime', model: 'qwen3-omni-flash-realtime', apiKey: 'key', omniPrompt: '',
+    })
+    const provider = new CloudAPIProvider()
+    const onFinal = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onFinal, onDone: finish })
+
+    provider.start({
+      runId: 31,
+      disableStreaming: true,
+      textContext: { source: 'uia', textBefore: '', selectedText: 'Original', textAfter: '', selectionTruncated: false },
+    })
+    provider.sendAudio(new ArrayBuffer(16000))
+    provider.stop()
+    await done
+
+    expect(mocks.polishWithClientAi).not.toHaveBeenCalled()
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
+      llmText: 'Original',
+      aiStatus: 'skipped',
+    }))
+  })
 })

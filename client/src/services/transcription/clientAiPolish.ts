@@ -105,7 +105,9 @@ export async function polishWithClientAi(
     }
   }
 
-  const config = await loadRuntimeAiConfig()
+  // A frozen selection-edit snapshot wins over the active profile for this run; the
+  // completeness check below applies to it exactly like to the runtime configuration.
+  const config = startOptions?.selectionAiConfig ?? await loadRuntimeAiConfig()
   if (!isCurrent()) return null
 
   const keyless = Boolean(findProvider(config.provider).keyless)

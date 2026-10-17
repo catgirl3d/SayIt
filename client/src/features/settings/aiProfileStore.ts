@@ -162,6 +162,8 @@ async function saveAiProfilesUnlocked(state: AiProfileState): Promise<void> {
     'cloudAi.reasoningEffort': active && supportsReasoningEffort(active.provider) ? active.reasoningEffort ?? '' : '',
     'cloudAi.serviceTier': active && supportsServiceTier(active.provider) ? active.serviceTier ?? '' : '',
   })
+  // Settings UIs (for example the selection-edit model picker) refresh their list on this.
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('ai-profiles-changed'))
 }
 
 /** Every write path must go through here; the call is serialized with all other profile operations. */
