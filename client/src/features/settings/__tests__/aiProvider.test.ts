@@ -13,11 +13,12 @@ import {
   formatLatency,
   findProvider,
   gradeLatency,
+  isChatModelId,
   isCheckFresh,
   isProfileComplete,
   migrateLegacyProfiles,
   newDraftProfile,
-  normalizeModelNames,
+  normalizeRemoteModels,
   normalizeProfiles,
   parseLegacyLatencies,
   parseProfiles,
@@ -553,10 +554,92 @@ describe('migrateLegacyProfiles', () => {
   })
 })
 
-describe('normalizeModelNames', () => {
-  it('trims, removes empty names, and de-duplicates the remote catalog', () => {
-    expect(normalizeModelNames([' model-a ', '', 'model-a', 'model-b', '  ']))
-      .toEqual(['model-a', 'model-b'])
+describe('normalizeRemoteModels', () => {
+  it('trims ids, removes empty entries, and keeps the first duplicate with its metadata', () => {
+    expect(normalizeRemoteModels([
+      { id: ' model-a ', name: 'Model A', input_price_per_million: 0.15 },
+      { id: '', name: 'broken' },
+      { id: 'model-a', name: 'Duplicate A' },
+      { id: 'model-b' },
+      { id: '  ' },
+    ])).toEqual([
+      { id: 'model-a', name: 'Model A', input_price_per_million: 0.15 },
+      { id: 'model-b' },
+    ])
+  })
+
+  it('hides batch, voice, and other non-chat models but keeps chat models with their metadata', () => {
+    expect(normalizeRemoteModels([
+      { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini', input_price_per_million: 0.15 },
+      { id: 'mistral-large-batch' },
+      { id: 'openai/gpt-4o-mini-tts' },
+      { id: 'nvidia/nemotron-3.5-content-safety:free' },
+      { id: 'deepseek/deepseek-v4.1-flash' },
+    ])).toEqual([
+      { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini', input_price_per_million: 0.15 },
+      { id: 'deepseek/deepseek-v4.1-flash' },
+    ])
+  })
+})
+
+describe('isChatModelId', () => {
+  it.each([
+    'mistral-large-batch',
+    'gpt-4o-batch',
+    'whisper-large-v3-turbo',
+    'distil-whisper-large-v3-en',
+    'playai-tts-arabic',
+    'gemini-2.5-flash-preview-tts',
+    'gpt-4o-mini-transcribe',
+    'gpt-4o-audio-preview',
+    'gpt-4o-realtime-preview',
+    'canopylabs/orpheus-v1-english',
+    'text-embedding-3-small',
+    'nomic-embed-text',
+    'cohere/rerank-v3.5',
+    'omni-moderation-latest',
+    'meta-llama/llama-guard-4-12b',
+    'nvidia/nemotron-3.5-content-safety:free',
+    'gpt-image-1',
+    'dall-e-3',
+    'google/gemini-2.5-flash-image',
+    'google/gemini-3-pro-image-preview',
+    'nano-banana-pro',
+  ])('hides %s', (id) => {
+    expect(isChatModelId(id)).toBe(false)
+  })
+
+  it.each([
+    'gpt-4o-mini',
+    'openai/gpt-oss-20b',
+    'llama-3.3-70b-versatile',
+    'qwen2.5:7b',
+    'qwen-omni-turbo',
+    'nvidia/nemotron-3.5-lightning:free',
+    'nvidia/nemotron-3.5-super-vl:free',
+    'poolside/laguna-s-2.1:free',
+    'google/gemini-2.5-flash',
+    'openai/gpt-5-nano',
+  ])('keeps %s', (id) => {
+    expect(isChatModelId(id)).toBe(true)
+  })
+
+  it('matches whole id tokens, never substrings', () => {
+    expect(isChatModelId('outstts-pro')).toBe(true)
+    expect(isChatModelId('imagery-chat')).toBe(true)
+    expect(isChatModelId('batching-flash')).toBe(true)
+  })
+
+  it('is case-insensitive', () => {
+    expect(isChatModelId('Whisper-Large-V3')).toBe(false)
+  })
+
+  it('never hides a suggested default model of any provider', () => {
+    for (const provider of AI_PROVIDERS) {
+      for (const model of provider.defaultModels) {
+        expect(isChatModelId(model), `${provider.value}: ${model}`).toBe(true)
+      }
+    }
   })
 })
 

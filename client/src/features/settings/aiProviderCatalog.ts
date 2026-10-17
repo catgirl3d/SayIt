@@ -337,9 +337,65 @@ export function isProfileComplete(profile: AiProfile): boolean {
   return true
 }
 
-/** Normalize remote model names before exposing them in the selector. */
-export function normalizeModelNames(models: string[]): string[] {
-  return [...new Set(models.map((model) => model.trim()).filter(Boolean))]
+/**
+ * One model from a provider's remote catalog, as returned by `list_remote_models`.
+ * Prices are USD per million tokens; a missing price means the provider did not
+ * report a usable value.
+ */
+export interface RemoteModel {
+  id: string
+  name?: string
+  input_price_per_million?: number
+  output_price_per_million?: number
+}
+
+/**
+ * Id tokens that mark a catalog entry as something other than a text chat model.
+ *
+ * The AI editor sends plain text to /chat/completions, so batch variants, speech models
+ * (TTS, STT, realtime, audio), embeddings, rerankers, moderation/safety classifiers and
+ * image/video generators can only fail or burn money there. The catalog endpoint reports
+ * no model type to the frontend, so the id is the only signal.
+ *
+ * Matching is on whole tokens (the id split on every non-alphanumeric run), never on
+ * substrings: "tts" must hide "gpt-4o-mini-tts" and "playai-tts-arabic" without ever
+ * matching an unrelated id that merely contains those letters.
+ */
+const NON_CHAT_ID_TOKENS: ReadonlySet<string> = new Set([
+  'batch',
+  // Speech and voice.
+  'tts', 'stt', 'asr', 'whisper', 'transcribe', 'transcription', 'speech', 'voice', 'audio', 'realtime', 'orpheus',
+  // Embeddings and ranking.
+  'embed', 'embedding', 'embeddings', 'rerank', 'reranker',
+  // Moderation and safety classifiers.
+  'moderation', 'safety', 'guard', 'safeguard',
+  // Image and video generation. "banana" covers Nano Banana ids that omit the word "image";
+  // "nano" is deliberately absent because it would hide the chat model gpt-5-nano.
+  'image', 'imagen', 'dall', 'sora', 'veo', 'banana',
+])
+
+/** Whether a catalog id can plausibly serve the text-cleanup chat request (see NON_CHAT_ID_TOKENS). */
+export function isChatModelId(id: string): boolean {
+  return !id.toLowerCase().split(/[^a-z0-9]+/).some((token) => NON_CHAT_ID_TOKENS.has(token))
+}
+
+/**
+ * Normalize the remote model catalog before exposing it in the selector: trim ids, drop
+ * empty and duplicate entries, and hide models that are not text chat models.
+ *
+ * A saved selection that falls out of the list this way stays selectable: the editor
+ * injects the current model as a metadata-less entry when the catalog lacks it.
+ */
+export function normalizeRemoteModels(models: RemoteModel[]): RemoteModel[] {
+  const seen = new Set<string>()
+  const out: RemoteModel[] = []
+  for (const model of models) {
+    const id = typeof model.id === 'string' ? model.id.trim() : ''
+    if (!id || seen.has(id) || !isChatModelId(id)) continue
+    seen.add(id)
+    out.push({ ...model, id })
+  }
+  return out
 }
 
 /**

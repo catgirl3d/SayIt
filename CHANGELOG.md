@@ -6,7 +6,8 @@ Sections are ordered by version, newest first.
 ## v0.3.1 (unreleased)
 
 ### Added
-- Added OpenRouter as a ready AI cleanup provider preset with DeepSeek V4.1 Flash as the default model and a link to its key page; the API URL is optional, and a blank field uses the official endpoint.
+- Added OpenRouter as a ready AI cleanup provider preset with DeepSeek V4.1 Flash as the default model and a link to its key page; the API URL is optional, and a blank field uses the official endpoint. The fetched model list can be searched, sorted by name or output price, shows input / output prices per million tokens, and opens scrolled to the current model.
+- The fetched model list now leaves out models that cannot clean up text: batch variants, speech (TTS, transcription, realtime, audio), embedding, rerank, moderation/safety and image-generation models. The model already saved in a service stays selectable even if it matches.
 - Selection editing can now use a separate saved AI service: pick it in the Context awareness card (default: the dictation model). The choice is fixed when recording starts and applies on every engine, including Qwen Omni, where the chosen model now performs the edit. If the saved service is removed, edits fall back to the dictation model; an incompletely configured service keeps the selected text unchanged.
 
 ### Changed

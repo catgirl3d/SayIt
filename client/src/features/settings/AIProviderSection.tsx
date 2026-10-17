@@ -60,7 +60,7 @@ import {
   isProfileComplete,
   lastProfileOf,
   newDraftProfile,
-  normalizeModelNames,
+  normalizeRemoteModels,
   profileSubtitle,
   profileTitle,
   providerLabel,
@@ -71,10 +71,12 @@ import {
   supportsServiceTier,
   type AiProfile,
   type AiProfileCheck,
+  type RemoteModel,
 } from './aiProviderCatalog'
 import { loadAiProfiles, saveAiProfiles } from './aiProfileStore'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { helpIconClass, inputClass, linkClass } from './formStyles'
+import { ModelPicker } from './ModelPicker'
 import { ProfileCard } from './ProfileCard'
 import { useBatchTest, type BatchRunResult } from './useBatchTest'
 import { getLocale, t } from '@/i18n'
@@ -82,7 +84,7 @@ import { useT } from '@/i18n/useT'
 
 interface TestResult { ok: boolean; message: string; elapsed_ms: number; detail?: string }
 
-interface FetchModelsResult { ok: boolean; models: string[]; message: string }
+interface FetchModelsResult { ok: boolean; models: RemoteModel[]; message: string }
 
 interface Notice {
   tone: FeedbackTone
@@ -263,7 +265,7 @@ export default function AIProviderSection() {
   const [draftModels, setDraftModels] = useState<string[]>([])
   const [modelInput, setModelInput] = useState('')
   /** Remote models are a temporary selector catalog, not persisted profiles. */
-  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [availableModels, setAvailableModels] = useState<RemoteModel[]>([])
   /** Whether the model catalog is being fetched from the endpoint. */
   const [fetchingModels, setFetchingModels] = useState(false)
   /** Snapshot taken when opening the modal, used to determine unsaved changes */
@@ -296,8 +298,13 @@ export default function AIProviderSection() {
   const draftUrlError = draft ? checkApiUrl(draft.apiUrl) : ''
   const draftKeyHint = draft && draftNeedsKey ? checkAiKeyFormat(draft.provider, draft.apiKey) : ''
   const selectedModel = draft?.model.trim() ?? ''
-  const modelOptions = selectedModel && !availableModels.includes(selectedModel)
-    ? [selectedModel, ...availableModels]
+  /**
+   * The saved model may be absent from the fetched catalog (renamed, filtered, or
+   * fetched from another endpoint). Inject it as a metadata-less entry so the
+   * current selection stays visible and selectable, matching the old behavior.
+   */
+  const modelOptions: RemoteModel[] = selectedModel && !availableModels.some((model) => model.id === selectedModel)
+    ? [{ id: selectedModel }, ...availableModels]
     : availableModels
   const draftSignature = draft ? draftSnapshot(draft, draftModels) : ''
   const draftDirty = draft !== null && (draftSignature !== draftBaseline || modelInput.trim() !== '')
@@ -459,7 +466,7 @@ export default function AIProviderSection() {
         setNotice({ tone: 'error', scope: 'editor', message: friendly.message, detail: friendly.detail })
         return
       }
-      const models = normalizeModelNames(result.models)
+      const models = normalizeRemoteModels(result.models)
       if (models.length === 0) {
         setNotice({ tone: 'warning', scope: 'editor', message: t('ai.msg.noModels') })
         return
@@ -1041,16 +1048,20 @@ export default function AIProviderSection() {
             )}
 
             <div>
-              <label htmlFor="ai-model" className="mb-1 block text-sm text-muted-foreground">{t('ai.model')}</label>
+              <label
+                id="ai-model-label"
+                htmlFor={availableModels.length > 0 ? undefined : 'ai-model'}
+                className="mb-1 block text-sm text-muted-foreground"
+              >
+                {t('ai.model')}
+              </label>
               {availableModels.length > 0 ? (
-                <Select
+                <ModelPicker
+                  models={modelOptions}
                   value={selectedModel}
                   onChange={(value) => selectModel(value)}
                   placeholder={t('ai.selectModel')}
-                  options={modelOptions.map((model) => ({
-                    value: model,
-                    label: model,
-                  }))}
+                  labelledBy="ai-model-label"
                 />
               ) : (
                 <>
