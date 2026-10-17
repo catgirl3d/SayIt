@@ -22,9 +22,7 @@ export function PageHelp({ title, children }: PageHelpProps) {
         {t('help.button')}
       </Button>
       {open && (
-        // The shared Modal panel scrolls with the browser's default scrollbar unless the
-        // app's custom-scrollbar class is passed; every other scroll area uses it.
-        <Modal title={title} onClose={() => setOpen(false)} showCloseButton panelClassName="custom-scrollbar w-[520px]">
+        <Modal title={title} onClose={() => setOpen(false)} showCloseButton panelClassName="w-[520px]">
           <div className="mt-3 space-y-5">{children}</div>
         </Modal>
       )}

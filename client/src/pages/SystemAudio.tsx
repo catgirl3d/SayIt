@@ -409,7 +409,7 @@ export default function SystemAudio() {
       {pipelineDebugEnabled && <PipelineDebugPanel />}
       {/* The dialog sits last so the page-level alert stays the first one in the document. */}
       {captionsOpen && (
-        <Modal title={t('systemAudio.captionsRow')} onClose={() => setCaptionsOpen(false)} showCloseButton panelClassName="custom-scrollbar w-[520px]">
+        <Modal title={t('systemAudio.captionsRow')} onClose={() => setCaptionsOpen(false)} showCloseButton panelClassName="w-[520px]">
           <div className="mt-4 space-y-6">
             <div className="space-y-2">
               <div className="flex items-baseline justify-between gap-3">

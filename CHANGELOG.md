@@ -3,6 +3,11 @@
 Release history and notable changes for the SayIt fork.
 Sections are ordered by version, newest first.
 
+## v0.3.1 (unreleased)
+
+### Changed
+#### Desktop Client
+- Scrollbars in the main window are now thin and follow the theme everywhere: dialogs, lists, and text fields no longer fall back to the browser's light default scrollbar.
 ## v0.3.0 — 2026-10-17
 
 ### Added
