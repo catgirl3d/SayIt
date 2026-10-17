@@ -7,6 +7,8 @@ Sections are ordered by version, newest first.
 
 ### Changed
 #### Desktop Client
+- Eight new themes are available in Appearance settings: Paper & Ink, Dark Jade, Orchid (soft pink-white), Twilight (deep violet), Espresso (warm brown-black with a copper accent), Frost (cool blue-grey), Moss (sage green) and Midnight (near-black, made for OLED screens).
+- The theme picker in Appearance settings is now split into Light and Dark groups, with a miniature app preview per theme, instead of one long list. Switching the group only changes what is listed; it does not change the theme.
 - Scrollbars in the main window are now thin and follow the theme everywhere: dialogs, lists, and text fields no longer fall back to the browser's light default scrollbar. The overlay's recognized-text and error cards get a matching dark scrollbar when their text is long.
 - The configuration export and import dialogs now behave like every other dialog: focus moves into them and returns when they close, Tab stays inside, and all dialogs share the same frosted theme-tinted backdrop instead of a mix of black and blurred variants.
 - The focus highlight is now clean and themed: text fields get the accent border with a soft halo, and other controls a single accent ring, instead of the browser's doubled blue-and-white outline.

@@ -1,4 +1,4 @@
-// 外观设置页面 — 主题 + 悬浮窗样式 + 预览
+// Appearance settings page - app theme, overlay style and preview
 
 import { useEffect, useRef, useState } from 'react'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
@@ -14,6 +14,7 @@ import { OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recor
 import { type OverlayWaveTheme } from './utils'
 import { type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { ThemePicker } from './ThemePicker'
 
 const OVERLAY_OPTIONS: Array<{
   theme: OverlayWaveTheme
@@ -25,7 +26,8 @@ const OVERLAY_OPTIONS: Array<{
     { theme: 'black-rainbow', labelKey: 'appearance.wave.blackRainbow', barColors: ['#4ade80', '#facc15', '#fb923c', '#f87171'] },
   ]
 
-// 由长到短排列：从「最完整」往「最克制」读，比反过来更符合挑尺寸的直觉。
+// Ordered from long to short: reading from "fullest" to "most restrained" matches the
+// intuition for picking a size better than the reverse.
 const WIDTH_OPTIONS: Array<{ value: OverlayWidthPreset; labelKey: TranslationKey }> = [
   { value: 'long', labelKey: 'appearance.width.long' },
   { value: 'medium', labelKey: 'appearance.width.medium' },
@@ -59,7 +61,8 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
   const barRefs = useRef<Array<HTMLDivElement | null>>([])
   const [typed, setTyped] = useState('')
 
-  // 流式预览：循环把示例文字一个字一个字打出来，模拟"边说边出字"的动态效果
+  // Streaming preview: loops through the sample text one character at a time,
+  // simulating the "text appears as you speak" effect
   useEffect(() => {
     if (!streaming) {
       setTyped('')
@@ -73,7 +76,7 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
         i += 1
         timer = setTimeout(step, 130)
       } else {
-        // 打完停顿一下再从头循环
+        // Pause briefly after the text is fully typed, then restart from the beginning
         timer = setTimeout(() => { i = 0; step() }, 1600)
       }
     }
@@ -86,7 +89,7 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
     let running = true
     let rafId = 0
     let lastFrame = 0
-    const FRAME_INTERVAL = 1000 / 30 // 30fps 足够流畅，且不占满主线程
+    const FRAME_INTERVAL = 1000 / 30 // 30fps is smooth enough and does not saturate the main thread
 
     const animate = (now: number) => {
       if (!running) return
@@ -114,11 +117,11 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
 
   return (
     <div className="flex flex-col items-center gap-3">
-      {/* 流式实时字幕气泡（开启时显示，带打字动画） */}
+      {/* Live streaming caption bubble (shown when enabled, with the typing animation) */}
       {streaming && (
         <div className="relative w-[260px] rounded-2xl border border-slate-600 bg-black px-3.5 py-2.5 shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
           <span className="mb-1 block text-[10px] font-medium tracking-[0.18em] text-slate-400">{t('appearance.streamingPreviewLabel')}</span>
-          {/* 内容驱动、底部对齐，和真实悬浮窗一致 */}
+          {/* Content-driven height, bottom-aligned, matching the real overlay */}
           <div className="flex max-h-[40px] flex-col justify-end overflow-hidden text-left text-[13px] leading-5 text-slate-100">
             <div>
               {typed}
@@ -128,14 +131,14 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
               />
             </div>
           </div>
-          {/* 朝下尖角，指向下方录音胶囊 */}
+          {/* Downward-pointing tail aimed at the recording capsule below */}
           <span
             className="absolute left-1/2 -translate-x-1/2"
             style={{ bottom: '-7px', width: 0, height: 0, borderLeft: '7px solid transparent', borderRight: '7px solid transparent', borderTop: '7px solid #000' }}
           />
         </div>
       )}
-      {/* 1:1 还原真实悬浮窗样式 */}
+      {/* 1:1 reproduction of the real overlay styling */}
       <div className="flex items-center rounded-full border border-slate-600 bg-black px-4 py-2 shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
         <div className="flex items-center gap-[2px]" style={{ height: '20px' }}>
           {Array.from({ length: barCount }, (_, index) => {
@@ -176,30 +179,39 @@ export default function AppearancePage() {
   const [overlayShowDuration, setOverlayShowDuration] = useState(true)
   const [overlayWidth, setOverlayWidth] = useState<OverlayWidthPreset>('medium')
   const [streamingDisplay, setStreamingDisplay] = useState(false)
-  // 读到已保存值之前，控件先隐藏、且不带过渡：避免「默认值 → 已保存值」闪一下。
-  // 注意过渡也必须一起关掉 —— visibility:hidden 只是看不见，CSS 过渡照样会跑；
-  // 隐藏期间选中项仍是默认值，揭开的同一刻颜色会从旧值过渡到新值，看起来就是
-  // 「默认项高亮淡出、已保存项淡入」（悬浮窗长度从「中」闪到「短」正是如此）。
-  // 隐藏一律用内联 style，不用 Tailwind 的 invisible 类：类要靠扫描源码产出，
-  // 一旦跑的是旧的 CSS 产物这层保护就整条失效（曾因此反复排查很久）。
+  // Until the saved values have been read, the controls are hidden and carry no transition:
+  // this avoids a flash of "default value -> saved value".
+  // Note that the transitions must be turned off as well - visibility:hidden only makes the
+  // controls invisible, the CSS transitions still run. While hidden, the selected item is still
+  // the default one, so at the moment of the reveal the colours would transition from the old
+  // value to the new one, which looks like "the default item's highlight fades out while the
+  // saved item's fades in" (the overlay length flashing from "medium" to "short" was exactly this).
+  // Always hide with an inline style, not with Tailwind's invisible class: classes only exist
+  // if the source scan generated them, so as soon as a stale CSS build is running this whole
+  // protection stops working (this once cost a long round of repeated debugging).
   const [ready, setReady] = useState(false)
-  // animate 与 ready 必须分开：
-  // 按 CSS 过渡规范，浏览器看的是「变化之后」的样式里有没有 transition。若在揭开、
-  // 赋值的同一帧把 transition 加上，浏览器就会认为「有过渡且颜色变了」，于是把
-  // 「默认项高亮淡出、已保存项淡入」真的动画一遍 —— 那就是反复没修掉的那个「闪」。
-  // 因此：揭开的那一帧仍然不带过渡，等再下一帧才允许过渡（此时颜色已无变化）。
+  // animate and ready must be kept separate:
+  // Per the CSS transitions spec, the browser checks whether the style *after* the change has
+  // a transition. If the transition is added in the same frame as the reveal and the value
+  // assignment, the browser concludes "there is a transition and the colour changed" and really
+  // animates the "default item's highlight fades out, saved item's fades in" - that is the flash
+  // that kept coming back.
+  // Therefore the reveal frame still carries no transition, and the transition is only allowed
+  // from the next frame on (by which point the colours no longer change).
   const [animate, setAnimate] = useState(false)
 
   useEffect(() => {
-    // 先把所有值取回，再在同一个同步块里一次性落值 + 置 ready：React 会把这批更新
-    // 合成一次渲染，因此不存在「已显示但值还没到」的中间态（那正是闪一下的成因）。
+    // Fetch all values first, then apply them and set ready in a single synchronous block:
+    // React batches those updates into one render, so there is no intermediate state of
+    // "shown, but the values have not arrived yet" (which is exactly what caused the flash).
     //
-    // 两个坑都在这里躲掉了：
-    //  1. 每项自带 catch 兜底 —— Promise.all 是 fail-fast，只要有一项 reject 就会
-    //     立刻往下走，那时其它项还没回来，ready 会在值到位前就被置上（并留下一个
-    //     未处理的 rejection）。
-    //  2. 不用 requestAnimationFrame —— 那会把 setReady 丢到与赋值不同的批次里，
-    //     同样可能先提交出一帧「已显示但值是默认值」。
+    // Two pitfalls are avoided here:
+    //  1. Every item carries its own catch fallback - Promise.all is fail-fast: as soon as one
+    //     item rejects it moves on while the others have not come back yet, so ready would be
+    //     set before the values are in place (and an unhandled rejection would be left behind).
+    //  2. requestAnimationFrame is not used for this - it would put setReady into a different
+    //     batch from the assignments, which could likewise commit one frame of "shown, but the
+    //     values are still the defaults" first.
     let cancelled = false
     void (async () => {
       const [showDuration, streaming, waveTheme, width] = await Promise.all([
@@ -250,7 +262,7 @@ export default function AppearancePage() {
   const handleToggleStreamingDisplay = () => {
     const next = !streamingDisplay
     setStreamingDisplay(next)
-    setStreamingDisplayCache(next) // 立即同步录音器缓存，无需重启即可生效
+    setStreamingDisplayCache(next) // Sync the recorder cache immediately so it takes effect without a restart
     void setSetting('streamingDisplayEnabled', next)
   }
 
@@ -261,31 +273,13 @@ export default function AppearancePage() {
       <div className="space-y-6">
         <Card>
           <CardContent className="p-6">
-            <h2 className="mb-4 text-lg font-semibold">{t('appearance.appTheme')}</h2>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {themeList.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  onClick={() => void handleThemeChange(theme.id)}
-                  className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${activeTheme === theme.id
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-accent'
-                    }`}
-                >
-                  <div className="flex gap-1">
-                    {Object.values(theme.previewColors).map((color, i) => (
-                      <span
-                        key={i}
-                        className="h-5 w-5 rounded-full border border-border/50"
-                        style={{ backgroundColor: color }}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-sm font-medium">{theme.name}</span>
-                </button>
-              ))}
-            </div>
+            <h2 id="app-theme-heading" className="mb-4 text-lg font-semibold">{t('appearance.appTheme')}</h2>
+            <ThemePicker
+              themes={themeList}
+              value={activeTheme}
+              onChange={(themeId) => void handleThemeChange(themeId)}
+              labelledBy="app-theme-heading"
+            />
           </CardContent>
         </Card>
 
@@ -293,9 +287,11 @@ export default function AppearancePage() {
           <CardContent className="p-6">
             <h2 className="mb-4 text-lg font-semibold">{t('appearance.overlayStyle')}</h2>
 
-            {/* 整块一起等值到位再显示。除了选择器，**悬浮窗预览**那颗胶囊的长度也跟着
-                overlayWidth 变（它有可见边框），只盖住选择器的话，仍会看到预览从「中」
-                的长度一下缩到「短」——那正是之前反复没修掉的那个「闪」。 */}
+            {/* Wait for the values as one block, then show it. Besides the selectors, the length of
+                the **overlay preview** capsule also follows overlayWidth (it has a visible
+                border); if only the selectors were covered, the preview would still be seen
+                shrinking from the "medium" length to "short" - that is the flash that kept
+                coming back. */}
             <div className="space-y-4" style={ready ? undefined : { visibility: 'hidden' }}>
               <div>
                 <p className="mb-2 text-sm text-muted-foreground">{t('appearance.waveTheme')}</p>

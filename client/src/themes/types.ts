@@ -1,8 +1,8 @@
-/** 主题系统类型定义 */
+/** Type definitions for the theme system */
 
-/** 全局语义 CSS 变量 — 所有主题必须提供 */
+/** Global semantic CSS variables - every theme must provide them */
 export interface ThemeVars {
-  // 基础色
+  // Base colours
   '--background': string
   '--foreground': string
   '--card': string
@@ -26,7 +26,7 @@ export interface ThemeVars {
   '--ring': string
   '--radius': string
 
-  // 区域色
+  // Region colours
   '--sidebar-bg': string
   '--sidebar-border': string
   '--sidebar-item-active-bg': string
@@ -38,24 +38,25 @@ export interface ThemeVars {
   '--titlebar-close-hover-bg': string
   '--titlebar-close-hover-text': string
 
-  // 表单控件
+  // Form controls
   '--input-bg': string
   '--input-border': string
   '--input-focus-border': string
   '--input-focus-ring': string
   '--input-placeholder': string
 
-  // 状态色
+  // Status colours
   //
-  // 每种状态有三个变量，用途不同，别混用：
-  //   --xxx              色块本体（圆点、进度条填充、10% 淡底）
-  //   --xxx-foreground   压在色块本体上的文字
-  //   --xxx-strong       直接画在页面/卡片底色上的**文字**颜色
+  // Each status has three variables with different purposes - do not mix them up:
+  //   --xxx              the colour block itself (dots, progress-bar fill, 10% tinted background)
+  //   --xxx-foreground   text drawn on top of the colour block
+  //   --xxx-strong       the colour of **text** drawn directly on the page/card background
   //
-  // 为什么要有 -strong：--success/--warning/--info 这类中等明度的彩色在浅色主题的
-  // 白底上对比度只有 2~3.3:1，远低于正文 4.5:1 的要求（`text-warning` 那句
-  // 「模型尚未下载」曾经是全卡最不可读的一行）。-strong 是同色相压暗/提亮到达标
-  // 的版本，只用于文字与描边。
+  // Why -strong exists: mid-lightness colours such as --success/--warning/--info reach only
+  // 2-3.3:1 contrast on the white background of light themes, far below the 4.5:1
+  // requirement for body text (the `text-warning` "model not downloaded yet" line used to be
+  // the least readable line on the whole card). -strong is the same hue darkened or lightened
+  // until it passes, and is used only for text and outlines.
   '--success': string
   '--success-foreground': string
   '--success-strong': string
@@ -68,39 +69,50 @@ export interface ThemeVars {
   '--destructive-strong': string
 }
 
-/** 主题扩展变量 — 主题独有的特色变量（可选） */
+/** Theme extension variables - variables unique to one theme (optional) */
 export type ThemeExtras = Record<string, string>
 
-/** 主题字体配置（可选） */
+/** Theme font configuration (optional) */
 export interface ThemeFonts {
-  /** body 正文字体 */
+  /** Body text font */
   body?: string
-  /** 等宽字体 */
+  /** Monospace font */
   mono?: string
 }
 
-/** 主题定义 */
+/** Theme definition */
 export interface ThemeDefinition {
-  /** 唯一标识 */
+  /** Unique identifier */
   id: string
-  /** 显示名称 */
+  /** Display name */
   name: string
-  /** 是否为暗色主题（控制 Tailwind dark: 前缀） */
+  /** Whether this is a dark theme (controls the Tailwind dark: prefix) */
   isDark: boolean
-  /** 预览色（用于设置页面的主题选择器） */
+  /** Preview colours (used by the theme picker on the settings page) */
   previewColors: {
     bg: string
     sidebar: string
     primary: string
     accent: string
   }
-  /** 全局 CSS 变量 */
+  /** Global CSS variables */
   vars: ThemeVars
-  /** 主题独有的扩展变量 */
+  /** Variables unique to this theme */
   extras?: ThemeExtras
-  /** 主题字体（不设置则使用全局默认字体） */
+  /** Theme fonts (the global default font is used when unset) */
   fonts?: ThemeFonts
 }
 
-/** 主题 ID 类型 */
-export type ThemeId = 'light' | 'dark' | 'claude'
+/** Theme ID type */
+export type ThemeId =
+  | 'light'
+  | 'dark'
+  | 'claude'
+  | 'teal'
+  | 'teal-dark'
+  | 'orchid'
+  | 'twilight'
+  | 'espresso'
+  | 'frost'
+  | 'moss'
+  | 'midnight'
