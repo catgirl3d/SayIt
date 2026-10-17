@@ -121,4 +121,29 @@ describe('selection-edit model setting', () => {
     fireEvent.click(screen.getByRole('button', { name: t('settings.contextAware.model') }))
     expect(await screen.findByRole('button', { name: /gpt-pro/ })).toBeTruthy()
   })
+
+  it('replays a profile change that raced a load in flight before the save', async () => {
+    type ProfileLoadState = { profiles: Array<typeof editor>; activeId: string }
+    let resolveDeferred!: (state: ProfileLoadState) => void
+    const deferred = new Promise<ProfileLoadState>((resolve) => {
+      resolveDeferred = resolve
+    })
+
+    render(<ContextSelectionModelSetting />)
+    const trigger = await screen.findByRole('button', { name: t('settings.contextAware.model') })
+    await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false))
+
+    profileStoreMocks.loadAiProfiles.mockReturnValueOnce(deferred)
+    window.dispatchEvent(new Event('ai-profiles-changed'))
+    await waitFor(() => expect(profileStoreMocks.loadAiProfiles).toHaveBeenCalledTimes(2))
+
+    profileStoreMocks.loadAiProfiles.mockResolvedValue({ profiles: [editor, editor2], activeId: '' })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('button', { name: /gpt-edit/ }))
+    resolveDeferred({ profiles: [editor, editor2], activeId: '' })
+
+    await waitFor(() => expect(profileStoreMocks.loadAiProfiles).toHaveBeenCalledTimes(3))
+    fireEvent.click(trigger)
+    expect(await screen.findByRole('button', { name: /gpt-pro/ })).toBeTruthy()
+  })
 })

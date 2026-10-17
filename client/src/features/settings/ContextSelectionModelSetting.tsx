@@ -25,6 +25,7 @@ export default function ContextSelectionModelSetting() {
   const [error, setError] = useState<'load' | 'save' | null>(null)
   const revision = useRef(0)
   const savingRef = useRef(false)
+  const loadInFlightRef = useRef(0)
   const pendingReloadRef = useRef(false)
   const loadRef = useRef<() => Promise<void>>(async () => {})
 
@@ -37,6 +38,7 @@ export default function ContextSelectionModelSetting() {
         pendingReloadRef.current = true
         return
       }
+      loadInFlightRef.current += 1
       const current = ++revision.current
       try {
         const [state, selectedId] = await Promise.all([
@@ -50,6 +52,7 @@ export default function ContextSelectionModelSetting() {
       } catch {
         if (!disposed && current === revision.current) setError('load')
       } finally {
+        loadInFlightRef.current -= 1
         if (!disposed && current === revision.current) setLoading(false)
       }
     }
@@ -67,6 +70,9 @@ export default function ContextSelectionModelSetting() {
   const save = async (nextId: string) => {
     if (savingRef.current) return
     savingRef.current = true
+    // A load already in flight will be discarded by the revision bump below; replay it once
+    // after the save so a profile change that raced the save is not lost.
+    if (loadInFlightRef.current > 0) pendingReloadRef.current = true
     revision.current += 1
     setSaving(true)
     try {
