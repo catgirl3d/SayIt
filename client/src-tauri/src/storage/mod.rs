@@ -497,7 +497,7 @@ impl Storage {
     /// paths use `export_collection` or `export_app_settings` instead.
     pub fn get(&self, key: &str, fallback: Option<&Value>) -> Value {
         if is_collection_key(key) {
-            return self.read_collection(key).unwrap_or(Value::Array(vec![]));
+            return self.export_collection(key).unwrap_or(Value::Array(vec![]));
         }
 
         let db = self.db.lock().unwrap();
@@ -816,7 +816,7 @@ impl Storage {
 
     // ─── Collections ───
 
-    fn read_collection(&self, key: &str) -> SqlResult<Value> {
+    pub fn export_collection(&self, key: &str) -> SqlResult<Value> {
         let table = collection_table(key).ok_or(rusqlite::Error::InvalidParameterName(
             "unknown collection".into(),
         ))?;
@@ -842,10 +842,6 @@ impl Storage {
             .collect::<SqlResult<Vec<Value>>>()?;
 
         Ok(Value::Array(items))
-    }
-
-    pub fn export_collection(&self, key: &str) -> SqlResult<Value> {
-        self.read_collection(key)
     }
 
     fn replace_collection_on(db: &Connection, key: &str, items: &[Value]) -> SqlResult<()> {
@@ -1796,7 +1792,6 @@ mod tests {
             storage
                 .restore_full_transaction(
                     replacement_settings.as_object().unwrap(),
-                    &[],
                     None,
                     None,
                     Some(&replacement_history),
@@ -1857,7 +1852,6 @@ mod tests {
         let error = storage
             .restore_full_transaction(
                 replacement_settings.as_object().unwrap(),
-                &[],
                 None,
                 None,
                 Some(&replacement_history),
@@ -2781,7 +2775,6 @@ impl Storage {
     pub fn restore_full_transaction(
         &self,
         app_settings: &serde_json::Map<String, Value>,
-        exclude: &[&str],
         prompt_presets: Option<&[Value]>,
         app_prompt_rules: Option<&[Value]>,
         history: Option<&[Value]>,
@@ -2792,7 +2785,7 @@ impl Storage {
         let db = self.db.lock().unwrap();
         let tx = db.unchecked_transaction()?;
 
-        Self::apply_config_on(&tx, app_settings, exclude, prompt_presets, app_prompt_rules)?;
+        Self::apply_config_on(&tx, app_settings, &[], prompt_presets, app_prompt_rules)?;
         if let Some(items) = history {
             Self::replace_collection_on(&tx, "history", items)?;
         }

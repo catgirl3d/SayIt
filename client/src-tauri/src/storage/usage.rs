@@ -232,6 +232,7 @@ impl Storage {
     /// usage wholesale, an empty one included. An absent section — a backup
     /// made before usage events existed — keeps local usage, or rebuilds it
     /// from the restored history and legacy counters when there is none.
+    #[cfg(test)]
     pub fn usage_restore(&self, backup: Option<&UsageBackup>) -> SqlResult<()> {
         let db = self.db.lock().unwrap();
         let tx = db.unchecked_transaction()?;
@@ -240,6 +241,8 @@ impl Storage {
     }
 }
 
+/// Production path: applies a usage section inside the caller's transaction
+/// (used by `restore_full_transaction`).
 pub(crate) fn usage_restore_on(tx: &Connection, backup: Option<&UsageBackup>) -> SqlResult<()> {
     match backup {
         Some(backup) => {

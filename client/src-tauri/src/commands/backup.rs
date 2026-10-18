@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -395,6 +395,10 @@ fn is_selected_config(data: &Value) -> bool {
 }
 
 /// 应用完整配置部分（设置 + Prompt 预设 + 分应用规则），两档共用。
+fn array_section<'a>(data: &'a Value, key: &str) -> Option<&'a [Value]> {
+    data.get(key).and_then(Value::as_array).map(Vec::as_slice)
+}
+
 fn apply_config_part(
     storage: &Storage,
     data: &Value,
@@ -405,14 +409,8 @@ fn apply_config_part(
         .get("appSettings")
         .and_then(Value::as_object)
         .unwrap_or(&empty_settings);
-    let prompt_presets = data
-        .get("promptPresets")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice);
-    let app_prompt_rules = data
-        .get("appPromptRules")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice);
+    let prompt_presets = array_section(data, "promptPresets");
+    let app_prompt_rules = array_section(data, "appPromptRules");
 
     storage
         .apply_config_transaction(
@@ -424,145 +422,30 @@ fn apply_config_part(
         .map_err(|error| format!("Failed to write configuration: {}", error))
 }
 
-fn validate_restorable_collections(data: &Value) -> Result<(), String> {
-    for key in ["history", "manualCorrections", "feedbackQueue"] {
-        let Some(value) = data.get(key) else {
-            continue;
-        };
-        let items = value
-            .as_array()
-            .ok_or_else(|| format!("{} has an invalid format", key))?;
-        let mut ids = HashSet::new();
-        for (index, item) in items.iter().enumerate() {
-            let object = item
-                .as_object()
-                .ok_or_else(|| format!("Item {} in {} has an invalid format", index + 1, key))?;
-            let id = object
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .ok_or_else(|| format!("Item {} in {} is missing id", index + 1, key))?;
-            if !ids.insert(id.to_string()) {
-                return Err(format!(
-                    "{} contains duplicate id '{}' at item {}",
-                    key,
-                    id,
-                    index + 1
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn audio_restored_name(base: &str, index: usize) -> String {
-    let path = Path::new(base);
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or(base);
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| format!(".{}", value))
-        .unwrap_or_default();
-    format!("{}-restored-{}{}", stem, index, extension)
-}
-
-fn publish_audio_file(adir: &Path, base: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    let mut index = 0usize;
-    loop {
-        let candidate_name = if index == 0 {
-            base.to_string()
-        } else {
-            audio_restored_name(base, index)
-        };
-        let candidate = adir.join(&candidate_name);
-
-        if index == 0 {
-            match fs::read(&candidate) {
-                Ok(existing) if existing == bytes => return Ok(candidate),
-                Ok(_) => {
-                    index += 1;
-                    continue;
-                }
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(format!(
-                        "Failed to inspect existing audio file {}: {}",
-                        candidate_name, error
-                    ));
-                }
-                Err(_) => {}
-            }
-        }
-
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(mut file) => {
-                file.write_all(bytes).map_err(|error| {
-                    format!("Failed to write audio file {}: {}", candidate_name, error)
-                })?;
-                return Ok(candidate);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                index += 1;
-                continue;
-            }
-            Err(error) => {
-                return Err(format!(
-                    "Failed to create audio file {}: {}",
-                    candidate_name, error
-                ));
-            }
-        }
-    }
-}
-
-fn collect_archive_audio(
-    archive: &mut zip::ZipArchive<fs::File>,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let mut audio = BTreeMap::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let name = entry.name().to_string();
-        let Some(rest) = name.strip_prefix("audio/") else {
-            continue;
-        };
-        if rest.is_empty() || entry.is_dir() {
-            continue;
-        }
-        let base = basename(rest);
-        if base.is_empty() {
-            continue;
-        }
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        if let Some(existing) = audio.get(&base) {
-            if existing != &bytes {
-                return Err(format!(
-                    "Audio archive contains conflicting entries named {}",
-                    base
-                ));
-            }
-        } else {
-            audio.insert(base, bytes);
-        }
-    }
-    Ok(audio)
+/// Streams one archive audio entry into the local audio directory. Audio files
+/// are named after their record id, so an existing file with the same name is
+/// the same recording: it is kept untouched and reused.
+fn publish_audio_file<R: Read>(
+    adir: &Path,
+    base: &str,
+    entry: &mut R,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let path = adir.join(base);
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) => return Err(format!("Failed to create audio file {}: {}", base, error)),
+    };
+    // Recorded before writing so a partially written file is removed on failure too.
+    created.push(path);
+    std::io::copy(entry, &mut file)
+        .map(|_| ())
+        .map_err(|error| format!("Failed to write audio file {}: {}", base, error))
 }
 
 /// Rewrites one history record to the local audio directory.
-fn rewrite_audio_path(
-    rec: &Value,
-    adir: &Path,
-    restored_audio_paths: &BTreeMap<String, PathBuf>,
-) -> Value {
+fn rewrite_audio_path(rec: &Value, adir: &Path) -> Value {
     let mut rec = rec.clone();
     if let Some(obj) = rec.as_object_mut() {
         if let Some(p) = obj
@@ -572,10 +455,7 @@ fn rewrite_audio_path(
         {
             let base = basename(&p);
             if !base.is_empty() {
-                let new_path = restored_audio_paths
-                    .get(&base)
-                    .cloned()
-                    .unwrap_or_else(|| adir.join(&base));
+                let new_path = adir.join(&base);
                 obj.insert(
                     "audioFilePath".to_string(),
                     Value::String(new_path.to_string_lossy().to_string()),
@@ -1487,7 +1367,7 @@ pub async fn import_full(in_path: String, storage: State<'_, Storage>) -> Result
 /// profile) has no `history` field, and then the **local history is kept**
 /// rather than cleared — see `build_full_value` for why an empty array is
 /// never written. A missing `usage` section is handled the same way; see
-/// `Storage::usage_restore`.
+/// `usage::usage_restore_on`.
 pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String> {
     let file = fs::File::open(in_path).map_err(|e| format!("Failed to open file: {}", e))?;
     let mut archive =
@@ -1507,67 +1387,89 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
         .map_err(|e| format!("Failed to parse backup.json: {}", e))?;
     check_kind_and_version(&data, "full", FULL_FORMAT_VERSION)?;
     full_config_preview_sections(&data)?;
-    validate_restorable_collections(&data)?;
+    for key in ["history", "manualCorrections", "feedbackQueue"] {
+        if let Some(value) = data.get(key) {
+            let items = value
+                .as_array()
+                .ok_or_else(|| format!("{} has an invalid format", key))?;
+            validate_config_collection(key, items)?;
+        }
+    }
 
     // Validate the usage section up front: a malformed one must abort the
     // restore before any part of it is applied.
     let usage = data.get("usage").map(parse_usage_backup).transpose()?;
 
-    // 2. Read archive audio before any filesystem or database mutation.
-    let archive_audio = collect_archive_audio(&mut archive)?;
+    // 2. Publish archive audio, then restore the database in one transaction.
+    //    If anything fails, the audio files this restore created are removed;
+    //    files that already existed are never touched.
     let adir = audio_dir();
-    if !archive_audio.is_empty() {
+    let mut created = Vec::new();
+    let mut restore = || -> Result<(), String> {
         fs::create_dir_all(&adir)
             .map_err(|e| format!("Failed to create audio directory: {}", e))?;
-    }
-    let mut restored_audio_paths = BTreeMap::new();
-    for (base, bytes) in archive_audio {
-        let path = publish_audio_file(&adir, &base, &bytes)?;
-        restored_audio_paths.insert(base, path);
-    }
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+            let name = entry.name().to_string();
+            let Some(rest) = name.strip_prefix("audio/") else {
+                continue;
+            };
+            if rest.is_empty() || entry.is_dir() {
+                continue;
+            }
+            let base = basename(rest);
+            if base.is_empty() {
+                continue;
+            }
+            publish_audio_file(&adir, &base, &mut entry, &mut created)?;
+        }
 
-    let empty_settings = Map::new();
-    let app_settings = data
-        .get("appSettings")
-        .and_then(Value::as_object)
-        .unwrap_or(&empty_settings);
-    let prompt_presets = data
-        .get("promptPresets")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice);
-    let app_prompt_rules = data
-        .get("appPromptRules")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice);
-    let history = data.get("history").and_then(Value::as_array).map(|items| {
-        items
+        let empty_settings = Map::new();
+        let app_settings = data
+            .get("appSettings")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty_settings);
+        let prompt_presets = array_section(&data, "promptPresets");
+        let app_prompt_rules = array_section(&data, "appPromptRules");
+        let history = data.get("history").and_then(Value::as_array).map(|items| {
+            items
+                .iter()
+                .map(|record| rewrite_audio_path(record, &adir))
+                .collect::<Vec<_>>()
+        });
+        let manual_corrections = array_section(&data, "manualCorrections");
+        let feedback_queue = array_section(&data, "feedbackQueue");
+
+        storage
+            .restore_full_transaction(
+                app_settings,
+                prompt_presets,
+                app_prompt_rules,
+                history.as_deref(),
+                manual_corrections,
+                feedback_queue,
+                usage.as_ref(),
+            )
+            .map_err(|e| format!("Failed to restore full backup: {}", e))
+    };
+
+    if let Err(error) = restore() {
+        let removal_failures: Vec<String> = created
             .iter()
-            .map(|record| rewrite_audio_path(record, &adir, &restored_audio_paths))
-            .collect::<Vec<_>>()
-    });
-    let manual_corrections = data
-        .get("manualCorrections")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice);
-    let feedback_queue = data
-        .get("feedbackQueue")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice);
-
-    // Audio publication is an independent I/O phase. The database part is one
-    // transaction so configuration, collections, and usage commit together.
-    storage
-        .restore_full_transaction(
-            app_settings,
-            &[],
-            prompt_presets,
-            app_prompt_rules,
-            history.as_deref(),
-            manual_corrections,
-            feedback_queue,
-            usage.as_ref(),
-        )
-        .map_err(|e| format!("Failed to restore full backup: {}", e))?;
+            .filter_map(|path| {
+                fs::remove_file(path)
+                    .err()
+                    .map(|remove_error| format!("{}: {}", path.display(), remove_error))
+            })
+            .collect();
+        if removal_failures.is_empty() {
+            return Err(error);
+        }
+        return Err(format!(
+            "{error}; also failed to remove restored audio files: {}",
+            removal_failures.join("; ")
+        ));
+    }
     Ok(())
 }
 
@@ -1744,16 +1646,6 @@ mod tests {
                 }]),
             )
             .unwrap();
-        let raw_before: String = storage
-            .db
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT raw_json FROM prompt_presets WHERE id = 'local-preset'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
         storage
             .db
             .lock()
@@ -1789,7 +1681,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(raw_after, "{not-json");
-        assert_ne!(raw_after, raw_before);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1850,25 +1741,17 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    fn write_backup_json(path: &Path, payload: &Value) {
-        let file = fs::File::create(path).unwrap();
-        let mut zip = zip::ZipWriter::new(file);
-        zip.start_file("backup.json", zip::write::FileOptions::default())
-            .unwrap();
-        zip.write_all(serde_json::to_string(payload).unwrap().as_bytes())
-            .unwrap();
-        zip.finish().unwrap();
-    }
-
-    fn write_backup_json_with_audio(path: &Path, payload: &Value, name: &str, bytes: &[u8]) {
+    fn write_backup_zip(path: &Path, payload: &Value, audio: &[(&str, &[u8])]) {
         let file = fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::FileOptions::default();
         zip.start_file("backup.json", options).unwrap();
         zip.write_all(serde_json::to_string(payload).unwrap().as_bytes())
             .unwrap();
-        zip.start_file(format!("audio/{name}"), options).unwrap();
-        zip.write_all(bytes).unwrap();
+        for (name, bytes) in audio {
+            zip.start_file(format!("audio/{name}"), options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
         zip.finish().unwrap();
     }
 
@@ -1895,12 +1778,13 @@ mod tests {
         storage.set("history", &original_history).unwrap();
         let usage_before = storage.usage_summary(None).unwrap();
         let backup_path = dir.join("duplicate-history-id.zip");
-        write_backup_json(
+        write_backup_zip(
             &backup_path,
             &restorable_validation_payload(json!([
                 { "id": "duplicate", "timestamp": 2 },
                 { "id": "duplicate", "timestamp": 3 },
             ])),
+            &[],
         );
 
         let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
@@ -1921,9 +1805,10 @@ mod tests {
         let original_history = json!([{ "id": "local-1", "timestamp": 1 }]);
         storage.set("history", &original_history).unwrap();
         let backup_path = dir.join("non-object-history.zip");
-        write_backup_json(
+        write_backup_zip(
             &backup_path,
             &restorable_validation_payload(json!(["not-an-object"])),
+            &[],
         );
 
         let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
@@ -1942,9 +1827,10 @@ mod tests {
         let original_history = json!([{ "id": "local-1", "timestamp": 1 }]);
         storage.set("history", &original_history).unwrap();
         let backup_path = dir.join("missing-history-id.zip");
-        write_backup_json(
+        write_backup_zip(
             &backup_path,
             &restorable_validation_payload(json!([{ "timestamp": 2 }])),
+            &[],
         );
 
         let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
@@ -1957,16 +1843,15 @@ mod tests {
     }
 
     #[test]
-    fn audio_collision_uses_a_new_file_without_changing_the_existing_file() {
-        let (storage, dir) = temp_storage("audio-collision-success");
+    fn existing_audio_with_the_same_name_is_kept_and_reused() {
+        let (storage, dir) = temp_storage("audio-same-name");
         let adir = audio_dir();
         fs::create_dir_all(&adir).unwrap();
-        let name = format!("restore-collision-{}.wav", uuid::Uuid::new_v4());
+        let name = format!("restore-same-name-{}.wav", uuid::Uuid::new_v4());
         let existing_path = adir.join(&name);
-        let existing_bytes = b"old-audio";
-        let restored_bytes = b"restored-audio";
+        let existing_bytes = b"local-audio";
         fs::write(&existing_path, existing_bytes).unwrap();
-        let backup_path = dir.join("audio-collision-success.zip");
+        let backup_path = dir.join("audio-same-name.zip");
         let payload = json!({
             "kind": "full",
             "formatVersion": 2,
@@ -1974,116 +1859,23 @@ mod tests {
             "promptPresets": [],
             "appPromptRules": [],
             "history": [{
-                "id": "restored-audio",
+                "id": "restored-same-name",
                 "timestamp": 2,
                 "audioFilePath": format!("C:\\old\\{name}"),
             }],
             "usage": { "firstUsedAt": null, "events": [] },
         });
-        write_backup_json_with_audio(&backup_path, &payload, &name, restored_bytes);
+        write_backup_zip(&backup_path, &payload, &[(&name, b"archive-audio")]);
 
+        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
         apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
 
         assert_eq!(fs::read(&existing_path).unwrap(), existing_bytes);
-        let restored_path = storage.get("history", None)[0]["audioFilePath"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(restored_path.ends_with("-restored-1.wav"));
-        assert_ne!(restored_path, existing_path.to_string_lossy());
-        assert_eq!(fs::read(&restored_path).unwrap(), restored_bytes);
-
-        let _ = fs::remove_file(&existing_path);
-        let _ = fs::remove_file(&restored_path);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn equal_audio_collision_reuses_the_existing_file() {
-        let (storage, dir) = temp_storage("audio-collision-equal");
-        let adir = audio_dir();
-        fs::create_dir_all(&adir).unwrap();
-        let name = format!("restore-equal-{}.wav", uuid::Uuid::new_v4());
-        let existing_path = adir.join(&name);
-        let bytes = b"same-audio";
-        fs::write(&existing_path, bytes).unwrap();
-        let backup_path = dir.join("audio-collision-equal.zip");
-        let payload = json!({
-            "kind": "full",
-            "formatVersion": 2,
-            "appSettings": {},
-            "promptPresets": [],
-            "appPromptRules": [],
-            "history": [{
-                "id": "restored-equal-audio",
-                "timestamp": 2,
-                "audioFilePath": format!("C:\\old\\{name}"),
-            }],
-            "usage": { "firstUsedAt": null, "events": [] },
-        });
-        write_backup_json_with_audio(&backup_path, &payload, &name, bytes);
-
-        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
-
-        assert_eq!(fs::read(&existing_path).unwrap(), bytes);
         assert_eq!(
             storage.get("history", None)[0]["audioFilePath"],
             json!(existing_path.to_string_lossy())
         );
-        assert!(
-            !adir
-                .join(format!("{}-restored-1.wav", name.trim_end_matches(".wav")))
-                .exists()
-        );
-
         let _ = fs::remove_file(&existing_path);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn audio_collision_skips_an_occupied_restored_name() {
-        let (storage, dir) = temp_storage("audio-collision-suffix");
-        let adir = audio_dir();
-        fs::create_dir_all(&adir).unwrap();
-        let name = format!("restore-suffix-{}.wav", uuid::Uuid::new_v4());
-        let stem = name.trim_end_matches(".wav");
-        let existing_path = adir.join(&name);
-        let occupied_suffix_path = adir.join(format!("{stem}-restored-1.wav"));
-        let old_bytes = b"old-audio";
-        let restored_bytes = b"restored-audio";
-        fs::write(&existing_path, old_bytes).unwrap();
-        fs::write(&occupied_suffix_path, restored_bytes).unwrap();
-        let backup_path = dir.join("audio-collision-suffix.zip");
-        let payload = json!({
-            "kind": "full",
-            "formatVersion": 2,
-            "appSettings": {},
-            "promptPresets": [],
-            "appPromptRules": [],
-            "history": [{
-                "id": "restored-suffix-audio",
-                "timestamp": 2,
-                "audioFilePath": format!("C:\\old\\{name}"),
-            }],
-            "usage": { "firstUsedAt": null, "events": [] },
-        });
-        write_backup_json_with_audio(&backup_path, &payload, &name, restored_bytes);
-
-        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
-
-        let restored_path = storage.get("history", None)[0]["audioFilePath"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let expected_path = adir.join(format!("{stem}-restored-2.wav"));
-        assert_eq!(restored_path, expected_path.to_string_lossy());
-        assert_eq!(fs::read(&existing_path).unwrap(), old_bytes);
-        assert_eq!(fs::read(&occupied_suffix_path).unwrap(), restored_bytes);
-        assert_eq!(fs::read(&expected_path).unwrap(), restored_bytes);
-
-        let _ = fs::remove_file(&existing_path);
-        let _ = fs::remove_file(&occupied_suffix_path);
-        let _ = fs::remove_file(&expected_path);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2126,6 +1918,8 @@ mod tests {
         let existing_path = adir.join(&name);
         let existing_bytes = b"old-audio-on-failure";
         fs::write(&existing_path, existing_bytes).unwrap();
+        let created_name = format!("restore-created-{}.wav", uuid::Uuid::new_v4());
+        let created_path = adir.join(&created_name);
         let backup_path = dir.join("audio-collision-failure.zip");
         let payload = json!({
             "kind": "full",
@@ -2151,11 +1945,22 @@ mod tests {
                 }],
             },
         });
-        write_backup_json_with_audio(&backup_path, &payload, &name, b"new-audio-on-failure");
+        write_backup_zip(
+            &backup_path,
+            &payload,
+            &[
+                (name.as_str(), b"new-audio-on-failure"),
+                (created_name.as_str(), b"archive-created"),
+            ],
+        );
 
         let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
 
         assert!(error.contains("injected audio restore usage failure"));
+        assert!(
+            !created_path.exists(),
+            "newly created audio must be removed"
+        );
         assert_eq!(fs::read(&existing_path).unwrap(), existing_bytes);
         assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
         assert_eq!(storage.get("history", None), original_history);
@@ -2168,8 +1973,6 @@ mod tests {
             .execute_batch("DROP TRIGGER fail_restore_usage_audio")
             .unwrap();
         let _ = fs::remove_file(&existing_path);
-        let _ =
-            fs::remove_file(adir.join(format!("{}-restored-1.wav", name.trim_end_matches(".wav"))));
         let _ = fs::remove_dir_all(&dir);
     }
 
