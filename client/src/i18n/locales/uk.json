@@ -1705,6 +1705,8 @@
   "files.cloudProfilesLoading": "Читання хмарних профілів…",
   "files.cloudProfilesFailed": "Не вдалося прочитати хмарні профілі",
   "files.cloudProfileMissing": "Вибраний хмарний профіль не готовий",
+  "files.fragmentDuration": "Тривалість фрагмента",
+  "files.fragmentDurationHint": "Номінальна тривалість; виявлення активності мовлення може трохи змістити межу. Менші значення означають більше запитів.",
   "files.model": "Модель",
   "files.language": "Мова",
   "files.noInstalledModels": "Жодної локальної моделі не встановлено. Спершу завантажте її у Voice Engine.",

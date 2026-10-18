@@ -32,6 +32,7 @@ export interface FileTranscriptionCloudProfile {
   label: string
   provider: string
   model: string
+  windowSecondsOptions: number[]
   /** Configuration-readiness verdict from describeAsrMissing; '' means ready. */
   missing: string
 }
@@ -39,6 +40,7 @@ export interface FileTranscriptionCloudProfile {
 interface FileTranscriptionCloudRequest {
   label: string
   config: AsrProviderConfig
+  windowSeconds: number | null
 }
 
 export interface FileTranscriptionSnapshot {
@@ -91,6 +93,8 @@ export interface FileTranscriptionJobOptions {
   cloudProfilesError: string
   /** Remembered profile if it still exists, else the active profile, else the first profile, else ''. */
   cloudProfileId: string
+  /** Remembered cloud fragment duration; null delegates to the backend default. */
+  cloudWindowSeconds: number | null
 }
 
 export interface FileTranscriptionStartOptions {
@@ -104,6 +108,8 @@ export interface FileTranscriptionStartOptions {
   /** Per-job speech language for both engines; falls back to the global setting when omitted. */
   language?: SpeechInputLanguage
   cloudProfileId?: string | null
+  /** Per-job cloud fragment duration; null delegates to the backend default. */
+  cloudWindowSeconds?: number | null
 }
 
 export interface FileTranscriptionBridge {
@@ -285,8 +291,14 @@ export class FileTranscriptionService {
 
   async getCloudProfiles(): Promise<{ profiles: FileTranscriptionCloudProfile[]; activeId: string }> {
     const state = await loadAsrProfiles()
+    const windowSecondsByProvider = new Map<string, number[]>()
+    const providers = [...new Set(state.profiles.map((profile) => profile.provider))]
+    await Promise.all(providers.map(async (provider) => {
+      const options = await this.ipc.invoke<number[]>('get_file_transcription_cloud_window_options', { provider })
+      windowSecondsByProvider.set(provider, options)
+    }))
     return {
-      profiles: state.profiles.map((profile) => this.cloudProfileMetadata(profile)),
+      profiles: state.profiles.map((profile) => this.cloudProfileMetadata(profile, windowSecondsByProvider.get(profile.provider) ?? [])),
       activeId: state.activeId,
     }
   }
@@ -296,6 +308,7 @@ export class FileTranscriptionService {
       storedEngine,
       rememberedModelId,
       rememberedCloudProfileId,
+      storedCloudWindowSeconds,
       storedLanguage,
       globalLanguage,
       acceleratorValue,
@@ -304,6 +317,7 @@ export class FileTranscriptionService {
       getSetting('fileTranscription.engine', ''),
       getSetting('fileTranscription.modelId', ''),
       getSetting('fileTranscription.cloudProfileId', ''),
+      getSetting('fileTranscription.cloudWindowSeconds', null),
       getSetting('fileTranscription.language', ''),
       getSpeechInputLanguage(),
       getSetting('localAsr.accelerator', 'auto'),
@@ -357,6 +371,10 @@ export class FileTranscriptionService {
           : profileIds.has(activeId)
             ? activeId
             : (cloudProfiles[0]?.id ?? '')
+    const cloudWindowSeconds =
+      typeof storedCloudWindowSeconds === 'number' && Number.isFinite(storedCloudWindowSeconds)
+        ? storedCloudWindowSeconds
+        : null
 
     return {
       engine: storedEngine === 'cloud' ? 'cloud' : 'local',
@@ -368,11 +386,12 @@ export class FileTranscriptionService {
       cloudProfiles,
       cloudProfilesError,
       cloudProfileId,
+      cloudWindowSeconds,
     }
   }
 
   async rememberJobSelection(
-    patch: Partial<Pick<FileTranscriptionJobOptions, 'engine' | 'modelId' | 'language' | 'cloudProfileId'>>,
+    patch: Partial<Pick<FileTranscriptionJobOptions, 'engine' | 'modelId' | 'language' | 'cloudProfileId' | 'cloudWindowSeconds'>>,
   ): Promise<void> {
     await Promise.all(Object.entries(patch).map(([key, value]) => setSetting(`fileTranscription.${key}`, value)))
   }
@@ -381,6 +400,7 @@ export class FileTranscriptionService {
     const {
       engine: requestedEngine,
       cloudProfileId,
+      cloudWindowSeconds: requestedCloudWindowSeconds,
       modelId: requestedModelId,
       language: requestedLanguage,
       ...fileOptions
@@ -389,7 +409,7 @@ export class FileTranscriptionService {
     const language = requestedLanguage ?? (await getSpeechInputLanguage())
     return this.startReserved(engine, async () => {
       if (engine === 'cloud') {
-        return this.buildCloudRequest(fileOptions, cloudProfileId, language)
+        return this.buildCloudRequest(fileOptions, cloudProfileId, language, requestedCloudWindowSeconds)
       }
       const modelId = String(requestedModelId ?? '').trim()
       if (!modelId) throw new Error('A local ASR model must be selected')
@@ -510,12 +530,13 @@ export class FileTranscriptionService {
     this.reservationJobId = null
   }
 
-  private cloudProfileMetadata(profile: AsrProfile): FileTranscriptionCloudProfile {
+  private cloudProfileMetadata(profile: AsrProfile, windowSecondsOptions: number[] = []): FileTranscriptionCloudProfile {
     return {
       id: profile.id,
       label: findAsrProvider(profile.provider)?.label ?? profile.provider,
       provider: profile.provider,
       model: profile.model,
+      windowSecondsOptions,
       // The canonical readiness predicate shared with the settings cards and
       // mode status; the page needs the verdict, never the credentials.
       missing: describeAsrMissing(profile),
@@ -526,6 +547,7 @@ export class FileTranscriptionService {
     options: FileTranscriptionStartOptions,
     cloudProfileId: string | null | undefined,
     language: SpeechInputLanguage,
+    cloudWindowSeconds: number | null | undefined,
   ): Promise<FileTranscriptionIpcRequest> {
     if (!cloudProfileId) throw new Error('A cloud ASR profile must be selected')
     const state = await loadAsrProfiles()
@@ -533,9 +555,13 @@ export class FileTranscriptionService {
     if (!profile) throw new Error(`Cloud ASR profile not found: ${cloudProfileId}`)
     const profileSnapshot = { ...profile }
     const metadata = this.cloudProfileMetadata(profileSnapshot)
+    const windowSeconds = typeof cloudWindowSeconds === 'number' && Number.isFinite(cloudWindowSeconds)
+      ? cloudWindowSeconds
+      : null
     const cloud = {
       label: metadata.label,
       config: buildAsrProviderConfig(profileSnapshot, language),
+      windowSeconds,
     }
     return {
       ...options,

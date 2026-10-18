@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, userEvent, within } from 'storybook/test'
 import FileTranscription from './FileTranscription'
 import {
   fileTranscriptionService,
@@ -21,10 +22,18 @@ const asrProfile = {
   deepgramKeytermsEnabled: false,
 }
 
+const fixedAsrProfile = {
+  ...asrProfile,
+  id: 'storybook-fixed-window',
+  provider: 'groq_whisper',
+  model: 'whisper-large-v3-turbo',
+}
+
 const settings = {
   'fileTranscription.engine': 'local',
   'fileTranscription.modelId': localModelId,
   'fileTranscription.cloudProfileId': 'storybook-deepgram',
+  'fileTranscription.cloudWindowSeconds': null,
   'fileTranscription.language': 'en',
   'speechInput.language': 'en',
   'localAsr.modelId': localModelId,
@@ -46,6 +55,19 @@ const settings = {
   'cloudAsr.openrouter.apiKey': '',
   'cloudAsr.deepgram.apiKey': '',
   'cloudAsr.custom.apiKey': '',
+} as const
+
+const cloudSettings = {
+  ...settings,
+  'fileTranscription.engine': 'cloud',
+  'fileTranscription.cloudWindowSeconds': 300,
+  'cloudAsr.profiles': [asrProfile, fixedAsrProfile],
+  'cloudAsr.activeProfileId': asrProfile.id,
+} as const
+
+const cloudAutoSettings = {
+  ...cloudSettings,
+  'fileTranscription.cloudWindowSeconds': null,
 } as const
 
 const mediaInfo: FileMediaInfo = {
@@ -119,11 +141,20 @@ const cancelledSnapshot: FileTranscriptionSnapshot = {
   resourcesReleased: true,
 }
 
+const cloudRunningSnapshot: FileTranscriptionSnapshot = {
+  ...runningSnapshot,
+  jobId: 'storybook-cloud-job-running',
+  engine: 'cloud',
+  cloudLabel: 'Deepgram',
+}
+
 function commandsFor(snapshot: FileTranscriptionSnapshot | null) {
   return {
     get_file_transcription_state: () => snapshot,
     detect_ffmpeg_directory: () => null,
     inspect_transcription_file: () => mediaInfo,
+    get_file_transcription_cloud_window_options: (args?: { provider?: string }) =>
+      args?.provider === 'deepgram' ? [20, 60, 180, 300] : [],
     list_downloaded_models: () => [{ id: localModelId, name: 'Nemotron ASR Streaming 0.6B', complete: true }],
     start_file_transcription: () => runningSnapshot,
     cancel_file_transcription: () => cancelledSnapshot,
@@ -177,5 +208,50 @@ export const FailedExport: Story = {
       commands: commandsFor(failedSnapshot),
       settings,
     },
+  },
+}
+
+export const CloudFragmentDuration: Story = {
+  parameters: {
+    tauri: {
+      commands: commandsFor(null),
+      settings: cloudSettings,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = within(canvasElement.ownerDocument.body)
+    const duration = await canvas.findByRole('button', { name: 'Fragment duration' })
+    await expect(duration).toHaveTextContent('5 min')
+
+    await userEvent.click(duration)
+    await userEvent.click(body.getByRole('button', { name: '3 min' }))
+    await expect(duration).toHaveTextContent('3 min')
+
+    await userEvent.click(canvas.getByRole('button', { name: 'Cloud profile' }))
+    await userEvent.click(body.getByRole('button', { name: 'Groq Whisper · whisper-large-v3-turbo' }))
+    await expect(canvas.queryByRole('button', { name: 'Fragment duration' })).toBeNull()
+  },
+}
+
+export const CloudFragmentDurationAuto: Story = {
+  parameters: {
+    tauri: {
+      commands: commandsFor(null),
+      settings: cloudAutoSettings,
+    },
+  },
+}
+
+export const CloudFragmentDurationActive: Story = {
+  parameters: {
+    tauri: {
+      commands: commandsFor(cloudRunningSnapshot),
+      settings: cloudSettings,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const duration = await within(canvasElement).findByRole('button', { name: 'Fragment duration' })
+    await expect(duration).toBeDisabled()
   },
 }

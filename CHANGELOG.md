@@ -13,7 +13,7 @@ Sections are ordered by version, newest first.
 
 ### Changed
 #### File Transcription
-- Cloud file transcription now sends far fewer, larger requests: Deepgram, OpenAI, Gemini and Doubao flash send 5-minute audio windows and Qwen's synchronous ASR provider 3-minute windows instead of the former 20 seconds for every provider, so long recordings are cut less often. The streaming cloud providers keep the previous window.
+- Cloud file transcription now sends far fewer, larger requests: Deepgram, OpenAI, Gemini and Doubao flash send 5-minute audio windows and Qwen's synchronous ASR provider 3-minute windows instead of the former 20 seconds for every provider, so long recordings are cut less often. The streaming cloud providers keep the previous window. On the Files page, Cloud profiles expose their backend-supported fragment-duration choices with an Auto option; profiles with a fixed window keep that control hidden.
 #### Desktop Client
 - Eight new themes are available in Appearance settings: Paper & Ink, Dark Jade, Orchid (soft pink-white), Twilight (deep violet), Espresso (warm brown-black with a copper accent), Frost (cool blue-grey), Moss (sage green) and Midnight (near-black, made for OLED screens).
 - The theme picker in Appearance settings is now split into Light and Dark groups, with a miniature app preview per theme, instead of one long list. Switching the group only changes what is listed; it does not change the theme.
