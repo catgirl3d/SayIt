@@ -14,6 +14,9 @@
  */
 import { getLocale, t } from '@/i18n'
 
+/** Where a provider is based; groups the provider dropdown of the service editor. */
+export type AiProviderRegion = 'global' | 'china' | 'local_custom'
+
 export interface AiProvider {
   value: string
   /**
@@ -25,6 +28,11 @@ export interface AiProvider {
    * keeps the `.label` read syntax, so the twenty-odd call sites and three test files need no changes.
    */
   label: string
+  /**
+   * Dropdown group. `china` is the vendor's home market (DeepSeek included, although its API is
+   * reachable internationally); `local_custom` is a self-hosted or user-supplied endpoint.
+   */
+  region: AiProviderRegion
   defaultUrl: string
   /**
    * A blank URL means "use the official endpoint" for this provider.
@@ -58,6 +66,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     value: 'deepseek',
     label: 'DeepSeek',
+    region: 'china',
     defaultUrl: 'https://api.deepseek.com',
     defaultModels: ['deepseek-v4-flash'],
     consoleUrl: 'https://platform.deepseek.com/api_keys',
@@ -65,6 +74,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     value: 'qwen',
     get label() { return t('aiProvider.qwen') },
+    region: 'china',
     defaultUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
     defaultModels: ['qwen3.6-flash', 'qwen-plus'],
     consoleUrl: 'https://bailian.console.aliyun.com',
@@ -72,6 +82,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     value: 'doubao',
     get label() { return t('aiProvider.doubao') },
+    region: 'china',
     defaultUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     defaultModels: ['doubao-seed-2-0-lite-260215'],
     consoleUrl: 'https://console.volcengine.com/ark',
@@ -79,6 +90,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     value: 'mimo',
     get label() { return t('aiProvider.mimo') },
+    region: 'china',
     defaultUrl: 'https://api.xiaomimimo.com/v1',
     defaultModels: ['mimo-v2.5', 'mimo-v2.5-pro'],
   },
@@ -86,6 +98,7 @@ export const AI_PROVIDERS: AiProvider[] = [
     value: 'groq',
     // Brand name, written Groq in every locale — no locale key needed (same handling as DeepSeek).
     label: 'Groq',
+    region: 'global',
     // The last segment is already /v1, so normalize_base_url keeps it as-is and does not append a version segment.
     defaultUrl: 'https://api.groq.com/openai/v1',
     defaultModels: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'llama-3.3-70b-versatile'],
@@ -98,6 +111,7 @@ export const AI_PROVIDERS: AiProvider[] = [
     value: 'opencode_go',
     // Brand name, identical in every locale (same handling as DeepSeek and Groq).
     label: 'OpenCode Go',
+    region: 'global',
     // Rust appends /chat/completions: -> https://opencode.ai/zen/go/v1/chat/completions
     defaultUrl: 'https://opencode.ai/zen/go/v1',
     defaultModels: ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k2.6'],
@@ -107,6 +121,7 @@ export const AI_PROVIDERS: AiProvider[] = [
     value: 'openrouter',
     // Brand name, identical in every locale (same handling as DeepSeek and Groq).
     label: 'OpenRouter',
+    region: 'global',
     // Rust appends /chat/completions and derives /models from it for the model list.
     defaultUrl: 'https://openrouter.ai/api/v1',
     // The only provider that accepts a blank URL: the field starts prefilled, and
@@ -119,6 +134,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     value: 'openai_compat',
     get label() { return t('aiProvider.openaiCompat') },
+    region: 'local_custom',
     defaultUrl: 'https://api.openai.com',
     defaultModels: ['gpt-4o-mini'],
   },
@@ -128,6 +144,7 @@ export const AI_PROVIDERS: AiProvider[] = [
     // The URL field is editable per profile, so this preset doubles as the proxy/relay entry:
     // point it at any OpenAI-compatible endpoint and the openai request tuning below still applies.
     label: 'OpenAI',
+    region: 'global',
     defaultUrl: 'https://api.openai.com',
     defaultModels: ['gpt-4o-mini', 'gpt-5-mini'],
     consoleUrl: 'https://platform.openai.com/api-keys',
@@ -135,6 +152,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     value: 'ollama',
     get label() { return t('aiProvider.ollama') },
+    region: 'local_custom',
     defaultUrl: 'http://127.0.0.1:11434',
     defaultModels: ['qwen2.5:7b'],
     keyless: true,
@@ -146,7 +164,11 @@ export function preferredAiProviderValue(): string {
   return 'openai_compat'
 }
 
-/** The English UI shows the generic entry that connects directly to overseas endpoints first; the original array order stays unchanged for the migration logic. */
+/**
+ * The catalog order with the generic entry that connects directly to overseas endpoints first; the original
+ * array order stays unchanged for the migration logic. The help dialog builds its list from this order; the
+ * provider dropdown of the service editor uses groupedAiProviders instead.
+ */
 export function aiProvidersForDisplay(): AiProvider[] {
   const preferred = preferredAiProviderValue()
   if (AI_PROVIDERS[0]?.value === preferred) return AI_PROVIDERS
@@ -154,6 +176,32 @@ export function aiProvidersForDisplay(): AiProvider[] {
     ...AI_PROVIDERS.filter((provider) => provider.value === preferred),
     ...AI_PROVIDERS.filter((provider) => provider.value !== preferred),
   ]
+}
+
+// International providers come first and the self-hosted or custom ones last.
+const AI_PROVIDER_REGION_ORDER: readonly AiProviderRegion[] = ['global', 'china', 'local_custom']
+
+function aiProviderRegionLabel(region: AiProviderRegion): string {
+  switch (region) {
+    case 'global': return t('aiProvider.groupGlobal')
+    case 'china': return t('aiProvider.groupChina')
+    case 'local_custom': return t('aiProvider.groupCustom')
+  }
+}
+
+/**
+ * Providers for the provider dropdown of the service editor: grouped by region, and alphabetical by
+ * the displayed label inside each group. AI_PROVIDERS keeps its own order for the migration logic.
+ */
+export function groupedAiProviders(): { provider: AiProvider; group: string }[] {
+  const collator = new Intl.Collator(getLocale(), { numeric: true, sensitivity: 'base' })
+  return AI_PROVIDER_REGION_ORDER.flatMap((region) => {
+    const group = aiProviderRegionLabel(region)
+    return AI_PROVIDERS
+      .filter((provider) => provider.region === region)
+      .sort((a, b) => collator.compare(a.label, b.label))
+      .map((provider) => ({ provider, group }))
+  })
 }
 
 export function findProvider(value: string): AiProvider {

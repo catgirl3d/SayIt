@@ -14,6 +14,7 @@ import {
   formatLatency,
   findProvider,
   gradeLatency,
+  groupedAiProviders,
   isChatModelId,
   isCheckFresh,
   isProfileComplete,
@@ -150,6 +151,36 @@ describe('地区相关的供应商默认值', () => {
     expect(preferredAiProviderValue()).toBe('openai_compat')
     expect(aiProvidersForDisplay()[0].value).toBe('openai_compat')
     expect(blankProfile().provider).toBe('openai_compat')
+  })
+})
+
+describe('groupedAiProviders', () => {
+  afterEach(() => setLocale('en'))
+
+  it('groups the editor dropdown by region and sorts each group alphabetically', () => {
+    setLocale('en')
+    const labelsOf = (group: string) => groupedAiProviders()
+      .filter((item) => item.group === group)
+      .map(({ provider }) => provider.label)
+
+    expect(labelsOf('Global')).toEqual(['Groq', 'OpenAI', 'OpenCode Go', 'OpenRouter'])
+    expect(labelsOf('China')).toEqual(['DeepSeek', 'Doubao (Volcengine Ark)', 'Qwen', 'Xiaomi MiMo'])
+    expect(labelsOf('Local and custom')).toEqual(['Ollama (local)', 'OpenAI-compatible'])
+  })
+
+  it('lists every provider exactly once, with each group in one contiguous run', () => {
+    setLocale('en')
+    const grouped = groupedAiProviders()
+    const groupRuns = grouped.filter((item, index) => index === 0 || item.group !== grouped[index - 1].group)
+
+    expect(grouped.map(({ provider }) => provider.value).sort()).toEqual(AI_PROVIDERS.map((p) => p.value).sort())
+    expect(groupRuns.map(({ group }) => group)).toEqual(['Global', 'China', 'Local and custom'])
+  })
+
+  it('does not reorder the catalog used by the migration logic', () => {
+    const before = AI_PROVIDERS.map((p) => p.value)
+    groupedAiProviders()
+    expect(AI_PROVIDERS.map((p) => p.value)).toEqual(before)
   })
 })
 

@@ -123,6 +123,22 @@ export const NewServiceDialog: Story = {
   },
 }
 
+export const NewServiceProviderGroups: Story = {
+  parameters: { tauri: { settings: emptySettings } },
+  play: async ({ canvasElement }) => {
+    const body = bodyOf(canvasElement)
+    const dialog = await openNewDialog(canvasElement)
+
+    await userEvent.click(dialog.getByRole('button', { name: 'OpenAI-compatible' }))
+    for (const heading of ['Global', 'China', 'Local and custom']) {
+      await expect(await body.findByText(heading)).toBeVisible()
+    }
+
+    await userEvent.click(body.getByRole('button', { name: 'Groq' }))
+    await expect(dialog.getByRole('button', { name: 'Groq' })).toBeVisible()
+  },
+}
+
 export const NewServiceSeveralModels: Story = {
   parameters: { tauri: { settings: emptySettings } },
   play: async ({ canvasElement }) => {

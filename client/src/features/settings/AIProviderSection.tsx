@@ -44,7 +44,6 @@ import {
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import { describeProviderError } from '@/lib/errorMessages'
 import {
-  aiProvidersForDisplay,
   applyProviderSwitch,
   blankProfile,
   buildAiProviderConfig,
@@ -56,6 +55,7 @@ import {
   formatCheckedAt,
   formatLatency,
   gradeLatency,
+  groupedAiProviders,
   isCheckFresh,
   isProfileComplete,
   lastProfileOf,
@@ -995,9 +995,10 @@ export default function AIProviderSection() {
               <Select
                 value={draft.provider}
                 onChange={(value) => handleDraftProvider(value)}
-                options={aiProvidersForDisplay().map((p) => ({
-                  value: p.value,
-                  label: p.label,
+                options={groupedAiProviders().map(({ provider, group }) => ({
+                  value: provider.value,
+                  label: provider.label,
+                  group,
                 }))}
               />
             </div>
