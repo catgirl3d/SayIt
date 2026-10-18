@@ -183,6 +183,9 @@ function enablePipelineDebug() {
   return { getPipelineSnapshot }
 }
 
+// Every submitted batch piece starts with 300 ms of digital silence (9600 bytes) before its speech.
+const LEAD_BYTES = 9600
+
 function frames(count: number, probability: number, value?: number, sessionId?: number, discontinuity = false) {
   const started = [...native.invoke.mock.calls].reverse().find(([name]) => name === 'start_system_audio_capture')
   const id = sessionId ?? (started?.[1] as { sessionId: number } | undefined)?.sessionId
@@ -893,7 +896,7 @@ describe('system audio subtitle session', () => {
     await settle()
 
     expect(session.getSnapshot().caption).toBe('Translated speech')
-    expect(native.captured[0]?.length).toBe(35 * 1024)
+    expect(native.captured[0]?.length).toBe(LEAD_BYTES + 35 * 1024)
     expect(native.settings).toEqual(before)
     const request = native.invoke.mock.calls.find(([name]) => name === 'cloud_polish')?.[1].request
     expect(request.system_prompt).toContain('Russian')
@@ -1166,6 +1169,96 @@ describe('system audio subtitle session', () => {
     })
   })
 
+  describe('batch caption text', () => {
+    // Scripted recognizer answers, one per piece in speech order; the last answer repeats.
+    function scriptRecognition(...texts: string[]) {
+      let index = 0
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation(async (name, args) => {
+        const result = await original(name, args)
+        return name === 'local_transcribe' ? { ...result, text: texts[Math.min(index++, texts.length - 1)] } : result
+      })
+    }
+
+    it('journals the same text the caption shows once the cut marker and continuation case are cleaned', async () => {
+      const { appends } = enableTranscriptJournal()
+      scriptRecognition('a new campaign...', 'Fostering system works')
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      expect(session.getSnapshot().caption).toBe('a new campaign')
+
+      speak()
+      await settle()
+      expect(session.getSnapshot().caption).toBe('fostering system works')
+      expect(journalTexts(appends)).toEqual(['a new campaign', 'fostering system works'])
+    })
+
+    it('gives the translation the cleaned text of a cut piece and of its lowercased continuation', async () => {
+      scriptRecognition('a new campaign...', 'Fostering system works')
+      await session.start({ deviceId: '', targetLanguage: 'uk' })
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+
+      expect(polishRequests().map((request) => request.text)).toEqual(['a new campaign', 'fostering system works'])
+    })
+
+    it('keeps the capital letter when the piece before a continuation ends a sentence', async () => {
+      scriptRecognition('It is finished.', 'Fostering system works')
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+
+      expect(session.getSnapshot().caption).toBe('Fostering system works')
+    })
+
+    it('keeps the capital letter when the piece before a continuation failed to recognize', async () => {
+      const original = native.invoke.getMockImplementation()!
+      let calls = 0
+      native.invoke.mockImplementation((name, args) => {
+        if (name !== 'local_transcribe') return original(name, args)
+        calls++
+        if (calls === 1) return Promise.resolve({ text: 'a new campaign...', elapsed_ms: 5 })
+        if (calls === 2) return Promise.reject(new Error('ASR backend unavailable'))
+        return Promise.resolve({ text: 'Fostering system works', elapsed_ms: 5 })
+      })
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+
+      expect(session.getSnapshot()).toMatchObject({ state: 'listening', caption: 'Fostering system works' })
+    })
+
+    it('keeps the capital letter when the piece before a continuation was dropped from the backlog', async () => {
+      const pending = deferred<{ text: string; elapsed_ms: number }>()
+      const original = native.invoke.getMockImplementation()!
+      let calls = 0
+      native.invoke.mockImplementation((name, args) => {
+        if (name !== 'local_transcribe') return original(name, args)
+        calls++
+        return calls === 1 ? pending.promise : Promise.resolve({ text: 'Fostering system works', elapsed_ms: 5 })
+      })
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9, 11)
+      await settle()
+      frames(188, 0.9, 22)
+      frames(188, 0.9, 33)
+      await settle()
+
+      pending.resolve({ text: 'a new campaign...', elapsed_ms: 5 })
+      await settle()
+      expect(session.getSnapshot().caption).toBe('Fostering system works')
+    })
+  })
+
   it('ignores silence and retains every voiced frame across a forced split and its short tail', async () => {
     await session.start({ deviceId: '', targetLanguage: 'uk' })
     frames(100, 0)
@@ -1178,7 +1271,7 @@ describe('system audio subtitle session', () => {
     const voicedSamples = native.captured.reduce((count, audio) => count + [...new Int16Array(audio.buffer)].filter((sample) => sample === 77).length, 0)
     expect(voicedSamples).toBe(200 * 512)
     expect(native.captured.length).toBeGreaterThanOrEqual(2)
-    expect(native.captured.every((audio) => audio.length <= 188 * 1024)).toBe(true)
+    expect(native.captured.every((audio) => audio.length <= LEAD_BYTES + 188 * 1024)).toBe(true)
   })
 
   it('moves a forced cut into the quietest part of the tail and carries the remainder into the next segment', async () => {
@@ -1190,13 +1283,16 @@ describe('system audio subtitle session', () => {
     await settle()
 
     expect(native.captured).toHaveLength(2)
-    const first = new Int16Array(native.captured[0].buffer)
-    const second = new Int16Array(native.captured[1].buffer)
-    expect(native.captured[0].length).toBe(152 * 1024)
+    // The cut falls inside the quiet run: the first piece keeps one of its two quiet frames, and the other one
+    // leads the second piece, ahead of the carried voiced tail.
+    const first = new Int16Array(native.captured[0].buffer, LEAD_BYTES)
+    const second = new Int16Array(native.captured[1].buffer, LEAD_BYTES)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 151 * 1024)
     expect(first.includes(33)).toBe(false)
     expect(first[first.length - 1]).toBe(22)
-    expect(native.captured[1].length).toBe(75 * 1024)
-    expect(second[0]).toBe(33)
+    expect(native.captured[1].length).toBe(LEAD_BYTES + 76 * 1024)
+    expect(second[0]).toBe(22)
+    expect(second[512]).toBe(33)
     expect([...second].filter((sample) => sample === 33)).toHaveLength(60 * 512)
   })
 
@@ -1207,15 +1303,17 @@ describe('system audio subtitle session', () => {
     await settle()
 
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(135 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 132 * 1024)
 
     frames(30, 0.9, 33)
     frames(15, 0, 0)
     await settle()
 
     expect(native.captured).toHaveLength(2)
-    const second = new Int16Array(native.captured[1].buffer)
-    expect(second[0]).toBe(33)
+    // The three carried quiet frames lead the second piece.
+    const second = new Int16Array(native.captured[1].buffer, LEAD_BYTES)
+    expect(second[0]).toBe(22)
+    expect(second[3 * 512]).toBe(33)
     expect([...second].filter((sample) => sample === 33)).toHaveLength(30 * 512)
   })
 
@@ -1326,7 +1424,7 @@ describe('system audio subtitle session', () => {
     frames(7, 0)
     await settle()
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(115 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 115 * 1024)
   })
 
   it('cuts at the 3 s minimum of the maximum segment length setting', async () => {
@@ -1339,7 +1437,7 @@ describe('system audio subtitle session', () => {
     frames(7, 0.9)
     await settle()
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(94 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 94 * 1024)
   })
 
   it('cuts at an intermediate maximum segment length', async () => {
@@ -1352,7 +1450,7 @@ describe('system audio subtitle session', () => {
     frames(1, 0.9)
     await settle()
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(141 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 141 * 1024)
   })
 
   it('splits at a pause once two thirds of an intermediate maximum are reached', async () => {
@@ -1363,7 +1461,7 @@ describe('system audio subtitle session', () => {
     await settle()
 
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(99 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 96 * 1024)
   })
 
   it('falls back to the 6 s cap when the stored maximum is outside the supported range', async () => {
@@ -1376,7 +1474,7 @@ describe('system audio subtitle session', () => {
     frames(1, 0.9)
     await settle()
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(188 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 188 * 1024)
   })
 
   it('keeps the original 6 s cut for the default medium segment length', async () => {
@@ -1388,7 +1486,7 @@ describe('system audio subtitle session', () => {
     frames(1, 0.9)
     await settle()
     expect(native.captured).toHaveLength(1)
-    expect(native.captured[0].length).toBe(188 * 1024)
+    expect(native.captured[0].length).toBe(LEAD_BYTES + 188 * 1024)
   })
 
   describe('failure tolerance', () => {
@@ -1625,7 +1723,7 @@ describe('system audio subtitle session', () => {
     const original = native.invoke.getMockImplementation()!
     native.invoke.mockImplementation((name, args) => name === 'local_transcribe' ? pending.promise : original(name, args))
     const transcribed = () => native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')
-      .map(([, args]) => new Int16Array(Uint8Array.from(atob(args.audioB64 as string), (char) => char.charCodeAt(0)).buffer)[0])
+      .map(([, args]) => new Int16Array(Uint8Array.from(atob(args.audioB64 as string), (char) => char.charCodeAt(0)).buffer)[LEAD_BYTES / 2])
     await session.start({ deviceId: '', targetLanguage: 'en' })
     frames(188, 0.9, 11)
     await settle()
@@ -2072,7 +2170,7 @@ describe('system audio subtitle session', () => {
     await vi.advanceTimersByTimeAsync(600)
 
     expect(session.getSnapshot().caption).toBe('Translated speech')
-    expect(native.captured[0]?.length).toBe(20 * 1024)
+    expect(native.captured[0]?.length).toBe(LEAD_BYTES + 20 * 1024)
   })
 
   it('holds the recorder lease while paused and ignores frames from the previous capture after resume', async () => {
@@ -2290,7 +2388,7 @@ describe('system audio subtitle session', () => {
     frames(15, 0, 0)
     await settle()
 
-    const samples = new Int16Array(native.captured[0].buffer)
+    const samples = new Int16Array(native.captured[0].buffer).subarray(LEAD_BYTES / 2)
     expect(samples).toHaveLength(36 * 512)
     expect(samples.slice(0, 512)).toEqual(new Int16Array(512).fill(88))
     expect([...samples].filter((sample) => sample === 77)).toHaveLength(20 * 512)
@@ -2332,7 +2430,7 @@ describe('system audio subtitle session', () => {
       expect(session.getSnapshot().caption).toBe(`${text} translated`)
     }
     const submitted = native.invoke.mock.calls.filter(([name]) => name === 'local_transcribe')
-      .map(([, args]) => new Int16Array(Uint8Array.from(atob(args.audioB64), (char) => char.charCodeAt(0)).buffer))
+      .map(([, args]) => new Int16Array(Uint8Array.from(atob(args.audioB64), (char) => char.charCodeAt(0)).buffer, LEAD_BYTES))
     expect(submitted).toHaveLength(3)
     expect(submitted.map((samples) => samples[0])).toEqual([11, 22, 88])
     expect(submitted.every((samples) => ![...samples].includes(33))).toBe(true)
@@ -2484,7 +2582,7 @@ describe('system audio subtitle session', () => {
 
       pendings[0].resolve({ text: 'Translation 1', elapsed_ms: 5 })
       await settle()
-      expect(polishRequests().map((request) => request.text)).toEqual(['Speech 1', 'Speech 3'])
+      expect(polishRequests().map((request) => request.text)).toEqual(['Speech 1', 'speech 3'])
     })
 
     it('drops a translation that resolves after the session was restarted', async () => {
@@ -4464,16 +4562,16 @@ describe('system audio subtitle session', () => {
 
       pendings[0].resolve({ text: 'Translation 1', elapsed_ms: 5 })
       await settle()
-      expect(journalTexts(appends)).toEqual(['Speech 1', `Speech 2 ${t('systemAudio.transcriptUntranslatedMarker')}`])
+      expect(journalTexts(appends)).toEqual(['Speech 1', `speech 2 ${t('systemAudio.transcriptUntranslatedMarker')}`])
 
       pendings[1].resolve({ text: 'Translation 3', elapsed_ms: 5 })
       await settle()
       await session.stop()
       expect(journalTexts(appends)).toEqual([
         'Speech 1',
-        `Speech 2 ${t('systemAudio.transcriptUntranslatedMarker')}`,
-        'Speech 3',
-        `Speech 4 ${t('systemAudio.transcriptUntranslatedMarker')}`,
+        `speech 2 ${t('systemAudio.transcriptUntranslatedMarker')}`,
+        'speech 3',
+        `speech 4 ${t('systemAudio.transcriptUntranslatedMarker')}`,
       ])
     })
 
