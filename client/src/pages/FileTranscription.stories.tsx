@@ -199,6 +199,23 @@ export const IdleReady: Story = {
   },
 }
 
+export const ChooseFileFromDropZone: Story = {
+  parameters: {
+    tauri: {
+      commands: {
+        ...commandsFor(null),
+        'plugin:dialog|open': () => 'C:\\Storybook\\meeting.mp4',
+      },
+      settings,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(await canvas.findByRole('heading', { name: 'Choose an audio or video file' }))
+    await expect(await canvas.findByText('meeting.mp4')).toBeInTheDocument()
+  },
+}
+
 export const CloudHotwordsGate: Story = {
   parameters: {
     tauri: {

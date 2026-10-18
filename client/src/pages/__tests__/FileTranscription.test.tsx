@@ -1880,6 +1880,18 @@ describe('file transcription page', () => {
     })))
   })
 
+  it('opens the file picker once per click anywhere in the empty drop zone', async () => {
+    dialog.open.mockResolvedValue(null)
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('heading', { name: 'Choose an audio or video file' }))
+    await waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(2))
+  })
+
   it('keeps Start silent without a file, then reports a file that could not be inspected', async () => {
     dialog.open.mockResolvedValueOnce('C:/media/recording.mp4')
     renderPage()

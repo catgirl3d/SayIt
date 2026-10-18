@@ -940,7 +940,12 @@ export default function FileTranscription() {
               </Button>
             </div>
           ) : (
-            <div className="flex min-h-[28rem] flex-1 flex-col items-center justify-center gap-3.5 rounded-xl border-2 border-dashed border-border px-6 py-8 text-center">
+            // The whole zone opens the picker for pointer users; the button inside stays the keyboard
+            // and screen-reader target, and its click bubbles up to this handler.
+            <div
+              className="flex min-h-[28rem] flex-1 cursor-pointer flex-col items-center justify-center gap-3.5 rounded-xl border-2 border-dashed border-border px-6 py-8 text-center transition-colors hover:border-primary/50 hover:bg-muted/30"
+              onClick={() => { if (!inspecting && !active) void chooseFile() }}
+            >
               <div className="mb-1.5 flex h-16 items-center gap-1" aria-hidden>
                 {WAVEFORM_HEIGHTS.map((height, index) => (
                   <span
@@ -952,7 +957,7 @@ export default function FileTranscription() {
               </div>
               <h2 className="max-w-[20ch] text-xl font-semibold leading-tight">{t('files.pickerTitle')}</h2>
               <p className="max-w-[42ch] text-sm text-muted-foreground">{t('files.pickerFormats', { formats: MEDIA_EXTENSIONS.join(', ') })}</p>
-              <Button type="button" className="gap-2" onClick={() => void chooseFile()} disabled={inspecting || active}>
+              <Button type="button" className="gap-2" disabled={inspecting || active}>
                 <FileAudio className="h-4 w-4" />
                 {t('files.chooseFile')}
               </Button>
