@@ -7,9 +7,11 @@ import {
   DEFAULT_SEGMENT_SECONDS,
   FRAME_BYTES,
   FRAME_MS,
+  leadingContextMs,
   normalizeSegmentSeconds,
   segmentPlan,
   SubtitleSegmenter,
+  withLeadingContext,
   type SealedSubtitleSegment,
   type SegmentPlan,
   type SubtitleFrame,
@@ -128,13 +130,18 @@ interface SegmentJob extends SegmentSpan {
   sequence: number
   closeReason: SegmentCloseReason
   continuesPrevious: boolean
+  contextAudio: Uint8Array | null
 }
 
-/** How the piece being recognized was cut, carried from its job until its recognition finishes. */
+/**
+ * How the piece being recognized was cut, carried from its job until its recognition finishes. `leadingContext` is
+ * true when the recognizer received the previous piece's tail, which already gives it the sentence context.
+ */
 interface ActiveCut {
   readonly sequence: number
   readonly closeReason: SegmentCloseReason
   readonly continuesPrevious: boolean
+  readonly leadingContext: boolean
 }
 
 /** One recognized segment waiting for, or undergoing, client-side translation. */
@@ -1123,6 +1130,7 @@ export class SystemAudioSession {
       sequence: this.batchSequence,
       closeReason: segment.closeReason,
       continuesPrevious: segment.continuesPrevious,
+      contextAudio: segment.contextAudio,
     })
     this.queuedBytes += segment.audio.byteLength
     this.publishQueueDepth()
@@ -1188,7 +1196,13 @@ export class SystemAudioSession {
     this.queuedBytes -= job.audio.byteLength
     this.activeRunId = job.runId
     this.activeSpan = { startedAt: job.startedAt, endedAt: job.endedAt }
-    this.activeCut = { sequence: job.sequence, closeReason: job.closeReason, continuesPrevious: job.continuesPrevious }
+    const leading = this.leadingContextFor(job)
+    this.activeCut = {
+      sequence: job.sequence,
+      closeReason: job.closeReason,
+      continuesPrevious: job.continuesPrevious,
+      leadingContext: leading !== null,
+    }
     this.activeContext = this.translationContext(job)
     // Client-AI modes can translate in a separate lane; a managed server run cannot.
     this.activeSplit = !this.options?.asrOnly && this.usesClientTranslation()
@@ -1214,19 +1228,32 @@ export class SystemAudioSession {
         disableAi: this.activeSplit || Boolean(this.startOptions.disableAi),
         textContext: this.activeContext,
         runId: this.activeJob,
+        ...(leading ? { leadingContextMs: leading.leadingContextMs } : {}),
       }
       if (!this.provider.start(startOptions)) throw new Error('ASR did not start')
       setPipelineActivity({ phase: 'asr', stageStartedAt: Date.now() })
-      this.provider.sendAudio(job.audio.buffer as ArrayBuffer)
+      const submitted = leading?.audio ?? job.audio
+      this.provider.sendAudio(submitted.buffer as ArrayBuffer)
       if (!this.provider.stop()) throw new Error('ASR did not accept the segment')
     } catch (error) { this.fail(t('systemAudio.notReady'), String(error)) }
+  }
+
+  // The previous piece's tail is sent only to a provider that can drop its words, so the recognizer hears the sentence
+  // continue. Any other provider gets the plain piece, exactly as before. Span and duration stay the spoken span.
+  private leadingContextFor(job: SegmentJob): { audio: Uint8Array; leadingContextMs: number } | null {
+    if (!job.contextAudio || this.provider?.acceptsLeadingContext?.() !== true) return null
+    return {
+      audio: withLeadingContext(job.audio, job.contextAudio),
+      leadingContextMs: leadingContextMs(job.contextAudio.byteLength),
+    }
   }
 
   // Cleans one batch piece's text. The chain is read, never advanced, here: onASR and onFinal of the same piece
   // must agree, and only onFinal records the cleaned text as the piece that the next one may continue.
   private batchCaptionText(text: string, cut: ActiveCut): string {
     const previous = this.lastRecognizedPiece
-    const continuesUnfinishedSentence = cut.continuesPrevious
+    // With context words the recognizer already heard the sentence, so the first letter keeps the case it was given.
+    const continuesUnfinishedSentence = cut.continuesPrevious && !cut.leadingContext
       && previous !== null
       && previous.sequence === cut.sequence - 1
       && !endsSentence(previous.text)

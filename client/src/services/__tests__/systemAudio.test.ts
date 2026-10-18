@@ -1169,6 +1169,84 @@ describe('system audio subtitle session', () => {
     })
   })
 
+  describe('leading context for a provider that drops context words', () => {
+    // Scripted recognizer answers, one per piece in speech order; the last answer repeats.
+    function scriptRecognition(...texts: string[]) {
+      let index = 0
+      const original = native.invoke.getMockImplementation()!
+      native.invoke.mockImplementation(async (name, args) => {
+        const result = await original(name, args)
+        return name === 'local_transcribe' ? { ...result, text: texts[Math.min(index++, texts.length - 1)] } : result
+      })
+    }
+
+    function sessionWith(provider: TranscriptionProvider) {
+      session = new SystemAudioSession({
+        getProvider: () => provider,
+        acquire: async () => { leased = true },
+        release: async () => { leased = false },
+        overlay,
+      })
+    }
+
+    function acceptingProvider(): TranscriptionProvider {
+      const provider: TranscriptionProvider = new LocalProvider()
+      provider.acceptsLeadingContext = () => true
+      return provider
+    }
+
+    it('sends the tail of the previous piece as leading context and keeps the spoken span and the capital letter', async () => {
+      const trace = enablePipelineDebug()
+      scriptRecognition('a new campaign...', 'Fostering system works')
+      const provider = acceptingProvider()
+      const start = vi.spyOn(provider, 'start')
+      sessionWith(provider)
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+
+      expect(start.mock.calls.map(([options]) => options.leadingContextMs)).toEqual([undefined, 1292])
+      expect(native.captured).toHaveLength(2)
+      expect(native.captured[1].length).toBe(9600 + 31 * 1024 + 35 * 1024)
+      const submitted = new Int16Array(native.captured[1].buffer)
+      expect(submitted.slice(0, 4800).every((sample) => sample === 0)).toBe(true)
+      expect(submitted.slice(4800, 4800 + 51 * 512).every((sample) => sample === 1)).toBe(true)
+      expect(submitted.slice(4800 + 51 * 512).every((sample) => sample === 0)).toBe(true)
+      expect(session.getSnapshot().caption).toBe('Fostering system works')
+      expect(trace.getPipelineSnapshot().runs.map((run) => run.speechMs)).toEqual([188 * 32, 35 * 32])
+    })
+
+    it('sends the plain piece to a provider that does not accept leading context, as before', async () => {
+      scriptRecognition('a new campaign...', 'Fostering system works')
+      const provider = new LocalProvider()
+      const start = vi.spyOn(provider, 'start')
+      sessionWith(provider)
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+
+      expect(start.mock.calls.every(([options]) => options.leadingContextMs === undefined)).toBe(true)
+      expect(native.captured[1].length).toBe(9600 + 35 * 1024)
+      expect(session.getSnapshot().caption).toBe('fostering system works')
+    })
+
+    it('still removes a mid-speech ellipsis from a piece that is sent with context', async () => {
+      scriptRecognition('a new campaign...', 'Fostering system works...')
+      sessionWith(acceptingProvider())
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      frames(188, 0.9)
+      await settle()
+
+      expect(session.getSnapshot().caption).toBe('Fostering system works')
+    })
+  })
+
   describe('batch caption text', () => {
     // Scripted recognizer answers, one per piece in speech order; the last answer repeats.
     function scriptRecognition(...texts: string[]) {

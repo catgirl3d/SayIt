@@ -14,6 +14,7 @@ import {
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { errorProtocolCode } from '@/lib/errorMessages'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
+import { withoutLeadingContext } from '../subtitleSegmentation'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -164,6 +165,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private activeRunId = 0
   private activeStartOpts: Readonly<StartOptions> | undefined
   private activeProfileSnapshot: Promise<AsrProfile | null> | null = null
+  // The ASR provider of the profile the last batch run resolved. It answers acceptsLeadingContext for the next run.
+  private resolvedAsrProvider: string | null = null
   private ready = false
 
   // Doubao / Qwen / Deepgram streaming state
@@ -203,6 +206,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.ready = true
     callbacks.onStateChange?.('connected')
     callbacks.onReady?.({ asr: true, llm: true })
+  }
+
+  // Answers from the profile the last batch run resolved. runProcess checks the profile of the run itself and strips
+  // the context for any other engine, so a profile switch between the two checks never sends context elsewhere.
+  acceptsLeadingContext(): boolean {
+    return this.resolvedAsrProvider === 'deepgram'
   }
 
   start(opts: StartOptions): boolean {
@@ -1015,6 +1024,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
       const profile = await profileSnapshot
       if (!profile) throw new Error('No active cloud ASR profile')
+      this.resolvedAsrProvider = profile.provider
       if (!this.isRunCurrent(runId)) return
       const asrProvider = profile.provider
       const isQwenOmni = isQwenOmniProvider(asrProvider)
@@ -1083,7 +1093,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
           merged.set(new Uint8Array(buf), offset)
           offset += buf.byteLength
         }
-        const audioB64 = uint8ArrayToBase64(merged)
+        // Context words are dropped only by Deepgram. Every other engine gets the plain piece, byte for byte as before.
+        const leadingContextMs = startOpts.leadingContextMs ?? 0
+        const usesLeadingContext = leadingContextMs > 0 && asrProvider === 'deepgram'
+        const audioB64 = uint8ArrayToBase64(
+          leadingContextMs > 0 && !usesLeadingContext ? withoutLeadingContext(merged, leadingContextMs) : merged,
+        )
 
         const asrConfig: AsrProviderConfig = buildAsrProviderConfig(
           profile,
@@ -1106,6 +1121,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
               sample_rate: 16000,
               asr_config: asrConfig,
               hotwords: startOpts.hotwords ?? [],
+              ...(usesLeadingContext ? { leading_context_ms: leadingContextMs } : {}),
             },
           })
         if (!this.isRunCurrent(runId) || !asrResult) return

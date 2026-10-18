@@ -35,6 +35,7 @@ vi.mock('../clientAiPolish', async (importOriginal) => ({
 }))
 
 import { CloudAPIProvider } from '../CloudAPIProvider'
+import { uint8ArrayToBase64 } from '@/lib/encoding'
 
 describe('CloudAPIProvider selected-profile snapshots', () => {
   beforeEach(() => {
@@ -1709,5 +1710,72 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
       aiSource: 'custom',
       aiStatus: 'applied',
     }))
+  })
+})
+
+describe('CloudAPIProvider leading context', () => {
+  // A submitted piece is 300 ms of lead silence, then 31 frames of context, then the piece's own audio.
+  const LEAD_BYTES = 9600
+  const CONTEXT_BYTES = 31 * 1024
+  const OWN_BYTES = 2 * 1024
+  const LEADING_CONTEXT_MS = 1292
+
+  const deepgramProfile = { id: 'dg', provider: 'deepgram', apiKey: 'key-dg', appId: '', model: 'nova-3', omniPrompt: '' }
+  const openaiProfile = { id: 'oa', provider: 'openai_transcribe', apiKey: 'key-oa', appId: '', model: 'whisper-1', omniPrompt: '' }
+
+  beforeEach(() => {
+    mocks.invoke.mockReset()
+    mocks.loadActiveAsrProfile.mockReset()
+    mocks.getSetting.mockReset()
+    mocks.getSetting.mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
+    ))
+  })
+
+  async function runBatchPiece(profile: unknown, audio: Uint8Array, leadingContextMs?: number) {
+    mocks.loadActiveAsrProfile.mockResolvedValueOnce(profile)
+    const provider = new CloudAPIProvider()
+    let finished = () => {}
+    const done = new Promise<void>((resolve) => { finished = resolve })
+    await provider.connect({ onDone: () => finished() })
+    const leading = leadingContextMs === undefined ? {} : { leadingContextMs }
+    expect(provider.start({ runId: 1, language: 'auto', disableStreaming: true, ...leading })).toBe(true)
+    provider.sendAudio(audio.buffer as ArrayBuffer)
+    expect(provider.stop()).toBe(true)
+    await done
+    return provider
+  }
+
+  function cloudRequest() {
+    return mocks.invoke.mock.calls.find(([command]) => command === 'cloud_transcribe')?.[1].request as Record<string, unknown>
+  }
+
+  it('sends the context and its offset to the Deepgram batch route', async () => {
+    const audio = new Uint8Array(LEAD_BYTES + CONTEXT_BYTES + OWN_BYTES)
+    const provider = await runBatchPiece(deepgramProfile, audio, LEADING_CONTEXT_MS)
+
+    expect(provider.acceptsLeadingContext()).toBe(true)
+    expect(cloudRequest().leading_context_ms).toBe(LEADING_CONTEXT_MS)
+    expect(cloudRequest().audio_b64).toBe(uint8ArrayToBase64(audio))
+  })
+
+  it('strips the context for any other engine and sends the plain piece without a context field', async () => {
+    const audio = new Uint8Array(LEAD_BYTES + CONTEXT_BYTES + OWN_BYTES)
+    audio.fill(5, LEAD_BYTES, LEAD_BYTES + CONTEXT_BYTES)
+    audio.fill(7, LEAD_BYTES + CONTEXT_BYTES)
+    const provider = await runBatchPiece(openaiProfile, audio, LEADING_CONTEXT_MS)
+
+    expect(provider.acceptsLeadingContext()).toBe(false)
+    expect(cloudRequest()).not.toHaveProperty('leading_context_ms')
+    const plain = new Uint8Array(LEAD_BYTES + OWN_BYTES)
+    plain.fill(7, LEAD_BYTES)
+    expect(cloudRequest().audio_b64).toBe(uint8ArrayToBase64(plain))
+  })
+
+  it('omits the context field on a Deepgram run that carries no context', async () => {
+    await runBatchPiece(deepgramProfile, new Uint8Array(LEAD_BYTES + OWN_BYTES))
+
+    expect(cloudRequest()).not.toHaveProperty('leading_context_ms')
   })
 })

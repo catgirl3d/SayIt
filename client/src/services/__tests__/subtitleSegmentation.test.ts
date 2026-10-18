@@ -7,7 +7,12 @@ import {
   normalizeSegmentSeconds,
   segmentPlan,
   SEGMENT_SECONDS_STEP,
+  leadingContextMs,
+  LEADING_CONTEXT_FRAMES,
+  SUBMITTED_LEAD_BYTES,
   SubtitleSegmenter,
+  withLeadingContext,
+  withoutLeadingContext,
 } from '../subtitleSegmentation'
 
 // Every submitted piece starts with 300 ms of digital silence, which is 4800 samples (9600 bytes).
@@ -293,5 +298,53 @@ describe('batch subtitle segmenter', () => {
     pushFrames(segmenter, 8, 0.9, 33)
     segmenter.push(pcmFrame(0, 0))
     expect(segmenter.closeGap()).toMatchObject({ closeReason: 'gap', continuesPrevious: false })
+  })
+})
+
+describe('leading context', () => {
+  it('gives a continuation the last 31 kept frames of the previous piece and nothing else', () => {
+    const segmenter = new SubtitleSegmenter({ softFrames: 35, hardFrames: 100 })
+    pushFrames(segmenter, 40, 0.9, 11)
+    const first = pushFrames(segmenter, 5, 0, 22)
+    // The pause keeps 40 voiced frames and 2 quiet frames; the 3 carried quiet frames are not context.
+    expect(first).toMatchObject({ speechMs: 42 * 32, closeReason: 'pause', continuesPrevious: false, contextAudio: null })
+
+    pushFrames(segmenter, 4, 0.9, 33)
+    const second = pushFrames(segmenter, 15, 0, 44)
+    if (!second) throw new Error('Expected trailing silence to seal the continuation')
+
+    expect(second).toMatchObject({ closeReason: 'silence', continuesPrevious: true })
+    expect(second.audio.byteLength).toBe(SUBMITTED_LEAD_BYTES + 22 * 1024)
+    expect(second.contextAudio?.byteLength).toBe(LEADING_CONTEXT_FRAMES * 1024)
+    const context = samples(second.contextAudio!)
+    expect(context.slice(0, 29 * 512).every((sample) => sample === 11)).toBe(true)
+    expect(context.slice(29 * 512).every((sample) => sample === 22)).toBe(true)
+  })
+
+  it('gives no context after an ineligible piece, and none to a piece that does not continue', () => {
+    const segmenter = new SubtitleSegmenter({ softFrames: 7, hardFrames: 40 })
+    pushFrames(segmenter, 3, 0.9, 11)
+    // Pause with only 3 voiced frames: not eligible, so it is dropped and breaks the continuation.
+    expect(pushFrames(segmenter, 7, 0, 22)).toBeNull()
+
+    pushFrames(segmenter, 8, 0.9, 33)
+    expect(segmenter.closeGap()).toMatchObject({ closeReason: 'dropout', continuesPrevious: false, contextAudio: null })
+  })
+
+  it('composes the context in front of the piece and strips it back to the plain layout', () => {
+    const piece = new Uint8Array(SUBMITTED_LEAD_BYTES + 2 * 1024)
+    piece.fill(5, SUBMITTED_LEAD_BYTES)
+    const context = new Uint8Array(3 * 1024).fill(7)
+
+    const composed = withLeadingContext(piece, context)
+
+    expect(composed.byteLength).toBe(SUBMITTED_LEAD_BYTES + 3 * 1024 + 2 * 1024)
+    expect(composed.subarray(0, SUBMITTED_LEAD_BYTES).every((byte) => byte === 0)).toBe(true)
+    expect(composed.subarray(SUBMITTED_LEAD_BYTES, SUBMITTED_LEAD_BYTES + 3 * 1024)).toEqual(context)
+    expect(composed.subarray(SUBMITTED_LEAD_BYTES + 3 * 1024)).toEqual(piece.subarray(SUBMITTED_LEAD_BYTES))
+
+    const offsetMs = leadingContextMs(context.byteLength)
+    expect(offsetMs).toBe(396)
+    expect(withoutLeadingContext(composed, offsetMs)).toEqual(piece)
   })
 })

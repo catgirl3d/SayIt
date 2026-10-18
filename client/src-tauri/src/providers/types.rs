@@ -144,6 +144,11 @@ pub struct CloudTranscribeRequest {
     /// 热词列表（豆包等供应商通过 request.context 直传）
     #[serde(default)]
     pub hotwords: Vec<String>,
+    /// Milliseconds of already-transcribed audio at the start of `audio_b64`, which ends where this piece's own
+    /// audio starts. Zero means no context. Only the Deepgram batch route accepts it: that route drops the words
+    /// that lie inside the context, and every other provider refuses the request instead of repeating them.
+    #[serde(default)]
+    pub leading_context_ms: u32,
 }
 
 /// 云端 AI 校对请求（前端传入）

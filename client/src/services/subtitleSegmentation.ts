@@ -43,7 +43,12 @@ const SCORE_EPSILON = 1e-6
 const MIN_SUBMITTED_FRAMES = 10
 // Some cloud ASR models drop or return nothing for speech that starts at the very first sample. Leading digital
 // silence (300 ms, 4800 samples of 16-bit PCM) lets them lock on before the first word. Trailing silence did not help.
-const SUBMITTED_LEAD_BYTES = 300 * 16 * 2
+export const SUBMITTED_LEAD_BYTES = 300 * 16 * 2
+// 16 kHz mono 16-bit PCM: 16 samples of 2 bytes per millisecond.
+const BYTES_PER_MS = 16 * 2
+// About one second of the previous submitted piece, sent as recognition context with a continuation. The recognizer
+// then hears the sentence go on, so mid-sentence words stop getting capitals; the words inside this context are dropped.
+export const LEADING_CONTEXT_FRAMES = 31
 // Silero speech probability at or above which a frame counts as voiced.
 const SPEECH_THRESHOLD = 0.3
 
@@ -98,6 +103,33 @@ export interface SealedSubtitleSegment {
   readonly closeReason: SegmentCloseReason
   /** True when this piece continues the previous submitted piece of the same utterance (a pause or cap cut before it). */
   readonly continuesPrevious: boolean
+  /** The last kept frames of the previous submitted piece, as PCM, when this piece continues it; null otherwise. */
+  readonly contextAudio: Uint8Array | null
+}
+
+/** Milliseconds of audio at the start of a submitted piece, given the byte length of its leading context. */
+export function leadingContextMs(contextBytes: number): number {
+  return (SUBMITTED_LEAD_BYTES + contextBytes) / BYTES_PER_MS
+}
+
+/** Lays out a piece as lead silence, the previous piece's context, then the piece's own audio. */
+export function withLeadingContext(audio: Uint8Array, contextAudio: Uint8Array): Uint8Array {
+  const ownAudio = audio.subarray(SUBMITTED_LEAD_BYTES)
+  const result = new Uint8Array(SUBMITTED_LEAD_BYTES + contextAudio.byteLength + ownAudio.byteLength)
+  result.set(contextAudio, SUBMITTED_LEAD_BYTES)
+  result.set(ownAudio, SUBMITTED_LEAD_BYTES + contextAudio.byteLength)
+  return result
+}
+
+/**
+ * Inverse of withLeadingContext for a provider that cannot drop context words. The result is the plain submitted
+ * piece, with the same lead silence and length as if no context had been composed.
+ */
+export function withoutLeadingContext(audio: Uint8Array, leadingContextMs: number): Uint8Array {
+  const ownAudio = audio.subarray(leadingContextMs * BYTES_PER_MS)
+  const result = new Uint8Array(Math.max(SUBMITTED_LEAD_BYTES + ownAudio.byteLength, MIN_SUBMITTED_FRAMES * FRAME_BYTES))
+  result.set(ownAudio, SUBMITTED_LEAD_BYTES)
+  return result
 }
 
 /** Per-frame state needed by the session before it submits a sealed segment. */
@@ -128,6 +160,8 @@ export class SubtitleSegmenter {
   private voicedFrames = 0
   private silenceFrames = 0
   private continuation = false
+  // The kept frames of the last submitted piece, as PCM; the context of a continuation piece.
+  private submittedTail = new Uint8Array(0)
 
   constructor(private readonly plan: SegmentPlan) {}
 
@@ -175,6 +209,7 @@ export class SubtitleSegmenter {
     this.voicedFrames = 0
     this.silenceFrames = 0
     this.continuation = false
+    this.submittedTail = new Uint8Array(0)
   }
 
   // The segment hit its hard cap without a phrase boundary. Cut inside the quietest point of the tail window and
@@ -196,18 +231,25 @@ export class SubtitleSegmenter {
   private finishSegment(reason: SegmentCloseReason, carry: SubtitleFrame[] = []): SealedSubtitleSegment | null {
     const eligible = this.voicedFrames >= MIN_VOICED_FRAMES || (this.continuation && this.voicedFrames > 0)
     const continuesPrevious = this.continuation
+    const contextAudio = continuesPrevious ? this.submittedTail : null
     const frames = this.frames
     this.frames = carry
     this.voicedFrames = carry.filter(isVoiced).length
     this.silenceFrames = 0
     while (this.silenceFrames < carry.length && !isVoiced(carry[carry.length - 1 - this.silenceFrames]!)) this.silenceFrames++
     this.continuation = (reason === 'pause' || reason === 'cap') && eligible
-    if (!eligible || !frames.length) return null
+    if (!eligible || !frames.length) {
+      this.submittedTail = new Uint8Array(0)
+      return null
+    }
 
     // A short continuation still contains real speech; pad only the submitted job to the ASR minimum.
     // The lead silence counts toward that minimum, so the total never shrinks below the old padding.
     const audio = new Uint8Array(Math.max(SUBMITTED_LEAD_BYTES + frames.length * FRAME_BYTES, MIN_SUBMITTED_FRAMES * FRAME_BYTES))
     frames.forEach((frame, index) => audio.set(frame.audio, SUBMITTED_LEAD_BYTES + index * FRAME_BYTES))
-    return { audio, speechMs: frames.length * FRAME_MS, closeReason: reason, continuesPrevious }
+    const tail = frames.slice(-LEADING_CONTEXT_FRAMES)
+    this.submittedTail = new Uint8Array(tail.length * FRAME_BYTES)
+    tail.forEach((frame, index) => this.submittedTail.set(frame.audio, index * FRAME_BYTES))
+    return { audio, speechMs: frames.length * FRAME_MS, closeReason: reason, continuesPrevious, contextAudio }
   }
 }
