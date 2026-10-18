@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
+import { Tooltip } from '@/components/ui/tooltip'
 import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
 import AlphaBadge from '@/components/AlphaBadge'
 import { cn } from '@/lib/utils'
@@ -729,9 +730,17 @@ export default function FileTranscription() {
                   </div>
                   {selectedCloudProfile && selectedCloudProfile.windowSecondsOptions.length > 0 && (
                     <div className="space-y-1.5">
-                      <span id="file-fragment-duration-label" className="text-xs font-medium text-foreground">
-                        {t('files.fragmentDuration')}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span id="file-fragment-duration-label" className="text-xs font-medium text-foreground">
+                          {t('files.fragmentDuration')}
+                        </span>
+                        <Tooltip variant="light" content={<div className="w-72 max-w-[calc(100vw-3rem)]">{t('files.fragmentDurationHint')}</div>}>
+                          <Info
+                            aria-label={t('files.fragmentDurationHint')}
+                            className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground"
+                          />
+                        </Tooltip>
+                      </div>
                       <Select
                         labelledBy="file-fragment-duration-label"
                         value={selectedCloudWindowSeconds === null ? '' : String(selectedCloudWindowSeconds)}
@@ -753,7 +762,6 @@ export default function FileTranscription() {
                           })),
                         ]}
                       />
-                      <p className="text-xs leading-relaxed text-muted-foreground">{t('files.fragmentDurationHint')}</p>
                     </div>
                   )}
                   {selectedCloudProfile?.windowSecondsOptionsError && (

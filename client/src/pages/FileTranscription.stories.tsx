@@ -286,6 +286,11 @@ export const CloudFragmentDuration: Story = {
     const duration = await canvas.findByRole('button', { name: 'Fragment duration' })
     await expect(duration).toHaveTextContent('5 min')
 
+    const hint = canvas.getByLabelText(/Nominal duration/)
+    await userEvent.hover(hint)
+    await expect(await body.findByText(/Nominal duration/)).toBeVisible()
+    await userEvent.unhover(hint)
+
     await userEvent.click(duration)
     await userEvent.click(body.getByRole('button', { name: '3 min' }))
     await expect(duration).toHaveTextContent('3 min')
