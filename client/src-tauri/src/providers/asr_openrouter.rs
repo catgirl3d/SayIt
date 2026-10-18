@@ -1,10 +1,11 @@
 use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const API_URL: &str = "https://openrouter.ai/api/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "openai/gpt-transcribe";
 const SCOPE: &str = "openrouter/asr";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn resolve_model(config: &AsrProviderConfig) -> String {
     config
@@ -42,20 +43,21 @@ fn build_body(model: &str, wav_b64: String, language: Option<&str>) -> serde_jso
 }
 
 fn build_request(api_key: &str, body: &serde_json::Value) -> Result<reqwest::Request, String> {
-    build_request_to(API_URL, api_key, body)
+    build_request_to(API_URL, api_key, body, REQUEST_TIMEOUT)
 }
 
 fn build_request_to(
     endpoint: &str,
     api_key: &str,
     body: &serde_json::Value,
+    request_timeout: Duration,
 ) -> Result<reqwest::Request, String> {
     let client = super::http_client::shared_no_redirect().map_err(str::to_string)?;
     client
         .post(endpoint)
         .header("Authorization", format!("Bearer {}", api_key.trim()))
         .json(body)
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(request_timeout)
         .build()
         .map_err(|error| error.to_string())
 }
@@ -128,6 +130,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<Duration>,
 ) -> Result<AsrResult, String> {
     if !hotwords.is_empty() {
         diag::log(
@@ -137,7 +140,14 @@ pub async fn transcribe(
         );
     }
 
-    transcribe_to_endpoint(API_URL, audio_pcm_b64, sample_rate, config).await
+    transcribe_to_endpoint(
+        API_URL,
+        audio_pcm_b64,
+        sample_rate,
+        config,
+        request_timeout.unwrap_or(REQUEST_TIMEOUT),
+    )
+    .await
 }
 
 async fn transcribe_to_endpoint(
@@ -145,6 +155,7 @@ async fn transcribe_to_endpoint(
     audio_pcm_b64: &str,
     sample_rate: u32,
     config: &AsrProviderConfig,
+    request_timeout: Duration,
 ) -> Result<AsrResult, String> {
     if config.api_key.trim().is_empty() {
         return Err(diag::fail_code(
@@ -200,13 +211,14 @@ async fn transcribe_to_endpoint(
             ),
         )
     })?;
-    let request = build_request_to(endpoint, &config.api_key, &body).map_err(|_| {
-        diag::fail(
-            SCOPE,
-            "build_request",
-            "Could not construct OpenRouter request; check API key formatting".to_string(),
-        )
-    })?;
+    let request =
+        build_request_to(endpoint, &config.api_key, &body, request_timeout).map_err(|_| {
+            diag::fail(
+                SCOPE,
+                "build_request",
+                "Could not construct OpenRouter request; check API key formatting".to_string(),
+            )
+        })?;
     let start = Instant::now();
     let response = client
         .execute(request)
@@ -407,6 +419,7 @@ mod tests {
             "AQIDBA==",
             16000,
             &config("fixture-api-key", serde_json::json!({})),
+            REQUEST_TIMEOUT,
         )
         .await
         .unwrap_err();
@@ -431,6 +444,7 @@ mod tests {
                 "fixture-api-key",
                 serde_json::json!({ "model": "vendor/model-slug", "language": "ja" }),
             ),
+            REQUEST_TIMEOUT,
         )
         .await
         .unwrap();
@@ -483,9 +497,15 @@ mod tests {
 
     #[tokio::test]
     async fn missing_api_key_fails_before_request() {
-        let error = transcribe("AQID", 16000, &config("  ", serde_json::json!({})), &[])
-            .await
-            .unwrap_err();
+        let error = transcribe(
+            "AQID",
+            16000,
+            &config("  ", serde_json::json!({})),
+            &[],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("API Key"));
     }
 }

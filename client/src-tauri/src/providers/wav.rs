@@ -18,6 +18,10 @@ pub fn pcm16le_bytes(samples: &[f32]) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// RIFF header written in front of the PCM payload. The shared encoder and the
+/// file-transcription payload budgets both consume this value.
+pub(crate) const HEADER_BYTES: usize = 44;
+
 /// Wrap 16kHz mono 16-bit PCM (actually any sample rate, mono 16-bit) in a WAV container.
 ///
 /// The 44-byte header must exactly match the payload length; servers only return
@@ -28,7 +32,7 @@ pub fn pcm16le_bytes(samples: &[f32]) -> Result<Vec<u8>, String> {
 /// of truth avoids five diverging copies.
 pub fn pcm_to_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     let data_size = pcm.len() as u32;
-    let mut wav = Vec::with_capacity(44 + pcm.len());
+    let mut wav = Vec::with_capacity(HEADER_BYTES + pcm.len());
     // RIFF header
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(36 + data_size).to_le_bytes());

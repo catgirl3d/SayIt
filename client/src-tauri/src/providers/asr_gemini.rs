@@ -1,10 +1,11 @@
 use super::diag;
 use super::types::{AsrProviderConfig, AsrResult, TestResult};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const DEFAULT_MODEL: &str = "gemini-3.5-transcribe";
 const SCOPE: &str = "gemini/asr";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const TRANSCRIBE_PROMPT: &str = "Transcribe this audio verbatim. Output only the transcript text with natural punctuation. Do not add explanations, prefixes, quotation marks, timestamps, or speaker labels. If the audio contains no intelligible speech, output nothing at all.";
 const HOTWORD_LIMIT: usize = 100;
 
@@ -114,13 +115,14 @@ fn build_request(
     api_key: &str,
     model: &str,
     body: &serde_json::Value,
+    request_timeout: Duration,
 ) -> Result<reqwest::Request, String> {
     let client = super::http_client::shared_no_redirect().map_err(str::to_string)?;
     client
         .post(endpoint(model))
         .header("x-goog-api-key", api_key.trim())
         .json(body)
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(request_timeout)
         .build()
         .map_err(|error| error.to_string())
 }
@@ -187,6 +189,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<Duration>,
 ) -> Result<AsrResult, String> {
     if config.api_key.trim().is_empty() {
         return Err(diag::fail_code(
@@ -242,7 +245,13 @@ pub async fn transcribe(
             ),
         )
     })?;
-    let request = build_request(&config.api_key, &model, &body).map_err(|error| {
+    let request = build_request(
+        &config.api_key,
+        &model,
+        &body,
+        request_timeout.unwrap_or(REQUEST_TIMEOUT),
+    )
+    .map_err(|error| {
         diag::fail(
             SCOPE,
             "build_request",
@@ -318,7 +327,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
                 error
             )
         })?;
-        let request = build_request(&config.api_key, &model, &body)
+        let request = build_request(&config.api_key, &model, &body, REQUEST_TIMEOUT)
             .map_err(|error| format!("Could not construct Gemini request: {}", error))?;
         let response = client
             .execute(request)
@@ -388,6 +397,7 @@ mod tests {
             "secret-gemini-key",
             "gemini-3.5-transcribe",
             &build_body("transcribe", "QUJD".to_string()),
+            REQUEST_TIMEOUT,
         )
         .unwrap();
         assert_eq!(
@@ -408,7 +418,8 @@ mod tests {
     #[test]
     fn selected_model_is_encoded_as_a_path_segment_not_a_query_or_custom_url() {
         let model = "gemini-3.5-transcribe?untrusted=value";
-        let request = build_request("secret-key", model, &serde_json::json!({})).unwrap();
+        let request =
+            build_request("secret-key", model, &serde_json::json!({}), REQUEST_TIMEOUT).unwrap();
         assert!(request.url().query().is_none());
         assert_eq!(
             request.url().host_str(),
@@ -506,9 +517,15 @@ mod tests {
 
     #[tokio::test]
     async fn missing_api_key_fails_before_request() {
-        let error = transcribe("AQID", 16000, &config("  ", serde_json::json!({})), &[])
-            .await
-            .unwrap_err();
+        let error = transcribe(
+            "AQID",
+            16000,
+            &config("  ", serde_json::json!({})),
+            &[],
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("API Key"));
     }
 

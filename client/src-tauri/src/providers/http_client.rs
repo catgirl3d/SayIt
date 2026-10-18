@@ -1,22 +1,26 @@
-// 所有 provider 共用的 HTTP 客户端。
+// Shared HTTP client for all providers.
 //
-// 为什么一定要带 User-Agent：**reqwest 默认一个 UA 都不发**，而 nginx / WAF 类网关
-// 普遍把「无 UA」当爬虫拦掉。实测 https://test-ai-api.nwcdcloud.cn/v1（LiteLLM 网关）：
-// 同一个地址 + 密钥 + 模型，带 UA 返回 200，去掉 UA 头一律 403 并回一段 nginx 的 HTML
-// 错误页 —— 请求在网关就被拒了，鉴权根本没执行。我们自己的 ALB 上有同一条规则
-// （见 pitfalls 第 1 条）。这类 403 的响应里一个字都不提 UA，所以只会被归成
-// 「地区不可用 / 模型没开通」，用户换密钥、换模型都修不掉。
+// Why User-Agent is mandatory: **reqwest sends no UA by default**, and nginx/WAF-style
+// gateways commonly block requests without one as bot traffic. We verified this against
+// https://test-ai-api.nwcdcloud.cn/v1 (a LiteLLM gateway): the same address, key, and model
+// returned 200 with a UA, but consistently returned 403 with an nginx HTML error page without
+// one. The gateway rejected the request before authentication ran. Our own ALB has the same
+// rule (see pitfall 1). Those 403 responses do not mention User-Agent, so the failure is
+// otherwise misclassified as "region unavailable / model not enabled" and changing the key
+// or model cannot fix it.
 //
-// 因此：provider 里**不要再写 `reqwest::Client::new()`**，一律用这里的单例。
-// 附带好处是连接池和 TLS 会话得以复用，不必每次调用重建一个客户端。
+// Therefore providers must not construct `reqwest::Client::new()` themselves; they must use
+// the singleton here. Reusing it also preserves the connection pool and TLS sessions instead
+// of rebuilding a client for every call.
 pub const USER_AGENT: &str = concat!("SayIt/", env!("CARGO_PKG_VERSION"));
 
 static SHARED: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()
-        // 构建失败只可能是 TLS 后端初始化不了，此时退回默认客户端也不会更糟，
-        // 至少不要让整个转写功能因为拿不到客户端而不可用。
+        // Construction can fail only when the TLS backend cannot initialize. Falling back to
+        // the default client is no worse than failing here; at minimum, do not make all
+        // transcription unavailable because this configured client could not be built.
         .unwrap_or_else(|_| reqwest::Client::new())
 });
 
@@ -29,7 +33,7 @@ static SHARED_NO_REDIRECT: once_cell::sync::Lazy<Result<reqwest::Client, String>
             .map_err(|error| error.to_string())
     });
 
-/// 带 User-Agent 的共享客户端。超时仍按各调用点的 `.timeout()` 单独设置。
+/// Shared client with User-Agent. Each call site still sets its own timeout with `.timeout()`.
 pub fn shared() -> &'static reqwest::Client {
     &SHARED
 }
@@ -47,6 +51,12 @@ pub fn shared_no_redirect() -> Result<&'static reqwest::Client, &'static str> {
 pub(super) mod test_support {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
+    enum ResponseDelay {
+        BeforeHeaders(Duration),
+        BeforeBody(Duration),
+    }
 
     pub fn spawn_response_server(
         status: u16,
@@ -60,24 +70,92 @@ pub(super) mod test_support {
         content_type: &str,
         body: String,
     ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+        spawn_response_server_inner(status, content_type, body, None)
+    }
+
+    fn spawn_response_server_inner(
+        status: u16,
+        content_type: &str,
+        body: String,
+        delay: Option<ResponseDelay>,
+    ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let content_type = content_type.to_string();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream).unwrap();
-            write!(
-                stream,
-                "HTTP/1.1 {} Test Response\r\nContent-Type: {}\r\nx-request-id: response-header-marker\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            let headers = format!(
+                "HTTP/1.1 {} Test Response\r\nContent-Type: {}\r\nx-request-id: response-header-marker\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 status,
                 content_type,
                 body.len(),
-                body
-            )
-            .unwrap();
+            );
+            match delay {
+                None => {
+                    stream.write_all(headers.as_bytes()).unwrap();
+                    stream.write_all(body.as_bytes()).unwrap();
+                }
+                Some(ResponseDelay::BeforeHeaders(delay)) => {
+                    std::thread::sleep(delay);
+                    write_late_response(&mut stream, &[headers.as_bytes(), body.as_bytes()]);
+                }
+                Some(ResponseDelay::BeforeBody(delay)) => {
+                    stream.write_all(headers.as_bytes()).unwrap();
+                    stream.flush().unwrap();
+                    std::thread::sleep(delay);
+                    write_late_response(&mut stream, &[body.as_bytes()]);
+                }
+            }
             request
         });
         (format!("http://{}/response", address), server)
+    }
+
+    /// Like [`spawn_response_server`], but answers only after `delay`. A client
+    /// that aborts earlier closes the stream; expected disconnect errors from
+    /// the late write are accepted, while other write failures panic the fixture.
+    pub fn spawn_delayed_response_server(
+        delay: Duration,
+        status: u16,
+        body: String,
+    ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+        spawn_response_server_inner(
+            status,
+            "application/json",
+            body,
+            Some(ResponseDelay::BeforeHeaders(delay)),
+        )
+    }
+
+    pub fn spawn_response_server_with_delayed_body(
+        delay: Duration,
+        status: u16,
+        body: String,
+    ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+        spawn_response_server_inner(
+            status,
+            "application/json",
+            body,
+            Some(ResponseDelay::BeforeBody(delay)),
+        )
+    }
+
+    fn write_late_response(stream: &mut TcpStream, parts: &[&[u8]]) {
+        for part in parts {
+            if let Err(error) = stream.write_all(part) {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::ConnectionReset
+                    ),
+                    "unexpected delayed fixture write error: {error}"
+                );
+                return;
+            }
+        }
     }
 
     pub fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {

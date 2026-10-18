@@ -76,6 +76,7 @@ function createHarness() {
     calls.push(`invoke:${command}`)
     if (command === 'get_file_transcription_state') return null
     if (command === 'list_downloaded_models') return []
+    if (command === 'get_file_transcription_cloud_window_options') return []
     return undefined
   })
   const listen = vi.fn(async (_event: string, _handler: (event: { payload: unknown }) => void): Promise<() => void> => {
@@ -114,11 +115,41 @@ describe('file transcription service', () => {
           label: 'Groq Whisper',
           provider: 'groq_whisper',
           model: 'whisper-large-v3',
+          windowSecondsOptions: [],
           missing: '',
         },
       ],
       activeId: 'cloud-a',
     })
+  })
+
+  it('loads backend-provided cloud window options once per unique provider', async () => {
+    const profiles = [
+      cloudProfile,
+      { ...cloudProfile, id: 'cloud-b', model: 'whisper-medium' },
+      { ...cloudProfile, id: 'cloud-fixed', provider: 'fixed_provider' },
+    ]
+    profileStoreMocks.loadAsrProfiles.mockResolvedValue({ profiles, activeId: cloudProfile.id })
+    const harness = createHarness()
+    const windowOptionCalls: Array<{ provider: string }> = []
+    harness.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') {
+        windowOptionCalls.push(args as { provider: string })
+        return args?.provider === 'groq_whisper' ? [300, 180] : []
+      }
+      return undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await expect(service.getCloudProfiles()).resolves.toEqual({
+      profiles: [
+        expect.objectContaining({ id: 'cloud-a', windowSecondsOptions: [300, 180] }),
+        expect.objectContaining({ id: 'cloud-b', windowSecondsOptions: [300, 180] }),
+        expect.objectContaining({ id: 'cloud-fixed', windowSecondsOptions: [] }),
+      ],
+      activeId: 'cloud-a',
+    })
+    expect(windowOptionCalls).toEqual([{ provider: 'groq_whisper' }, { provider: 'fixed_provider' }])
   })
 
   it('marks unconfigured cloud profiles as missing and configured ones as ready', async () => {
@@ -231,6 +262,17 @@ describe('file transcription service', () => {
     await expect(service.loadJobOptions()).resolves.toMatchObject({ language: 'uk' })
   })
 
+  it('restores a remembered cloud window value without normalizing it in the service loader', async () => {
+    const harness = createHarness()
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'fileTranscription.cloudWindowSeconds') return 180
+      return fallback
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await expect(service.loadJobOptions()).resolves.toMatchObject({ cloudWindowSeconds: 180 })
+  })
+
   it('resolves the remembered, active, first, and empty cloud profile fallbacks', async () => {
     const harness = createHarness()
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
@@ -288,15 +330,32 @@ describe('file transcription service', () => {
     })
   })
 
+  it('reports a cloud window-options IPC failure through cloudProfilesError', async () => {
+    const harness = createHarness()
+    harness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_file_transcription_cloud_window_options') throw new Error('window options unavailable')
+      if (command === 'list_downloaded_models') return []
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await expect(service.loadJobOptions()).resolves.toMatchObject({
+      cloudProfiles: [],
+      cloudProfilesError: 'window options unavailable',
+      cloudProfileId: '',
+    })
+  })
+
   it('remembers only the provided file transcription keys', async () => {
     const harness = createHarness()
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
-    await service.rememberJobSelection({ modelId: 'model-a', language: 'auto' })
+    await service.rememberJobSelection({ modelId: 'model-a', language: 'auto', cloudWindowSeconds: 180 })
 
-    expect(storeMocks.setSetting).toHaveBeenCalledTimes(2)
+    expect(storeMocks.setSetting).toHaveBeenCalledTimes(3)
     expect(storeMocks.setSetting).toHaveBeenCalledWith('fileTranscription.modelId', 'model-a')
     expect(storeMocks.setSetting).toHaveBeenCalledWith('fileTranscription.language', 'auto')
+    expect(storeMocks.setSetting).toHaveBeenCalledWith('fileTranscription.cloudWindowSeconds', 180)
     expect(storeMocks.setSetting).not.toHaveBeenCalledWith('fileTranscription.engine', expect.anything())
     expect(storeMocks.setSetting).not.toHaveBeenCalledWith('localAsr.modelId', expect.anything())
   })
@@ -396,6 +455,7 @@ describe('file transcription service', () => {
       engine: 'cloud',
       cloudProfileId: 'cloud-a',
       language: 'en',
+      cloudWindowSeconds: 180,
     })
 
     const startCall = harness.invoke.mock.calls.find(([command]) => command === 'start_file_transcription')
@@ -415,6 +475,7 @@ describe('file transcription service', () => {
           app_id: '',
           extra: { model: 'whisper-large-v3', language: 'en' },
         },
+        windowSeconds: 180,
       },
     })
     expect(request).not.toHaveProperty('modelId')

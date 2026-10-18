@@ -532,6 +532,7 @@ async fn send_batch(
     sample_rate: u32,
     config: &AsrProviderConfig,
     keyterms: &[String],
+    request_timeout: Duration,
 ) -> Result<reqwest::Response, String> {
     let model = resolve_model(config);
     let language = resolve_language(config);
@@ -561,17 +562,19 @@ async fn send_batch(
     request
         .header("Authorization", format!("Token {}", config.api_key.trim()))
         .header("Content-Type", "audio/raw")
-        .timeout(Duration::from_secs(60))
+        .timeout(request_timeout)
         .body(pcm.to_vec())
         .send()
         .await
         .map_err(|error| {
+            let timed_out = error.is_timeout();
             log_transport_error("http_send_error", &error.without_url().to_string());
-            diag::fail(
-                SCOPE,
-                "http_send",
-                "Deepgram batch request failed".to_string(),
-            )
+            let detail = "Deepgram batch request failed".to_string();
+            if timed_out {
+                diag::fail_code(SCOPE, "http_send", "provider_timeout", detail)
+            } else {
+                diag::fail(SCOPE, "http_send", detail)
+            }
         })
 }
 
@@ -621,12 +624,14 @@ async fn is_keyterm_limit_response(mut response: reqwest::Response) -> bool {
 
 async fn parse_batch_response(response: reqwest::Response) -> Result<String, String> {
     let body = response.text().await.map_err(|error| {
+        let timed_out = error.is_timeout();
         log_transport_error("http_body_error", &error.without_url().to_string());
-        diag::fail(
-            SCOPE,
-            "http_body",
-            "Failed to read Deepgram batch response".to_string(),
-        )
+        let detail = "Failed to read Deepgram batch response".to_string();
+        if timed_out {
+            diag::fail_code(SCOPE, "http_body", "provider_timeout", detail)
+        } else {
+            diag::fail(SCOPE, "http_body", detail)
+        }
     })?;
     parse_batch_transcript(&body)
 }
@@ -638,15 +643,17 @@ async fn run_batch(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Duration,
 ) -> Result<CloudTranscribeResult, String> {
     let start = Instant::now();
     let keyterms = resolve_keyterms(config, hotwords);
-    let response = send_batch(base, pcm, sample_rate, config, &keyterms).await?;
+    let response = send_batch(base, pcm, sample_rate, config, &keyterms, request_timeout).await?;
     let status = response.status();
     let headers = response.headers().clone();
     let (text, warning) = if status.as_u16() == 400 && !keyterms.is_empty() {
         if is_keyterm_limit_response(response).await {
-            let retry = match send_batch(base, pcm, sample_rate, config, &[]).await {
+            let retry = match send_batch(base, pcm, sample_rate, config, &[], request_timeout).await
+            {
                 Ok(response) => response,
                 Err(_) => return Err(keyterm_retry_failed()),
             };
@@ -695,6 +702,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<Duration>,
 ) -> Result<CloudTranscribeResult, String> {
     if missing_api_key(config) {
         return Err(missing_key_error());
@@ -726,7 +734,15 @@ pub async fn transcribe(
             hotwords.len()
         ),
     );
-    run_batch(BATCH_URL, &pcm, sample_rate, config, hotwords).await
+    run_batch(
+        BATCH_URL,
+        &pcm,
+        sample_rate,
+        config,
+        hotwords,
+        request_timeout.unwrap_or(Duration::from_secs(60)),
+    )
+    .await
 }
 
 /// Connection test for the settings page: handshake, then a short silent stream
@@ -1574,6 +1590,8 @@ mod tests {
             extra,
         }
     }
+
+    const TEST_BATCH_TIMEOUT: Duration = Duration::from_secs(60);
 
     #[test]
     fn listen_url_carries_the_verified_parameters() {
@@ -2605,9 +2623,16 @@ mod tests {
         let pcm = vec![7u8; FRAME_BYTES * 2];
         let config =
             test_config(serde_json::json!({ "model": "nova&keyterm=x", "language": "uk" }));
-        let result = run_batch(&base, &pcm, 16000, &config, &["not-opted-in".to_string()])
-            .await
-            .unwrap();
+        let result = run_batch(
+            &base,
+            &pcm,
+            16000,
+            &config,
+            &["not-opted-in".to_string()],
+            TEST_BATCH_TIMEOUT,
+        )
+        .await
+        .unwrap();
         let request = server.join().unwrap();
         let header_end = request
             .windows(4)
@@ -2650,11 +2675,59 @@ mod tests {
             16000,
             &test_config(serde_json::json!({})),
             &[],
+            TEST_BATCH_TIMEOUT,
         )
         .await
         .unwrap();
         server.join().unwrap();
         assert!(result.result.text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_send_and_body_timeouts_report_provider_timeout_with_phase_details() {
+        let response_body =
+            r#"{"results":{"channels":[{"alternatives":[{"transcript":"late"}]}]}}"#;
+        for (phase, delay_body, expected_detail) in [
+            ("send", false, "Deepgram batch request failed"),
+            ("body", true, "Failed to read Deepgram batch response"),
+        ] {
+            let spawn_server = if delay_body {
+                super::super::http_client::test_support::spawn_response_server_with_delayed_body
+            } else {
+                super::super::http_client::test_support::spawn_delayed_response_server
+            };
+            let (endpoint, server) =
+                spawn_server(Duration::from_millis(500), 200, response_body.to_string());
+            let base = format!(
+                "{}/deepgram-private-endpoint-marker",
+                endpoint.trim_end_matches("/response")
+            );
+            let result = run_batch(
+                &base,
+                &[1u8; FRAME_BYTES],
+                16000,
+                &test_config(serde_json::json!({})),
+                &[],
+                Duration::from_millis(100),
+            )
+            .await;
+            let _request = server.join().unwrap();
+            let error = result.unwrap_err();
+
+            assert_eq!(
+                crate::error_protocol::decode(&error),
+                Some(("provider_timeout", expected_detail)),
+                "phase={phase}: error={error}"
+            );
+            assert!(
+                !error.contains("fixture-key"),
+                "phase={phase}: error leaked the API key: {error}"
+            );
+            assert!(
+                !error.contains("deepgram-private-endpoint-marker"),
+                "phase={phase}: error leaked the endpoint: {error}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2677,6 +2750,7 @@ mod tests {
                 16000,
                 &test_config(serde_json::json!({})),
                 &[],
+                TEST_BATCH_TIMEOUT,
             )
             .await
             .unwrap_err();
@@ -2824,9 +2898,16 @@ mod tests {
             "東京".to_string(),
         ];
 
-        let result = run_batch(&base, &[3u8; FRAME_BYTES], 16000, &config, &hotwords)
-            .await
-            .unwrap();
+        let result = run_batch(
+            &base,
+            &[3u8; FRAME_BYTES],
+            16000,
+            &config,
+            &hotwords,
+            TEST_BATCH_TIMEOUT,
+        )
+        .await
+        .unwrap();
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(result.result.text, "retried transcript");
@@ -2917,6 +2998,7 @@ mod tests {
                 16000,
                 &config,
                 &["private term".to_string()],
+                TEST_BATCH_TIMEOUT,
             )
             .await
             .unwrap_err();
@@ -2946,6 +3028,7 @@ mod tests {
                 16000,
                 &test_config(extra),
                 &hotwords,
+                TEST_BATCH_TIMEOUT,
             )
             .await
             .unwrap_err();
@@ -2975,6 +3058,7 @@ mod tests {
             16000,
             &test_config(serde_json::json!({ "keyterms_enabled": true })),
             &["term".to_string()],
+            TEST_BATCH_TIMEOUT,
         )
         .await
         .unwrap_err();
@@ -2996,6 +3080,7 @@ mod tests {
             16000,
             &test_config(serde_json::json!({ "keyterms_enabled": true })),
             &["private term".to_string()],
+            TEST_BATCH_TIMEOUT,
         )
         .await
         .unwrap_err();
@@ -3265,7 +3350,7 @@ mod tests {
         let mut config = test_config(extra);
         config.api_key = key;
 
-        let result = run_batch(BATCH_URL, &pcm, 16000, &config, &[])
+        let result = run_batch(BATCH_URL, &pcm, 16000, &config, &[], TEST_BATCH_TIMEOUT)
             .await
             .unwrap();
         println!(
@@ -3375,7 +3460,7 @@ mod tests {
         .unwrap();
         let pcm = pcm_from_wav(&wav).unwrap();
         let terms = vec!["SayIt".to_string(), "quick brown fox".to_string()];
-        let regular = run_batch(BATCH_URL, &pcm, 16000, &config, &terms)
+        let regular = run_batch(BATCH_URL, &pcm, 16000, &config, &terms, TEST_BATCH_TIMEOUT)
             .await
             .unwrap();
         assert!(
@@ -3390,9 +3475,16 @@ mod tests {
             .map(|index| format!("lexicography vocabulary specification {index}"))
             .collect();
         let snapshot = config.extra.clone();
-        let recovered = run_batch(BATCH_URL, &pcm, 16000, &config, &excessive)
-            .await
-            .unwrap();
+        let recovered = run_batch(
+            BATCH_URL,
+            &pcm,
+            16000,
+            &config,
+            &excessive,
+            TEST_BATCH_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(
             recovered
                 .result

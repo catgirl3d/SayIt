@@ -80,6 +80,13 @@ function isCloudProfileReady(profile: FileTranscriptionCloudProfile | null | und
   return profile !== null && profile !== undefined && profile.missing === ''
 }
 
+function normalizeCloudWindowSeconds(
+  profile: FileTranscriptionCloudProfile | null | undefined,
+  value: number | null,
+): number | null {
+  return profile?.windowSecondsOptions.includes(value ?? Number.NaN) ? value : null
+}
+
 // Cancellation stays possible exactly while the backend worker can still stop early;
 // the final export runs to completion once it starts, so the action closes with it.
 function isCancellablePhase(phase: FilePhase): boolean {
@@ -160,6 +167,7 @@ export default function FileTranscription() {
   const [modelId, setModelId] = useState('')
   const [language, setLanguage] = useState<SpeechInputLanguage>('auto')
   const [cloudProfileId, setCloudProfileId] = useState('')
+  const [cloudWindowSeconds, setCloudWindowSeconds] = useState<number | null>(null)
   const [ffmpegSuggestion, setFfmpegSuggestion] = useState<string | null>(null)
   const [inspecting, setInspecting] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
@@ -192,9 +200,13 @@ export default function FileTranscription() {
     setModelId((current) =>
       firstLoad || !value.models.some((model) => model.id === current) ? value.modelId : current,
     )
-    setCloudProfileId((current) =>
-      firstLoad || !value.cloudProfiles.some((profile) => profile.id === current) ? value.cloudProfileId : current,
-    )
+    setCloudProfileId((current) => {
+      if (value.cloudProfilesError !== '') return firstLoad ? value.cloudProfileId : current
+      return firstLoad || !value.cloudProfiles.some((profile) => profile.id === current)
+        ? value.cloudProfileId
+        : current
+    })
+    setCloudWindowSeconds((current) => (firstLoad ? value.cloudWindowSeconds : current))
   }
 
   useEffect(() => {
@@ -218,6 +230,17 @@ export default function FileTranscription() {
       cancelled = true
     }
   }, [locale, t])
+
+  useEffect(() => {
+    if (jobOptions === null || jobOptions.cloudProfilesError !== '') return
+    const selectedProfile = jobOptions.cloudProfiles.find((profile) => profile.id === cloudProfileId)
+    const normalizedWindow = normalizeCloudWindowSeconds(selectedProfile, cloudWindowSeconds)
+    if (normalizedWindow === cloudWindowSeconds) return
+    setCloudWindowSeconds(normalizedWindow)
+    if (cloudWindowSeconds !== null && normalizedWindow === null) {
+      void rememberSelection({ cloudWindowSeconds: null })
+    }
+  }, [jobOptions, cloudProfileId, cloudWindowSeconds])
 
   useEffect(() => {
     if (!snapshot || snapshot.resourcesReleased) setCancelRequested(false)
@@ -319,7 +342,7 @@ export default function FileTranscription() {
   }
 
   const rememberSelection = async (
-    patch: Partial<Pick<FileTranscriptionJobOptions, 'engine' | 'modelId' | 'language' | 'cloudProfileId'>>,
+    patch: Partial<Pick<FileTranscriptionJobOptions, 'engine' | 'modelId' | 'language' | 'cloudProfileId' | 'cloudWindowSeconds'>>,
   ) => {
     try {
       await fileTranscriptionService.rememberJobSelection(patch)
@@ -344,6 +367,7 @@ export default function FileTranscription() {
         modelId,
         language,
         cloudProfileId,
+        cloudWindowSeconds,
       })
     } catch (reason) {
       setError(`${t('files.startFailed')}: ${errorMessage(reason)}`)
@@ -433,6 +457,7 @@ export default function FileTranscription() {
   const models = jobOptions?.models ?? []
   const cloudProfiles = jobOptions?.cloudProfiles ?? []
   const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId) ?? null
+  const selectedCloudWindowSeconds = normalizeCloudWindowSeconds(selectedCloudProfile, cloudWindowSeconds)
   const engineReady =
     engine === 'local'
       ? jobOptions !== null && jobOptions.modelsError === '' && modelId !== ''
@@ -678,8 +703,11 @@ export default function FileTranscription() {
                       labelledBy="file-cloud-profile-label"
                       value={cloudProfileId}
                       onChange={(value) => {
+                        const nextProfile = cloudProfiles.find((profile) => profile.id === value) ?? null
+                        const nextWindow = normalizeCloudWindowSeconds(nextProfile, cloudWindowSeconds)
                         setCloudProfileId(value)
-                        void rememberSelection({ cloudProfileId: value })
+                        setCloudWindowSeconds(nextWindow)
+                        void rememberSelection({ cloudProfileId: value, cloudWindowSeconds: nextWindow })
                       }}
                       placeholder={t('files.cloudSelectProfile')}
                       disabled={active || actionBusy}
@@ -690,6 +718,35 @@ export default function FileTranscription() {
                       }))}
                     />
                   </div>
+                  {selectedCloudProfile && selectedCloudProfile.windowSecondsOptions.length > 0 && (
+                    <div className="space-y-1.5">
+                      <span id="file-fragment-duration-label" className="text-xs font-medium text-foreground">
+                        {t('files.fragmentDuration')}
+                      </span>
+                      <Select
+                        labelledBy="file-fragment-duration-label"
+                        value={selectedCloudWindowSeconds === null ? '' : String(selectedCloudWindowSeconds)}
+                        onChange={(value) => {
+                          const nextWindow = selectedCloudProfile.windowSecondsOptions.find(
+                            (seconds) => String(seconds) === value,
+                          ) ?? null
+                          setCloudWindowSeconds(nextWindow)
+                          void rememberSelection({ cloudWindowSeconds: nextWindow })
+                        }}
+                        disabled={active || actionBusy}
+                        options={[
+                          { value: '', label: t('common.auto') },
+                          ...selectedCloudProfile.windowSecondsOptions.map((seconds) => ({
+                            value: String(seconds),
+                            label: seconds >= 60 && seconds % 60 === 0
+                              ? t('duration.minutes', { count: seconds / 60 })
+                              : t('duration.seconds', { count: seconds }),
+                          })),
+                        ]}
+                      />
+                      <p className="text-xs leading-relaxed text-muted-foreground">{t('files.fragmentDurationHint')}</p>
+                    </div>
+                  )}
                   {selectedCloudProfile && !isCloudProfileReady(selectedCloudProfile) && (
                     <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong">
                       <div>

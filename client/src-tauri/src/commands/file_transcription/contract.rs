@@ -29,6 +29,8 @@ pub struct FileCloudJobRequest {
     pub label: String,
     #[serde(alias = "config")]
     pub asr_config: AsrProviderConfig,
+    #[serde(default, rename = "windowSeconds")]
+    pub window_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -180,9 +182,40 @@ mod tests {
         assert_eq!(cloud.label, "Deepgram");
         assert_eq!(cloud.asr_config.provider, "deepgram");
         assert_eq!(cloud.asr_config.api_key, "sentinel-key");
+        assert_eq!(cloud.window_seconds, None);
         assert_eq!(request.model_id, "");
         assert_eq!(request.language, "");
         assert_eq!(request.accelerator, "");
+    }
+
+    #[test]
+    fn cloud_request_uses_the_nested_camel_case_window_and_rejects_invalid_numbers() {
+        let request_with_window = |window: serde_json::Value| {
+            serde_json::from_value::<FileTranscriptionRequest>(serde_json::json!({
+                "filePath": "C:/recording.wav",
+                "outputDirectory": "C:/output",
+                "engine": "cloud",
+                "cloud": {
+                    "label": "Deepgram",
+                    "config": {
+                        "provider": "deepgram",
+                        "api_key": "sentinel-key",
+                        "app_id": "",
+                        "extra": {}
+                    },
+                    "windowSeconds": window
+                }
+            }))
+        };
+
+        let selected = request_with_window(serde_json::json!(60)).unwrap();
+        assert_eq!(selected.cloud.unwrap().window_seconds, Some(60));
+
+        let automatic = request_with_window(serde_json::Value::Null).unwrap();
+        assert_eq!(automatic.cloud.unwrap().window_seconds, None);
+
+        assert!(request_with_window(serde_json::json!(-1)).is_err());
+        assert!(request_with_window(serde_json::json!(20.5)).is_err());
     }
 
     #[test]

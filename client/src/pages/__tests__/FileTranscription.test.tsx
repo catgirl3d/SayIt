@@ -28,6 +28,7 @@ const native = vi.hoisted(() => {
       return undefined
     }
     if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', name: 'SenseVoice Small', complete: true }]
+    if (command === 'get_file_transcription_cloud_window_options') return []
     if (command === 'detect_ffmpeg_directory') return detectedFfmpegDirectory
     if (command === 'inspect_transcription_file') return {
       durationMs: 12_000,
@@ -114,6 +115,12 @@ function cloudProfile(overrides: Partial<AsrProfile> = {}): AsrProfile {
     apiKey: 'test-key',
     ...overrides,
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise })
+  return { promise, resolve }
 }
 
 describe('file transcription page', () => {
@@ -216,6 +223,204 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('Custom installed'))
   })
 
+  it('restores a backend-supported cloud fragment duration and renders Auto when it is absent', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile()],
+      activeId: 'cloud-profile-1',
+    })
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') {
+        expect(args).toEqual({ provider: 'deepgram' })
+        return [300, 180]
+      }
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' })).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('Auto')
+    expect(native.storeWrites).not.toContainEqual(expect.objectContaining({ key: 'fileTranscription.cloudWindowSeconds' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fragment duration' }))
+    fireEvent.click(screen.getByRole('button', { name: '3 min' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('3 min'))
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudWindowSeconds', value: 180 })
+  })
+
+  it('restores and shows a remembered supported cloud fragment duration', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
+    native.settings.set('fileTranscription.cloudWindowSeconds', 300)
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile()],
+      activeId: 'cloud-profile-1',
+    })
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') return [300, 180]
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('5 min'))
+  })
+
+  it('shows Auto and persists null when the remembered duration is unavailable for the profile', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
+    native.settings.set('fileTranscription.cloudWindowSeconds', 20)
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile()],
+      activeId: 'cloud-profile-1',
+    })
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') return [300, 180]
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('Auto'))
+    await waitFor(() => expect(native.storeWrites).toContainEqual({
+      key: 'fileTranscription.cloudWindowSeconds',
+      value: null,
+    }))
+  })
+
+  it('preserves compatible duration on profile change and hides it for a fixed-window profile', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
+    native.settings.set('fileTranscription.cloudWindowSeconds', 180)
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile(),
+        cloudProfile({ id: 'cloud-fixed', provider: 'openai_transcribe', model: 'whisper-1' }),
+      ],
+      activeId: 'cloud-profile-1',
+    })
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== 'get_file_transcription_cloud_window_options') return native.defaultInvoke(command, args)
+      return args?.provider === 'deepgram' ? [300, 180] : []
+    })
+    renderPage()
+
+    const durationSelect = await screen.findByRole('button', { name: 'Fragment duration' })
+    expect(durationSelect.textContent).toContain('3 min')
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Fragment duration' })).toBeNull())
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudProfileId', value: 'cloud-fixed' })
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudWindowSeconds', value: null })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('Auto'))
+  })
+
+  it('keeps cloud duration selection through a window-options failure and retry', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
+    native.settings.set('fileTranscription.cloudWindowSeconds', 180)
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({ profiles: [cloudProfile()], activeId: 'cloud-profile-1' })
+    let optionCall = 0
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') {
+        optionCall += 1
+        if (optionCall === 1) throw new Error('window options unavailable')
+        return [300, 180]
+      }
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Could not read cloud profiles: window options unavailable')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('3 min'))
+    expect(native.storeWrites).not.toContainEqual({ key: 'fileTranscription.cloudWindowSeconds', value: null })
+  })
+
+  it('disables the cloud fragment duration control while a cloud job is active', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({ profiles: [cloudProfile()], activeId: 'cloud-profile-1' })
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') return [300, 180]
+      return native.defaultInvoke(command, args)
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' })).toBeTruthy())
+    act(() => {
+      stateListener?.({ payload: fileSnapshot({
+        engine: 'cloud',
+        cloudLabel: 'Deepgram',
+        phase: 'transcribing',
+        resourcesReleased: false,
+      }) })
+    })
+
+    expect((screen.getByRole('button', { name: 'Fragment duration' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('keeps the latest cloud selection when a locale reload resolves stale options', async () => {
+    const firstLoad = deferred<FileTranscriptionJobOptions>()
+    const reload = deferred<FileTranscriptionJobOptions>()
+    vi.spyOn(fileTranscriptionService, 'loadJobOptions')
+      .mockReturnValueOnce(firstLoad.promise)
+      .mockReturnValueOnce(reload.promise)
+
+    const profiles = [
+      {
+        id: 'cloud-profile-1',
+        label: 'Deepgram',
+        provider: 'deepgram',
+        model: 'nova-3',
+        windowSecondsOptions: [300, 180],
+        missing: '',
+      },
+      {
+        id: 'cloud-profile-2',
+        label: 'OpenAI transcription',
+        provider: 'openai_transcribe',
+        model: 'whisper-1',
+        windowSecondsOptions: [300, 180],
+        missing: '',
+      },
+    ]
+    const initialOptions: FileTranscriptionJobOptions = {
+      engine: 'cloud',
+      models: [],
+      modelsError: '',
+      modelId: '',
+      language: 'auto',
+      accelerator: 'auto',
+      cloudProfiles: profiles,
+      cloudProfilesError: '',
+      cloudProfileId: 'cloud-profile-1',
+      cloudWindowSeconds: 300,
+    }
+    renderPage()
+    await act(async () => { firstLoad.resolve(initialOptions) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('5 min'))
+
+    setLocale('uk')
+    await waitFor(() => expect(fileTranscriptionService.loadJobOptions).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Тривалість фрагмента' }))
+    fireEvent.click(screen.getByRole('button', { name: '3 хв' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Хмарний профіль' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Хмарний профіль' }).textContent).toContain('whisper-1'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Тривалість фрагмента' }).textContent).toContain('3 хв'))
+
+    await act(async () => { reload.resolve(initialOptions) })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Хмарний профіль' }).textContent).toContain('whisper-1'))
+    expect(screen.getByRole('button', { name: 'Тривалість фрагмента' }).textContent).toContain('3 хв')
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudProfileId', value: 'cloud-profile-2' })
+    expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudWindowSeconds', value: 180 })
+  })
+
   it('disables engine and language controls until the first options load resolves', async () => {
     let resolveOptions: (value: FileTranscriptionJobOptions) => void = () => undefined
     const pendingOptions = new Promise<FileTranscriptionJobOptions>((resolve) => { resolveOptions = resolve })
@@ -241,6 +446,7 @@ describe('file transcription page', () => {
         cloudProfiles: [],
         cloudProfilesError: '',
         cloudProfileId: '',
+        cloudWindowSeconds: null,
       })
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
@@ -397,13 +603,14 @@ describe('file transcription page', () => {
     await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
       request: expect.objectContaining({
         engine: 'cloud',
-        cloud: {
+        cloud: expect.objectContaining({
           label: 'OpenAI transcription',
           config: expect.objectContaining({
             provider: 'openai_transcribe',
             extra: expect.objectContaining({ language: 'uk' }),
           }),
-        },
+          windowSeconds: null,
+        }),
       }),
     }))
   })

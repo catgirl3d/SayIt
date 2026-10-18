@@ -143,6 +143,7 @@ fn build_request(
     settings: &Settings,
     wav: Vec<u8>,
     hotwords: &[String],
+    request_timeout: std::time::Duration,
 ) -> Result<reqwest::Request, String> {
     let client = super::http_client::shared_no_redirect().map_err(|_| {
         diag::fail(
@@ -151,7 +152,9 @@ fn build_request(
             "Could not initialize the no-redirect HTTP client".to_string(),
         )
     })?;
-    let mut request = client.post(settings.endpoint.clone()).timeout(TIMEOUT);
+    let mut request = client
+        .post(settings.endpoint.clone())
+        .timeout(request_timeout);
     if !config.api_key.trim().is_empty() {
         request = request.bearer_auth(config.api_key.trim());
     }
@@ -265,6 +268,7 @@ async fn transcribe_with_settings(
     config: &AsrProviderConfig,
     hotwords: &[String],
     settings: Settings,
+    request_timeout: Option<std::time::Duration>,
 ) -> Result<AsrResult, String> {
     let (is_empty, wav) = audio_wav(audio_pcm_b64, sample_rate)?;
     if is_empty {
@@ -274,7 +278,8 @@ async fn transcribe_with_settings(
             elapsed_ms: 0,
         });
     }
-    let request = build_request(config, &settings, wav, hotwords)?;
+    let request_timeout = request_timeout.unwrap_or(TIMEOUT);
+    let request = build_request(config, &settings, wav, hotwords, request_timeout)?;
     let client = super::http_client::shared_no_redirect().map_err(|_| {
         diag::fail(
             SCOPE,
@@ -283,21 +288,23 @@ async fn transcribe_with_settings(
         )
     })?;
     let start = Instant::now();
-    let response = client.execute(request).await.map_err(|_| {
-        diag::fail(
-            SCOPE,
-            "http_send",
-            "OpenAI-compatible ASR request failed; endpoint details omitted".to_string(),
-        )
+    let response = client.execute(request).await.map_err(|error| {
+        let detail = "OpenAI-compatible ASR request failed; endpoint details omitted".to_string();
+        if error.is_timeout() {
+            diag::fail_code(SCOPE, "http_send", "provider_timeout", detail)
+        } else {
+            diag::fail(SCOPE, "http_send", detail)
+        }
     })?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let status = response.status();
-    let body = response.text().await.map_err(|_| {
-        diag::fail(
-            SCOPE,
-            "read_body",
-            "Could not read OpenAI-compatible ASR response".to_string(),
-        )
+    let body = response.text().await.map_err(|error| {
+        let detail = "Could not read OpenAI-compatible ASR response".to_string();
+        if error.is_timeout() {
+            diag::fail_code(SCOPE, "read_body", "provider_timeout", detail)
+        } else {
+            diag::fail(SCOPE, "read_body", detail)
+        }
     })?;
     if !status.is_success() {
         return Err(response_error(status, &body));
@@ -335,9 +342,18 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<std::time::Duration>,
 ) -> Result<AsrResult, String> {
     let settings = resolve_settings(config)?;
-    transcribe_with_settings(audio_pcm_b64, sample_rate, config, hotwords, settings).await
+    transcribe_with_settings(
+        audio_pcm_b64,
+        sample_rate,
+        config,
+        hotwords,
+        settings,
+        request_timeout,
+    )
+    .await
 }
 
 pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
@@ -357,7 +373,7 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
         super::connection::silence_pcm(),
     );
     let start = Instant::now();
-    match transcribe_with_settings(&audio_b64, 16000, config, &[], settings).await {
+    match transcribe_with_settings(&audio_b64, 16000, config, &[], settings, None).await {
         Ok(result) => TestResult {
             ok: true,
             message: format!(
@@ -552,6 +568,7 @@ mod tests {
             &settings,
             wav,
             &[],
+            TIMEOUT,
         )
         .unwrap();
         assert!(request.headers().get("authorization").is_none());
@@ -569,7 +586,7 @@ mod tests {
         config.extra["base_url"] = serde_json::json!(format!("{}/v1/chat/completions", base_url));
         let audio =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
-        let result = transcribe(&audio, 16000, &config, &[]).await.unwrap();
+        let result = transcribe(&audio, 16000, &config, &[], None).await.unwrap();
         let request = String::from_utf8_lossy(&server.join().unwrap()).to_string();
         assert_eq!(result.text, "fixture transcript");
         assert!(request.starts_with("POST /v1/audio/transcriptions HTTP/1.1"));
@@ -596,7 +613,7 @@ mod tests {
             b"chat-audio-marker",
         );
 
-        let result = transcribe(&audio, 16000, &config, &["SayIt".to_string()])
+        let result = transcribe(&audio, 16000, &config, &["SayIt".to_string()], None)
             .await
             .unwrap();
         let request = String::from_utf8_lossy(&server.join().unwrap()).to_string();
@@ -618,6 +635,70 @@ mod tests {
             body["messages"][0]["content"][1]["input_audio"]["format"],
             "wav"
         );
+    }
+
+    #[tokio::test]
+    async fn transcription_send_and_body_timeouts_report_provider_timeout_with_phase_details() {
+        let response_body = r#"{"text":"late"}"#;
+        for (phase, delay_body, api_key_marker, expected_detail) in [
+            (
+                "send",
+                false,
+                "openai-timeout-key-marker",
+                "OpenAI-compatible ASR request failed; endpoint details omitted",
+            ),
+            (
+                "body",
+                true,
+                "openai-body-timeout-key-marker",
+                "Could not read OpenAI-compatible ASR response",
+            ),
+        ] {
+            let spawn_server = if delay_body {
+                super::super::http_client::test_support::spawn_response_server_with_delayed_body
+            } else {
+                super::super::http_client::test_support::spawn_delayed_response_server
+            };
+            let (endpoint, server) = spawn_server(
+                std::time::Duration::from_millis(500),
+                200,
+                response_body.to_string(),
+            );
+            let base_url = endpoint.trim_end_matches("/response");
+            let config = config(
+                &format!("{}/private-endpoint-marker", base_url),
+                "timeout-model",
+                "transcriptions",
+                api_key_marker,
+            );
+            let audio =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
+
+            let result = transcribe(
+                &audio,
+                16000,
+                &config,
+                &[],
+                Some(std::time::Duration::from_millis(100)),
+            )
+            .await;
+            let _request = server.join().unwrap();
+            let error = result.unwrap_err();
+
+            assert_eq!(
+                crate::error_protocol::decode(&error),
+                Some(("provider_timeout", expected_detail)),
+                "phase={phase}: error={error}"
+            );
+            assert!(
+                !error.contains(api_key_marker),
+                "phase={phase}: error leaked the API key: {error}"
+            );
+            assert!(
+                !error.contains("private-endpoint-marker"),
+                "phase={phase}: error leaked the endpoint: {error}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -679,7 +760,9 @@ mod tests {
         let audio =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"one-send-only");
 
-        let error = transcribe(&audio, 16000, &config, &[]).await.unwrap_err();
+        let error = transcribe(&audio, 16000, &config, &[], None)
+            .await
+            .unwrap_err();
         let request = server.join().unwrap();
 
         assert!(error.starts_with("sayit_error:asr_protocol_mismatch:"));
@@ -737,7 +820,9 @@ mod tests {
             b"do-not-forward-this-audio",
         );
 
-        let error = transcribe(&audio, 16000, &config, &[]).await.unwrap_err();
+        let error = transcribe(&audio, 16000, &config, &[], None)
+            .await
+            .unwrap_err();
         let request = String::from_utf8_lossy(&source_thread.join().unwrap()).to_string();
         let reached_destination = destination_thread.join().unwrap();
 

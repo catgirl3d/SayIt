@@ -2,6 +2,7 @@
 //! cloud transcription of media files, and the lifecycle of a running job.
 
 mod cloud;
+mod cloud_policy;
 mod contract;
 mod decode;
 mod ffmpeg;
@@ -81,6 +82,11 @@ pub async fn detect_ffmpeg_directory() -> Result<Option<String>, String> {
     })
     .await
     .map_err(|error| format!("FFmpeg detection task failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn get_file_transcription_cloud_window_options(provider: String) -> Vec<u32> {
+    cloud_policy::window_options(&provider)
 }
 
 #[tauri::command(rename_all = "camelCase")]

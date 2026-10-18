@@ -195,6 +195,7 @@ export const DEFAULTS: Record<string, unknown> = {
   'fileTranscription.engine': 'local', // Options: 'local' | 'cloud'
   'fileTranscription.modelId': '',
   'fileTranscription.cloudProfileId': '',
+  'fileTranscription.cloudWindowSeconds': null,
   'fileTranscription.language': '',
 
   // ── Server ──
