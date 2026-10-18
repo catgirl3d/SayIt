@@ -474,11 +474,11 @@ export default function FileTranscription() {
       && !inspecting && !actionBusy && !active,
   )
   // Names the first unmet canStart condition, in the same order, so a disabled Start
-  // always says why. Transient states (inspecting, busy) and a running job say nothing.
+  // says why. Transient states (inspecting, busy), a running job and a missing file say
+  // nothing: the empty-state picker already asks for the file.
   const startBlockedReason = (() => {
     if (canStart || active) return ''
-    if (!filePath) return t('files.reasonChooseFile')
-    if (inspecting) return ''
+    if (!filePath || inspecting) return ''
     if (!mediaInfo) return t('files.inspectFailed')
     if (!engineReady) return t('files.reasonEngineNotReady')
     if (!hotwords.ready) {
@@ -524,10 +524,7 @@ export default function FileTranscription() {
       <div className="grid gap-4 lg:grid-cols-[288px_minmax(0,1fr)]">
         <aside className="flex">
           <Card className="flex w-full flex-col gap-4 p-5">
-            <div>
-              <h2 className="text-base font-semibold">{t('files.settingsTitle')}</h2>
-              {active && <p className="mt-0.5 text-xs text-muted-foreground">{t('files.settingsLocked')}</p>}
-            </div>
+            {active && <p className="text-xs text-muted-foreground">{t('files.settingsLocked')}</p>}
             <div className="space-y-1.5">
               <span id="file-engine-label" className="text-xs font-medium text-foreground">
                 {t('files.engineTitle')}
