@@ -64,6 +64,7 @@ pub(super) fn worker_input(
             audio_stream_index: None,
             engine: FileTranscriptionEngine::Local,
             cloud: None,
+            hotwords: Vec::new(),
         },
         job_id: job_id.into(),
         cancel: CancelToken::new(),

@@ -1,6 +1,9 @@
 use super::cloud_policy;
 use super::job::{WorkerInput, WorkerOutcome};
-use super::messages::{cloud_window_recognition_error, skipped_fragments_warning};
+use super::messages::{
+    cloud_window_recognition_error, combine_warnings, provider_warning_text,
+    skipped_fragments_warning,
+};
 use super::output::{
     CheckpointProgress, preserve_unsaved_checkpoint, safe_title, write_checkpoint,
 };
@@ -267,6 +270,11 @@ pub(super) fn process_cloud_pcm(
     let config = cloud.asr_config.clone();
     let mut progress = CheckpointProgress::default();
     let mut draft = None;
+    // A window can succeed with a provider warning (Deepgram retries without keyterms after a
+    // keyterm-limit rejection). Every window sends the same fixed term list, so the first
+    // reported warning is kept and joined with the skipped-fragments accounting below into the
+    // single warning string of the snapshot.
+    let mut provider_warning: Option<String> = None;
     let result = run_cloud_windowed_recognition(
         windows,
         &input.cancel,
@@ -278,7 +286,7 @@ pub(super) fn process_cloud_pcm(
                     &config,
                     &audio_b64,
                     SAMPLE_RATE as u32,
-                    &[],
+                    &input.request.hotwords,
                     cloud_policy::request_timeout(&config.provider),
                 ),
             ));
@@ -289,6 +297,9 @@ pub(super) fn process_cloud_pcm(
                 return Err("Cloud recognition aborted by cancellation".to_string());
             };
             let response = recognition?;
+            if let Some(warning) = response.warning {
+                provider_warning.get_or_insert_with(|| provider_warning_text(warning));
+            }
             Ok(response.result.text)
         },
         |delay| sleep_unless_cancelled(&input.cancel, delay),
@@ -349,9 +360,12 @@ pub(super) fn process_cloud_pcm(
             result.has_speech,
             result.text,
             draft,
-            skipped_fragments_warning(
-                result.empty_fragments,
-                result.first_empty_position_samples.map(samples_to_ms),
+            combine_warnings(
+                provider_warning,
+                skipped_fragments_warning(
+                    result.empty_fragments,
+                    result.first_empty_position_samples.map(samples_to_ms),
+                ),
             ),
         )),
         Err(CloudWindowRunError::Cancelled) => Err(WorkerOutcome::Cancelled),
@@ -369,8 +383,89 @@ pub(super) fn process_cloud_pcm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::file_transcription::contract::{
+        FileCloudJobRequest, FileTranscriptionEngine, FileTranscriptionRequest,
+    };
+    use crate::commands::file_transcription::test_support::dummy_tools;
+    use crate::providers::types::AsrProviderConfig;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use transcribe_cpp::CancelToken;
+
+    #[test]
+    fn cloud_process_passes_hotwords_through_production_dispatch() {
+        let job_id = format!("cloud-wire-{}", uuid::Uuid::new_v4());
+        let root = std::env::temp_dir().join("kilo").join(&job_id);
+        std::fs::create_dir_all(&root).unwrap();
+        let output_directory = root.join("output");
+        let tools_directory = root.join("tools");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        std::fs::create_dir_all(&tools_directory).unwrap();
+        let tools = dummy_tools(&tools_directory);
+        let pcm_path = root.join("decoded.pcm");
+        let wav = include_bytes!("../../../resources/test_zh.wav");
+        std::fs::write(&pcm_path, &wav[44..]).unwrap();
+
+        let (endpoint, server) = crate::providers::http_client::test_support::spawn_response_server(
+            200,
+            r#"{"choices":[{"message":{"content":"fixture transcript"}}]}"#.to_string(),
+        );
+        let mut base_url = reqwest::Url::parse(&endpoint).unwrap();
+        base_url.set_path("/v1");
+        let input = WorkerInput {
+            request: FileTranscriptionRequest {
+                file_path: "fixture.wav".into(),
+                output_directory: output_directory.to_string_lossy().into_owned(),
+                model_id: String::new(),
+                language: "en".into(),
+                accelerator: String::new(),
+                ffmpeg_directory: None,
+                audio_stream_index: None,
+                engine: FileTranscriptionEngine::Cloud,
+                cloud: Some(FileCloudJobRequest {
+                    label: "OpenAI-compatible".into(),
+                    asr_config: AsrProviderConfig {
+                        provider: "openai_compat".into(),
+                        api_key: "fixture-key".into(),
+                        app_id: String::new(),
+                        extra: serde_json::json!({
+                            "base_url": base_url.as_str(),
+                            "model": "fixture-model",
+                            "protocol": "chat",
+                            "language": "en"
+                        }),
+                    },
+                    window_seconds: None,
+                }),
+                hotwords: vec!["Kubernetes".into(), "SayIt".into()],
+            },
+            job_id,
+            cancel: CancelToken::new(),
+            tools,
+            temp_dir: root.join("temp"),
+            _model_lease: None,
+            _resource_lease: None,
+        };
+
+        let process_result = process_cloud_pcm(&input, &pcm_path, 3_050);
+        let request = server.join().expect("response server thread panicked");
+        let (has_speech, text, draft, _) = process_result.expect("cloud process failed");
+        let request = String::from_utf8_lossy(&request);
+        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+        let body = request.split_once("\r\n\r\n").expect("missing HTTP body").1;
+        let body: serde_json::Value = serde_json::from_str(body).expect("invalid request JSON");
+        assert_eq!(body["model"], "fixture-model");
+        let prompt = body["messages"][0]["content"][0]["text"]
+            .as_str()
+            .expect("missing transcription prompt");
+        assert!(
+            prompt.contains("Kubernetes, SayIt"),
+            "unexpected prompt: {prompt}"
+        );
+        assert!(has_speech);
+        assert_eq!(text, "fixture transcript");
+        assert!(draft.is_some());
+    }
 
     #[test]
     fn cloud_window_runner_concatenates_non_empty_results() {

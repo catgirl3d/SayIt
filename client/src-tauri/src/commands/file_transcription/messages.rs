@@ -1,4 +1,5 @@
 use crate::error_protocol;
+use crate::providers::types::AsrWarningCode;
 
 fn format_position_hms(milliseconds: u64) -> String {
     let total_seconds = milliseconds / 1000;
@@ -87,6 +88,31 @@ pub(super) fn skipped_fragments_warning(
             "{count} fragments without recognized text were skipped (first at {})",
             format_position_hms(first_position_ms)
         ))
+    }
+}
+
+/// User-facing text for a provider warning carried into the file-transcription snapshot. The
+/// match is exhaustive on purpose: a new warning variant must decide its message instead of
+/// silently reaching the user as an unknown code.
+pub(super) fn provider_warning_text(warning: AsrWarningCode) -> String {
+    match warning {
+        AsrWarningCode::DeepgramKeytermLimit => {
+            "Hotwords were not applied: Deepgram rejected the keyterms as over its token limit"
+                .to_string()
+        }
+    }
+}
+
+/// Joins the provider warning with the skipped-fragments warning. The snapshot carries a single
+/// warning string and both facts matter to the user, so the provider warning (terms were not
+/// applied) leads and the fragment accounting follows.
+pub(super) fn combine_warnings(
+    provider: Option<String>,
+    skipped: Option<String>,
+) -> Option<String> {
+    match (provider, skipped) {
+        (Some(provider), Some(skipped)) => Some(format!("{provider}; {skipped}")),
+        (provider, skipped) => provider.or(skipped),
     }
 }
 
@@ -209,6 +235,34 @@ mod tests {
             "SenseVoice Small (sensevoice-small-gguf)"
         );
         assert_eq!(file_model_label("custom-model"), "custom-model");
+    }
+
+    #[test]
+    fn provider_warning_text_names_the_deepgram_keyterm_fallback() {
+        assert_eq!(
+            provider_warning_text(AsrWarningCode::DeepgramKeytermLimit),
+            "Hotwords were not applied: Deepgram rejected the keyterms as over its token limit"
+        );
+    }
+
+    #[test]
+    fn combine_warnings_keeps_both_facts_in_a_stable_order() {
+        assert_eq!(combine_warnings(None, None), None);
+        assert_eq!(
+            combine_warnings(Some("provider warning".into()), None),
+            Some("provider warning".into())
+        );
+        assert_eq!(
+            combine_warnings(None, Some("skipped warning".into())),
+            Some("skipped warning".into())
+        );
+        assert_eq!(
+            combine_warnings(
+                Some("provider warning".into()),
+                Some("skipped warning".into())
+            ),
+            Some("provider warning; skipped warning".into())
+        );
     }
 
     #[test]
