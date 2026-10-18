@@ -1,11 +1,12 @@
+use super::cloud_policy;
 use super::job::{WorkerInput, WorkerOutcome};
 use super::messages::{cloud_window_recognition_error, skipped_fragments_warning};
 use super::output::{
     CheckpointProgress, preserve_unsaved_checkpoint, safe_title, write_checkpoint,
 };
 use super::pcm::{
-    AnalyzedPcmWindow, LOOKAHEAD_SAMPLES, PcmWindowReader, SAMPLE_RATE, TARGET_WINDOW_SAMPLES,
-    read_analyzed_pcm_window, samples_to_ms,
+    AnalyzedPcmWindow, LOOKAHEAD_SAMPLES, PcmWindowReader, SAMPLE_RATE, read_analyzed_pcm_window,
+    samples_to_ms,
 };
 use super::state::update_active;
 use super::transcript::{append_transcript, should_retry_empty_fragment};
@@ -233,7 +234,7 @@ pub(super) fn process_cloud_pcm(
         WorkerOutcome::Failed("Cloud transcription configuration is missing".into())
     })?;
     let mut reader = PcmWindowReader::open(pcm_path).map_err(WorkerOutcome::Failed)?;
-    let window_samples = TARGET_WINDOW_SAMPLES;
+    let window_samples = cloud_policy::window_samples(&cloud.asr_config.provider);
     let read_samples = window_samples.saturating_add(LOOKAHEAD_SAMPLES);
     let mut source_samples = 0_u64;
     let windows = std::iter::from_fn(move || {
@@ -267,7 +268,13 @@ pub(super) fn process_cloud_pcm(
             let audio_b64 = encode_pcm_i16_base64(samples)?;
             let recognition = tauri::async_runtime::block_on(cancellable(
                 &input.cancel,
-                registry::dispatch_cloud_transcribe(&config, &audio_b64, SAMPLE_RATE as u32, &[]),
+                registry::dispatch_cloud_transcribe(
+                    &config,
+                    &audio_b64,
+                    SAMPLE_RATE as u32,
+                    &[],
+                    cloud_policy::request_timeout(&config.provider),
+                ),
             ));
             // Cancelled mid-flight: the runner re-checks the token right after
             // this closure returns, so the sentinel is reported as

@@ -2,6 +2,7 @@
 //! cloud transcription of media files, and the lifecycle of a running job.
 
 mod cloud;
+mod cloud_policy;
 mod contract;
 mod decode;
 mod ffmpeg;

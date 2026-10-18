@@ -85,6 +85,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<std::time::Duration>,
 ) -> Result<AsrResult, String> {
     let pcm = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio_pcm_b64)
         .map_err(|e| {
@@ -152,7 +153,7 @@ pub async fn transcribe(
         .header("Authorization", format!("Bearer {}", config.api_key))
         .header("Content-Type", "application/json")
         .json(&body)
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(request_timeout.unwrap_or(std::time::Duration::from_secs(60)))
         .send()
         .await
         .map_err(|e| diag::fail(SCOPE, "http_send", format!("Request failed: {}", e)))?;

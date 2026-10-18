@@ -532,6 +532,7 @@ async fn send_batch(
     sample_rate: u32,
     config: &AsrProviderConfig,
     keyterms: &[String],
+    request_timeout: Duration,
 ) -> Result<reqwest::Response, String> {
     let model = resolve_model(config);
     let language = resolve_language(config);
@@ -561,7 +562,7 @@ async fn send_batch(
     request
         .header("Authorization", format!("Token {}", config.api_key.trim()))
         .header("Content-Type", "audio/raw")
-        .timeout(Duration::from_secs(60))
+        .timeout(request_timeout)
         .body(pcm.to_vec())
         .send()
         .await
@@ -638,15 +639,17 @@ async fn run_batch(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Duration,
 ) -> Result<CloudTranscribeResult, String> {
     let start = Instant::now();
     let keyterms = resolve_keyterms(config, hotwords);
-    let response = send_batch(base, pcm, sample_rate, config, &keyterms).await?;
+    let response = send_batch(base, pcm, sample_rate, config, &keyterms, request_timeout).await?;
     let status = response.status();
     let headers = response.headers().clone();
     let (text, warning) = if status.as_u16() == 400 && !keyterms.is_empty() {
         if is_keyterm_limit_response(response).await {
-            let retry = match send_batch(base, pcm, sample_rate, config, &[]).await {
+            let retry = match send_batch(base, pcm, sample_rate, config, &[], request_timeout).await
+            {
                 Ok(response) => response,
                 Err(_) => return Err(keyterm_retry_failed()),
             };
@@ -695,6 +698,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<Duration>,
 ) -> Result<CloudTranscribeResult, String> {
     if missing_api_key(config) {
         return Err(missing_key_error());
@@ -726,7 +730,15 @@ pub async fn transcribe(
             hotwords.len()
         ),
     );
-    run_batch(BATCH_URL, &pcm, sample_rate, config, hotwords).await
+    run_batch(
+        BATCH_URL,
+        &pcm,
+        sample_rate,
+        config,
+        hotwords,
+        request_timeout.unwrap_or(Duration::from_secs(60)),
+    )
+    .await
 }
 
 /// Connection test for the settings page: handshake, then a short silent stream
@@ -2605,9 +2617,16 @@ mod tests {
         let pcm = vec![7u8; FRAME_BYTES * 2];
         let config =
             test_config(serde_json::json!({ "model": "nova&keyterm=x", "language": "uk" }));
-        let result = run_batch(&base, &pcm, 16000, &config, &["not-opted-in".to_string()])
-            .await
-            .unwrap();
+        let result = run_batch(
+            &base,
+            &pcm,
+            16000,
+            &config,
+            &["not-opted-in".to_string()],
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
         let request = server.join().unwrap();
         let header_end = request
             .windows(4)
@@ -2650,6 +2669,7 @@ mod tests {
             16000,
             &test_config(serde_json::json!({})),
             &[],
+            Duration::from_secs(60),
         )
         .await
         .unwrap();
@@ -2677,6 +2697,7 @@ mod tests {
                 16000,
                 &test_config(serde_json::json!({})),
                 &[],
+                Duration::from_secs(60),
             )
             .await
             .unwrap_err();
@@ -2824,9 +2845,16 @@ mod tests {
             "東京".to_string(),
         ];
 
-        let result = run_batch(&base, &[3u8; FRAME_BYTES], 16000, &config, &hotwords)
-            .await
-            .unwrap();
+        let result = run_batch(
+            &base,
+            &[3u8; FRAME_BYTES],
+            16000,
+            &config,
+            &hotwords,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(result.result.text, "retried transcript");
@@ -2917,6 +2945,7 @@ mod tests {
                 16000,
                 &config,
                 &["private term".to_string()],
+                Duration::from_secs(60),
             )
             .await
             .unwrap_err();
@@ -2946,6 +2975,7 @@ mod tests {
                 16000,
                 &test_config(extra),
                 &hotwords,
+                Duration::from_secs(60),
             )
             .await
             .unwrap_err();
@@ -2975,6 +3005,7 @@ mod tests {
             16000,
             &test_config(serde_json::json!({ "keyterms_enabled": true })),
             &["term".to_string()],
+            Duration::from_secs(60),
         )
         .await
         .unwrap_err();
@@ -2996,6 +3027,7 @@ mod tests {
             16000,
             &test_config(serde_json::json!({ "keyterms_enabled": true })),
             &["private term".to_string()],
+            Duration::from_secs(60),
         )
         .await
         .unwrap_err();
@@ -3265,9 +3297,16 @@ mod tests {
         let mut config = test_config(extra);
         config.api_key = key;
 
-        let result = run_batch(BATCH_URL, &pcm, 16000, &config, &[])
-            .await
-            .unwrap();
+        let result = run_batch(
+            BATCH_URL,
+            &pcm,
+            16000,
+            &config,
+            &[],
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
         println!(
             "Deepgram batch {wav_name}: audio_ms={} request_ms={} chars={}",
             pcm.len() / 32,
@@ -3375,9 +3414,16 @@ mod tests {
         .unwrap();
         let pcm = pcm_from_wav(&wav).unwrap();
         let terms = vec!["SayIt".to_string(), "quick brown fox".to_string()];
-        let regular = run_batch(BATCH_URL, &pcm, 16000, &config, &terms)
-            .await
-            .unwrap();
+        let regular = run_batch(
+            BATCH_URL,
+            &pcm,
+            16000,
+            &config,
+            &terms,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
         assert!(
             regular
                 .result
@@ -3390,9 +3436,16 @@ mod tests {
             .map(|index| format!("lexicography vocabulary specification {index}"))
             .collect();
         let snapshot = config.extra.clone();
-        let recovered = run_batch(BATCH_URL, &pcm, 16000, &config, &excessive)
-            .await
-            .unwrap();
+        let recovered = run_batch(
+            BATCH_URL,
+            &pcm,
+            16000,
+            &config,
+            &excessive,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
         assert!(
             recovered
                 .result

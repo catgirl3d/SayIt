@@ -21,6 +21,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<std::time::Duration>,
 ) -> Result<AsrResult, String> {
     // 解码 base64 PCM 数据
     let pcm_data =
@@ -104,7 +105,7 @@ pub async fn transcribe(
 
     let resp = req
         .json(&body)
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(request_timeout.unwrap_or(std::time::Duration::from_secs(60)))
         .send()
         .await
         .map_err(|e| diag::fail(SCOPE, "http_send", format!("HTTP request failed: {}", e)))?;

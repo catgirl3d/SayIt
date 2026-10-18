@@ -168,26 +168,40 @@ pub async fn cloud_transcribe(
         &request.audio_b64,
         request.sample_rate,
         &request.hotwords,
+        None,
     )
     .await
 }
 
+/// `request_timeout` carries the file-transcription engine's per-provider HTTP
+/// budget; `None` keeps each provider's own default, so dictation and the
+/// connection test are unaffected.
 pub(crate) async fn dispatch_cloud_transcribe(
     config: &AsrProviderConfig,
     audio_b64: &str,
     sample_rate: u32,
     hotwords: &[String],
+    request_timeout: Option<std::time::Duration>,
 ) -> Result<CloudTranscribeResult, String> {
     let result = match config.provider.as_str() {
         "deepgram" => {
-            return asr_deepgram::transcribe(audio_b64, sample_rate, config, hotwords).await;
+            return asr_deepgram::transcribe(
+                audio_b64,
+                sample_rate,
+                config,
+                hotwords,
+                request_timeout,
+            )
+            .await;
         }
-        "doubao" => asr_doubao::transcribe(audio_b64, sample_rate, config, hotwords).await,
+        "doubao" => {
+            asr_doubao::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
+        }
         "doubao_v2" => {
             asr_doubao_stream::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         "qwen" | "aliyun" | "qwen_realtime" => {
-            asr_qwen::transcribe(audio_b64, sample_rate, config, hotwords).await
+            asr_qwen::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
         }
         // Qwen-Audio-3.0 流式：关掉实时字幕、以及设置页的识别测试都走这条一次性路径。
         // 用的仍是同一个 duplex 协议，只是整段音频推完再收结果。
@@ -195,17 +209,25 @@ pub(crate) async fn dispatch_cloud_transcribe(
             asr_qwen_audio_stream::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
         "qwen_omni" => asr_qwen_omni::transcribe(audio_b64, sample_rate, config, hotwords).await,
-        "mimo" => asr_mimo::transcribe(audio_b64, sample_rate, config, hotwords).await,
-        "groq_whisper" => asr_groq::transcribe(audio_b64, sample_rate, config, hotwords).await,
-        "openai_transcribe" => asr_groq::transcribe(audio_b64, sample_rate, config, hotwords).await,
+        "mimo" => {
+            asr_mimo::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
+        }
+        "groq_whisper" => {
+            asr_groq::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
+        }
+        "openai_transcribe" => {
+            asr_groq::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
+        }
         "gemini_transcribe" => {
-            asr_gemini::transcribe(audio_b64, sample_rate, config, hotwords).await
+            asr_gemini::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
         }
         "openrouter_transcribe" => {
-            asr_openrouter::transcribe(audio_b64, sample_rate, config, hotwords).await
+            asr_openrouter::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout)
+                .await
         }
         "openai_compat" => {
-            asr_openai_compat::transcribe(audio_b64, sample_rate, config, hotwords).await
+            asr_openai_compat::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout)
+                .await
         }
         other => Err(error_protocol::encode(
             "connect_failed",
@@ -345,6 +367,67 @@ mod tests {
         assert!(request.starts_with("POST /v1/audio/transcriptions HTTP/1.1"));
         assert!(request.contains("registry-fixture-model"));
         assert!(request.contains("audio-marker"));
+    }
+
+    #[tokio::test]
+    async fn file_timeout_aborts_a_slow_transcription_through_the_shared_dispatch() {
+        let (endpoint, _server) =
+            super::super::http_client::test_support::spawn_delayed_response_server(
+                std::time::Duration::from_secs(2),
+                200,
+                r#"{"text":"late transcript"}"#.to_string(),
+            );
+        let mut config = asr_config("openai_compat", "fixture-api-key");
+        config.extra = serde_json::json!({
+            "base_url": format!("{}/v1", endpoint.trim_end_matches("/response")),
+            "model": "timeout-fixture-model",
+            "protocol": "transcriptions"
+        });
+        let audio_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
+
+        let started = std::time::Instant::now();
+        let error = dispatch_cloud_transcribe(
+            &config,
+            &audio_b64,
+            16000,
+            &[],
+            Some(std::time::Duration::from_millis(150)),
+        )
+        .await
+        .unwrap_err();
+        let aborted_at = started.elapsed();
+
+        assert!(
+            aborted_at < std::time::Duration::from_secs(1),
+            "a 150 ms budget must abort before the two-second response; took {aborted_at:?}"
+        );
+        assert!(error.starts_with("sayit_error:"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_provider_default_serves_a_slow_transcription_without_an_explicit_budget() {
+        let (endpoint, server) =
+            super::super::http_client::test_support::spawn_delayed_response_server(
+                std::time::Duration::from_secs(1),
+                200,
+                r#"{"text":"delayed fixture transcript"}"#.to_string(),
+            );
+        let mut config = asr_config("openai_compat", "fixture-api-key");
+        config.extra = serde_json::json!({
+            "base_url": format!("{}/v1", endpoint.trim_end_matches("/response")),
+            "model": "delay-tolerance-fixture-model",
+            "protocol": "transcriptions"
+        });
+        let audio_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
+
+        let result = dispatch_cloud_transcribe(&config, &audio_b64, 16000, &[], None)
+            .await
+            .unwrap();
+        let _request = server.join().unwrap();
+
+        assert_eq!(result.result.text, "delayed fixture transcript");
     }
 
     #[tokio::test]

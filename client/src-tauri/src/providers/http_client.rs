@@ -80,6 +80,32 @@ pub(super) mod test_support {
         (format!("http://{}/response", address), server)
     }
 
+    /// Like [`spawn_response_server`], but answers only after `delay`. A client
+    /// that aborts earlier closes the stream; the late write is then ignored
+    /// instead of panicking the fixture thread.
+    pub fn spawn_delayed_response_server(
+        delay: std::time::Duration,
+        status: u16,
+        body: String,
+    ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream).unwrap();
+            std::thread::sleep(delay);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {} Test Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                body.len(),
+                body
+            );
+            request
+        });
+        (format!("http://{}/response", address), server)
+    }
+
     pub fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
         stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut request = Vec::new();

@@ -278,6 +278,7 @@ pub async fn transcribe(
     sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
+    request_timeout: Option<std::time::Duration>,
 ) -> Result<AsrResult, String> {
     let is_openai = config.provider == "openai_transcribe";
     let scope = if is_openai { OPENAI_SCOPE } else { SCOPE };
@@ -381,7 +382,7 @@ pub async fn transcribe(
         api_url,
         api_key,
         form,
-        std::time::Duration::from_secs(60),
+        request_timeout.unwrap_or(std::time::Duration::from_secs(60)),
     )
     .send()
     .await
