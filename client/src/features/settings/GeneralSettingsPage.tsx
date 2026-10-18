@@ -1,8 +1,6 @@
 import * as bridge from '@/services/bridge'
 import { useEffect, useState } from 'react'
-import { Pencil, RotateCcw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
-import { Modal } from '@/components/ui/modal'
 import { refreshRecorderSettings, setSuppressLateFinalInsertionCache } from '@/services/recorder'
 import { getSetting, setSetting } from '@/services/store'
 import { setAutomaticUpdateChecksEnabled } from '@/features/update/autoUpdate'
@@ -14,12 +12,6 @@ import WebDavSection from './WebDavSection'
 import { type LanguagePreference, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { getLanguagePreference, switchLanguage } from '@/stores/language'
-import {
-  CONTEXT_SELECTION_EDIT_PROMPT,
-  CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
-  normalizeContextSelectionEditPrompt,
-} from '@/services/contextAware'
-import ContextSelectionModelSetting from './ContextSelectionModelSetting'
 
 const LANGUAGE_OPTIONS = [
   { value: 'auto', labelKey: 'language.auto' },
@@ -33,11 +25,6 @@ export default function GeneralSettingsPage() {
   const [autoLaunch, setAutoLaunch] = useState(false)
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(true)
   const [protectClipboard, setProtectClipboard] = useState(true)
-  const [contextAwareWriting, setContextAwareWriting] = useState(false)
-  const [contextPromptOpen, setContextPromptOpen] = useState(false)
-  const [contextSelectionEditPrompt, setContextSelectionEditPrompt] = useState(CONTEXT_SELECTION_EDIT_PROMPT)
-  const [contextPromptDraft, setContextPromptDraft] = useState(CONTEXT_SELECTION_EDIT_PROMPT)
-  const [contextPromptSaving, setContextPromptSaving] = useState(false)
   const [historyEnabled, setHistoryEnabled] = useState(true)
   const [suppressLateFinalInsertion, setSuppressLateFinalInsertion] = useState<boolean | null>(null)
   const [suppressLateFinalInsertionSaving, setSuppressLateFinalInsertionSaving] = useState(false)
@@ -51,10 +38,9 @@ export default function GeneralSettingsPage() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const [launch, clip, contextAware, history, suppressLateInsertion, retention, audioDays, logDays, autoCheck] = await Promise.all([
+      const [launch, clip, history, suppressLateInsertion, retention, audioDays, logDays, autoCheck] = await Promise.all([
         bridge.getAutoLaunch().catch(() => false),
         getSetting('protectClipboard', true).catch(() => true),
-        getSetting('contextAwareWritingEnabled', false).catch(() => false),
         getSetting('historyEnabled', true).catch(() => true),
         getSetting('suppressLateFinalInsertion', false)
           .then((value) => Boolean(value), () => null),
@@ -67,7 +53,6 @@ export default function GeneralSettingsPage() {
       setAutoLaunch(Boolean(launch))
       setAutoCheckUpdate(Boolean(autoCheck))
       setProtectClipboard(Boolean(clip))
-      setContextAwareWriting(Boolean(contextAware))
       setHistoryEnabled(Boolean(history))
       setSuppressLateFinalInsertion(suppressLateInsertion)
       setAudioRetentionEnabled(Boolean(retention))
@@ -84,13 +69,6 @@ export default function GeneralSettingsPage() {
     })()
 
     getLanguagePreference().then(setLanguagePreference).catch(() => { })
-    getSetting(CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY, CONTEXT_SELECTION_EDIT_PROMPT)
-      .then((v) => {
-        const p = normalizeContextSelectionEditPrompt(v)
-        setContextSelectionEditPrompt(p)
-        setContextPromptDraft(p)
-      })
-      .catch(() => { })
     return () => { cancelled = true }
   }, [])
 
@@ -132,38 +110,6 @@ export default function GeneralSettingsPage() {
     setProtectClipboard(next)
     await setSetting('protectClipboard', next)
     await refreshRecorderSettings()
-  }
-
-  const toggleContextAwareWriting = async () => {
-    const next = !contextAwareWriting
-    setContextAwareWriting(next)
-    await setSetting('contextAwareWritingEnabled', next)
-    await refreshRecorderSettings()
-  }
-
-  const openContextPrompt = () => {
-    setContextPromptDraft(contextSelectionEditPrompt)
-    setContextPromptOpen(true)
-  }
-
-  const saveContextPrompt = async () => {
-    const prompt = contextPromptDraft.trim()
-    if (!prompt || contextPromptSaving) return
-    setContextPromptSaving(true)
-    const normalized = normalizeContextSelectionEditPrompt(prompt)
-    try {
-      await setSetting(CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY, normalized)
-      setContextSelectionEditPrompt(normalized)
-      setContextPromptDraft(normalized)
-      await refreshRecorderSettings()
-      setContextPromptOpen(false)
-    } finally {
-      setContextPromptSaving(false)
-    }
-  }
-
-  const resetContextPrompt = () => {
-    setContextPromptDraft(CONTEXT_SELECTION_EDIT_PROMPT)
   }
 
   const toggleHistory = async () => {
@@ -241,36 +187,6 @@ export default function GeneralSettingsPage() {
               </div>
               <Switch labelledBy="protect-clipboard-label" checked={protectClipboard} onChange={() => void toggleProtectClipboard()} noAnimation={!animate} hidden={!ready} />
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Selection editing */}
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            <h2 id="context-aware-heading" className="text-lg font-semibold">{t('settings.contextAware.title')}</h2>
-            <div className="flex items-center justify-between">
-              <div>
-                <p id="context-aware-label" className="text-sm font-medium">{t('settings.contextAware.enable')}</p>
-                <p className="text-xs text-muted-foreground">{t('settings.contextAware.descContinue')}</p>
-              </div>
-              <Switch labelledBy="context-aware-label" checked={contextAwareWriting} onChange={() => void toggleContextAwareWriting()} noAnimation={!animate} hidden={!ready} />
-            </div>
-
-            <div className="flex items-center justify-between border-t border-border pt-4">
-              <div>
-                <p className="text-sm font-medium">{t('settings.contextAware.promptTitle')}</p>
-                <p className="text-xs text-muted-foreground">{t('settings.contextAware.promptDesc')}</p>
-              </div>
-              <button
-                type="button"
-                onClick={openContextPrompt}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-                {t('settings.contextAware.editPrompt')}
-              </button>
-            </div>
-            <ContextSelectionModelSetting />
           </CardContent>
         </Card>
 
@@ -375,50 +291,6 @@ export default function GeneralSettingsPage() {
         <BackupSection />
         <WebDavSection />
       </div>
-
-      {/* Selection-editing prompt dialog */}
-      {contextPromptOpen && (
-        <Modal onClose={() => setContextPromptOpen(false)} title={t('settings.contextAware.promptTitle')}>
-          <div className="space-y-4">
-            <p className="text-xs text-muted-foreground">{t('settings.contextAware.promptDesc')}</p>
-            <textarea
-              value={contextPromptDraft}
-              onChange={(e) => setContextPromptDraft(e.target.value)}
-              rows={8}
-              className="w-full rounded-md border border-border bg-input p-3 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none"
-              placeholder={CONTEXT_SELECTION_EDIT_PROMPT}
-            />
-            <div className="flex items-center justify-between pt-2">
-              <button
-                type="button"
-                onClick={resetContextPrompt}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                {t('settings.contextAware.resetPrompt')}
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setContextPromptOpen(false)}
-                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveContextPrompt()}
-                  disabled={contextPromptSaving || !contextPromptDraft.trim()}
-                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                >
-                  {contextPromptSaving ? t('settings.contextAware.savingPrompt') : t('common.save')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </Modal>
-      )}
-
     </div>
   )
 }

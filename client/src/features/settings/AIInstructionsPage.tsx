@@ -32,6 +32,7 @@ import {
 } from '@/services/store'
 import AIProofreadToggle from './AIProofreadToggle'
 import HotwordPromptInjectToggle from './HotwordPromptInjectToggle'
+import ContextAwareSection from './ContextAwareSection'
 import AppPromptRulesSection from './AppPromptRulesSection'
 import PromptPresetSection from './PromptPresetSection'
 import { useT } from '@/i18n/useT'
@@ -265,6 +266,7 @@ export default function AIInstructionsPage() {
       <div className="space-y-6">
         <AIProofreadToggle />
         <HotwordPromptInjectToggle />
+        <ContextAwareSection />
 
         <PromptPresetSection
           presets={presets}

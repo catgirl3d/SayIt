@@ -381,7 +381,7 @@
   "settings.contextAware.title": "Врахування контексту",
   "settings.contextAware.enable": "Врахування контексту та виділення",
   "settings.contextAware.descContinue": "Коли увімкнено, AI використовує текст біля курсора, тож нове диктування природно відповідає його тону, термінології та оформленню.",
-  "settings.contextAware.descSelection": "Виділіть текст мишею і попросіть перекласти, скоротити чи переписати його. SayIt замінить виділений фрагмент результатом.",
+  "settings.contextAware.needsAi": "Працює лише коли AI-очищення увімкнено. Доти SayIt не зчитує текст навколо курсора.",
   "settings.contextAware.model": "Власна модель",
   "settings.contextAware.sameModel": "Як у диктуванні",
   "settings.contextAware.modelDesc": "Використовуйте іншу модель для завдань із виділеним текстом, наприклад потужнішу для складніших запитів.",

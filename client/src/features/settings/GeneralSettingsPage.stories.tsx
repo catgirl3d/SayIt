@@ -1,6 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import GeneralSettingsPage from './GeneralSettingsPage'
-import { CONTEXT_SELECTION_EDIT_PROMPT } from '@/services/contextAware'
 
 const meta = {
   title: 'settings/GeneralSettingsPage',
@@ -13,14 +12,12 @@ const meta = {
       settings: {
         'ui.language': 'en',
         protectClipboard: false,
-        contextAwareWritingEnabled: true,
         historyEnabled: true,
         suppressLateFinalInsertion: true,
         audioRetentionEnabled: true,
         audioRetentionDays: 30,
         logRetentionDays: 15,
         autoCheckUpdate: false,
-        contextSelectionEditPrompt: CONTEXT_SELECTION_EDIT_PROMPT,
         'webdav.enabled': true,
         'webdav.url': 'https://dav.jianguoyun.com/dav/SayIt',
         'webdav.username': 'storybook@example.com',
