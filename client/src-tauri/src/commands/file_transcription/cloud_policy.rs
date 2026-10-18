@@ -13,13 +13,15 @@
 //! Providers whose documentation does not state a safe long-request limit stay
 //! on the conservative window until integration tests prove otherwise.
 
-use super::pcm::{LOOKAHEAD_SAMPLES, SAMPLE_RATE};
+use super::pcm::{LOOKAHEAD_SAMPLES, SAMPLE_BYTES, SAMPLE_RATE};
+use crate::providers::wav;
 use std::time::Duration;
 
-/// One second of the pipeline's 16 kHz mono PCM16 audio.
-const PCM_BYTES_PER_SECOND: u64 = 32_000;
+/// One second of the pipeline's mono PCM16 audio, derived from the shared
+/// format constants so a format change cannot silently desync the budgets.
+const PCM_BYTES_PER_SECOND: u64 = (SAMPLE_RATE as u64) * (SAMPLE_BYTES as u64);
 /// WAV header written by the shared encoder (`providers/wav.rs`).
-const WAV_HEADER_BYTES: u64 = 44;
+const WAV_HEADER_BYTES: u64 = wav::HEADER_BYTES as u64;
 /// Fixed reserve for JSON envelopes, prompts, multipart fields, and data-URL
 /// prefixes, counted before the audio bytes.
 const ENVELOPE_RESERVE_BYTES: u64 = 8 * 1024;
@@ -65,13 +67,16 @@ fn profile(provider: &str) -> Profile {
         budget: None,
     };
     match provider {
-        // 2 GB request body; the 10-minute synchronous processing cap is a
-        // server-side time budget, handled by our request timeout instead of
-        // a payload budget.
+        // 2 GB documented file/body limit, recorded as a guard rail; the
+        // 10-minute synchronous processing cap is a server-side time budget
+        // handled by the request timeout instead of a payload budget.
         "deepgram" => Profile {
             window_seconds: 300,
             timeout: Some(Duration::from_secs(300)),
-            budget: None,
+            budget: Some(PayloadBudget {
+                bytes: 2_000_000_000,
+                format: WireFormat::RawPcm,
+            }),
         },
         // Documented as 2 h / 100 MB, with binary uploads "preferably within
         // 20 MB". The exact base64 JSON body ceiling is not documented, so the
@@ -153,7 +158,11 @@ fn lookahead_seconds() -> u32 {
     (LOOKAHEAD_SAMPLES / SAMPLE_RATE).max(1) as u32
 }
 
-/// Bytes on the wire for `seconds` of audio in the given transport.
+/// Bytes on the wire for `seconds` of audio in the given transport. Production
+/// computes windows in the inverse direction ([`seconds_that_fit`]); this
+/// forward model exists so tests can pin the two against each other and against
+/// the real encoder.
+#[cfg(test)]
 fn wire_bytes(seconds: u32, format: WireFormat) -> u64 {
     let pcm = (seconds as u64).saturating_mul(PCM_BYTES_PER_SECOND);
     match format {
@@ -167,8 +176,9 @@ fn wire_bytes(seconds: u32, format: WireFormat) -> u64 {
 }
 
 /// Whole seconds of audio that fit into a payload capacity for this transport,
-/// leaving the envelope reserve. Not the exact inverse of [`wire_bytes`]: it
-/// floors to whole base64 groups, so the estimate stays conservative.
+/// leaving the envelope reserve. Not the exact inverse of the test-only
+/// `wire_bytes`: it floors to whole base64 groups, so the estimate stays
+/// conservative.
 fn seconds_that_fit(capacity_bytes: u64, format: WireFormat) -> u32 {
     let audio_capacity = capacity_bytes.saturating_sub(ENVELOPE_RESERVE_BYTES);
     let (wav_capacity, header_bytes) = match format {
@@ -211,6 +221,7 @@ pub(super) fn request_timeout(provider: &str) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn enlarged_providers_get_their_target_windows() {
@@ -282,6 +293,7 @@ mod tests {
     #[test]
     fn every_window_fits_its_budget_with_lookahead_and_margin() {
         for provider in [
+            "deepgram",
             "openai_transcribe",
             "gemini_transcribe",
             "doubao",
@@ -336,5 +348,18 @@ mod tests {
     fn raw_pcm_capacity_does_not_reserve_the_wav_header() {
         assert_eq!(seconds_that_fit(72_192, WireFormat::RawPcm), 2);
         assert_eq!(seconds_that_fit(72_192, WireFormat::Wav), 1);
+    }
+
+    #[test]
+    fn wire_estimates_match_the_shared_encoder() {
+        let samples = vec![0.0_f32; SAMPLE_RATE];
+        let raw = crate::providers::wav::pcm16le_bytes(&samples).unwrap();
+        assert_eq!(wire_bytes(1, WireFormat::RawPcm), raw.len() as u64);
+
+        let wav = crate::providers::wav::pcm_to_wav(&raw, SAMPLE_RATE as u32);
+        assert_eq!(wire_bytes(1, WireFormat::Wav), wav.len() as u64);
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&wav);
+        assert_eq!(wire_bytes(1, WireFormat::Base64Wav), encoded.len() as u64);
     }
 }

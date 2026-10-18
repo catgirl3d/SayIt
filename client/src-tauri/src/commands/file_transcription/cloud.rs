@@ -28,20 +28,25 @@ const CLOUD_ERROR_RETRY_COUNT: u8 = CLOUD_ERROR_RETRY_DELAYS.len() as u8;
 /// it from another task.
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Error codes that describe conditions a retry cannot fix: rejected
-/// credentials, missing permissions, an unavailable model, an empty balance.
+/// Error codes the file engine must not retry: conditions a retry cannot fix
+/// (rejected credentials, missing permissions, an unavailable model, an empty
+/// balance) and `provider_timeout`, where one attempt already consumed the
+/// window's whole request budget (up to five minutes), so two more attempts
+/// would stall the job for many minutes before it reports the failure.
 /// Every other message — including ones without a `sayit_error` code — keeps
-/// the historical retry behavior.
-const CLOUD_PERMANENT_ERROR_CODES: &[&str] = &[
+/// the historical retry behavior; fast failures such as an unreachable host
+/// stay cheap to retry.
+const CLOUD_NON_RETRYABLE_ERROR_CODES: &[&str] = &[
     "provider_bad_key",
     "provider_forbidden",
     "provider_no_model",
     "provider_insufficient_balance",
+    "provider_timeout",
 ];
 
 fn cloud_error_is_retryable(error: &str) -> bool {
     match error_protocol::decode(error) {
-        Some((code, _)) => !CLOUD_PERMANENT_ERROR_CODES.contains(&code),
+        Some((code, _)) => !CLOUD_NON_RETRYABLE_ERROR_CODES.contains(&code),
         None => true,
     }
 }
@@ -523,15 +528,14 @@ mod tests {
     }
 
     #[test]
-    fn cloud_retry_policy_only_stops_on_permanent_codes() {
-        for code in CLOUD_PERMANENT_ERROR_CODES {
+    fn cloud_retry_policy_only_stops_on_non_retryable_codes() {
+        for code in CLOUD_NON_RETRYABLE_ERROR_CODES {
             assert!(
                 !cloud_error_is_retryable(&error_protocol::encode(code, "detail")),
                 "{code} must not be retried"
             );
         }
         for error in [
-            error_protocol::encode("provider_timeout", "request timed out"),
             error_protocol::encode("provider_rate_limit", "HTTP 429"),
             error_protocol::encode("provider_unreachable", "connection reset"),
             error_protocol::encode("connect_failed", "HTTP 500"),
@@ -543,6 +547,35 @@ mod tests {
                 "{error} must stay retryable"
             );
         }
+    }
+
+    #[test]
+    fn cloud_window_runner_does_not_retry_timeouts() {
+        let cancel = CancelToken::new();
+        let mut attempts = 0;
+
+        let result = run_cloud_windowed_recognition(
+            vec![Ok(speech_window(1))],
+            &cancel,
+            |_| {
+                attempts += 1;
+                Err(error_protocol::encode(
+                    "provider_timeout",
+                    "request timed out",
+                ))
+            },
+            |_| panic!("a timed-out window must not sleep into another attempt"),
+            |_, _, _| Ok(()),
+            |_, _| panic!("no fragments are skipped in this test"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(CloudWindowRunError::Failed { detail, position_samples })
+                if detail.starts_with("sayit_error:provider_timeout:")
+                    && position_samples == Some(0)
+        ));
+        assert_eq!(attempts, 1);
     }
 
     #[test]
