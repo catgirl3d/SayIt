@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { t } from '@/i18n'
 import {
   ASR_PLATFORMS,
   ASR_PROVIDERS,
@@ -12,6 +13,7 @@ import {
   emptyAsrProfile,
   findAsrProvider,
   gradeAsrLatency,
+  groupedAsrProviders,
   keyFingerprint,
   normalizeAsrProfileForSave,
   parseAsrProfiles,
@@ -87,9 +89,52 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     expect(provider?.blurb).not.toMatch(/more accurate|faster|cheaper|superior/i)
   })
 
-  /** 清单顺序就是推荐顺序（卡片顺序 + 新建下拉的顺序），前两名钉住 */
+  /** The catalog order is the recommendation order (card order + default of a new service); the first two are pinned. */
   it('推荐顺序：豆包第一，千问 Audio 3.1 第二', () => {
     expect(ASR_PROVIDERS.slice(0, 2).map((p) => p.id)).toEqual(['doubao_v2', 'qwen_audio_stream'])
+  })
+
+  it('groups the editor dropdown by availability and sorts each group alphabetically', () => {
+    const labelsOf = (group: string) => groupedAsrProviders()
+      .filter((item) => item.group === group)
+      .map(({ entry }) => entry.label)
+
+    expect(labelsOf(t('asrProvider.groupGlobal'))).toEqual([
+      'Deepgram',
+      'Gemini transcription',
+      'Groq Whisper',
+      'OpenAI transcription',
+      'OpenRouter transcription',
+    ])
+    expect(labelsOf(t('asrProvider.groupChina'))).toEqual([
+      'Doubao ASR',
+      'Qwen 3.5 Omni Flash',
+      'Qwen 3.5 Omni Plus',
+      'Qwen 3.8 Omni Flash Realtime',
+      'Qwen ASR',
+      'Qwen ASR streaming',
+      'Qwen Audio 3.1 streaming',
+      'Xiaomi MiMo',
+    ])
+    expect(labelsOf(t('asrProvider.groupCustom'))).toEqual(['OpenAI-compatible ASR'])
+  })
+
+  it('lists every provider exactly once, with each group in one contiguous run', () => {
+    const grouped = groupedAsrProviders()
+    const groupRuns = grouped.filter((item, index) => index === 0 || item.group !== grouped[index - 1].group)
+
+    expect(grouped.map(({ entry }) => entry.id).sort()).toEqual(ASR_PROVIDERS.map((p) => p.id).sort())
+    expect(groupRuns.map(({ group }) => group)).toEqual([
+      t('asrProvider.groupGlobal'),
+      t('asrProvider.groupChina'),
+      t('asrProvider.groupCustom'),
+    ])
+  })
+
+  it('does not reorder the curated catalog when building the grouped view', () => {
+    const before = ASR_PROVIDERS.map((p) => p.id)
+    groupedAsrProviders()
+    expect(ASR_PROVIDERS.map((p) => p.id)).toEqual(before)
   })
 
   it('Qwen Audio catalog identifies the active 3.1 model without unverified quality claims', () => {

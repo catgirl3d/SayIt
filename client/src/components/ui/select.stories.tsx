@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, userEvent, within } from 'storybook/test'
 import { Select } from './select'
 
 const meta = {
@@ -32,6 +33,36 @@ export const Default: Story = {
       />
     </div>
   ),
+}
+
+export const Grouped: Story = {
+  render: () => (
+    <div className="w-72 space-y-2">
+      <label id="grouped-provider-label" className="block text-sm font-medium">Provider</label>
+      <Select
+        labelledBy="grouped-provider-label"
+        value="deepgram"
+        options={[
+          { value: 'deepgram', label: 'Deepgram', group: 'Global' },
+          { value: 'groq', label: 'Groq Whisper', group: 'Global' },
+          { value: 'doubao', label: 'Doubao ASR', group: 'China' },
+          { value: 'qwen', label: 'Qwen ASR', group: 'China' },
+          { value: 'custom', label: 'OpenAI-compatible ASR', group: 'Custom endpoint' },
+        ]}
+        onChange={() => undefined}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body)
+    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Provider' }))
+
+    for (const heading of ['Global', 'China', 'Custom endpoint']) {
+      await expect(await body.findByText(heading)).toBeVisible()
+    }
+    await userEvent.click(body.getByRole('button', { name: 'Qwen ASR' }))
+    await expect(within(canvasElement).getByRole('button', { name: 'Provider' })).toHaveTextContent('Deepgram')
+  },
 }
 
 export const Placeholder: Story = {

@@ -1,4 +1,4 @@
-import { forwardRef, useState, useRef, useEffect, useLayoutEffect, useCallback, isValidElement, type ReactNode } from 'react'
+import { forwardRef, Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, isValidElement, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
 import { useT } from '@/i18n/useT'
@@ -9,6 +9,11 @@ export interface SelectOption {
   label: string
   /** Optional full label for hover when the visible option may be truncated. */
   title?: string
+  /**
+   * Optional group heading. A heading is rendered above the first option of each run of
+   * consecutive options that share the same group, so options must arrive already grouped.
+   */
+  group?: string
 }
 
 export interface SelectProps {
@@ -125,21 +130,32 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
           className="overflow-y-auto py-1"
           style={{ maxHeight: `${dropdownStyle.maxHeight - 2}px` }}
         >
-          {parsedOptions.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => handleSelect(option.value)}
-              className={cn(
-                'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors',
-                option.value === value
-                  ? 'bg-primary/5 text-primary font-medium'
-                  : 'text-foreground hover:bg-accent',
+          {parsedOptions.map((option, index) => (
+            <Fragment key={option.value}>
+              {option.group !== undefined && option.group !== parsedOptions[index - 1]?.group && (
+                <div
+                  className={cn(
+                    'px-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground',
+                    index === 0 ? 'pt-1' : 'mt-1 border-t border-border pt-2.5',
+                  )}
+                >
+                  {option.group}
+                </div>
               )}
-            >
-              <span className="truncate" title={option.title}>{option.label}</span>
-              {option.value === value && <Check className="ml-2 h-4 w-4 shrink-0" />}
-            </button>
+              <button
+                type="button"
+                onClick={() => handleSelect(option.value)}
+                className={cn(
+                  'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors',
+                  option.value === value
+                    ? 'bg-primary/5 text-primary font-medium'
+                    : 'text-foreground hover:bg-accent',
+                )}
+              >
+                <span className="truncate" title={option.title}>{option.label}</span>
+                {option.value === value && <Check className="ml-2 h-4 w-4 shrink-0" />}
+              </button>
+            </Fragment>
           ))}
         </div>
       </div>,

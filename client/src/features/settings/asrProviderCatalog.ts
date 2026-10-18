@@ -27,7 +27,7 @@ export { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
 /** 凭据归属的平台。同平台的服务用同一种密钥形态。 */
-import { t } from '@/i18n'
+import { getLocale, t } from '@/i18n'
 
 export type AsrPlatform = 'doubao' | 'qwen' | 'mimo' | 'groq' | 'openai' | 'gemini' | 'openrouter' | 'deepgram' | 'custom'
 
@@ -126,10 +126,13 @@ const OPENROUTER_TRANSCRIPTION_MODELS = [
 ] as const
 
 /**
- * 内置服务清单。顺序即卡片顺序，也是新建时下拉的顺序：把最推荐的放前面。
+ * Built-in provider catalog. The order is the card order and the default pick of a new
+ * service: the most recommended entry goes first. The provider dropdown of the service
+ * editor is a separate grouped, alphabetical view (see groupedAsrProviders).
  *
- * label 刻意不带模型名后缀（模型名单独一行小字），否则卡片标题会被
- * 「千问 3.5 Omni Plus（qwen3.5-omni-plus，ASR+AI）」这种括号串撑爆。
+ * The label deliberately carries no model-name suffix (the model name sits on its own line
+ * in small text); otherwise the card title would be blown up by a parenthesized string such
+ * as "Qwen 3.5 Omni Plus (qwen3.5-omni-plus, ASR+AI)".
  *
  * Each blurb should answer when to choose that provider and distinguish it from
  * the others. Earlier copy listed strengths independently (such as accuracy and
@@ -314,6 +317,34 @@ export function asrAvailabilityLabel(entry: AsrProviderEntry): string {
 /** 同一平台下有哪些可选服务 */
 export function providersOfPlatform(platform: AsrPlatform): AsrProviderEntry[] {
   return ASR_PROVIDERS.filter((p) => p.platform === platform)
+}
+
+// International services come first and the self-hosted endpoint last: the catalog's own
+// order puts the mainland-China services ahead of the global ones.
+const ASR_PROVIDER_GROUP_ORDER: readonly AsrProviderEntry['availability'][] = ['global', 'mainland_china', 'custom']
+
+function asrProviderGroupLabel(availability: AsrProviderEntry['availability']): string {
+  switch (availability) {
+    case 'global': return t('asrProvider.groupGlobal')
+    case 'mainland_china': return t('asrProvider.groupChina')
+    case 'custom': return t('asrProvider.groupCustom')
+  }
+}
+
+/**
+ * Providers for the provider dropdown of the service editor: grouped by availability, and
+ * alphabetical by the displayed label inside each group. ASR_PROVIDERS keeps its curated order
+ * for the service cards and the default pick of a new service, so this is a separate view.
+ */
+export function groupedAsrProviders(): { entry: AsrProviderEntry; group: string }[] {
+  const collator = new Intl.Collator(getLocale(), { numeric: true, sensitivity: 'base' })
+  return ASR_PROVIDER_GROUP_ORDER.flatMap((availability) => {
+    const group = asrProviderGroupLabel(availability)
+    return ASR_PROVIDERS
+      .filter((p) => p.availability === availability)
+      .sort((a, b) => collator.compare(a.label, b.label) || collator.compare(a.model, b.model))
+      .map((entry) => ({ entry, group }))
+  })
 }
 
 // ─────────────────────────── 检测结果 ───────────────────────────

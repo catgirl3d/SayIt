@@ -38,7 +38,6 @@ import { doubaoKeyLabel } from '@/lib/cloudAsrCreds'
 import { prepareTestPcm, type PreparedTestAudio } from './testAudio'
 import {
   ASR_PLATFORMS,
-  ASR_PROVIDERS,
   asrAvailabilityLabel,
   asrProfileCheckShouldInvalidate,
   changeAsrProfileProvider,
@@ -48,6 +47,7 @@ import {
   emptyAsrProfile,
   findAsrProvider,
   gradeAsrLatency,
+  groupedAsrProviders,
   keyFingerprint,
   normalizeAsrProfileForSave,
   type AsrCheck,
@@ -706,9 +706,10 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
             <Select
               value={draft.provider}
               onChange={(value) => handleDraftProvider(value)}
-              options={ASR_PROVIDERS.map((p) => ({
-                value: p.id,
-                label: p.model ? `${p.label} · ${p.model}` : p.label,
+              options={groupedAsrProviders().map(({ entry, group }) => ({
+                value: entry.id,
+                label: entry.model ? `${entry.label} · ${entry.model}` : entry.label,
+                group,
               }))}
             />
             <p className="mt-1 text-xs text-muted-foreground">

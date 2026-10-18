@@ -23,6 +23,7 @@ Sections are ordered by version, newest first.
 - The focus highlight is now clean and themed: text fields get the accent border with a soft halo, and other controls a single accent ring, instead of the browser's doubled blue-and-white outline.
 - History reprocessing now uses the same cleanup policy as live recording in Cloud API and Local modes: cleanup is skipped below the minimum-duration threshold, waits no longer than the same cleanup timeout, and keeps the raw transcript when the provider fails or returns nothing. A keyless provider such as Ollama may also run with a blank model in every path, using the built-in default model, and its service card is treated as complete for connection testing.
 - The Context awareness card moved from General settings to the AI cleanup page, next to the other AI cleanup options. It is only used while AI cleanup is on, so when cleanup is off the card now says so instead of silently doing nothing; the saved setting is kept. The card title has an ⓘ tooltip explaining how context reading works (Windows UI Automation, without screenshots or OCR, up to 500 characters before the cursor and 300 after), and the selection-edit prompt field is now announced by screen readers.
+- The provider list in the speech recognition service editor is now split into Global, China and Custom endpoint groups, sorted alphabetically inside each group, instead of one hand-ordered list that started with the Chinese providers.
 
 ### Fixed
 #### Desktop Client
