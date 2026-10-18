@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, userEvent, within } from 'storybook/test'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
 import FileTranscription from './FileTranscription'
 import {
   fileTranscriptionService,
@@ -29,6 +29,13 @@ const fixedAsrProfile = {
   model: 'whisper-large-v3-turbo',
 }
 
+const openaiTranscribeProfile = {
+  ...asrProfile,
+  id: 'storybook-openai',
+  provider: 'openai_transcribe',
+  model: 'whisper-1',
+}
+
 const settings = {
   'fileTranscription.engine': 'local',
   'fileTranscription.modelId': localModelId,
@@ -55,6 +62,10 @@ const settings = {
   'cloudAsr.openrouter.apiKey': '',
   'cloudAsr.deepgram.apiKey': '',
   'cloudAsr.custom.apiKey': '',
+  builtinSetWords: {},
+  builtinSetActive: { ai: true },
+  customHotwordThemes: [],
+  customThemeActive: {},
 } as const
 
 const cloudSettings = {
@@ -156,6 +167,10 @@ function commandsFor(snapshot: FileTranscriptionSnapshot | null) {
     get_file_transcription_cloud_window_options: (args?: { provider?: string }) =>
       args?.provider === 'deepgram' ? [20, 60, 180, 300] : [],
     list_downloaded_models: () => [{ id: localModelId, name: 'Nemotron ASR Streaming 0.6B', complete: true }],
+    asr_hotword_capability_matrix: () => ({
+      deepgram: { delivery: 'vocabulary', clientCap: null },
+      openai_transcribe: { delivery: 'not_wired_up', clientCap: null },
+    }),
     start_file_transcription: () => runningSnapshot,
     cancel_file_transcription: () => cancelledSnapshot,
     retry_file_transcription_export: () => completedSnapshot,
@@ -181,6 +196,53 @@ export const IdleReady: Story = {
       commands: commandsFor(null),
       settings,
     },
+  },
+}
+
+export const CloudHotwordsGate: Story = {
+  parameters: {
+    tauri: {
+      commands: commandsFor(null),
+      settings: {
+        ...settings,
+        'fileTranscription.engine': 'cloud',
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    await waitFor(() => expect(
+      canvas.getByText(/hotword sending is disabled in the Deepgram profile/),
+    ).toBeTruthy())
+  },
+}
+
+export const CloudHotwordsHidden: Story = {
+  parameters: {
+    tauri: {
+      commands: commandsFor(null),
+      settings: {
+        ...settings,
+        'fileTranscription.engine': 'cloud',
+        'fileTranscription.cloudProfileId': 'storybook-openai',
+        'cloudAsr.profiles': [asrProfile, openaiTranscribeProfile],
+        'cloudAsr.activeProfileId': 'storybook-openai',
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = within(canvasElement.ownerDocument.body)
+
+    await waitFor(() => expect(canvas.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    await userEvent.click(canvas.getByRole('button', { name: 'Cloud profile' }))
+    await userEvent.click(await body.findByRole('button', { name: 'Deepgram · nova-3' }))
+    await waitFor(() => expect(canvas.getByText('Hotwords')).toBeTruthy())
+
+    await userEvent.click(canvas.getByRole('button', { name: 'Cloud profile' }))
+    await userEvent.click(await body.findByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    await expect(canvas.queryByText('Hotwords')).toBeNull()
   },
 }
 

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router-dom'
+import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import {
@@ -25,6 +26,15 @@ import { cn } from '@/lib/utils'
 import { useLocale, useT } from '@/i18n/useT'
 import { t as translate, type TranslationKey } from '@/i18n'
 import { ConfirmDeleteModal } from '@/features/settings/ConfirmDeleteModal'
+import { resolveAsrDispatchProvider } from '@/features/settings/asrProviderCatalog'
+import { foldHotwordDelivery, type AsrHotwordCapability } from '@/lib/asrModels'
+import HotwordSection from '@/features/fileTranscription/HotwordSection'
+import {
+  buildHotwordPlan,
+  type HotwordCategorySelection,
+  type HotwordMode,
+} from '@/features/fileTranscription/hotwordPlan'
+import { loadHotwordCatalog, type HotwordCatalog } from '@/services/hotwords/settings'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import {
   errorMessage,
@@ -178,6 +188,20 @@ export default function FileTranscription() {
   const [copied, setCopied] = useState(false)
   const [cancelRequested, setCancelRequested] = useState(false)
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false)
+  const [hotwordMode, setHotwordMode] = useState<HotwordMode>('active')
+  const [hotwordSelection, setHotwordSelection] = useState<HotwordCategorySelection>({
+    builtinKeys: [],
+    themeIds: [],
+  })
+  const [hotwordSelectionTouched, setHotwordSelectionTouched] = useState(false)
+  const [hotwordCatalog, setHotwordCatalog] = useState<HotwordCatalog | null>(null)
+  const [hotwordError, setHotwordError] = useState('')
+  const [hotwordReload, setHotwordReload] = useState(0)
+  const [hotwordCapabilities, setHotwordCapabilities] = useState<
+    Record<string, AsrHotwordCapability> | null
+  >(null)
+  const [hotwordCapabilitiesError, setHotwordCapabilitiesError] = useState(false)
+  const [hotwordCapabilitiesReload, setHotwordCapabilitiesReload] = useState(0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const jobOptionsLoaded = useRef(false)
   const jobOptionsRequest = useRef(0)
@@ -189,6 +213,28 @@ export default function FileTranscription() {
   // outputDirectory holds only an explicit choice; until one is made the result goes next
   // to the source file, so choosing a file alone is enough to start.
   const effectiveOutputDirectory = outputDirectory || (filePath ? parentDirectory(filePath) : '')
+  const selectedCloudProfile = (jobOptions?.cloudProfiles ?? [])
+    .find((profile) => profile.id === cloudProfileId) ?? null
+  // The provider delivery verdict is the Rust capability matrix, so the page warns for exactly
+  // the providers that ignore hotwords instead of keeping a second list of its own.
+  const providerCapability = hotwordCapabilities !== null && selectedCloudProfile
+    ? hotwordCapabilities[resolveAsrDispatchProvider(selectedCloudProfile.provider)]
+    : undefined
+  const providerDelivery = selectedCloudProfile === null || hotwordCapabilities === null
+    ? null
+    : foldHotwordDelivery(providerCapability?.delivery ?? 'unknown_provider')
+  const providerClientCap = providerCapability?.clientCap ?? null
+  // The preview and the start request share this plan, so the words shown are the words sent.
+  const hotwordPlan = useMemo(() => buildHotwordPlan({
+    mode: hotwordMode,
+    selection: hotwordSelection,
+    catalog: hotwordCatalog,
+    engine,
+    provider: selectedCloudProfile?.provider ?? null,
+    providerDelivery,
+    providerClientCap,
+    deepgramKeytermsEnabled: selectedCloudProfile?.deepgramKeytermsEnabled === true,
+  }), [engine, hotwordMode, hotwordSelection, hotwordCatalog, selectedCloudProfile, providerDelivery, providerClientCap])
 
   const applyJobOptions = (value: FileTranscriptionJobOptions) => {
     const firstLoad = !jobOptionsLoaded.current
@@ -243,6 +289,54 @@ export default function FileTranscription() {
       void rememberSelection({ cloudWindowSeconds: null })
     }
   }, [jobOptions, cloudProfileId, cloudWindowSeconds])
+
+  useEffect(() => {
+    let cancelled = false
+    setHotwordCatalog(null)
+    setHotwordError('')
+    void loadHotwordCatalog()
+      .then((catalog) => {
+        if (!cancelled) setHotwordCatalog(catalog)
+      })
+      .catch((reason) => {
+        if (!cancelled) setHotwordError(errorMessage(reason))
+      })
+    return () => { cancelled = true }
+  }, [hotwordReload])
+
+  useEffect(() => {
+    let cancelled = false
+    setHotwordCapabilities(null)
+    setHotwordCapabilitiesError(false)
+    void invoke<Record<string, AsrHotwordCapability>>('asr_hotword_capability_matrix')
+      .then((matrix) => {
+        if (cancelled) return
+        if (!matrix || typeof matrix !== 'object') throw new Error('Invalid ASR hotword capability matrix')
+        setHotwordCapabilities(matrix)
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return
+        console.warn('Failed to load ASR hotword capability matrix', reason)
+        setHotwordCapabilitiesError(true)
+      })
+    return () => { cancelled = true }
+  }, [hotwordCapabilitiesReload])
+
+  useEffect(() => {
+    if (hotwordMode !== 'selected' || hotwordSelectionTouched || !hotwordCatalog) return
+    // Start the per-job selection from the active hotwords so it can be trimmed rather than
+    // rebuilt from scratch; globally disabled categories remain available to add.
+    setHotwordSelection({
+      builtinKeys: Object.keys(hotwordCatalog.builtinSetActive).filter(
+        (key) => hotwordCatalog.builtinSetActive[key]
+          && (hotwordCatalog.builtinSetWords[key]?.length ?? 0) > 0,
+      ),
+      themeIds: hotwordCatalog.customThemes
+        .filter((theme) => hotwordCatalog.customThemeActive[theme.id] && theme.words.length > 0)
+        .map((theme) => theme.id),
+    })
+    setHotwordSelectionTouched(true)
+  }, [hotwordMode, hotwordSelectionTouched, hotwordCatalog])
 
   useEffect(() => {
     if (!snapshot || snapshot.resourcesReleased) setCancelRequested(false)
@@ -353,9 +447,19 @@ export default function FileTranscription() {
     }
   }
 
+  const changeHotwordSelection = (selection: HotwordCategorySelection) => {
+    setHotwordSelection(selection)
+    setHotwordSelectionTouched(true)
+  }
+
+  const retryHotwordCatalog = () => setHotwordReload((value) => value + 1)
+  const retryHotwordCapabilities = () => {
+    setHotwordCapabilitiesError(false)
+    setHotwordCapabilitiesReload((value) => value + 1)
+  }
+
   const startTranscription = async () => {
     if (!filePath || !effectiveOutputDirectory || !mediaInfo || actionBusy) return
-    const selectedCloudProfile = jobOptions?.cloudProfiles.find((profile) => profile.id === cloudProfileId)
     if (engine === 'cloud' && !isCloudProfileReady(selectedCloudProfile)) return
     setActionBusy(true)
     setError('')
@@ -370,6 +474,7 @@ export default function FileTranscription() {
         language,
         cloudProfileId,
         cloudWindowSeconds: normalizeCloudWindowSeconds(selectedCloudProfile, cloudWindowSeconds),
+        hotwords: hotwordPlan.hotwords,
       })
     } catch (reason) {
       setError(`${t('files.startFailed')}: ${errorMessage(reason)}`)
@@ -458,14 +563,22 @@ export default function FileTranscription() {
   const active = isActiveSnapshot(snapshot)
   const models = jobOptions?.models ?? []
   const cloudProfiles = jobOptions?.cloudProfiles ?? []
-  const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId) ?? null
   const selectedCloudWindowSeconds = normalizeCloudWindowSeconds(selectedCloudProfile, cloudWindowSeconds)
   const engineReady =
     engine === 'local'
       ? jobOptions !== null && jobOptions.modelsError === '' && modelId !== ''
       : isCloudProfileReady(selectedCloudProfile)
+  // A selected cloud provider must have a capability verdict before a job can start unless the
+  // user explicitly disabled hotwords, in which case there is no dictionary to misroute.
+  const providerResolved = hotwordMode === 'none'
+    || engine !== 'cloud'
+    || selectedCloudProfile === null
+    || providerDelivery !== null
+  const hotwordsReady = providerResolved
+    && (!hotwordPlan.applicable || hotwordMode === 'none' || hotwordCatalog !== null)
   const canStart = Boolean(
-    filePath && effectiveOutputDirectory && mediaInfo && engineReady && !inspecting && !actionBusy && !active,
+    filePath && effectiveOutputDirectory && mediaInfo && engineReady && hotwordsReady
+      && !inspecting && !actionBusy && !active,
   )
   // Names the first unmet canStart condition, in the same order, so a disabled Start
   // always says why. Transient states (inspecting, busy) and a running job say nothing.
@@ -475,6 +588,10 @@ export default function FileTranscription() {
     if (inspecting) return ''
     if (!mediaInfo) return t('files.inspectFailed')
     if (!engineReady) return t('files.reasonEngineNotReady')
+    if (!hotwordsReady) {
+      if (!providerResolved) return hotwordCapabilitiesError ? t('files.hotwordsCapabilitiesFailed') : ''
+      return hotwordError ? t('files.hotwordsLoadFailed') : ''
+    }
     return ''
   })()
   const progress = snapshot && active ? progressView(snapshot) : null
@@ -781,6 +898,36 @@ export default function FileTranscription() {
                 </>
               )}
             </div>
+            {hotwordMode !== 'none' && engine === 'cloud' && selectedCloudProfile !== null && hotwordCapabilities === null && hotwordCapabilitiesError && (
+              <div className="space-y-1.5" role="alert">
+                <div className="flex items-start gap-2 text-xs text-destructive">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1">{t('files.hotwordsCapabilitiesFailed')}</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={retryHotwordCapabilities}
+                >
+                  {t('common.retry')}
+                </Button>
+              </div>
+            )}
+            {hotwordPlan.applicable && (
+              <HotwordSection
+                mode={hotwordMode}
+                onModeChange={setHotwordMode}
+                selection={hotwordSelection}
+                onSelectionChange={changeHotwordSelection}
+                catalog={hotwordCatalog}
+                catalogError={hotwordError}
+                plan={hotwordPlan}
+                disabled={jobOptions === null || active || actionBusy}
+                onRetry={retryHotwordCatalog}
+              />
+            )}
             <div className="space-y-1.5">
               <span id="file-output-label" className="text-xs font-medium text-foreground">
                 {t('files.destinationTitle')}

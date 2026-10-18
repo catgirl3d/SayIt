@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
 import { setLocale } from '@/i18n'
 import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { BUILTIN_SETS } from '@/services/hotwords/model'
 import { fileTranscriptionService, type FileTranscriptionJobOptions, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
 import { releaseFileTranscription, reserveFileTranscription } from '@/services/recorder'
 
@@ -29,6 +30,10 @@ const native = vi.hoisted(() => {
     }
     if (command === 'list_downloaded_models') return [{ id: 'sensevoice-small-gguf', name: 'SenseVoice Small', complete: true }]
     if (command === 'get_file_transcription_cloud_window_options') return []
+    if (command === 'asr_hotword_capability_matrix') return {
+      deepgram: { delivery: 'vocabulary', clientCap: null },
+      openai_transcribe: { delivery: 'not_wired_up', clientCap: null },
+    }
     if (command === 'detect_ffmpeg_directory') return detectedFfmpegDirectory
     if (command === 'inspect_transcription_file') return {
       durationMs: 12_000,
@@ -126,6 +131,7 @@ function deferred<T>() {
 describe('file transcription page', () => {
   afterEach(() => {
     cleanup()
+    stateListener = null
     fileTranscriptionService.dispose()
     releaseFileTranscription()
     setLocale('en')
@@ -133,6 +139,7 @@ describe('file transcription page', () => {
   })
 
   beforeEach(() => {
+    stateListener = null
     native.invoke.mockClear()
     native.invoke.mockImplementation(native.defaultInvoke)
     native.listen.mockClear()
@@ -650,6 +657,446 @@ describe('file transcription page', () => {
           windowSeconds: null,
         }),
       }),
+    }))
+  })
+
+  it('sends the active hotwords snapshot with a cloud start', async () => {
+    const activeTheme = { id: 'story-theme', name: 'Studio', words: ['Skyline', 'Pelican'] }
+    const expectedHotwords = [...BUILTIN_SETS.ai.words, ...activeTheme.words]
+    native.settings.set('builtinSetActive', { ai: true })
+    native.settings.set('customHotwordThemes', [activeTheme])
+    native.settings.set('customThemeActive', { [activeTheme.id]: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') {
+        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
+      }
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({
+          phase: 'completed',
+          error: null,
+          resourcesReleased: true,
+          engine: 'cloud',
+          cloudLabel: 'Deepgram',
+        })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      hotwords: expectedHotwords,
+    })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: expectedHotwords }),
+    }))
+  })
+
+  it('replaces the active hotwords with the picked categories without touching global settings', async () => {
+    const customTheme = {
+      id: 'custom-theme',
+      name: 'Personal terms',
+      words: ['CustomAlpha', 'CustomBeta'],
+    }
+    const storedHotwordSettings = {
+      builtinSetWords: {
+        ai: [...BUILTIN_SETS.ai.words],
+        code: [...BUILTIN_SETS.code.words],
+      },
+      builtinSetActive: { ai: true, code: false },
+      customThemeActive: { [customTheme.id]: false },
+      customHotwordThemes: [{ ...customTheme, words: [...customTheme.words] }],
+    }
+    const beforeHotwordSettings = {
+      builtinSetWords: {
+        ai: [...storedHotwordSettings.builtinSetWords.ai],
+        code: [...storedHotwordSettings.builtinSetWords.code],
+      },
+      builtinSetActive: { ...storedHotwordSettings.builtinSetActive },
+      customThemeActive: { ...storedHotwordSettings.customThemeActive },
+      customHotwordThemes: storedHotwordSettings.customHotwordThemes.map((theme) => ({
+        ...theme,
+        words: [...theme.words],
+      })),
+    }
+    native.settings.set('builtinSetWords', storedHotwordSettings.builtinSetWords)
+    native.settings.set('builtinSetActive', storedHotwordSettings.builtinSetActive)
+    native.settings.set('customHotwordThemes', storedHotwordSettings.customHotwordThemes)
+    native.settings.set('customThemeActive', storedHotwordSettings.customThemeActive)
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') {
+        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
+      }
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({
+          phase: 'completed',
+          error: null,
+          resourcesReleased: true,
+          engine: 'cloud',
+          cloudLabel: 'Deepgram',
+        })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Choose' }))
+    await waitFor(() => expect(screen.getByText(`Selected hotwords: ${BUILTIN_SETS.ai.words.length}`)).toBeTruthy())
+    fireEvent.click(screen.getByRole('checkbox', { name: /AI terms/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Programming/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(customTheme.name) }))
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    const expectedHotwords = [...BUILTIN_SETS.code.words, ...customTheme.words]
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      hotwords: expectedHotwords,
+    })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: expectedHotwords }),
+    }))
+    expect(native.storeWrites.filter(({ key }) => (
+      key === 'builtinSetActive'
+        || key === 'builtinSetWords'
+        || key === 'customThemeActive'
+        || key === 'customHotwordThemes'
+    ))).toEqual([])
+    expect(native.settings.get('builtinSetWords')).toEqual(beforeHotwordSettings.builtinSetWords)
+    expect(native.settings.get('builtinSetActive')).toEqual(beforeHotwordSettings.builtinSetActive)
+    expect(native.settings.get('customThemeActive')).toEqual(beforeHotwordSettings.customThemeActive)
+    expect(native.settings.get('customHotwordThemes')).toEqual(beforeHotwordSettings.customHotwordThemes)
+  })
+
+  it('blocks a cloud start while hotwords are unreadable and recovers after retry', async () => {
+    let hotwordsFail = true
+    native.settings.set('builtinSetActive', { ai: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') {
+        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
+      }
+      if (command === 'store_get' && args?.key === 'builtinSetWords' && hotwordsFail) {
+        throw new Error('hotwords offline')
+      }
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({
+          phase: 'completed',
+          error: null,
+          resourcesReleased: true,
+          engine: 'cloud',
+          cloudLabel: 'Deepgram',
+        })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    await waitFor(() => expect(screen.getByText('Could not read hotwords: hotwords offline')).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+
+    hotwordsFail = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled,
+    ).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      hotwords: BUILTIN_SETS.ai.words,
+    })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: BUILTIN_SETS.ai.words }),
+    }))
+  })
+
+  it('blocks a cloud start when provider capabilities fail and recovers after retry', async () => {
+    let capabilityAttempts = 0
+    native.settings.set('builtinSetActive', { ai: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') {
+        capabilityAttempts += 1
+        if (capabilityAttempts === 1) throw new Error('capabilities offline')
+        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
+      }
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({ phase: 'completed', error: null, engine: 'cloud', cloudLabel: 'Deepgram' })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    await waitFor(() => expect(screen.getAllByText('Could not read provider capabilities')).toHaveLength(2))
+    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(capabilityAttempts).toBe(2))
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled,
+    ).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      hotwords: BUILTIN_SETS.ai.words,
+    })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: BUILTIN_SETS.ai.words }),
+    }))
+  })
+
+  it('keeps a cloud start blocked while provider capabilities are loading', async () => {
+    let resolveCapabilities: (matrix: Record<string, { delivery: 'vocabulary'; clientCap: null }>) => void = () => undefined
+    const pendingCapabilities = new Promise<Record<string, { delivery: 'vocabulary'; clientCap: null }>>((resolve) => {
+      resolveCapabilities = resolve
+    })
+    native.settings.set('builtinSetActive', { ai: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') return pendingCapabilities
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({ phase: 'completed', error: null, engine: 'cloud', cloudLabel: 'Deepgram' })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText('Could not read provider capabilities')).toBeNull()
+
+    await act(async () => {
+      resolveCapabilities({ deepgram: { delivery: 'vocabulary', clientCap: null } })
+      await pendingCapabilities
+    })
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled,
+    ).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: BUILTIN_SETS.ai.words })))
+  })
+
+  it('starts with no hotwords after selecting None and sends an empty payload', async () => {
+    native.settings.set('builtinSetActive', { ai: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({ phase: 'completed', error: null, engine: 'cloud', cloudLabel: 'Deepgram' })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'None' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('radio', { name: 'None' }))
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: [] })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: [] }),
+    }))
+  })
+
+  it('hides the hotwords control when the local engine is selected', async () => {
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    expect(screen.queryByText('Hotwords')).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Choose' })).toBeNull()
+  })
+
+  it('hides the hotwords control for a provider that does not send terms and starts with none', async () => {
+    native.settings.set('builtinSetActive', { ai: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        cloudProfile({ id: 'cloud-profile-2', provider: 'openai_transcribe', model: 'whisper-1' }),
+      ],
+      activeId: 'cloud-profile-2',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') {
+        return { openai_transcribe: { delivery: 'not_wired_up', clientCap: null } }
+      }
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({
+          phase: 'completed',
+          error: null,
+          resourcesReleased: true,
+          engine: 'cloud',
+          cloudLabel: 'OpenAI transcription',
+        })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    expect(screen.queryByText('Hotwords')).toBeNull()
+
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: [] })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: [] }),
+    }))
+  })
+
+  it('treats a provider missing from a loaded capability matrix as undecided and sends no hotwords', async () => {
+    native.settings.set('builtinSetActive', { ai: true })
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile()],
+      activeId: 'cloud-profile-1',
+    })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'list_downloaded_models') return []
+      if (command === 'asr_hotword_capability_matrix') {
+        return { another_provider: { delivery: 'vocabulary', clientCap: null } }
+      }
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({ phase: 'completed', error: null, engine: 'cloud', cloudLabel: 'Deepgram' })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Deepgram · nova-3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+
+    expect(screen.queryByText('Hotwords')).toBeNull()
+    expect(screen.queryByText('Could not read provider capabilities')).toBeNull()
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: [] })))
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
+      request: expect.objectContaining({ hotwords: [] }),
     }))
   })
 
