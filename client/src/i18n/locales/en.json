@@ -381,7 +381,7 @@
   "settings.contextAware.title": "Context awareness",
   "settings.contextAware.enable": "Context and selection awareness",
   "settings.contextAware.descContinue": "When enabled, AI refers to text near the cursor so new dictation naturally matches its tone, terminology, and formatting.",
-  "settings.contextAware.descSelection": "After selecting text with the mouse, you can ask to translate, shorten, or rewrite it. SayIt replaces the original with the result.",
+  "settings.contextAware.needsAi": "Works only while AI cleanup is on. Until then SayIt does not read the text around the cursor.",
   "settings.contextAware.model": "Custom model",
   "settings.contextAware.sameModel": "Same as dictation",
   "settings.contextAware.modelDesc": "Use a different model for tasks on selected text, for example, a smarter one for more complex requests.",
