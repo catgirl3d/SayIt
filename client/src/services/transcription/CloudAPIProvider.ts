@@ -165,7 +165,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private activeRunId = 0
   private activeStartOpts: Readonly<StartOptions> | undefined
   private activeProfileSnapshot: Promise<AsrProfile | null> | null = null
-  // The ASR provider of the profile the last batch run resolved. It answers acceptsLeadingContext for the next run.
+  // The ASR provider of the profile the last run resolved. It answers acceptsLeadingContext for the next run.
   private resolvedAsrProvider: string | null = null
   private ready = false
 
@@ -208,8 +208,10 @@ export class CloudAPIProvider implements TranscriptionProvider {
     callbacks.onReady?.({ asr: true, llm: true })
   }
 
-  // Answers from the profile the last batch run resolved. runProcess checks the profile of the run itself and strips
-  // the context for any other engine, so a profile switch between the two checks never sends context elsewhere.
+  // Answers from the profile the last run resolved, so it can be stale after a profile switch. That is safe: a run
+  // with leading context never opens a stream (see tryStartRealtimeStream) and always takes the buffered route, where
+  // runProcess checks the profile of the run itself, sends the context to Deepgram only and gives every other engine
+  // the plain piece.
   acceptsLeadingContext(): boolean {
     return this.resolvedAsrProvider === 'deepgram'
   }
@@ -838,6 +840,16 @@ export class CloudAPIProvider implements TranscriptionProvider {
       const asrProvider = profile?.provider ?? ''
       const qwenWorkspaceId = profile?.workspaceId ?? ''
       if (!this.isRunCurrent(runId)) return
+
+      // A piece that carries leading context never opens any stream. Only the buffered route knows how to treat the
+      // context: Deepgram's HTTP request drops its words, and every other engine gets the plain piece. A stream, of
+      // any provider, would transcribe the context again and the user would see repeated words. The stream flags
+      // stay false, so sendAudio keeps only the full copy, no partial-result listener is created, and runProcess
+      // takes the buffered branch.
+      if ((startOpts.leadingContextMs ?? 0) > 0) {
+        addRuntimeEvent('info', 'cloud_api', 'Streaming skipped: the piece carries leading context', { asrProvider, runId })
+        return
+      }
 
       // Whether to enable live streaming display for this session: read the setting directly (single source
       // of truth, so a stale recorder cache cannot decide), fall back to this start's snapshot, and require the

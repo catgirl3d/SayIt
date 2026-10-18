@@ -320,10 +320,44 @@ fn parse_batch_transcript_after_context(
             })?;
         kept.push(text);
     }
-    Ok(kept
-        .join(separator_for_language(language))
-        .trim()
-        .to_string())
+    Ok(join_batch_words(&kept, language))
+}
+
+/// Characters of scripts written without word spacing: Han (including extension A and the compatibility ideographs),
+/// Hiragana, Katakana, CJK symbols and punctuation, and the full-width forms block (which holds half-width Katakana).
+fn is_unspaced_script_char(character: char) -> bool {
+    matches!(
+        character,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{3040}'..='\u{309F}'
+            | '\u{30A0}'..='\u{30FF}'
+            | '\u{3000}'..='\u{303F}'
+            | '\u{FF00}'..='\u{FFEF}'
+    )
+}
+
+/// Joins batch words into text. Explicit Chinese and Japanese never get spaces. Every other language, including the
+/// "multi" code-switching mode that can return Japanese, uses a single space between words, except between two words
+/// that meet at CJK characters, so mixed Latin and Japanese text keeps the spaces only where a Latin word is involved.
+fn join_batch_words(words: &[&str], language: &str) -> String {
+    let spaced = !separator_for_language(language).is_empty();
+    let mut joined = String::new();
+    for word in words {
+        let needs_space = spaced
+            && match (joined.chars().next_back(), word.chars().next()) {
+                (Some(previous), Some(next)) => {
+                    !(is_unspaced_script_char(previous) && is_unspaced_script_char(next))
+                }
+                _ => false,
+            };
+        if needs_space {
+            joined.push(' ');
+        }
+        joined.push_str(word);
+    }
+    joined.trim().to_string()
 }
 
 fn resolve_model(config: &AsrProviderConfig) -> String {
@@ -3061,10 +3095,104 @@ mod tests {
             parse_batch_transcript_after_context(&body, 1000, "ja-JP").unwrap(),
             "你好。"
         );
+    }
+
+    fn timed_words_body(words: &[&str]) -> String {
+        let words: Vec<serde_json::Value> = words
+            .iter()
+            .enumerate()
+            .map(|(index, word)| {
+                let start = 1.2 + 0.2 * index as f64;
+                word_json(word, word, start, start + 0.2)
+            })
+            .collect();
+        serde_json::json!({ "results": { "channels": [{ "alternatives": [{
+            "transcript": "",
+            "words": words
+        }] }] } })
+        .to_string()
+    }
+
+    #[test]
+    fn leading_context_joins_japanese_words_without_spaces_in_multi_language_mode() {
+        let body = timed_words_body(&[
+            "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}",
+            "\u{4e16}\u{754c}\u{3002}",
+        ]);
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "multi").unwrap(),
+            "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{4e16}\u{754c}\u{3002}"
+        );
+    }
+
+    #[test]
+    fn leading_context_puts_one_space_where_japanese_and_latin_words_meet_in_multi() {
+        let body = timed_words_body(&[
+            "\u{65e5}\u{672c}\u{8a9e}\u{3002}",
+            "Hello",
+            "\u{4e16}\u{754c}",
+        ]);
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "multi").unwrap(),
+            "\u{65e5}\u{672c}\u{8a9e}\u{3002} Hello \u{4e16}\u{754c}"
+        );
+    }
+
+    #[test]
+    fn leading_context_joins_adjacent_cjk_words_without_spaces_in_any_spaced_language() {
+        let body = timed_words_body(&["\u{4f60}", "\u{597d}\u{3002}"]);
+        for language in ["en", "ru", "multi"] {
+            assert_eq!(
+                parse_batch_transcript_after_context(&body, 1000, language).unwrap(),
+                "\u{4f60}\u{597d}\u{3002}",
+                "{language}"
+            );
+        }
+    }
+
+    #[test]
+    fn leading_context_joins_english_words_with_spaces() {
+        let body = timed_words_body(&["Hello", "there."]);
         assert_eq!(
             parse_batch_transcript_after_context(&body, 1000, "en").unwrap(),
-            "你 好。"
+            "Hello there."
         );
+    }
+
+    #[test]
+    fn leading_context_never_adds_spaces_for_explicit_chinese_or_japanese() {
+        let body = timed_words_body(&["Hello", "\u{4e16}\u{754c}", "ok"]);
+        for language in ["zh", "zh-CN", "ja", "ja-JP"] {
+            assert_eq!(
+                parse_batch_transcript_after_context(&body, 1000, language).unwrap(),
+                "Hello\u{4e16}\u{754c}ok",
+                "{language}"
+            );
+        }
+    }
+
+    #[test]
+    fn leading_context_word_join_recognizes_the_unspaced_script_ranges() {
+        for character in [
+            '\u{3400}', '\u{4dbf}', '\u{4e00}', '\u{9fff}', '\u{f900}', '\u{faff}', '\u{3040}',
+            '\u{309f}', '\u{30a0}', '\u{30ff}', '\u{3000}', '\u{303f}', '\u{ff00}', '\u{ff66}',
+            '\u{ff9f}', '\u{ffef}',
+        ] {
+            assert!(
+                is_unspaced_script_char(character),
+                "U+{:04X}",
+                character as u32
+            );
+        }
+        for character in [
+            'a', 'Z', '7', ' ', '.', '\u{0416}', '\u{ac00}', '\u{33ff}', '\u{2fff}', '\u{fb00}',
+        ] {
+            assert!(
+                !is_unspaced_script_char(character),
+                "U+{:04X}",
+                character as u32
+            );
+        }
     }
 
     #[test]
