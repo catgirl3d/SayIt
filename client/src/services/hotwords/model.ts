@@ -204,6 +204,24 @@ export function composeHotwords(
   return uniqueWords([...preservedWords, ...activeWords]).slice(0, MAX_HOTWORDS)
 }
 
+/**
+ * Composes the term list for an explicit category selection. Global active flags are ignored:
+ * the selection replaces the active hotwords, so a globally disabled category can be used for
+ * one run without changing the global configuration.
+ */
+export function composeSelectedHotwords(
+  builtinWordsMap: Record<string, string[]>,
+  selectedBuiltinKeys: readonly string[],
+  customThemes: CustomTheme[],
+  selectedThemeIds: readonly string[],
+): string[] {
+  const builtinActiveMap: Record<string, boolean> = {}
+  for (const key of selectedBuiltinKeys) builtinActiveMap[key] = true
+  const customThemeActiveMap: Record<string, boolean> = {}
+  for (const id of selectedThemeIds) customThemeActiveMap[id] = true
+  return composeHotwords([], builtinWordsMap, builtinActiveMap, customThemes, customThemeActiveMap)
+}
+
 export function normalizeBuiltinSetWords(value: unknown): Record<string, string[]> {
   if (!value || typeof value !== 'object') return {}
   const obj = value as Record<string, unknown>

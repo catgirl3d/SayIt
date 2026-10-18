@@ -37,6 +37,8 @@ export interface FileTranscriptionCloudProfile {
   windowSecondsOptionsError: string
   /** Configuration-readiness verdict from describeAsrMissing; '' means ready. */
   missing: string
+  /** Deepgram only: whether this profile opted in to billable keyterms. */
+  deepgramKeytermsEnabled?: boolean
 }
 
 interface FileTranscriptionCloudRequest {
@@ -112,6 +114,8 @@ export interface FileTranscriptionStartOptions {
   cloudProfileId?: string | null
   /** Per-job cloud fragment duration; null delegates to the backend default. */
   cloudWindowSeconds?: number | null
+  /** Fixed hotwords snapshot for this job; an empty list means no words, never a fallback. */
+  hotwords?: string[]
 }
 
 export interface FileTranscriptionBridge {
@@ -136,6 +140,7 @@ interface FileTranscriptionIpcRequest {
   modelId?: string
   language?: SpeechInputLanguage
   accelerator?: string
+  hotwords?: string[]
 }
 
 const defaultBridge: FileTranscriptionBridge = {
@@ -555,9 +560,10 @@ export class FileTranscriptionService {
     profile: AsrProfile,
     windowOptions: CloudWindowOptions = NO_CLOUD_WINDOW_OPTIONS,
   ): FileTranscriptionCloudProfile {
+    const entry = findAsrProvider(profile.provider)
     return {
       id: profile.id,
-      label: findAsrProvider(profile.provider)?.label ?? profile.provider,
+      label: entry?.label ?? profile.provider,
       provider: profile.provider,
       model: profile.model,
       windowSecondsOptions: windowOptions.seconds,
@@ -565,6 +571,9 @@ export class FileTranscriptionService {
       // The canonical readiness predicate shared with the settings cards and
       // mode status; the page needs the verdict, never the credentials.
       missing: describeAsrMissing(profile),
+      ...(entry?.platform === 'deepgram' && {
+        deepgramKeytermsEnabled: profile.deepgramKeytermsEnabled === true,
+      }),
     }
   }
 

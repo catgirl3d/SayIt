@@ -288,6 +288,14 @@ export function findAsrProvider(id: string): AsrProviderEntry | undefined {
 }
 
 /**
+ * Dispatch and capability key for a provider id: every Omni variant shares the single
+ * `qwen_omni` entry on the Rust side.
+ */
+export function resolveAsrDispatchProvider(provider: string): string {
+  return findAsrProvider(provider)?.omni ? 'qwen_omni' : provider
+}
+
+/**
  * 地区提示，**只在需要提醒时才给字**。
  *
  * `mainland_china` 刻意返回空串：内置清单里绝大多数都是国内端点，那是默认情形，
@@ -485,7 +493,7 @@ export function buildAsrProviderConfig(
     model,
   )
   return {
-    provider: entry?.omni ? 'qwen_omni' : profile.provider,
+    provider: resolveAsrDispatchProvider(profile.provider),
     api_key: credentials.apiKey,
     app_id: credentials.appId,
     extra: entry?.customEndpoint
