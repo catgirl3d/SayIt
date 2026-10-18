@@ -1708,6 +1708,7 @@
   "files.cloudProfilesLoading": "Reading cloud profiles…",
   "files.cloudProfilesFailed": "Could not read cloud profiles",
   "files.cloudProfileMissing": "The selected cloud profile is not ready",
+  "files.cloudWindowOptionsFailed": "Fragment duration options are unavailable, so Auto is used",
   "files.fragmentDuration": "Fragment duration",
   "files.fragmentDurationHint": "Nominal duration; voice activity detection may shift the boundary slightly. Shorter values mean more requests.",
   "files.model": "Model",

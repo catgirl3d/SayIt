@@ -318,7 +318,7 @@ describe('file transcription page', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('Auto'))
   })
 
-  it('keeps cloud duration selection through a window-options failure and retry', async () => {
+  it('warns and keeps the profile usable when window options fail, then restores the duration on retry', async () => {
     native.settings.set('fileTranscription.engine', 'cloud')
     native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
     native.settings.set('fileTranscription.cloudWindowSeconds', 180)
@@ -334,9 +334,45 @@ describe('file transcription page', () => {
     })
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Could not read cloud profiles: window options unavailable')).toBeTruthy())
+    await waitFor(() => expect(
+      screen.getByText('Fragment duration options are unavailable, so Auto is used: window options unavailable'),
+    ).toBeTruthy())
+    expect(screen.queryByText(/Could not read cloud profiles/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cloud profile' }).textContent).toContain('nova-3')
+    expect(screen.queryByRole('button', { name: 'Fragment duration' })).toBeNull()
+
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Fragment duration' }).textContent).toContain('3 min'))
+    expect(native.storeWrites).not.toContainEqual({ key: 'fileTranscription.cloudWindowSeconds', value: null })
+  })
+
+  it('starts with Auto instead of the hidden remembered duration while window options are unavailable', async () => {
+    native.settings.set('fileTranscription.engine', 'cloud')
+    native.settings.set('fileTranscription.cloudProfileId', 'cloud-profile-1')
+    native.settings.set('fileTranscription.cloudWindowSeconds', 180)
+    cloudProfiles.loadAsrProfiles.mockResolvedValue({ profiles: [cloudProfile()], activeId: 'cloud-profile-1' })
+    dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
+    native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_file_transcription_cloud_window_options') throw new Error('window options unavailable')
+      if (command === 'start_file_transcription') {
+        return fileSnapshot({ phase: 'completed', error: null, engine: 'cloud', cloudLabel: 'Deepgram' })
+      }
+      return native.defaultInvoke(command, args)
+    })
+    const startSpy = vi.spyOn(fileTranscriptionService, 'startWithCurrentSettings')
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/Fragment duration options are unavailable/)).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
+    await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'cloud',
+      cloudWindowSeconds: null,
+    })))
     expect(native.storeWrites).not.toContainEqual({ key: 'fileTranscription.cloudWindowSeconds', value: null })
   })
 
@@ -376,6 +412,7 @@ describe('file transcription page', () => {
         provider: 'deepgram',
         model: 'nova-3',
         windowSecondsOptions: [300, 180],
+        windowSecondsOptionsError: '',
         missing: '',
       },
       {
@@ -384,6 +421,7 @@ describe('file transcription page', () => {
         provider: 'openai_transcribe',
         model: 'whisper-1',
         windowSecondsOptions: [300, 180],
+        windowSecondsOptionsError: '',
         missing: '',
       },
     ]

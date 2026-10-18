@@ -234,6 +234,8 @@ export default function FileTranscription() {
   useEffect(() => {
     if (jobOptions === null || jobOptions.cloudProfilesError !== '') return
     const selectedProfile = jobOptions.cloudProfiles.find((profile) => profile.id === cloudProfileId)
+    // Unreadable options say nothing about the remembered duration; Retry restores the control.
+    if (selectedProfile?.windowSecondsOptionsError) return
     const normalizedWindow = normalizeCloudWindowSeconds(selectedProfile, cloudWindowSeconds)
     if (normalizedWindow === cloudWindowSeconds) return
     setCloudWindowSeconds(normalizedWindow)
@@ -367,7 +369,7 @@ export default function FileTranscription() {
         modelId,
         language,
         cloudProfileId,
-        cloudWindowSeconds,
+        cloudWindowSeconds: normalizeCloudWindowSeconds(selectedCloudProfile, cloudWindowSeconds),
       })
     } catch (reason) {
       setError(`${t('files.startFailed')}: ${errorMessage(reason)}`)
@@ -703,11 +705,9 @@ export default function FileTranscription() {
                       labelledBy="file-cloud-profile-label"
                       value={cloudProfileId}
                       onChange={(value) => {
-                        const nextProfile = cloudProfiles.find((profile) => profile.id === value) ?? null
-                        const nextWindow = normalizeCloudWindowSeconds(nextProfile, cloudWindowSeconds)
+                        // A duration the new profile does not offer is reset by the normalizing effect.
                         setCloudProfileId(value)
-                        setCloudWindowSeconds(nextWindow)
-                        void rememberSelection({ cloudProfileId: value, cloudWindowSeconds: nextWindow })
+                        void rememberSelection({ cloudProfileId: value })
                       }}
                       placeholder={t('files.cloudSelectProfile')}
                       disabled={active || actionBusy}
@@ -745,6 +745,23 @@ export default function FileTranscription() {
                         ]}
                       />
                       <p className="text-xs leading-relaxed text-muted-foreground">{t('files.fragmentDurationHint')}</p>
+                    </div>
+                  )}
+                  {selectedCloudProfile?.windowSecondsOptionsError && (
+                    <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong">
+                      <div>
+                        {t('files.cloudWindowOptionsFailed')}: {selectedCloudProfile.windowSecondsOptionsError}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        onClick={() => void retryJobOptions()}
+                        disabled={retryingJobOptions}
+                      >
+                        {t('common.retry')}
+                      </Button>
                     </div>
                   )}
                   {selectedCloudProfile && !isCloudProfileReady(selectedCloudProfile) && (
