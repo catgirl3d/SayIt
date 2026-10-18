@@ -48,10 +48,10 @@ pub fn shared_no_redirect() -> Result<&'static reqwest::Client, &'static str> {
 }
 
 #[cfg(test)]
-pub(super) mod test_support {
+pub(crate) mod test_support {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     enum ResponseDelay {
         BeforeHeaders(Duration),
@@ -80,11 +80,34 @@ pub(super) mod test_support {
         delay: Option<ResponseDelay>,
     ) -> (String, std::thread::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let content_type = content_type.to_string();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_request(&mut stream).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Vec::new();
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return Vec::new(),
+                }
+            };
+            if stream.set_nonblocking(false).is_err()
+                || stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .is_err()
+            {
+                return Vec::new();
+            }
+            let request = match read_request(&mut stream) {
+                Ok(request) => request,
+                Err(_) => return Vec::new(),
+            };
             let headers = format!(
                 "HTTP/1.1 {} Test Response\r\nContent-Type: {}\r\nx-request-id: response-header-marker\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 status,
@@ -93,8 +116,11 @@ pub(super) mod test_support {
             );
             match delay {
                 None => {
-                    stream.write_all(headers.as_bytes()).unwrap();
-                    stream.write_all(body.as_bytes()).unwrap();
+                    if stream.write_all(headers.as_bytes()).is_err()
+                        || stream.write_all(body.as_bytes()).is_err()
+                    {
+                        return Vec::new();
+                    }
                 }
                 Some(ResponseDelay::BeforeHeaders(delay)) => {
                     std::thread::sleep(delay);
@@ -159,10 +185,18 @@ pub(super) mod test_support {
     }
 
     pub fn read_request(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut request = Vec::new();
         let mut buffer = [0u8; 4096];
         loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "HTTP fixture request deadline exceeded",
+                ));
+            }
+            stream.set_read_timeout(Some(remaining))?;
             let count = stream.read(&mut buffer)?;
             if count == 0 {
                 break;

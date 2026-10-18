@@ -517,6 +517,52 @@ describe('file transcription service', () => {
     expect(harness.admission.reserveFileTranscription).not.toHaveBeenCalled()
   })
 
+  it('exposes the Deepgram keyterm opt-in in profile metadata without credentials', async () => {
+    profileStoreMocks.loadAsrProfiles.mockResolvedValue({
+      profiles: [
+        {
+          ...cloudProfile,
+          id: 'cloud-deepgram',
+          provider: 'deepgram',
+          model: 'nova-3',
+          deepgramKeytermsEnabled: true,
+        },
+      ],
+      activeId: 'cloud-deepgram',
+    })
+    const harness = createHarness()
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    const { profiles } = await service.getCloudProfiles()
+
+    expect(profiles[0]).toMatchObject({ provider: 'deepgram', deepgramKeytermsEnabled: true })
+    expect(profiles[0]).not.toHaveProperty('apiKey')
+  })
+
+  it('forwards the selected hotwords in the cloud start request', async () => {
+    const harness = createHarness()
+    harness.invoke.mockImplementation(async (command: string) => {
+      if (command === 'start_file_transcription')
+        return snapshot({ engine: 'cloud', cloudLabel: 'Groq Whisper', resourcesReleased: true })
+      return command === 'get_file_transcription_state' ? null : undefined
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await service.startWithCurrentSettings({
+      filePath: 'C:/recording.mp4',
+      outputDirectory: 'C:/output',
+      ffmpegDirectory: null,
+      audioStreamIndex: null,
+      engine: 'cloud',
+      cloudProfileId: 'cloud-a',
+      hotwords: ['Kubernetes', 'SayIt'],
+    })
+
+    const startCall = harness.invoke.mock.calls.find(([command]) => command === 'start_file_transcription')
+    const request = (startCall?.[1] as { request: Record<string, unknown> }).request
+    expect(request.hotwords).toEqual(['Kubernetes', 'SayIt'])
+  })
+
   it('detects an FFmpeg directory through the exact no-args IPC command', async () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {

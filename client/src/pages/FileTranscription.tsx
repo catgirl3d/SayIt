@@ -25,6 +25,8 @@ import { cn } from '@/lib/utils'
 import { useLocale, useT } from '@/i18n/useT'
 import { t as translate, type TranslationKey } from '@/i18n'
 import { ConfirmDeleteModal } from '@/features/settings/ConfirmDeleteModal'
+import HotwordSection from '@/features/fileTranscription/HotwordSection'
+import { useFileTranscriptionHotwords } from '@/features/fileTranscription/useFileTranscriptionHotwords'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import {
   errorMessage,
@@ -189,6 +191,9 @@ export default function FileTranscription() {
   // outputDirectory holds only an explicit choice; until one is made the result goes next
   // to the source file, so choosing a file alone is enough to start.
   const effectiveOutputDirectory = outputDirectory || (filePath ? parentDirectory(filePath) : '')
+  const selectedCloudProfile = (jobOptions?.cloudProfiles ?? [])
+    .find((profile) => profile.id === cloudProfileId) ?? null
+  const hotwords = useFileTranscriptionHotwords({ engine, cloudProfile: selectedCloudProfile })
 
   const applyJobOptions = (value: FileTranscriptionJobOptions) => {
     const firstLoad = !jobOptionsLoaded.current
@@ -355,7 +360,6 @@ export default function FileTranscription() {
 
   const startTranscription = async () => {
     if (!filePath || !effectiveOutputDirectory || !mediaInfo || actionBusy) return
-    const selectedCloudProfile = jobOptions?.cloudProfiles.find((profile) => profile.id === cloudProfileId)
     if (engine === 'cloud' && !isCloudProfileReady(selectedCloudProfile)) return
     setActionBusy(true)
     setError('')
@@ -370,6 +374,7 @@ export default function FileTranscription() {
         language,
         cloudProfileId,
         cloudWindowSeconds: normalizeCloudWindowSeconds(selectedCloudProfile, cloudWindowSeconds),
+        hotwords: hotwords.plan.hotwords,
       })
     } catch (reason) {
       setError(`${t('files.startFailed')}: ${errorMessage(reason)}`)
@@ -458,14 +463,14 @@ export default function FileTranscription() {
   const active = isActiveSnapshot(snapshot)
   const models = jobOptions?.models ?? []
   const cloudProfiles = jobOptions?.cloudProfiles ?? []
-  const selectedCloudProfile = cloudProfiles.find((profile) => profile.id === cloudProfileId) ?? null
   const selectedCloudWindowSeconds = normalizeCloudWindowSeconds(selectedCloudProfile, cloudWindowSeconds)
   const engineReady =
     engine === 'local'
       ? jobOptions !== null && jobOptions.modelsError === '' && modelId !== ''
       : isCloudProfileReady(selectedCloudProfile)
   const canStart = Boolean(
-    filePath && effectiveOutputDirectory && mediaInfo && engineReady && !inspecting && !actionBusy && !active,
+    filePath && effectiveOutputDirectory && mediaInfo && engineReady && hotwords.ready
+      && !inspecting && !actionBusy && !active,
   )
   // Names the first unmet canStart condition, in the same order, so a disabled Start
   // always says why. Transient states (inspecting, busy) and a running job say nothing.
@@ -475,6 +480,10 @@ export default function FileTranscription() {
     if (inspecting) return ''
     if (!mediaInfo) return t('files.inspectFailed')
     if (!engineReady) return t('files.reasonEngineNotReady')
+    if (!hotwords.ready) {
+      if (!hotwords.providerResolved) return hotwords.capabilitiesError ? t('files.hotwordsCapabilitiesFailed') : ''
+      return hotwords.catalogError ? t('files.hotwordsLoadFailed') : ''
+    }
     return ''
   })()
   const progress = snapshot && active ? progressView(snapshot) : null
@@ -781,6 +790,36 @@ export default function FileTranscription() {
                 </>
               )}
             </div>
+            {hotwords.mode !== 'none' && engine === 'cloud' && selectedCloudProfile !== null && hotwords.capabilitiesError && (
+              <div className="space-y-1.5" role="alert">
+                <div className="flex items-start gap-2 text-xs text-destructive">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1">{t('files.hotwordsCapabilitiesFailed')}</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={hotwords.retryCapabilities}
+                >
+                  {t('common.retry')}
+                </Button>
+              </div>
+            )}
+            {hotwords.plan.applicable && (
+              <HotwordSection
+                mode={hotwords.mode}
+                onModeChange={hotwords.setMode}
+                selection={hotwords.selection}
+                onSelectionChange={hotwords.changeSelection}
+                catalog={hotwords.catalog}
+                catalogError={hotwords.catalogError}
+                plan={hotwords.plan}
+                disabled={jobOptions === null || active || actionBusy}
+                onRetry={hotwords.retryCatalog}
+              />
+            )}
             <div className="space-y-1.5">
               <span id="file-output-label" className="text-xs font-medium text-foreground">
                 {t('files.destinationTitle')}

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,6 +7,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { exportHotwords } from '@/services/exports'
 import { HOTWORD_TOKEN_BUDGET, HOTWORD_WORD_BUDGET } from '@/services/hotwords/budget'
+import { loadAsrHotwordCapabilityMatrix } from '@/services/hotwords/capabilityMatrix'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
 import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
 import SuggestedTermsPicker from '@/components/SuggestedTermsPicker'
@@ -171,7 +171,7 @@ export default function Dictionary() {
 
   useEffect(() => {
     let mounted = true
-    void invoke<Record<string, AsrHotwordCapability>>('asr_hotword_capability_matrix')
+    void loadAsrHotwordCapabilityMatrix()
       .then((matrix) => {
         if (mounted) setHotwordCapabilities(matrix)
       })

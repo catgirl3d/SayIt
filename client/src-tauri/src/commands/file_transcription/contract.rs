@@ -50,6 +50,10 @@ pub struct FileTranscriptionRequest {
     pub engine: FileTranscriptionEngine,
     #[serde(default)]
     pub cloud: Option<FileCloudJobRequest>,
+    /// Fixed hotwords snapshot for this job. An empty list means no words; the backend
+    /// never falls back to the globally active hotwords.
+    #[serde(default)]
+    pub hotwords: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +149,21 @@ mod tests {
 
         assert_eq!(request.engine, FileTranscriptionEngine::Local);
         assert!(request.cloud.is_none());
+        assert!(request.hotwords.is_empty());
+    }
+
+    #[test]
+    fn transcription_request_carries_the_hotword_snapshot() {
+        let request: FileTranscriptionRequest = serde_json::from_value(serde_json::json!({
+            "filePath": "C:/recording.wav",
+            "outputDirectory": "C:/output",
+            "ffmpegDirectory": null,
+            "audioStreamIndex": null,
+            "hotwords": ["Kubernetes", "SayIt"],
+        }))
+        .unwrap();
+
+        assert_eq!(request.hotwords, vec!["Kubernetes", "SayIt"]);
     }
 
     #[test]

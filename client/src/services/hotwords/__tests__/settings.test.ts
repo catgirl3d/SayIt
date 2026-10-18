@@ -15,7 +15,7 @@ vi.mock('@/services/store', () => ({
   getSetting: vi.fn(async (key: string, fallback: unknown) => (key in mocks.settings ? mocks.settings[key] : fallback)),
 }))
 
-import { loadActiveHotwords } from '../settings'
+import { loadActiveHotwords, loadHotwordCatalog } from '../settings'
 
 describe('loadActiveHotwords', () => {
   beforeEach(() => {
@@ -45,5 +45,24 @@ describe('loadActiveHotwords', () => {
     }
 
     await expect(loadActiveHotwords()).resolves.toEqual(['GPT'])
+  })
+
+  it('returns the category catalog together with the composed active list', async () => {
+    mocks.settings = {
+      [BUILTIN_SET_WORDS_KEY]: { ai: ['GPT'] },
+      [BUILTIN_SET_ACTIVE_KEY]: { ai: true, code: true },
+      [CUSTOM_THEMES_KEY]: [{ id: 'theme_a', name: 'Mine', words: ['SayIt fork'] }],
+      [CUSTOM_THEME_ACTIVE_KEY]: { theme_a: true },
+    }
+
+    const catalog = await loadHotwordCatalog()
+
+    expect(catalog.builtinSetWords.ai).toEqual(['GPT'])
+    expect(catalog.builtinSetWords.code).toEqual(BUILTIN_SETS.code.words)
+    expect(catalog.builtinSetActive).toEqual({ ai: true, code: true })
+    expect(catalog.customThemes).toEqual([{ id: 'theme_a', name: 'Mine', words: ['SayIt fork'] }])
+    expect(catalog.customThemeActive).toEqual({ theme_a: true })
+    expect(catalog.activeWords).toEqual(['GPT', ...BUILTIN_SETS.code.words, 'SayIt fork'])
+    await expect(loadActiveHotwords()).resolves.toEqual(catalog.activeWords)
   })
 })

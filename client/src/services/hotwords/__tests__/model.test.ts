@@ -3,6 +3,7 @@ import { estimateHotwordTokens } from '../budget'
 import {
   BUILTIN_SETS,
   composeHotwords,
+  composeSelectedHotwords,
   legacyWordsToMigrate,
   normalizeBuiltinSetWords,
   removeThemeWord,
@@ -92,6 +93,32 @@ describe('built-in domain hotword presets', () => {
 
   it.each(PRESET_KEYS)('%s stays within the per-set token estimate', (key) => {
     expect(estimateHotwordTokens(BUILTIN_SETS[key].words)).toBeLessThanOrEqual(140)
+  })
+})
+
+describe('explicit category selection', () => {
+  const setWords = { ai: ['GPT', 'Shared'], code: ['Git', 'Shared'] }
+  const themes: CustomTheme[] = [
+    { id: 'mine', name: 'Mine', words: ['SayIt', 'GPT'] },
+    { id: 'other', name: 'Other', words: ['Docker'] },
+  ]
+
+  it('replaces the global active hotwords with the selected categories', () => {
+    expect(composeSelectedHotwords(setWords, ['code'], themes, ['mine'])).toEqual([
+      'Git',
+      'Shared',
+      'SayIt',
+      'GPT',
+    ])
+  })
+
+  it('includes a globally disabled category and leaves unselected ones out', () => {
+    const selection = composeSelectedHotwords(setWords, ['ai'], themes, [])
+
+    expect(selection).toContain('GPT')
+    expect(selection).toContain('Shared')
+    expect(selection).not.toContain('Git')
+    expect(selection).not.toContain('Docker')
   })
 })
 
