@@ -673,9 +673,6 @@ describe('file transcription page', () => {
     dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'list_downloaded_models') return []
-      if (command === 'asr_hotword_capability_matrix') {
-        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
-      }
       if (command === 'start_file_transcription') {
         return fileSnapshot({
           phase: 'completed',
@@ -750,9 +747,6 @@ describe('file transcription page', () => {
     dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'list_downloaded_models') return []
-      if (command === 'asr_hotword_capability_matrix') {
-        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
-      }
       if (command === 'start_file_transcription') {
         return fileSnapshot({
           phase: 'completed',
@@ -816,9 +810,6 @@ describe('file transcription page', () => {
     dialog.open.mockResolvedValueOnce('C:/recording.mp4').mockResolvedValueOnce('C:/output')
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'list_downloaded_models') return []
-      if (command === 'asr_hotword_capability_matrix') {
-        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
-      }
       if (command === 'store_get' && args?.key === 'builtinSetWords' && hotwordsFail) {
         throw new Error('hotwords offline')
       }

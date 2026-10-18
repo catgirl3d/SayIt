@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router-dom'
-import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import {
@@ -28,6 +27,7 @@ import { t as translate, type TranslationKey } from '@/i18n'
 import { ConfirmDeleteModal } from '@/features/settings/ConfirmDeleteModal'
 import { resolveAsrDispatchProvider } from '@/features/settings/asrProviderCatalog'
 import { foldHotwordDelivery, type AsrHotwordCapability } from '@/lib/asrModels'
+import { loadAsrHotwordCapabilityMatrix } from '@/services/hotwords/capabilityMatrix'
 import HotwordSection from '@/features/fileTranscription/HotwordSection'
 import {
   buildHotwordPlan,
@@ -308,10 +308,9 @@ export default function FileTranscription() {
     let cancelled = false
     setHotwordCapabilities(null)
     setHotwordCapabilitiesError(false)
-    void invoke<Record<string, AsrHotwordCapability>>('asr_hotword_capability_matrix')
+    void loadAsrHotwordCapabilityMatrix()
       .then((matrix) => {
         if (cancelled) return
-        if (!matrix || typeof matrix !== 'object') throw new Error('Invalid ASR hotword capability matrix')
         setHotwordCapabilities(matrix)
       })
       .catch((reason: unknown) => {
