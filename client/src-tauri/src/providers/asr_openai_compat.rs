@@ -288,21 +288,23 @@ async fn transcribe_with_settings(
         )
     })?;
     let start = Instant::now();
-    let response = client.execute(request).await.map_err(|_| {
-        diag::fail(
-            SCOPE,
-            "http_send",
-            "OpenAI-compatible ASR request failed; endpoint details omitted".to_string(),
-        )
+    let response = client.execute(request).await.map_err(|error| {
+        let detail = "OpenAI-compatible ASR request failed; endpoint details omitted".to_string();
+        if error.is_timeout() {
+            diag::fail_code(SCOPE, "http_send", "provider_timeout", detail)
+        } else {
+            diag::fail(SCOPE, "http_send", detail)
+        }
     })?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let status = response.status();
-    let body = response.text().await.map_err(|_| {
-        diag::fail(
-            SCOPE,
-            "read_body",
-            "Could not read OpenAI-compatible ASR response".to_string(),
-        )
+    let body = response.text().await.map_err(|error| {
+        let detail = "Could not read OpenAI-compatible ASR response".to_string();
+        if error.is_timeout() {
+            diag::fail_code(SCOPE, "read_body", "provider_timeout", detail)
+        } else {
+            diag::fail(SCOPE, "read_body", detail)
+        }
     })?;
     if !status.is_success() {
         return Err(response_error(status, &body));
@@ -633,6 +635,70 @@ mod tests {
             body["messages"][0]["content"][1]["input_audio"]["format"],
             "wav"
         );
+    }
+
+    #[tokio::test]
+    async fn transcription_send_and_body_timeouts_report_provider_timeout_with_phase_details() {
+        let response_body = r#"{"text":"late"}"#;
+        for (phase, delay_body, api_key_marker, expected_detail) in [
+            (
+                "send",
+                false,
+                "openai-timeout-key-marker",
+                "OpenAI-compatible ASR request failed; endpoint details omitted",
+            ),
+            (
+                "body",
+                true,
+                "openai-body-timeout-key-marker",
+                "Could not read OpenAI-compatible ASR response",
+            ),
+        ] {
+            let spawn_server = if delay_body {
+                super::super::http_client::test_support::spawn_response_server_with_delayed_body
+            } else {
+                super::super::http_client::test_support::spawn_delayed_response_server
+            };
+            let (endpoint, server) = spawn_server(
+                std::time::Duration::from_millis(500),
+                200,
+                response_body.to_string(),
+            );
+            let base_url = endpoint.trim_end_matches("/response");
+            let config = config(
+                &format!("{}/private-endpoint-marker", base_url),
+                "timeout-model",
+                "transcriptions",
+                api_key_marker,
+            );
+            let audio =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
+
+            let result = transcribe(
+                &audio,
+                16000,
+                &config,
+                &[],
+                Some(std::time::Duration::from_millis(100)),
+            )
+            .await;
+            let _request = server.join().unwrap();
+            let error = result.unwrap_err();
+
+            assert_eq!(
+                crate::error_protocol::decode(&error),
+                Some(("provider_timeout", expected_detail)),
+                "phase={phase}: error={error}"
+            );
+            assert!(
+                !error.contains(api_key_marker),
+                "phase={phase}: error leaked the API key: {error}"
+            );
+            assert!(
+                !error.contains("private-endpoint-marker"),
+                "phase={phase}: error leaked the endpoint: {error}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -371,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_timeout_aborts_a_slow_transcription_through_the_shared_dispatch() {
-        let (endpoint, _server) =
+        let (endpoint, server) =
             super::super::http_client::test_support::spawn_delayed_response_server(
                 std::time::Duration::from_secs(2),
                 200,
@@ -387,22 +387,26 @@ mod tests {
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"audio-marker");
 
         let started = std::time::Instant::now();
-        let error = dispatch_cloud_transcribe(
+        let result = dispatch_cloud_transcribe(
             &config,
             &audio_b64,
             16000,
             &[],
             Some(std::time::Duration::from_millis(150)),
         )
-        .await
-        .unwrap_err();
+        .await;
         let aborted_at = started.elapsed();
+        let _request = server.join().unwrap();
+        let error = result.unwrap_err();
 
         assert!(
             aborted_at < std::time::Duration::from_secs(1),
             "a 150 ms budget must abort before the two-second response; took {aborted_at:?}"
         );
-        assert!(error.starts_with("sayit_error:"), "{error}");
+        assert_eq!(
+            crate::error_protocol::decode(&error).map(|(code, _)| code),
+            Some("provider_timeout")
+        );
     }
 
     #[tokio::test]
