@@ -116,8 +116,35 @@ describe('file transcription service', () => {
           provider: 'groq_whisper',
           model: 'whisper-large-v3',
           windowSecondsOptions: [],
+          windowSecondsOptionsError: '',
           missing: '',
         },
+      ],
+      activeId: 'cloud-a',
+    })
+  })
+
+  it('records a window-options failure only on the profiles of the failing provider', async () => {
+    profileStoreMocks.loadAsrProfiles.mockResolvedValue({
+      profiles: [cloudProfile, { ...cloudProfile, id: 'cloud-b', provider: 'deepgram' }],
+      activeId: cloudProfile.id,
+    })
+    const harness = createHarness()
+    harness.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== 'get_file_transcription_cloud_window_options') return undefined
+      if (args?.provider === 'groq_whisper') throw new Error('window options unavailable')
+      return [300, 180]
+    })
+    const service = new FileTranscriptionService(harness.bridge, harness.admission)
+
+    await expect(service.getCloudProfiles()).resolves.toEqual({
+      profiles: [
+        expect.objectContaining({
+          id: 'cloud-a',
+          windowSecondsOptions: [],
+          windowSecondsOptionsError: 'window options unavailable',
+        }),
+        expect.objectContaining({ id: 'cloud-b', windowSecondsOptions: [300, 180], windowSecondsOptionsError: '' }),
       ],
       activeId: 'cloud-a',
     })
@@ -330,7 +357,7 @@ describe('file transcription service', () => {
     })
   })
 
-  it('reports a cloud window-options IPC failure through cloudProfilesError', async () => {
+  it('keeps cloud profiles loadable when the window-options IPC fails', async () => {
     const harness = createHarness()
     harness.invoke.mockImplementation(async (command: string) => {
       if (command === 'get_file_transcription_cloud_window_options') throw new Error('window options unavailable')
@@ -340,9 +367,15 @@ describe('file transcription service', () => {
     const service = new FileTranscriptionService(harness.bridge, harness.admission)
 
     await expect(service.loadJobOptions()).resolves.toMatchObject({
-      cloudProfiles: [],
-      cloudProfilesError: 'window options unavailable',
-      cloudProfileId: '',
+      cloudProfiles: [
+        expect.objectContaining({
+          id: 'cloud-a',
+          windowSecondsOptions: [],
+          windowSecondsOptionsError: 'window options unavailable',
+        }),
+      ],
+      cloudProfilesError: '',
+      cloudProfileId: 'cloud-a',
     })
   })
 

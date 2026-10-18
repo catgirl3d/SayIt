@@ -33,6 +33,8 @@ export interface FileTranscriptionCloudProfile {
   provider: string
   model: string
   windowSecondsOptions: number[]
+  /** Why the backend window options could not be read; '' means they were read. */
+  windowSecondsOptionsError: string
   /** Configuration-readiness verdict from describeAsrMissing; '' means ready. */
   missing: string
 }
@@ -151,6 +153,20 @@ const defaultAdmission: FileTranscriptionAdmission = {
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+// Narrows untyped input (settings storage, optional caller arguments) to the
+// wire type of the cloud window field; membership in the provider's options is
+// checked by the page and, authoritatively, by the backend.
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+interface CloudWindowOptions {
+  seconds: number[]
+  error: string
+}
+
+const NO_CLOUD_WINDOW_OPTIONS: CloudWindowOptions = { seconds: [], error: '' }
 
 export function normalizeInspectionFailure(reason: unknown): unknown {
   if (typeof reason !== 'object' || reason === null) return reason
@@ -291,14 +307,22 @@ export class FileTranscriptionService {
 
   async getCloudProfiles(): Promise<{ profiles: FileTranscriptionCloudProfile[]; activeId: string }> {
     const state = await loadAsrProfiles()
-    const windowSecondsByProvider = new Map<string, number[]>()
+    const windowOptionsByProvider = new Map<string, CloudWindowOptions>()
     const providers = [...new Set(state.profiles.map((profile) => profile.provider))]
+    // The window options only refine an optional control, so a failed lookup is
+    // recorded on the affected profiles instead of failing the whole profile list.
     await Promise.all(providers.map(async (provider) => {
-      const options = await this.ipc.invoke<number[]>('get_file_transcription_cloud_window_options', { provider })
-      windowSecondsByProvider.set(provider, options)
+      try {
+        const seconds = await this.ipc.invoke<number[]>('get_file_transcription_cloud_window_options', { provider })
+        windowOptionsByProvider.set(provider, { seconds, error: '' })
+      } catch (reason) {
+        windowOptionsByProvider.set(provider, { seconds: [], error: errorMessage(reason) })
+      }
     }))
     return {
-      profiles: state.profiles.map((profile) => this.cloudProfileMetadata(profile, windowSecondsByProvider.get(profile.provider) ?? [])),
+      profiles: state.profiles.map((profile) =>
+        this.cloudProfileMetadata(profile, windowOptionsByProvider.get(profile.provider) ?? NO_CLOUD_WINDOW_OPTIONS),
+      ),
       activeId: state.activeId,
     }
   }
@@ -371,10 +395,7 @@ export class FileTranscriptionService {
           : profileIds.has(activeId)
             ? activeId
             : (cloudProfiles[0]?.id ?? '')
-    const cloudWindowSeconds =
-      typeof storedCloudWindowSeconds === 'number' && Number.isFinite(storedCloudWindowSeconds)
-        ? storedCloudWindowSeconds
-        : null
+    const cloudWindowSeconds = finiteNumberOrNull(storedCloudWindowSeconds)
 
     return {
       engine: storedEngine === 'cloud' ? 'cloud' : 'local',
@@ -530,13 +551,17 @@ export class FileTranscriptionService {
     this.reservationJobId = null
   }
 
-  private cloudProfileMetadata(profile: AsrProfile, windowSecondsOptions: number[] = []): FileTranscriptionCloudProfile {
+  private cloudProfileMetadata(
+    profile: AsrProfile,
+    windowOptions: CloudWindowOptions = NO_CLOUD_WINDOW_OPTIONS,
+  ): FileTranscriptionCloudProfile {
     return {
       id: profile.id,
       label: findAsrProvider(profile.provider)?.label ?? profile.provider,
       provider: profile.provider,
       model: profile.model,
-      windowSecondsOptions,
+      windowSecondsOptions: windowOptions.seconds,
+      windowSecondsOptionsError: windowOptions.error,
       // The canonical readiness predicate shared with the settings cards and
       // mode status; the page needs the verdict, never the credentials.
       missing: describeAsrMissing(profile),
@@ -555,13 +580,10 @@ export class FileTranscriptionService {
     if (!profile) throw new Error(`Cloud ASR profile not found: ${cloudProfileId}`)
     const profileSnapshot = { ...profile }
     const metadata = this.cloudProfileMetadata(profileSnapshot)
-    const windowSeconds = typeof cloudWindowSeconds === 'number' && Number.isFinite(cloudWindowSeconds)
-      ? cloudWindowSeconds
-      : null
     const cloud = {
       label: metadata.label,
       config: buildAsrProviderConfig(profileSnapshot, language),
-      windowSeconds,
+      windowSeconds: finiteNumberOrNull(cloudWindowSeconds),
     }
     return {
       ...options,

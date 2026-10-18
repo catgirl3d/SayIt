@@ -1705,6 +1705,7 @@
   "files.cloudProfilesLoading": "Читання хмарних профілів…",
   "files.cloudProfilesFailed": "Не вдалося прочитати хмарні профілі",
   "files.cloudProfileMissing": "Вибраний хмарний профіль не готовий",
+  "files.cloudWindowOptionsFailed": "Варіанти тривалості фрагмента недоступні, тому використовується Авто",
   "files.fragmentDuration": "Тривалість фрагмента",
   "files.fragmentDurationHint": "Номінальна тривалість; виявлення активності мовлення може трохи змістити межу. Менші значення означають більше запитів.",
   "files.model": "Модель",
