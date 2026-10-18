@@ -16,6 +16,7 @@ use super::transcript::{append_transcript, should_retry_empty_fragment};
 use crate::error_protocol;
 use crate::providers::registry;
 use base64::Engine as _;
+use std::cell::RefCell;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -270,11 +271,23 @@ pub(super) fn process_cloud_pcm(
     let config = cloud.asr_config.clone();
     let mut progress = CheckpointProgress::default();
     let mut draft = None;
-    // A window can succeed with a provider warning (Deepgram retries without keyterms after a
-    // keyterm-limit rejection). Every window sends the same fixed term list, so the first
-    // reported warning is kept and joined with the skipped-fragments accounting below into the
-    // single warning string of the snapshot.
-    let mut provider_warning: Option<String> = None;
+    // Two sources feed the single snapshot warning: a provider warning reported by a successful
+    // window (Deepgram retried without keyterms after a keyterm-limit rejection) and the
+    // skipped-fragments accounting. Every window sends the same fixed term list, so only the
+    // first provider warning is kept. Each change republishes the combination, so the live
+    // snapshot shows both facts as soon as they happen and a later failure or cancellation does
+    // not drop the provider warning.
+    let provider_warning: RefCell<Option<String>> = RefCell::new(None);
+    let skipped_warning: RefCell<Option<String>> = RefCell::new(None);
+    let publish_warning = || {
+        let warning = combine_warnings(
+            provider_warning.borrow().clone(),
+            skipped_warning.borrow().clone(),
+        );
+        let _ = update_active(&input.job_id, |snapshot| {
+            snapshot.warning = warning;
+        });
+    };
     let result = run_cloud_windowed_recognition(
         windows,
         &input.cancel,
@@ -298,7 +311,10 @@ pub(super) fn process_cloud_pcm(
             };
             let response = recognition?;
             if let Some(warning) = response.warning {
-                provider_warning.get_or_insert_with(|| provider_warning_text(warning));
+                if provider_warning.borrow().is_none() {
+                    *provider_warning.borrow_mut() = Some(provider_warning_text(warning));
+                    publish_warning();
+                }
             }
             Ok(response.result.text)
         },
@@ -346,13 +362,11 @@ pub(super) fn process_cloud_pcm(
             Ok(())
         },
         |skipped_fragments, first_skipped_position_samples| {
-            let warning = skipped_fragments_warning(
+            *skipped_warning.borrow_mut() = skipped_fragments_warning(
                 skipped_fragments,
                 first_skipped_position_samples.map(samples_to_ms),
             );
-            let _ = update_active(&input.job_id, |snapshot| {
-                snapshot.warning = warning.clone();
-            });
+            publish_warning();
         },
     );
     match result {
@@ -361,7 +375,7 @@ pub(super) fn process_cloud_pcm(
             result.text,
             draft,
             combine_warnings(
-                provider_warning,
+                provider_warning.take(),
                 skipped_fragments_warning(
                     result.empty_fragments,
                     result.first_empty_position_samples.map(samples_to_ms),
