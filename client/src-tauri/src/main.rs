@@ -755,6 +755,7 @@ fn main() {
             // File transcription
             commands::file_transcription::inspect_transcription_file,
             commands::file_transcription::detect_ffmpeg_directory,
+            commands::file_transcription::get_file_transcription_cloud_window_options,
             commands::file_transcription::start_file_transcription,
             commands::file_transcription::get_file_transcription_state,
             commands::file_transcription::cancel_file_transcription,

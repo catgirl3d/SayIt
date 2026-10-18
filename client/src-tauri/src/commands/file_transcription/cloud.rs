@@ -239,7 +239,8 @@ pub(super) fn process_cloud_pcm(
         WorkerOutcome::Failed("Cloud transcription configuration is missing".into())
     })?;
     let mut reader = PcmWindowReader::open(pcm_path).map_err(WorkerOutcome::Failed)?;
-    let window_samples = cloud_policy::window_samples(&cloud.asr_config.provider);
+    let window_samples =
+        cloud_policy::window_samples(&cloud.asr_config.provider, cloud.window_seconds);
     let read_samples = window_samples.saturating_add(LOOKAHEAD_SAMPLES);
     let mut source_samples = 0_u64;
     let windows = std::iter::from_fn(move || {

@@ -59,6 +59,7 @@ struct Profile {
 
 /// Working window for providers without a proven longer one.
 const CONSERVATIVE_WINDOW_SECONDS: u32 = 20;
+const WINDOW_PRESETS: &[u32] = &[20, 60, 180, 300];
 
 fn profile(provider: &str) -> Profile {
     let conservative = Profile {
@@ -209,8 +210,23 @@ pub(super) fn window_seconds(provider: &str) -> u32 {
 }
 
 /// Window converted to PCM samples for the window reader.
-pub(super) fn window_samples(provider: &str) -> usize {
-    window_seconds(provider) as usize * SAMPLE_RATE
+pub(super) fn window_samples(provider: &str, requested: Option<u32>) -> usize {
+    let seconds = requested
+        .filter(|requested| window_options(provider).contains(requested))
+        .unwrap_or_else(|| window_seconds(provider));
+    seconds as usize * SAMPLE_RATE
+}
+
+pub(super) fn window_options(provider: &str) -> Vec<u32> {
+    let default_seconds = window_seconds(provider);
+    if default_seconds <= CONSERVATIVE_WINDOW_SECONDS {
+        return Vec::new();
+    }
+    WINDOW_PRESETS
+        .iter()
+        .copied()
+        .filter(|preset| *preset <= default_seconds)
+        .collect()
 }
 
 /// HTTP budget for one cloud request; `None` keeps the provider default.
@@ -250,7 +266,54 @@ mod tests {
             "mystery-provider",
         ] {
             assert_eq!(window_seconds(provider), 20, "{provider}");
-            assert_eq!(window_samples(provider), SAMPLE_RATE * 20, "{provider}");
+            assert_eq!(
+                window_samples(provider, None),
+                SAMPLE_RATE * 20,
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn window_options_are_limited_by_each_providers_effective_default() {
+        for (provider, expected) in [
+            ("deepgram", vec![20, 60, 180, 300]),
+            ("doubao", vec![20, 60, 180, 300]),
+            ("openai_transcribe", vec![20, 60, 180, 300]),
+            ("gemini_transcribe", vec![20, 60, 180, 300]),
+            ("qwen", vec![20, 60, 180]),
+            ("aliyun", vec![20, 60, 180]),
+            ("qwen_realtime", vec![20, 60, 180]),
+            ("groq_whisper", Vec::new()),
+            ("mystery-provider", Vec::new()),
+        ] {
+            assert_eq!(window_options(provider), expected, "{provider}");
+        }
+    }
+
+    #[test]
+    fn window_samples_honor_supported_presets_and_fall_back_for_invalid_overrides() {
+        for (provider, requested, expected_seconds) in [
+            ("deepgram", None, 300),
+            ("deepgram", Some(20), 20),
+            ("deepgram", Some(60), 60),
+            ("deepgram", Some(180), 180),
+            ("deepgram", Some(300), 300),
+            ("deepgram", Some(0), 300),
+            ("deepgram", Some(30), 300),
+            ("deepgram", Some(400), 300),
+            ("qwen", Some(20), 20),
+            ("qwen", Some(60), 60),
+            ("qwen", Some(180), 180),
+            ("qwen", Some(300), 180),
+            ("groq_whisper", Some(20), 20),
+            ("groq_whisper", Some(60), 20),
+        ] {
+            assert_eq!(
+                window_samples(provider, requested),
+                SAMPLE_RATE * expected_seconds,
+                "{provider} requested {requested:?}"
+            );
         }
     }
 

@@ -84,6 +84,11 @@ pub async fn detect_ffmpeg_directory() -> Result<Option<String>, String> {
     .map_err(|error| format!("FFmpeg detection task failed: {error}"))?
 }
 
+#[tauri::command]
+pub fn get_file_transcription_cloud_window_options(provider: String) -> Vec<u32> {
+    cloud_policy::window_options(&provider)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn start_file_transcription(
     app: AppHandle,
