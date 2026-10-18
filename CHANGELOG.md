@@ -28,6 +28,8 @@ Sections are ordered by version, newest first.
 - Dialogs no longer close when you select text in a field and release the mouse outside the dialog. Before, such a drag closed the dialog and discarded what you had typed.
 - With two dialogs open at once, such as the backup list under a restore confirmation, Esc now closes only the top one.
 - A long dialog title no longer runs under the close button.
+- Full-backup restores and Electron imports now fail closed without partial data changes, so failed imports can be retried.
+- History and Home now show read failures instead of empty history or zero statistics, and export failures are reported explicitly.
 
 ## v0.3.0 — 2026-10-17
 

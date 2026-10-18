@@ -1,9 +1,17 @@
+// @vitest-environment jsdom
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { t } from '@/i18n'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   getSetting: vi.fn(),
   loadActiveAsrProfile: vi.fn(),
+  listHistory: vi.fn(),
+  countHistory: vi.fn(),
+  exportHistory: vi.fn(),
+  listen: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => mocks.invoke(...args) }))
@@ -11,16 +19,28 @@ vi.mock('@/features/settings/asrProfileStore', () => ({
   loadActiveAsrProfile: (...args: unknown[]) => mocks.loadActiveAsrProfile(...args),
 }))
 vi.mock('@/services/store', () => ({
-  countHistory: vi.fn(),
+  countHistory: (...args: unknown[]) => mocks.countHistory(...args),
+  clearHistory: vi.fn(),
   deleteHistory: vi.fn(),
-  listHistory: vi.fn(),
+  listHistory: (...args: unknown[]) => mocks.listHistory(...args),
   setHistoryFavorite: vi.fn(),
   updateHistoryRecord: vi.fn(),
   getActivePreset: vi.fn(),
   getSetting: (...args: unknown[]) => mocks.getSetting(...args),
 }))
+vi.mock('@/services/exports', () => ({
+  exportHistory: (...args: unknown[]) => mocks.exportHistory(...args),
+}))
+vi.mock('@/services/bridge', () => ({
+  appendDebugLog: (payload: unknown) => mocks.invoke('append_debug_log', { payload }),
+  deleteAudioFile: vi.fn(),
+  emit: vi.fn(),
+  getClientRuntimeInfo: vi.fn().mockResolvedValue(null),
+  listen: (...args: unknown[]) => mocks.listen(...args),
+  readAudioFile: vi.fn(),
+}))
 
-import { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
+import History, { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
 import { getRuntimeServerAiSource, setRuntimeServerAiSource } from '@/services/transcription/serverAiSource'
 
 function mockCloudProfile(provider = 'openai_transcribe') {
@@ -57,6 +77,50 @@ function invokedCommands(): string[] {
     .map(([command]) => command as string)
     .filter((command) => command !== 'append_debug_log')
 }
+
+describe('history export attempt handling', () => {
+  beforeEach(() => {
+    mocks.listHistory.mockReset().mockResolvedValue([])
+    mocks.countHistory.mockReset().mockResolvedValue(0)
+    mocks.exportHistory.mockReset().mockResolvedValue({ canceled: true, filePath: null })
+    mocks.listen.mockReset().mockResolvedValue(() => undefined)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('does not let an older export timer hide a newer result', async () => {
+    vi.useFakeTimers()
+    mocks.exportHistory
+      .mockReset()
+      .mockResolvedValueOnce({ canceled: false, filePath: 'first-export.json' })
+      .mockResolvedValueOnce({ canceled: false, filePath: 'second-export.json' })
+
+    render(createElement(History))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const exportButton = screen.getByRole('button', { name: t('history.export') })
+
+    fireEvent.click(exportButton)
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText(t('history.savedTo', { path: 'first-export.json' }))).toBeTruthy()
+
+    await act(async () => { vi.advanceTimersByTime(4_000) })
+    fireEvent.click(exportButton)
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText(t('history.savedTo', { path: 'second-export.json' }))).toBeTruthy()
+
+    await act(async () => { vi.advanceTimersByTime(4_000) })
+    expect(screen.getByText(t('history.savedTo', { path: 'second-export.json' }))).toBeTruthy()
+
+    await act(async () => { vi.advanceTimersByTime(4_000) })
+    expect(screen.queryByText(t('history.savedTo', { path: 'second-export.json' }))).toBeNull()
+  })
+})
 
 describe('history cloud ASR reprocessing', () => {
   beforeEach(() => {
@@ -641,7 +705,6 @@ describe('history cloud ASR reprocessing', () => {
   })
 
   it('serializes skipped AI metadata as explicit nulls to clear prior attribution', async () => {
-    mockSettings(aiSettings('ollama', 'http://127.0.0.1:11434', '', 'model-b'))
     const metadata = await buildReprocessMetadata('cloud_api', {
       asrText: 'new raw transcript',
       llmText: 'new raw transcript',

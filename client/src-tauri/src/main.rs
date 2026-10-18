@@ -251,7 +251,7 @@ fn main() {
 
     // One-time migration from Electron app's SQLite database
     if let Err(e) = storage.migrate_from_electron() {
-        eprintln!("Warning: Electron data migration failed: {}", e);
+        log::error!("Electron data migration failed: {}", e);
     }
 
     // Clean up expired audio files on startup

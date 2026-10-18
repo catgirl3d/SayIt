@@ -176,6 +176,30 @@ describe('client AI polish completion handling', () => {
     }
   })
 
+  it.each([
+    { name: 'below', durationSec: 1.9, expectedCalls: 0, expectedStatus: 'skipped' as const },
+    { name: 'at', durationSec: 2, expectedCalls: 1, expectedStatus: 'applied' as const },
+    { name: 'above', durationSec: 2.1, expectedCalls: 1, expectedStatus: 'applied' as const },
+  ])('applies the duration threshold when the audio is $name it', async ({ durationSec, expectedCalls, expectedStatus }) => {
+    boundaries.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_polish' ? { text: 'polished', elapsed_ms: 17 } : undefined
+    ))
+
+    const polished = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec,
+      startOptions: { runId: 10, aiMinDurationSec: 2 },
+      logSource: 'test',
+    })
+
+    expect(polished).toMatchObject({
+      llmText: expectedStatus === 'skipped' ? ASR_COMMAND : 'polished',
+      aiSource: expectedStatus === 'skipped' ? 'none' : 'custom',
+      aiStatus: expectedStatus,
+    })
+    expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'cloud_polish')).toHaveLength(expectedCalls)
+  })
+
   it('treats a nonempty completion equal to ASR text as applied', async () => {
     boundaries.invoke.mockImplementation(async (command: string) => {
       if (command === 'cloud_polish') return { text: ASR_COMMAND, elapsed_ms: 17 }

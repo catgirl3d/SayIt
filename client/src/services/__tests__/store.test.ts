@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UsageEventInput } from '@/types/usage'
 
 const bridge = vi.hoisted(() => ({
+  historyList: vi.fn(),
+  historyCount: vi.fn(),
   usageRecord: vi.fn(),
   usageSummary: vi.fn(),
   usageClear: vi.fn(),
@@ -14,7 +16,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }))
 
 vi.mock('../bridge', () => bridge)
 
-import { clearStats, EMPTY_USAGE_SUMMARY, estimateTypingTimeSec, getSetting, getStats, recordUsage, setSetting } from '../store'
+import { clearStats, countHistory, EMPTY_USAGE_SUMMARY, estimateTypingTimeSec, getSetting, getStats, listHistory, recordUsage, setSetting } from '../store'
 
 describe('native app settings batch', () => {
   it('uses the registered transaction command and propagates a failed commit', async () => {
@@ -76,6 +78,35 @@ describe('native usage commands', () => {
     await actual.usageClear()
 
     expect(nativeInvoke).toHaveBeenCalledExactlyOnceWith('usage_clear')
+  })
+})
+
+describe('history reads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('propagates a failed history list read', async () => {
+    const failure = new Error('history list failed')
+    bridge.historyList.mockRejectedValueOnce(failure)
+
+    await expect(listHistory()).rejects.toBe(failure)
+  })
+
+  it('propagates a failed history count read', async () => {
+    const failure = new Error('history count failed')
+    bridge.historyCount.mockRejectedValueOnce(failure)
+
+    await expect(countHistory()).rejects.toBe(failure)
+  })
+
+  it('propagates a failed statistics read instead of returning zero totals', async () => {
+    vi.resetModules()
+    const store = await import('../store')
+    const failure = new Error('statistics read failed')
+    bridge.usageSummary.mockRejectedValueOnce(failure)
+
+    await expect(store.getStats()).rejects.toBe(failure)
   })
 })
 
