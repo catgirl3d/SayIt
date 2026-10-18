@@ -25,6 +25,7 @@ Sections are ordered by version, newest first.
 - The Context awareness card moved from General settings to the AI cleanup page, next to the other AI cleanup options. It is only used while AI cleanup is on, so when cleanup is off the card now says so instead of silently doing nothing; the saved setting is kept. The card title has an ⓘ tooltip explaining how context reading works (Windows UI Automation, without screenshots or OCR, up to 500 characters before the cursor and 300 after), and the selection-edit prompt field is now announced by screen readers.
 - The provider lists in the speech recognition and AI service editors are now split into Global, China and custom or local endpoint groups, sorted alphabetically inside each group, instead of one hand-ordered list that started with the Chinese providers or the generic entry.
 - The Settings group in the left menu is now folded until you click its heading, so the menu leads with the workspace and voice pages. It opens on its own when you land on one of its pages, and stays as you left it while you move around.
+- The AI providers page no longer repeats its title and description inside the card. Test all now sits in the page header next to Help, New is a dashed tile at the end of the card grid (and the whole empty state when no service is saved), and the page subtitle says that a click on a card makes it active and that recognized text is sent to the service you choose.
 
 ### Fixed
 #### Desktop Client

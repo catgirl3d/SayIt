@@ -15,6 +15,8 @@
 //   - Radio card grid matches `WorkModeSection` and the theme selector:
 //     `role="radiogroup"` + `grid gap-3 sm:grid-cols-3`, active state `border-primary bg-primary/5`
 //     with a checkmark so selection does not depend solely on color.
+//   - The last grid cell is a dashed "New" tile. It sits outside the radiogroup (the cards are wrapped in a
+//     `display: contents` group), so it is not announced as a radio option.
 //   - Create / Edit / Delete uses `Modal` (sharing the shell with model directory and deletion dialogs):
 //     Includes Escape handling, focus trapping, and focus restoration on close.
 //
@@ -22,7 +24,7 @@
 // Model name and provider are always visible; custom hostname is shown only when non-default;
 // full URL is available in the edit modal. Latency is the primary benchmark metric and remains visible.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { ExternalLink, Info, Plus, RefreshCw } from 'lucide-react'
@@ -251,9 +253,18 @@ function describeStatus(profile: AiProfile, checking: boolean): CardStatus {
   }
 }
 
-const pickAdvice = () => t('ai.pickAdvice')
+interface AIProviderSectionProps {
+  /**
+   * Lays out the page header around the section's page-level actions (Test all). The actions need
+   * this section's state, so the section builds them and the page decides where they go.
+   * Defaults to a right-aligned row above the card.
+   */
+  renderHeader?: (actions: ReactNode) => ReactNode
+}
 
-export default function AIProviderSection() {
+const defaultHeader = (actions: ReactNode) => <div className="mb-3 flex justify-end">{actions}</div>
+
+export default function AIProviderSection({ renderHeader = defaultHeader }: AIProviderSectionProps) {
   useT()
   const [profiles, setProfiles] = useState<AiProfile[]>([])
   const [activeId, setActiveId] = useState('')
@@ -887,318 +898,317 @@ export default function AIProviderSection() {
     )
   }
 
+  const testAllButton = (
+    <Button
+      variant="outline"
+      size="sm"
+      className="shrink-0"
+      onClick={() => void handleCheckAll()}
+      disabled={busy || profiles.length === 0}
+    >
+      <RefreshCw className={cn('mr-1 h-3.5 w-3.5', batch && 'animate-spin')} aria-hidden />
+      {batch ? t('ai.testingBatch', { done: batch.done, total: batch.total }) : t('ai.testAll')}
+    </Button>
+  )
+
+  // Doubles as the empty state: with no cards it spans the row and carries the "no services" note.
+  const noProfiles = profiles.length === 0
+  const newServiceTile = (
+    <button
+      type="button"
+      onClick={() => openEditor(newDraftProfile(profiles, activeId), true)}
+      aria-label={noProfiles ? t('common.new') : undefined}
+      aria-describedby={noProfiles ? 'ai-service-empty' : undefined}
+      className={cn(
+        'flex min-h-16 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border px-3 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        noProfiles && 'py-5 sm:col-span-3',
+      )}
+    >
+      <span className="flex items-center gap-1.5">
+        <Plus className="h-3.5 w-3.5" aria-hidden />
+        {t('common.new')}
+      </span>
+      {noProfiles && <span id="ai-service-empty">{t('ai.empty')}</span>}
+    </button>
+  )
+
   return (
-    <Card>
-      <CardContent className="p-6">
-        {serverAiSourceLoaded && isServerMode && (
-          <section className="mb-4 border-b border-border pb-4" aria-labelledby="server-ai-source-heading">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 id="server-ai-source-heading" className="text-lg font-semibold">
-                    {t('ai.serverSource.title')}
-                  </h2>
-                  <Tooltip variant="light" content={t('ai.serverSource.help')}>
-                    <Info
-                      aria-label={t('settings.helpAria', { label: t('ai.serverSource.title') })}
-                      className={helpIconClass}
-                    />
-                  </Tooltip>
-                </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {t(serverAiSource === 'custom' ? 'ai.serverSource.descCustom' : 'ai.serverSource.descManaged')}
-                </p>
-              </div>
-              <Switch
-                checked={serverAiSource === 'custom'}
-                onChange={() => void handleServerAiSource(serverAiSource === 'custom' ? 'managed' : 'custom')}
-                labelledBy="server-ai-source-heading"
-                disabled={savingServerAiSource}
-              />
-            </div>
-
-            {serverAiSourceError && (
-              <Feedback className="mt-2" tone="error" message={t('ai.err.saveFailed')} />
-            )}
-          </section>
-        )}
-
-        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 grow basis-[18rem]">
-            <div className="flex items-center gap-2">
-              <h2 id="ai-service-heading" className="text-lg font-semibold">{t('ai.title')}</h2>
-              <Tooltip variant="light" content={pickAdvice()}>
-                <Info aria-label={t('ai.helpAria')} className={helpIconClass} />
-              </Tooltip>
-            </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {t('ai.desc')}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0"
-              onClick={() => void handleCheckAll()}
-              disabled={busy || profiles.length === 0}
-            >
-              <RefreshCw className={cn('mr-1 h-3.5 w-3.5', batch && 'animate-spin')} aria-hidden />
-              {batch ? t('ai.testingBatch', { done: batch.done, total: batch.total }) : t('ai.testAll')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0"
-              onClick={() => openEditor(newDraftProfile(profiles, activeId), true)}
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />
-              {t('common.new')}
-            </Button>
-          </div>
-        </div>
-
-        <fieldset className="min-w-0">
-          {!loaded ? (
-            <p className="py-2 text-sm text-muted-foreground">{t('ai.loading')}</p>
-          ) : profiles.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border px-4 py-4 text-center text-sm text-muted-foreground">
-              {t('ai.empty')}
-            </p>
-          ) : (
-            <div
-              role="radiogroup"
-              aria-labelledby="ai-service-heading"
-              className="grid gap-2.5 sm:grid-cols-3"
-            >
-              {profiles.map(renderCard)}
-            </div>
-          )}
-
-          {notice?.scope === 'list' && (
-            <Feedback className="mt-3" tone={notice.tone} message={notice.message} detail={notice.detail} />
-          )}
-        </fieldset>
-      </CardContent>
-
-      {draft && (
-        <Modal
-          title={draftIsNew ? t('ai.editorNew') : t('ai.editorEdit')}
-          onClose={closeEditor}
-          locked={saving || fetchingModels || testingDraft}
-          showCloseButton
-          panelClassName="w-[520px]"
-        >
-          <div className="mt-4 space-y-3">
-            <div>
-              <label htmlFor="ai-provider" className="mb-1 block text-sm text-muted-foreground">{t('ai.provider')}</label>
-              <Select
-                value={draft.provider}
-                onChange={(value) => handleDraftProvider(value)}
-                options={groupedAiProviders().map(({ provider, group }) => ({
-                  value: provider.value,
-                  label: provider.label,
-                  group,
-                }))}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="ai-api-url" className="mb-1 block text-sm text-muted-foreground">
-                {draftProvider.urlOptional ? t('ai.apiUrlOptional') : draftProvider.keyless ? t('ai.ollamaUrl') : t('ai.apiUrl')}
-              </label>
-              <input
-                id="ai-api-url"
-                type="url"
-                inputMode="url"
-                value={draft.apiUrl}
-                onChange={(e) => patchDraft({ apiUrl: e.target.value })}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleSave() }}
-                placeholder={draftProvider.defaultUrl}
-                aria-describedby={draftProvider.urlOptional ? 'ai-api-url-hint' : undefined}
-                className={inputClass}
-              />
-              {draftProvider.urlOptional && (
-                <p id="ai-api-url-hint" className="mt-1 text-xs text-muted-foreground">{t('ai.apiUrlOptionalHint')}</p>
-              )}
-              {draftUrlError && <FormatHint text={draftUrlError} />}
-            </div>
-
-            {draftNeedsKey && (
-              <div data-modal-autofocus>
-                <label htmlFor="ai-api-key" className="mb-1 block text-sm text-muted-foreground">API Key</label>
-                <PasswordInput
-                  id="ai-api-key"
-                  label="API Key"
-                  value={draft.apiKey}
-                  onChange={(v) => patchDraft({ apiKey: v })}
-                  onSubmit={() => void handleSave()}
-                  placeholder={t('ai.keyPlaceholder')}
-                  className={cn(inputClass, 'pr-8')}
-                />
-                {!notice && draftKeyHint && <FormatHint text={draftKeyHint} />}
-                {draftKeyInherited && (
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {t('ai.keyReused', { provider: draftProvider.label })}
+    <>
+      {renderHeader(testAllButton)}
+      <Card>
+        <CardContent className="p-6">
+          {serverAiSourceLoaded && isServerMode && (
+            <section className="mb-4 border-b border-border pb-4" aria-labelledby="server-ai-source-heading">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 id="server-ai-source-heading" className="text-lg font-semibold">
+                      {t('ai.serverSource.title')}
+                    </h2>
+                    <Tooltip variant="light" content={t('ai.serverSource.help')}>
+                      <Info
+                        aria-label={t('settings.helpAria', { label: t('ai.serverSource.title') })}
+                        className={helpIconClass}
+                      />
+                    </Tooltip>
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {t(serverAiSource === 'custom' ? 'ai.serverSource.descCustom' : 'ai.serverSource.descManaged')}
                   </p>
+                </div>
+                <Switch
+                  checked={serverAiSource === 'custom'}
+                  onChange={() => void handleServerAiSource(serverAiSource === 'custom' ? 'managed' : 'custom')}
+                  labelledBy="server-ai-source-heading"
+                  disabled={savingServerAiSource}
+                />
+              </div>
+
+              {serverAiSourceError && (
+                <Feedback className="mt-2" tone="error" message={t('ai.err.saveFailed')} />
+              )}
+            </section>
+          )}
+
+          <fieldset className="min-w-0">
+            {!loaded ? (
+              <p className="py-2 text-sm text-muted-foreground">{t('ai.loading')}</p>
+            ) : (
+              <div className="grid gap-2.5 sm:grid-cols-3">
+                {!noProfiles && (
+                  <div role="radiogroup" aria-label={t('ai.title')} className="contents">
+                    {profiles.map(renderCard)}
+                  </div>
                 )}
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
-                  {draftProvider.consoleUrl && (
-                    <button
-                      type="button"
-                      onClick={() => void shellOpen(draftProvider.consoleUrl as string)}
-                      className={linkClass}
-                    >
-                      {t('ai.openConsole', { provider: draftProvider.label })}
-                      <ExternalLink className="h-3 w-3" aria-hidden />
-                    </button>
+                {newServiceTile}
+              </div>
+            )}
+
+            {notice?.scope === 'list' && (
+              <Feedback className="mt-3" tone={notice.tone} message={notice.message} detail={notice.detail} />
+            )}
+          </fieldset>
+        </CardContent>
+
+        {draft && (
+          <Modal
+            title={draftIsNew ? t('ai.editorNew') : t('ai.editorEdit')}
+            onClose={closeEditor}
+            locked={saving || fetchingModels || testingDraft}
+            showCloseButton
+            panelClassName="w-[520px]"
+          >
+            <div className="mt-4 space-y-3">
+              <div>
+                <label htmlFor="ai-provider" className="mb-1 block text-sm text-muted-foreground">{t('ai.provider')}</label>
+                <Select
+                  value={draft.provider}
+                  onChange={(value) => handleDraftProvider(value)}
+                  options={groupedAiProviders().map(({ provider, group }) => ({
+                    value: provider.value,
+                    label: provider.label,
+                    group,
+                  }))}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="ai-api-url" className="mb-1 block text-sm text-muted-foreground">
+                  {draftProvider.urlOptional ? t('ai.apiUrlOptional') : draftProvider.keyless ? t('ai.ollamaUrl') : t('ai.apiUrl')}
+                </label>
+                <input
+                  id="ai-api-url"
+                  type="url"
+                  inputMode="url"
+                  value={draft.apiUrl}
+                  onChange={(e) => patchDraft({ apiUrl: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleSave() }}
+                  placeholder={draftProvider.defaultUrl}
+                  aria-describedby={draftProvider.urlOptional ? 'ai-api-url-hint' : undefined}
+                  className={inputClass}
+                />
+                {draftProvider.urlOptional && (
+                  <p id="ai-api-url-hint" className="mt-1 text-xs text-muted-foreground">{t('ai.apiUrlOptionalHint')}</p>
+                )}
+                {draftUrlError && <FormatHint text={draftUrlError} />}
+              </div>
+
+              {draftNeedsKey && (
+                <div data-modal-autofocus>
+                  <label htmlFor="ai-api-key" className="mb-1 block text-sm text-muted-foreground">API Key</label>
+                  <PasswordInput
+                    id="ai-api-key"
+                    label="API Key"
+                    value={draft.apiKey}
+                    onChange={(v) => patchDraft({ apiKey: v })}
+                    onSubmit={() => void handleSave()}
+                    placeholder={t('ai.keyPlaceholder')}
+                    className={cn(inputClass, 'pr-8')}
+                  />
+                  {!notice && draftKeyHint && <FormatHint text={draftKeyHint} />}
+                  {draftKeyInherited && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {t('ai.keyReused', { provider: draftProvider.label })}
+                    </p>
+                  )}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {draftProvider.consoleUrl && (
+                      <button
+                        type="button"
+                        onClick={() => void shellOpen(draftProvider.consoleUrl as string)}
+                        className={linkClass}
+                      >
+                        {t('ai.openConsole', { provider: draftProvider.label })}
+                        <ExternalLink className="h-3 w-3" aria-hidden />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="ai-model" className="mb-1 block text-sm text-muted-foreground">
+                  {t('ai.model')}
+                </label>
+                <div ref={modelRowRef} className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <ModelPicker
+                      models={availableModels}
+                      value={draftModels}
+                      multiple={draftIsNew}
+                      onAdd={addModel}
+                      onRemove={removeModel}
+                      inputValue={modelInput}
+                      onInputChange={(text) => { setModelInput(text); clearDraftCheck(); setNotice(null) }}
+                      inputId="ai-model"
+                      anchorRef={modelRowRef}
+                      recommended={draftProvider.recommendedModels}
+                      placeholder={draftIsNew && draftModels.length > 0 ? t('ai.modelAddPlaceholder') : t('ai.modelPlaceholder')}
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 shrink-0"
+                    onClick={() => void handleFetchModels()}
+                    disabled={busy || fetchingModels}
+                  >
+                    <RefreshCw className={cn('mr-1 h-3.5 w-3.5', fetchingModels && 'animate-spin')} aria-hidden />
+                    {fetchingModels ? t('ai.fetchingModels') : t('ai.fetchModels')}
+                  </Button>
+                </div>
+
+                <RecommendedModels
+                  models={draftProvider.recommendedModels ?? []}
+                  chosen={pendingModels}
+                  onPick={addModel}
+                  disabled={busy}
+                />
+                {draftIsNew && <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ai.multiModelHint')}</p>}
+              </div>
+
+              {/* Request tuning, per capability. Hidden for providers whose endpoints would
+                  reject the field — generic OpenAI-compatible endpoints may reject unknown
+                  body fields, and OpenCode Zen/Go has no service tiers. */}
+              {(supportsReasoningEffort(draft.provider) || supportsServiceTier(draft.provider)) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {supportsReasoningEffort(draft.provider) && (
+                    <div>
+                      <span id="ai-reasoning-effort-label" className="mb-1 block text-sm text-muted-foreground">
+                        {t('ai.reasoningEffort')}
+                      </span>
+                      <Select
+                        value={draft.reasoningEffort ?? ''}
+                        onChange={(value) => patchDraft({ reasoningEffort: value || undefined })}
+                        labelledBy="ai-reasoning-effort-label"
+                        options={[
+                          { value: '', label: t('ai.tuningUnset') },
+                          ...REASONING_EFFORT_OPTIONS.map((value) => ({ value, label: value })),
+                        ]}
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.reasoningEffortHint')}</p>
+                    </div>
+                  )}
+                  {supportsServiceTier(draft.provider) && (
+                    <div>
+                      <span id="ai-service-tier-label" className="mb-1 block text-sm text-muted-foreground">
+                        {t('ai.serviceTier')}
+                      </span>
+                      <Select
+                        value={draft.serviceTier ?? ''}
+                        onChange={(value) => patchDraft({ serviceTier: value || undefined })}
+                        labelledBy="ai-service-tier-label"
+                        options={[
+                          { value: '', label: t('ai.tuningUnset') },
+                          ...SERVICE_TIER_OPTIONS.map((value) => ({ value, label: value })),
+                        ]}
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.serviceTierHint')}</p>
+                    </div>
                   )}
                 </div>
-              </div>
-            )}
+              )}
 
-            <div>
-              <label htmlFor="ai-model" className="mb-1 block text-sm text-muted-foreground">
-                {t('ai.model')}
-              </label>
-              <div ref={modelRowRef} className="flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  <ModelPicker
-                    models={availableModels}
-                    value={draftModels}
-                    multiple={draftIsNew}
-                    onAdd={addModel}
-                    onRemove={removeModel}
-                    inputValue={modelInput}
-                    onInputChange={(text) => { setModelInput(text); clearDraftCheck(); setNotice(null) }}
-                    inputId="ai-model"
-                    anchorRef={modelRowRef}
-                    recommended={draftProvider.recommendedModels}
-                    placeholder={draftIsNew && draftModels.length > 0 ? t('ai.modelAddPlaceholder') : t('ai.modelPlaceholder')}
-                  />
+              {notice?.scope === 'editor' && (
+                <Feedback tone={notice.tone} message={notice.message} detail={notice.detail} />
+              )}
+
+              {/* Dedicated test action on the left allows validating credentials without persisting or closing.
+                  Cancel and Save actions on the right follow standard modal dialog conventions. */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                <div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={() => void handleTestDraft()}
+                    disabled={busy}
+                  >
+                    <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', testingDraft && 'animate-spin')} aria-hidden />
+                    {testingDraft ? t('ai.testingConnection') : t('ai.testConnection')}
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 shrink-0"
-                  onClick={() => void handleFetchModels()}
-                  disabled={busy || fetchingModels}
-                >
-                  <RefreshCw className={cn('mr-1 h-3.5 w-3.5', fetchingModels && 'animate-spin')} aria-hidden />
-                  {fetchingModels ? t('ai.fetchingModels') : t('ai.fetchModels')}
-                </Button>
-              </div>
-
-              <RecommendedModels
-                models={draftProvider.recommendedModels ?? []}
-                chosen={pendingModels}
-                onPick={addModel}
-                disabled={busy}
-              />
-              {draftIsNew && <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ai.multiModelHint')}</p>}
-            </div>
-
-            {/* Request tuning, per capability. Hidden for providers whose endpoints would
-                reject the field — generic OpenAI-compatible endpoints may reject unknown
-                body fields, and OpenCode Zen/Go has no service tiers. */}
-            {(supportsReasoningEffort(draft.provider) || supportsServiceTier(draft.provider)) && (
-              <div className="grid grid-cols-2 gap-3">
-                {supportsReasoningEffort(draft.provider) && (
-                  <div>
-                    <span id="ai-reasoning-effort-label" className="mb-1 block text-sm text-muted-foreground">
-                      {t('ai.reasoningEffort')}
-                    </span>
-                    <Select
-                      value={draft.reasoningEffort ?? ''}
-                      onChange={(value) => patchDraft({ reasoningEffort: value || undefined })}
-                      labelledBy="ai-reasoning-effort-label"
-                      options={[
-                        { value: '', label: t('ai.tuningUnset') },
-                        ...REASONING_EFFORT_OPTIONS.map((value) => ({ value, label: value })),
-                      ]}
-                    />
-                    <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.reasoningEffortHint')}</p>
-                  </div>
-                )}
-                {supportsServiceTier(draft.provider) && (
-                  <div>
-                    <span id="ai-service-tier-label" className="mb-1 block text-sm text-muted-foreground">
-                      {t('ai.serviceTier')}
-                    </span>
-                    <Select
-                      value={draft.serviceTier ?? ''}
-                      onChange={(value) => patchDraft({ serviceTier: value || undefined })}
-                      labelledBy="ai-service-tier-label"
-                      options={[
-                        { value: '', label: t('ai.tuningUnset') },
-                        ...SERVICE_TIER_OPTIONS.map((value) => ({ value, label: value })),
-                      ]}
-                    />
-                    <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.serviceTierHint')}</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {notice?.scope === 'editor' && (
-              <Feedback tone={notice.tone} message={notice.message} detail={notice.detail} />
-            )}
-
-            {/* Dedicated test action on the left allows validating credentials without persisting or closing.
-                Cancel and Save actions on the right follow standard modal dialog conventions. */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-              <div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-9"
-                  onClick={() => void handleTestDraft()}
-                  disabled={busy}
-                >
-                  <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', testingDraft && 'animate-spin')} aria-hidden />
-                  {testingDraft ? t('ai.testingConnection') : t('ai.testConnection')}
-                </Button>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-9"
-                  onClick={closeEditor}
-                  disabled={busy}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="h-9"
-                  onClick={() => void handleSave()}
-                  disabled={busy}
-                >
-                  {saving
-                    ? t('common.saving')
-                    : pendingModels.length > 1
-                      ? t('ai.saveCount', { count: pendingModels.length })
-                      : t('common.save')}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={closeEditor}
+                    disabled={busy}
+                  >
+                    {t('common.cancel')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-9"
+                    onClick={() => void handleSave()}
+                    disabled={busy}
+                  >
+                    {saving
+                      ? t('common.saving')
+                      : pendingModels.length > 1
+                        ? t('ai.saveCount', { count: pendingModels.length })
+                        : t('common.save')}
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-        </Modal>
-      )}
+          </Modal>
+        )}
 
-      {pendingDelete && (
-        <ConfirmDeleteModal
-          title={t('ai.deleteTitle')}
-          danger
-          body={`${profileTitle(pendingDelete)} (${profileSubtitle(pendingDelete)}). ${t('ai.deleteBody')}`}
-          onCancel={() => setPendingDeleteId('')}
-          onConfirm={() => void handleDelete(pendingDelete.id)}
-        />
-      )}
-    </Card>
+        {pendingDelete && (
+          <ConfirmDeleteModal
+            title={t('ai.deleteTitle')}
+            danger
+            body={`${profileTitle(pendingDelete)} (${profileSubtitle(pendingDelete)}). ${t('ai.deleteBody')}`}
+            onCancel={() => setPendingDeleteId('')}
+            onConfirm={() => void handleDelete(pendingDelete.id)}
+          />
+        )}
+      </Card>
+    </>
   )
 }
