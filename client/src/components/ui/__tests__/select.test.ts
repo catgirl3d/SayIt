@@ -94,6 +94,43 @@ describe('Select rendered accessibility markup', () => {
     expect(markup).not.toContain('title="Laptop microphone"')
   })
 
+  it('renders one heading per run of consecutive options that share a group', () => {
+    hookStateOverrides.values = [true, { top: 100, left: 20, width: 240, maxHeight: 180 }]
+    vi.stubGlobal('document', { body: {} })
+
+    // The selected label also renders in the trigger, ahead of the dropdown, so select an
+    // ungrouped option to keep every other label unique to the list.
+    const markup = renderToStaticMarkup(createElement(Select, {
+      value: 'delta',
+      onChange: () => {},
+      options: [
+        { value: 'alpha', label: 'Alpha', group: 'First group' },
+        { value: 'beta', label: 'Beta', group: 'First group' },
+        { value: 'gamma', label: 'Gamma', group: 'Second group' },
+        { value: 'delta', label: 'Delta' },
+      ],
+    }))
+
+    expect(markup.match(/First group/g)).toHaveLength(1)
+    expect(markup.match(/Second group/g)).toHaveLength(1)
+    expect(markup.indexOf('First group')).toBeLessThan(markup.indexOf('Alpha'))
+    expect(markup.indexOf('Second group')).toBeGreaterThan(markup.indexOf('Beta'))
+    expect(markup.indexOf('Second group')).toBeLessThan(markup.indexOf('Gamma'))
+  })
+
+  it('renders no group headings for options without a group', () => {
+    hookStateOverrides.values = [true, { top: 100, left: 20, width: 240, maxHeight: 180 }]
+    vi.stubGlobal('document', { body: {} })
+
+    const markup = renderToStaticMarkup(createElement(Select, {
+      value: 'alpha',
+      onChange: () => {},
+      options: [{ value: 'alpha', label: 'Alpha' }, { value: 'beta', label: 'Beta' }],
+    }))
+
+    expect(markup).not.toContain('uppercase')
+  })
+
   it('renders the open dropdown on the popover surface', () => {
     hookStateOverrides.values = [true, { top: 100, left: 20, width: 240, maxHeight: 180 }]
     vi.stubGlobal('document', { body: {} })

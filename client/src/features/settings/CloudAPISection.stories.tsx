@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, userEvent, within } from 'storybook/test'
 import CloudAPISection from './CloudAPISection'
 import type { AsrProfile } from './asrProviderCatalog'
 
@@ -102,6 +103,28 @@ export const ConfiguredProfiles: Story = {
     tauri: {
       settings: settingsFor(configuredProfiles, configuredProfiles[0].id),
     },
+  },
+}
+
+export const NewServiceProviderGroups: Story = {
+  args: { speechLanguage: 'auto' },
+  parameters: {
+    tauri: {
+      settings: settingsFor([], ''),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body)
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: 'New' }))
+
+    const dialog = await body.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: /Doubao ASR/ }))
+
+    for (const heading of ['Global', 'China', 'Custom endpoint']) {
+      await expect(await body.findByText(heading)).toBeVisible()
+    }
+    await userEvent.click(body.getByRole('button', { name: /^Deepgram/ }))
+    await expect(within(dialog).getByRole('button', { name: /^Deepgram/ })).toBeVisible()
   },
 }
 

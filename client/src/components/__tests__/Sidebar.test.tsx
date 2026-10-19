@@ -22,14 +22,25 @@ vi.mock('react', async (importOriginal) => {
   }
 })
 
-function renderSidebar() {
-  return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(Sidebar)))
+function renderSidebar(route = '/') {
+  return renderToStaticMarkup(
+    createElement(MemoryRouter, { initialEntries: [route] }, createElement(Sidebar)),
+  )
 }
+
+const settingsRoutes = ['/general', '/audio', '/shortcuts', '/appearance', '/usage', '/diagnostics']
 
 function navEntry(markup: string, href: string) {
   const entryStart = markup.indexOf(`href="${href}"`)
   expect(entryStart, href).toBeGreaterThan(-1)
   return markup.slice(entryStart, markup.indexOf('</a>', entryStart))
+}
+
+/** The opening tag of a nav entry: NavLink writes its class and aria-current before href. */
+function navEntryTag(markup: string, href: string) {
+  const hrefStart = markup.indexOf(`href="${href}"`)
+  expect(hrefStart, href).toBeGreaterThan(-1)
+  return markup.slice(markup.lastIndexOf('<a ', hrefStart), markup.indexOf('>', hrefStart) + 1)
 }
 
 function withSessionState<T>(state: 'listening' | 'paused', render: () => T): T {
@@ -40,6 +51,27 @@ function withSessionState<T>(state: 'listening' | 'paused', render: () => T): T 
     spy.mockRestore()
   }
 }
+
+describe('sidebar settings group', () => {
+  it('is folded by default and lists no settings pages', () => {
+    const markup = renderSidebar('/history')
+
+    expect(markup).toMatch(/aria-expanded="false"[^>]*aria-controls="sidebar-settings-items"|aria-controls="sidebar-settings-items"[^>]*aria-expanded="false"/)
+    for (const href of settingsRoutes) expect(markup, href).not.toContain(`href="${href}"`)
+    // The other groups are not affected.
+    for (const href of ['/', '/files', '/voice-engine', '/ai-service']) expect(markup, href).toContain(`href="${href}"`)
+  })
+
+  it('opens on a settings page and marks the current entry', () => {
+    const markup = renderSidebar('/audio')
+
+    expect(markup).toContain('aria-expanded="true"')
+    for (const href of settingsRoutes) expect(markup, href).toContain(`href="${href}"`)
+    expect(navEntryTag(markup, '/audio')).toContain('aria-current="page"')
+    expect(navEntryTag(markup, '/audio')).toContain('bg-sidebar-item-active')
+    expect(navEntryTag(markup, '/shortcuts')).not.toContain('aria-current')
+  })
+})
 
 describe('sidebar alpha marker', () => {
   it('marks the file transcription and computer subtitles entries with the alpha badge', () => {

@@ -225,9 +225,7 @@ export function PTTShortcutInput({
               keys.map((key, index) => (
                 <span key={`${key}-${index}`}>
                   {index > 0 && <span className="mx-0.5 text-muted-foreground">+</span>}
-                  <span className={`rounded border bg-card px-1.5 py-0.5 text-xs shadow-sm ${!displayValue ? 'text-muted-foreground' : ''}`}>
-                    {key}
-                  </span>
+                  <span className={!displayValue ? 'text-muted-foreground' : undefined}>{key}</span>
                 </span>
               ))
             )}
@@ -430,7 +428,7 @@ export function ComboShortcutInput({
               keys.map((key, index) => (
                 <span key={index}>
                   {index > 0 && <span className="mx-0.5 text-muted-foreground">+</span>}
-                  <span className="rounded border bg-card px-1.5 py-0.5 text-xs shadow-sm">{key}</span>
+                  <span className={!displayValue ? 'text-muted-foreground' : undefined}>{key}</span>
                 </span>
               ))
             )}

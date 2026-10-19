@@ -199,6 +199,23 @@ export const IdleReady: Story = {
   },
 }
 
+export const ChooseFileFromDropZone: Story = {
+  parameters: {
+    tauri: {
+      commands: {
+        ...commandsFor(null),
+        'plugin:dialog|open': () => 'C:\\Storybook\\meeting.mp4',
+      },
+      settings,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(await canvas.findByRole('heading', { name: 'Choose an audio or video file' }))
+    await expect(await canvas.findByText('meeting.mp4')).toBeInTheDocument()
+  },
+}
+
 export const CloudHotwordsGate: Story = {
   parameters: {
     tauri: {
@@ -285,6 +302,11 @@ export const CloudFragmentDuration: Story = {
     const body = within(canvasElement.ownerDocument.body)
     const duration = await canvas.findByRole('button', { name: 'Fragment duration' })
     await expect(duration).toHaveTextContent('5 min')
+
+    const hint = canvas.getByLabelText(/Nominal duration/)
+    await userEvent.hover(hint)
+    await expect(await body.findByText(/Nominal duration/)).toBeVisible()
+    await userEvent.unhover(hint)
 
     await userEvent.click(duration)
     await userEvent.click(body.getByRole('button', { name: '3 min' }))

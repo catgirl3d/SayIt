@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
+import { Tooltip } from '@/components/ui/tooltip'
 import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
 import AlphaBadge from '@/components/AlphaBadge'
 import { cn } from '@/lib/utils'
@@ -473,11 +474,11 @@ export default function FileTranscription() {
       && !inspecting && !actionBusy && !active,
   )
   // Names the first unmet canStart condition, in the same order, so a disabled Start
-  // always says why. Transient states (inspecting, busy) and a running job say nothing.
+  // says why. Transient states (inspecting, busy), a running job and a missing file say
+  // nothing: the empty-state picker already asks for the file.
   const startBlockedReason = (() => {
     if (canStart || active) return ''
-    if (!filePath) return t('files.reasonChooseFile')
-    if (inspecting) return ''
+    if (!filePath || inspecting) return ''
     if (!mediaInfo) return t('files.inspectFailed')
     if (!engineReady) return t('files.reasonEngineNotReady')
     if (!hotwords.ready) {
@@ -523,10 +524,7 @@ export default function FileTranscription() {
       <div className="grid gap-4 lg:grid-cols-[288px_minmax(0,1fr)]">
         <aside className="flex">
           <Card className="flex w-full flex-col gap-4 p-5">
-            <div>
-              <h2 className="text-base font-semibold">{t('files.settingsTitle')}</h2>
-              {active && <p className="mt-0.5 text-xs text-muted-foreground">{t('files.settingsLocked')}</p>}
-            </div>
+            {active && <p className="text-xs text-muted-foreground">{t('files.settingsLocked')}</p>}
             <div className="space-y-1.5">
               <span id="file-engine-label" className="text-xs font-medium text-foreground">
                 {t('files.engineTitle')}
@@ -729,9 +727,17 @@ export default function FileTranscription() {
                   </div>
                   {selectedCloudProfile && selectedCloudProfile.windowSecondsOptions.length > 0 && (
                     <div className="space-y-1.5">
-                      <span id="file-fragment-duration-label" className="text-xs font-medium text-foreground">
-                        {t('files.fragmentDuration')}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span id="file-fragment-duration-label" className="text-xs font-medium text-foreground">
+                          {t('files.fragmentDuration')}
+                        </span>
+                        <Tooltip variant="light" content={<div className="w-72 max-w-[calc(100vw-3rem)]">{t('files.fragmentDurationHint')}</div>}>
+                          <Info
+                            aria-label={t('files.fragmentDurationHint')}
+                            className="h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50 transition-colors hover:text-muted-foreground"
+                          />
+                        </Tooltip>
+                      </div>
                       <Select
                         labelledBy="file-fragment-duration-label"
                         value={selectedCloudWindowSeconds === null ? '' : String(selectedCloudWindowSeconds)}
@@ -753,7 +759,6 @@ export default function FileTranscription() {
                           })),
                         ]}
                       />
-                      <p className="text-xs leading-relaxed text-muted-foreground">{t('files.fragmentDurationHint')}</p>
                     </div>
                   )}
                   {selectedCloudProfile?.windowSecondsOptionsError && (
@@ -935,7 +940,12 @@ export default function FileTranscription() {
               </Button>
             </div>
           ) : (
-            <div className="flex min-h-[28rem] flex-1 flex-col items-center justify-center gap-3.5 rounded-xl border-2 border-dashed border-border px-6 py-8 text-center">
+            // The whole zone opens the picker for pointer users; the button inside stays the keyboard
+            // and screen-reader target, and its click bubbles up to this handler.
+            <div
+              className="flex min-h-[28rem] flex-1 cursor-pointer flex-col items-center justify-center gap-3.5 rounded-xl border-2 border-dashed border-border px-6 py-8 text-center transition-colors hover:border-primary/50 hover:bg-muted/30"
+              onClick={() => { if (!inspecting && !active) void chooseFile() }}
+            >
               <div className="mb-1.5 flex h-16 items-center gap-1" aria-hidden>
                 {WAVEFORM_HEIGHTS.map((height, index) => (
                   <span
@@ -947,7 +957,7 @@ export default function FileTranscription() {
               </div>
               <h2 className="max-w-[20ch] text-xl font-semibold leading-tight">{t('files.pickerTitle')}</h2>
               <p className="max-w-[42ch] text-sm text-muted-foreground">{t('files.pickerFormats', { formats: MEDIA_EXTENSIONS.join(', ') })}</p>
-              <Button type="button" className="gap-2" onClick={() => void chooseFile()} disabled={inspecting || active}>
+              <Button type="button" className="gap-2" disabled={inspecting || active}>
                 <FileAudio className="h-4 w-4" />
                 {t('files.chooseFile')}
               </Button>

@@ -92,6 +92,17 @@ export const ConfiguredProfiles: Story = {
       settings: settingsFor(profiles, profiles[0].id, 'cloud_api', 'managed'),
     },
   },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    const group = within(await canvas.findByRole('radiogroup', { name: 'AI services' }))
+    await expect(group.getAllByRole('radio')).toHaveLength(profiles.length)
+
+    // The dashed tile is the last grid cell but not a radio option, so it stays outside the group.
+    await expect(canvas.getByRole('button', { name: /^new$/i })).toBeVisible()
+    await expect(group.queryByRole('button', { name: /^new$/i })).toBeNull()
+    await expect(canvas.getByRole('button', { name: 'Test all' })).toBeEnabled()
+  },
 }
 
 export const ServerModeCustomAI: Story = {
@@ -108,6 +119,16 @@ export const EmptyState: Story = {
       settings: settingsFor([], '', 'cloud_api', 'managed'),
     },
   },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    // With no cards the tile carries the "no services" note and is the only action.
+    const tile = await canvas.findByRole('button', { name: /^new$/i })
+    await expect(tile).toHaveAccessibleDescription('No AI services configured yet.')
+    await expect(canvas.getByText('No AI services configured yet.')).toBeVisible()
+    await expect(canvas.queryByRole('radiogroup')).toBeNull()
+    await expect(canvas.getByRole('button', { name: 'Test all' })).toBeDisabled()
+  },
 }
 
 export const NewServiceDialog: Story = {
@@ -120,6 +141,22 @@ export const NewServiceDialog: Story = {
     await expect(dialog.queryAllByRole('button', { name: /^remove /i })).toHaveLength(0)
     await expect(dialog.getByText(/each model becomes its own card/i)).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Save' })).toBeVisible()
+  },
+}
+
+export const NewServiceProviderGroups: Story = {
+  parameters: { tauri: { settings: emptySettings } },
+  play: async ({ canvasElement }) => {
+    const body = bodyOf(canvasElement)
+    const dialog = await openNewDialog(canvasElement)
+
+    await userEvent.click(dialog.getByRole('button', { name: 'OpenAI-compatible' }))
+    for (const heading of ['Global', 'China', 'Local and custom']) {
+      await expect(await body.findByText(heading)).toBeVisible()
+    }
+
+    await userEvent.click(body.getByRole('button', { name: 'Groq' }))
+    await expect(dialog.getByRole('button', { name: 'Groq' })).toBeVisible()
   },
 }
 

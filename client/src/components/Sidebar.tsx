@@ -1,6 +1,7 @@
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react'
-import { NavLink } from 'react-router-dom'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
 import {
+  ChevronRight,
   Home,
   FileText,
   Clock,
@@ -104,6 +105,59 @@ function NavItem({
       <span className="truncate">{label}</span>
       {indicator ?? (alpha && <AlphaBadge />)}
     </NavLink>
+  )
+}
+
+const settingsItemsId = 'sidebar-settings-items'
+
+function isSettingsPath(pathname: string) {
+  return systemNavItems.some(({ to }) => pathname === to || pathname.startsWith(`${to}/`))
+}
+
+/**
+ * The settings group stays folded until the user opens it, so the sidebar leads with the workspace
+ * and the voice and AI pages. Opening is sticky: the group stays as the user left it while they move
+ * between pages, and only landing on one of its pages (a link from elsewhere, a deep link) opens it,
+ * so the highlighted entry is never hidden. A folded group that holds the current page keeps an
+ * accent on its heading.
+ */
+function SettingsSection() {
+  const t = useT()
+  const { pathname } = useLocation()
+  const onSettingsPage = isSettingsPath(pathname)
+  const [open, setOpen] = useState(onSettingsPage)
+  const [seenPathname, setSeenPathname] = useState(pathname)
+  // Adjusted while rendering rather than in an effect, so the active entry is never painted hidden.
+  if (seenPathname !== pathname) {
+    setSeenPathname(pathname)
+    if (onSettingsPage) setOpen(true)
+  }
+  const currentPageFolded = onSettingsPage && !open
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={settingsItemsId}
+        onClick={() => setOpen((value) => !value)}
+        className={cn(
+          'flex w-full items-center gap-1.5 rounded-md px-2.5 pb-1 text-left text-[10px] font-semibold uppercase tracking-wider transition-colors hover:text-sidebar-text-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          currentPageFolded ? 'text-sidebar-text-active' : 'text-muted-foreground/70',
+        )}
+      >
+        <span>{t('nav.section.settings')}</span>
+        {currentPageFolded && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-sidebar-text-active" />}
+        <ChevronRight aria-hidden className={cn('ml-auto h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')} />
+      </button>
+      {open && (
+        <div id={settingsItemsId} className="space-y-1">
+          {systemNavItems.map(({ to, icon, labelKey }) => (
+            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -270,14 +324,7 @@ export default function Sidebar() {
         </div>
 
         {/* System Settings */}
-        <div className="space-y-1">
-          <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            {t('nav.section.settings')}
-          </div>
-          {systemNavItems.map(({ to, icon, labelKey }) => (
-            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
-          ))}
-        </div>
+        <SettingsSection />
       </div>
 
       <div className="border-t border-sidebar-border px-3 pt-3">

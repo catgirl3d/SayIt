@@ -23,18 +23,22 @@ function includesAny(value: string, patterns?: string[]) {
 }
 
 /**
- * 判断一条应用规则是否命中当前窗口。
+ * Determines whether an app rule matches the current window.
  *
- * 进程名是硬证据，窗口标题只是软线索 —— 所以**只要规则写了进程名、且这次确实拿到了
- * 进程名，就只按进程名判定**，标题不再独立触发。
+ * The process name is hard evidence; the window title is only a soft hint. So **as soon as
+ * the rule specifies process names and we actually obtained one this time, matching is decided
+ * by the process name alone**; the title no longer triggers a match on its own.
  *
- * 原来两者是「或」的关系，而标题是「包含即命中」，一个标题能同时命中多条规则：
- * 在 Outlook 里写一封标题为「Teams 会议纪要 - Outlook」的邮件时，Teams 规则也会命中，
- * 又因为 Teams 优先级更高，最终按"即时聊天短消息"来整理这封正式邮件。
+ * Previously the two were combined with OR, and a title match was "contains → hit", so a single
+ * title could hit several rules at once: when writing an email titled "Teams meeting notes - Outlook"
+ * in Outlook, the Teams rule also matched, and because Teams had higher priority, this formal email
+ * was ultimately cleaned up as an "instant chat short message".
  *
- * 保留标题/类名/控件 ID 的能力，是给"进程名区分不了"的场景兜底：
- *   · 规则本身没写进程名（如网页版应用，进程都是浏览器，只能靠标题区分）；
- *   · 少数窗口拿不到进程名（此时不能因为进程名为空就直接判不命中）。
+ * Keeping title/class name/control ID matching is a fallback for cases the process name cannot tell apart:
+ *   · the rule itself does not specify process names (e.g. web apps, where every process is the browser
+ *     and only the title can distinguish them);
+ *   · a few windows do not expose a process name (in that case an empty process name must not by
+ *     itself mean "no match").
  */
 export function matchesAppPromptRule(rule: AppPromptRule, context: ActiveAppContext | null) {
   if (!context) return false
@@ -70,17 +74,17 @@ function summarizeResolution(parts: string[]) {
   return parts.filter(Boolean).join(' | ')
 }
 
-/** 构造"热词注入 AI 提示词"的段落；无热词时返回 null。供实时与重新识别两条路径共用。 */
+/** Builds the "hotword injection into the AI prompt" section; returns null when there are no hotwords. Shared by the live and re-recognition paths. */
 export function buildHotwordInjectionPart(hotwords: string[] | undefined): string | null {
   if (!hotwords || hotwords.length === 0) return null
   const terms = Array.from(new Set(hotwords.map((w) => w.trim()).filter(Boolean)))
   if (terms.length === 0) return null
-  return `User Glossary: The following are proper nouns and terms frequently used by the user. If you encounter phonetically similar or misrecognized words during cleanup, prioritize correcting them to the following spellings (preserving exact casing) and keep them intact:\n${terms.join(', ')}`
+  return `User Hotwords: The following are proper nouns and terms frequently used by the user. If you encounter phonetically similar or misrecognized words during cleanup, prioritize correcting them to the following spellings (preserving exact casing) and keep them intact:\n${terms.join(', ')}`
 }
 
 export function resolvePromptRouting(input: PromptRoutingInput): PromptResolution {
-  // 顺序即优先级：取列表里第一条「已启用且命中」的规则，也就是界面上自上而下的第一条。
-  // 顺序完全由用户在界面上排（启用一条会自动置顶），这里不要再重排。
+  // Order is priority: take the first enabled rule that matches, i.e. the top-most one in the UI.
+  // The user fully controls the order in the UI (enabling a rule moves it to the top), so do not re-sort here.
   const matchedRule = input.appRules
     .find((rule) => rule.enabled && matchesAppPromptRule(rule, input.appContext))
 
@@ -101,7 +105,7 @@ export function resolvePromptRouting(input: PromptRoutingInput): PromptResolutio
     systemPromptParts.push(`User profile context:\n${dynamicIdentityPrompt}`)
   }
 
-  // 可选：把热词表注入系统提示词，帮助 AI 在整理时纠正/保留专有名词（默认关闭）。
+  // Optional: inject the hotword list into the system prompt so the AI corrects/keeps proper nouns during cleanup (off by default).
   let hotwordInjected = false
   if (input.injectHotwords) {
     const part = buildHotwordInjectionPart(input.hotwords)

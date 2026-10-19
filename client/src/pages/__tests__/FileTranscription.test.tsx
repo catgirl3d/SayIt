@@ -1880,13 +1880,25 @@ describe('file transcription page', () => {
     })))
   })
 
-  it('asks for a file under a disabled Start, then reports a file that could not be inspected', async () => {
+  it('opens the file picker once per click anywhere in the empty drop zone', async () => {
+    dialog.open.mockResolvedValue(null)
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
+    fireEvent.click(screen.getByRole('heading', { name: 'Choose an audio or video file' }))
+    await waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
+    await waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps Start silent without a file, then reports a file that could not be inspected', async () => {
     dialog.open.mockResolvedValueOnce('C:/media/recording.mp4')
     renderPage()
 
     await waitFor(() => expect(screen.getByText('SenseVoice Small')).toBeTruthy())
     expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText('Choose a file to start.')).toBeTruthy()
+    expect(screen.queryByText('Choose a file to start.')).toBeNull()
 
     native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === 'inspect_transcription_file') throw new Error('probe failed')
@@ -1895,7 +1907,6 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
 
     await waitFor(() => expect(screen.getByText('Could not inspect this file')).toBeTruthy())
-    expect(screen.queryByText('Choose a file to start.')).toBeNull()
     expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
