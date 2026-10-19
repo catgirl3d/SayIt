@@ -1,9 +1,7 @@
 import type { FoldedHotwordDelivery } from '@/lib/asrModels'
 import type { FileTranscriptionEngine } from '@/services/fileTranscription'
-import {
-  HOTWORD_TOKEN_BUDGET,
-  estimateHotwordTokens,
-} from '@/services/hotwords/budget'
+import { estimateHotwordTokens } from '@/services/hotwords/budget'
+import { deepgramHotwordNotice, type DeepgramHotwordNotice } from '@/services/hotwords/deepgramNotice'
 import { composeSelectedHotwords } from '@/services/hotwords/model'
 import type { HotwordCatalog } from '@/services/hotwords/settings'
 
@@ -14,7 +12,7 @@ export interface HotwordCategorySelection {
   themeIds: string[]
 }
 
-type HotwordNotice = 'deepgramGate' | 'deepgramTokenBudget' | 'wordCap'
+type HotwordNotice = DeepgramHotwordNotice | 'wordCap'
 
 export interface HotwordPlan {
   /** Whether this engine and provider use hotwords at all; the control is hidden otherwise. */
@@ -77,9 +75,13 @@ export function buildHotwordPlan({
   const wordCount = hotwords.length
   const notices: HotwordNotice[] = []
 
-  if (provider === 'deepgram' && wordCount > 0) {
-    if (!deepgramKeytermsEnabled) notices.push('deepgramGate')
-    else if (tokenEstimate > HOTWORD_TOKEN_BUDGET) notices.push('deepgramTokenBudget')
+  if (wordCount > 0) {
+    const deepgramNotice = deepgramHotwordNotice({
+      provider,
+      keytermsEnabled: deepgramKeytermsEnabled,
+      tokenEstimate,
+    })
+    if (deepgramNotice) notices.push(deepgramNotice)
   }
   if (providerClientCap !== null && wordCount > providerClientCap) notices.push('wordCap')
 

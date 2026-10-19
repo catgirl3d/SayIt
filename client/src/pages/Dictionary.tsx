@@ -1,6 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
-import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus, AlertTriangle, ExternalLink } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -12,6 +11,7 @@ import { loadDictationHotwordEngine, type DictationHotwordEngine } from '@/servi
 import { loadAsrHotwordCapabilityMatrix } from '@/services/hotwords/capabilityMatrix'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
 import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
+import HotwordEngineNotices from '@/components/HotwordEngineNotices'
 import SuggestedTermsPicker from '@/components/SuggestedTermsPicker'
 import TextReplacementSection from '@/components/TextReplacementSection'
 import TextFormatSection from '@/components/TextFormatSection'
@@ -67,19 +67,6 @@ function buildHotwordCapabilityRows(
   }
 
   return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label))
-}
-
-/** Warning strip stating that the engine dictation uses will not apply the hotword list as the user expects. */
-function HotwordEngineNotice({ children }: { children: ReactNode }) {
-  return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs leading-relaxed text-warning-strong"
-    >
-      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <p className="min-w-0">{children}</p>
-    </div>
-  )
 }
 
 /** Above this total hotword count, show a soft hint that too many terms can counterintuitively lower accuracy. */
@@ -212,23 +199,8 @@ export default function Dictionary() {
   }, [])
 
   const capabilityRows = buildHotwordCapabilityRows(hotwordCapabilities)
-  // The verdict is the Rust matrix entry of the engine dictation uses; the notice stays hidden until
-  // both the matrix and the engine have resolved, and for engines the matrix does not know.
-  const engineCapability = dictationEngine ? hotwordCapabilities[dictationEngine.capabilityKey] : undefined
-  const engineIgnoresHotwords = engineCapability !== undefined
-    && foldHotwordDelivery(engineCapability.delivery) === 'not_sent'
-  const engineLabel = dictationEngine === null
-    ? ''
-    : dictationEngine.mode === 'cloud_api'
-      ? dictationEngine.providerLabel
-      : t(dictationEngine.mode === 'local' ? 'mode.local' : 'mode.server')
   const tokensNearBudget = hotwordTokens >= HOTWORD_TOKEN_BUDGET * 0.8
   const tokensOverBudget = hotwordTokens > HOTWORD_TOKEN_BUDGET
-  // The matrix reports Deepgram as sending hotwords, but only when the profile opted in, and Deepgram
-  // rejects a list over its token budget, after which recognition continues without the terms.
-  const deepgramEngine = dictationEngine?.capabilityKey === 'deepgram' ? dictationEngine : null
-  const deepgramOptInOff = deepgramEngine !== null && !deepgramEngine.deepgramKeytermsEnabled
-  const deepgramOverBudget = deepgramEngine !== null && deepgramEngine.deepgramKeytermsEnabled && tokensOverBudget
   // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
   const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
   const budgetText = t('dict.budgetLabel', {
@@ -367,31 +339,11 @@ export default function Dictionary() {
             </Tooltip>
           </p>
 
-          {engineIgnoresHotwords && (
-            <HotwordEngineNotice>
-              <RichText
-                text={t('dict.engineIgnores', {
-                  engine: engineLabel,
-                  toggle: t('hotwordInject.title'),
-                  page: t('nav.aiInstructions'),
-                })}
-              />
-            </HotwordEngineNotice>
-          )}
-          {deepgramOptInOff && (
-            <HotwordEngineNotice>
-              <RichText text={t('dict.engineDeepgramGate', { option: t('asr.deepgramKeyterms') })} />{' '}
-              <Link to="/voice-engine" className="inline-flex items-center gap-0.5 underline underline-offset-2">
-                {t('files.hotwordsOpenVoiceEngine')}
-                <ExternalLink className="h-3 w-3" />
-              </Link>
-            </HotwordEngineNotice>
-          )}
-          {deepgramOverBudget && (
-            <HotwordEngineNotice>
-              {t('files.hotwordsDeepgramBudget', { tokens: hotwordTokens, budget: HOTWORD_TOKEN_BUDGET })}
-            </HotwordEngineNotice>
-          )}
+          <HotwordEngineNotices
+            engine={dictationEngine}
+            capabilities={hotwordCapabilities}
+            hotwordTokens={hotwordTokens}
+          />
 
           {!loading && (
             <div className="mb-4 -mt-2 space-y-1.5">
@@ -430,7 +382,7 @@ export default function Dictionary() {
               </div>
               {hotwords.length > HOTWORD_WORD_BUDGET && (
                 <p className="text-xs text-amber-500">
-                  {t('dict.budgetWordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
+                  {t('hotwords.wordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
                 </p>
               )}
             </div>

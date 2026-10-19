@@ -230,7 +230,7 @@ export const CloudHotwordsGate: Story = {
     const canvas = within(canvasElement)
 
     await waitFor(() => expect(
-      canvas.getByText(/hotword sending is disabled in the Deepgram profile/),
+      canvas.getByText(/is turned off in the Deepgram profile/),
     ).toBeTruthy())
   },
 }
