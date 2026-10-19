@@ -7,6 +7,12 @@ import { cn } from '@/lib/utils'
 export interface SelectOption {
   value: string
   label: string
+  /**
+   * Optional secondary part (for example a model name) rendered after the label in a
+   * muted style, separated by a dimmed middle dot. It stays part of the option's text,
+   * so accessible names and screen readers see "label · secondary".
+   */
+  secondary?: string
   /** Optional full label for hover when the visible option may be truncated. */
   title?: string
   /**
@@ -14,6 +20,34 @@ export interface SelectOption {
    * consecutive options that share the same group, so options must arrive already grouped.
    */
   group?: string
+}
+
+/** Full text of an option, including the secondary part and the separator between them. */
+function optionText(option: SelectOption): string {
+  return option.secondary ? `${option.label} · ${option.secondary}` : option.label
+}
+
+function optionTitle(option: SelectOption): string | undefined {
+  return option.title ?? (option.secondary ? optionText(option) : undefined)
+}
+
+/**
+ * Label as rendered in the trigger and the list: the secondary part is muted behind a thin
+ * vertical rule so the primary name stays dominant. The rule is decorative; a screen-reader
+ * only " · " keeps the plain-text name "label · secondary" for tests and assistive tech.
+ */
+function renderOptionLabel(option: SelectOption) {
+  if (!option.secondary) return option.label
+  return (
+    <>
+      {option.label}
+      {' '}
+      <span aria-hidden="true" className="mx-1.5 inline-block h-3.5 w-px bg-border align-middle" />
+      <span className="sr-only">·</span>
+      {' '}
+      <span className="text-muted-foreground">{option.secondary}</span>
+    </>
+  )
 }
 
 export interface SelectProps {
@@ -152,7 +186,7 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
                     : 'text-foreground hover:bg-accent',
                 )}
               >
-                <span className="truncate" title={option.title}>{option.label}</span>
+                <span className="truncate" title={optionTitle(option)}>{renderOptionLabel(option)}</span>
                 {option.value === value && <Check className="ml-2 h-4 w-4 shrink-0" />}
               </button>
             </Fragment>
@@ -184,9 +218,11 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
         >
           <span
             className={cn('truncate', !selectedOption && 'text-input-placeholder')}
-            title={selectedOption?.title}
+            title={selectedOption ? optionTitle(selectedOption) : undefined}
           >
-            {selectedOption?.label || placeholder || t('ui.selectPlaceholder')}
+            {selectedOption?.label
+              ? renderOptionLabel(selectedOption)
+              : placeholder || t('ui.selectPlaceholder')}
           </span>
           <ChevronDown
             className={cn(

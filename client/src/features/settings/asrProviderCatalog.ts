@@ -126,9 +126,10 @@ const OPENROUTER_TRANSCRIPTION_MODELS = [
 ] as const
 
 /**
- * Built-in provider catalog. The order is the card order and the default pick of a new
- * service: the most recommended entry goes first. The provider dropdown of the service
- * editor is a separate grouped, alphabetical view (see groupedAsrProviders).
+ * Built-in provider catalog. The order is the card order: the most recommended entry goes
+ * first. The provider dropdown of the service editor is a separate grouped, alphabetical
+ * view (see groupedAsrProviders), and a new service starts on that view's first entry
+ * (see defaultAsrProviderId) so the preselected value matches the top of the dropdown.
  *
  * The label deliberately carries no model-name suffix (the model name sits on its own line
  * in small text); otherwise the card title would be blown up by a parenthesized string such
@@ -334,7 +335,8 @@ function asrProviderGroupLabel(availability: AsrProviderEntry['availability']): 
 /**
  * Providers for the provider dropdown of the service editor: grouped by availability, and
  * alphabetical by the displayed label inside each group. ASR_PROVIDERS keeps its curated order
- * for the service cards and the default pick of a new service, so this is a separate view.
+ * for the service cards, so this is a separate view. The first entry here is also the default
+ * provider of a new service (see defaultAsrProviderId).
  */
 export function groupedAsrProviders(): { entry: AsrProviderEntry; group: string }[] {
   const collator = new Intl.Collator(getLocale(), { numeric: true, sensitivity: 'base' })
@@ -345,6 +347,14 @@ export function groupedAsrProviders(): { entry: AsrProviderEntry; group: string 
       .sort((a, b) => collator.compare(a.label, b.label) || collator.compare(a.model, b.model))
       .map((entry) => ({ entry, group }))
   })
+}
+
+/**
+ * Provider preselected when a new service card is created: the first entry of the grouped
+ * editor dropdown, so the value matches the top of the list the user is about to open.
+ */
+export function defaultAsrProviderId(): string {
+  return groupedAsrProviders()[0]?.entry.id ?? ASR_PROVIDERS[0].id
 }
 
 // ─────────────────────────── 检测结果 ───────────────────────────
@@ -426,8 +436,8 @@ export function makeAsrProfileId(): string {
   return `asr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** 一份空白档案。provider 默认给最推荐的那个。 */
-export function emptyAsrProfile(provider = ASR_PROVIDERS[0].id): AsrProfile {
+/** A blank profile. The provider defaults to the first entry of the grouped editor dropdown. */
+export function emptyAsrProfile(provider = defaultAsrProviderId()): AsrProfile {
   const entry = findAsrProvider(provider)
   return {
     id: makeAsrProfileId(),

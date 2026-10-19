@@ -708,7 +708,8 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
               onChange={(value) => handleDraftProvider(value)}
               options={groupedAsrProviders().map(({ entry, group }) => ({
                 value: entry.id,
-                label: entry.model ? `${entry.label} · ${entry.model}` : entry.label,
+                label: entry.label,
+                secondary: entry.model || undefined,
                 group,
               }))}
             />

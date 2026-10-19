@@ -720,8 +720,8 @@ export default function FileTranscription() {
                       disabled={active || actionBusy}
                       options={cloudProfiles.map((profile) => ({
                         value: profile.id,
-                        label: `${profile.label} · ${profile.model}`,
-                        title: `${profile.label} · ${profile.model}`,
+                        label: profile.label,
+                        secondary: profile.model || undefined,
                       }))}
                     />
                   </div>

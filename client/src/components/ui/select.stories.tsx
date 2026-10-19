@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { useState } from 'react'
 import { expect, userEvent, within } from 'storybook/test'
 import { Select } from './select'
 
@@ -62,6 +63,44 @@ export const Grouped: Story = {
     }
     await userEvent.click(body.getByRole('button', { name: 'Qwen ASR' }))
     await expect(within(canvasElement).getByRole('button', { name: 'Provider' })).toHaveTextContent('Deepgram')
+  },
+}
+
+function SecondaryLabelDemo() {
+  const [value, setValue] = useState('deepgram')
+  return (
+    <div className="w-72 space-y-2">
+      <label id="secondary-provider-label" className="block text-sm font-medium">Provider</label>
+      <Select
+        labelledBy="secondary-provider-label"
+        value={value}
+        options={[
+          { value: 'deepgram', label: 'Deepgram', secondary: 'nova-3' },
+          { value: 'openai', label: 'OpenAI', secondary: 'gpt-transcribe' },
+          { value: 'custom', label: 'OpenAI-compatible ASR' },
+        ]}
+        onChange={setValue}
+      />
+    </div>
+  )
+}
+
+export const SecondaryLabel: Story = {
+  render: () => <SecondaryLabelDemo />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = within(canvasElement.ownerDocument.body)
+
+    // The plain "label · secondary" text stays in the trigger for assistive tech...
+    const trigger = canvas.getByRole('button', { name: 'Provider' })
+    await expect(trigger).toHaveTextContent('Deepgram · nova-3')
+
+    await userEvent.click(trigger)
+    // ...while the list draws the model behind a decorative vertical rule, not a text dot.
+    const option = await body.findByRole('button', { name: 'OpenAI · gpt-transcribe' })
+    await expect(option.querySelector('span[aria-hidden="true"]')).not.toBeNull()
+    await userEvent.click(option)
+    await expect(trigger).toHaveTextContent('OpenAI · gpt-transcribe')
   },
 }
 

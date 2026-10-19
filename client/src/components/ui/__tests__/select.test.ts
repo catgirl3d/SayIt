@@ -94,6 +94,28 @@ describe('Select rendered accessibility markup', () => {
     expect(markup).not.toContain('title="Laptop microphone"')
   })
 
+  it('renders a secondary part behind a decorative divider and keeps the full text as the title', () => {
+    hookStateOverrides.values = [true, { top: 100, left: 20, width: 240, maxHeight: 180 }]
+    vi.stubGlobal('document', { body: {} })
+
+    const markup = renderToStaticMarkup(createElement(Select, {
+      value: 'deepgram',
+      onChange: () => {},
+      options: [
+        { value: 'deepgram', label: 'Deepgram', secondary: 'nova-3' },
+        { value: 'openai', label: 'OpenAI' },
+      ],
+    }))
+
+    expect(markup).toContain('title="Deepgram · nova-3"')
+    const cleaned = markup.replace(/<!--.*?-->/g, '')
+    expect(cleaned).toContain('<span aria-hidden="true" class="mx-1.5 inline-block h-3.5 w-px bg-border align-middle"></span>')
+    // The divider is visual only; the screen-reader dot keeps the plain "label · secondary" text.
+    expect(cleaned).toMatch(/<span class="sr-only">·<\/span>/)
+    expect(cleaned).toMatch(/<span class="text-muted-foreground">nova-3<\/span>/)
+    expect(markup).not.toContain('title="OpenAI"')
+  })
+
   it('renders one heading per run of consecutive options that share a group', () => {
     hookStateOverrides.values = [true, { top: 100, left: 20, width: 240, maxHeight: 180 }]
     vi.stubGlobal('document', { body: {} })

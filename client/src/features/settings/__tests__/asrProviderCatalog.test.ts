@@ -89,7 +89,7 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     expect(provider?.blurb).not.toMatch(/more accurate|faster|cheaper|superior/i)
   })
 
-  /** The catalog order is the recommendation order (card order + default of a new service); the first two are pinned. */
+  /** The catalog order is the recommendation order (card order); the first two are pinned. */
   it('推荐顺序：豆包第一，千问 Audio 3.1 第二', () => {
     expect(ASR_PROVIDERS.slice(0, 2).map((p) => p.id)).toEqual(['doubao_v2', 'qwen_audio_stream'])
   })
@@ -117,6 +117,12 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
       'Xiaomi MiMo',
     ])
     expect(labelsOf(t('asrProvider.groupCustom'))).toEqual(['OpenAI-compatible ASR'])
+  })
+
+  it('starts a new service on the first grouped editor entry (Deepgram)', () => {
+    const first = groupedAsrProviders()[0].entry
+    expect(first.id).toBe('deepgram')
+    expect(emptyAsrProfile().provider).toBe(first.id)
   })
 
   it('lists every provider exactly once, with each group in one contiguous run', () => {

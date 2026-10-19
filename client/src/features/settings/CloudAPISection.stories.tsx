@@ -118,13 +118,13 @@ export const NewServiceProviderGroups: Story = {
     await userEvent.click(await within(canvasElement).findByRole('button', { name: 'New' }))
 
     const dialog = await body.findByRole('dialog')
-    await userEvent.click(within(dialog).getByRole('button', { name: /Doubao ASR/ }))
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Deepgram/ }))
 
     for (const heading of ['Global', 'China', 'Custom endpoint']) {
       await expect(await body.findByText(heading)).toBeVisible()
     }
-    await userEvent.click(body.getByRole('button', { name: /^Deepgram/ }))
-    await expect(within(dialog).getByRole('button', { name: /^Deepgram/ })).toBeVisible()
+    await userEvent.click(body.getByRole('button', { name: /^OpenAI · / }))
+    await expect(within(dialog).getByRole('button', { name: /^OpenAI · / })).toBeVisible()
   },
 }
 
