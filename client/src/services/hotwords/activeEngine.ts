@@ -10,6 +10,8 @@ export interface DictationHotwordEngine {
   capabilityKey: string
   /** Catalog label of the active cloud provider; empty for the server and local modes. */
   providerLabel: string
+  /** Whether the active profile opted in to sending hotwords to Deepgram; false for every other engine. */
+  deepgramKeytermsEnabled: boolean
 }
 
 /**
@@ -19,8 +21,12 @@ export interface DictationHotwordEngine {
  */
 export async function loadDictationHotwordEngine(): Promise<DictationHotwordEngine | null> {
   const stored = await getSetting<string>('workMode', 'server')
-  if (stored === 'local') return { mode: 'local', capabilityKey: 'local', providerLabel: '' }
-  if (stored !== 'cloud_api') return { mode: 'server', capabilityKey: 'server', providerLabel: '' }
+  if (stored === 'local') {
+    return { mode: 'local', capabilityKey: 'local', providerLabel: '', deepgramKeytermsEnabled: false }
+  }
+  if (stored !== 'cloud_api') {
+    return { mode: 'server', capabilityKey: 'server', providerLabel: '', deepgramKeytermsEnabled: false }
+  }
 
   const profile = await loadActiveAsrProfile()
   if (!profile) return null
@@ -29,5 +35,6 @@ export async function loadDictationHotwordEngine(): Promise<DictationHotwordEngi
     // Every Qwen Omni variant shares the single `qwen_omni` entry in the matrix.
     capabilityKey: resolveAsrDispatchProvider(profile.provider),
     providerLabel: findAsrProvider(profile.provider)?.label ?? profile.provider,
+    deepgramKeytermsEnabled: profile.deepgramKeytermsEnabled === true,
   }
 }

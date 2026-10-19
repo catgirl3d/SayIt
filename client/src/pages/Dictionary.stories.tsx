@@ -31,6 +31,31 @@ const cloudEngineSettings = {
   'cloudAsr.autoCreatedProviders': [],
 }
 
+const deepgramProfile = {
+  id: 'asr-storybook-deepgram',
+  provider: 'deepgram',
+  model: 'nova-3',
+  apiKey: 'dg-storybook-key',
+  appId: '',
+  console: 'new',
+  otherKey: '',
+  workspaceId: '',
+  omniPrompt: '',
+  deepgramKeytermsEnabled: false,
+} satisfies AsrProfile
+
+const deepgramEngineSettings = (keytermsEnabled: boolean, extra: Record<string, unknown> = {}) => ({
+  ...hotwordSettings,
+  ...extra,
+  workMode: 'cloud_api',
+  'cloudAsr.profiles': [{ ...deepgramProfile, deepgramKeytermsEnabled: keytermsEnabled }],
+  'cloudAsr.activeProfileId': deepgramProfile.id,
+  'cloudAsr.autoCreatedProviders': [],
+})
+
+// 200 short terms estimate to about 600 tokens, above the 500-token Deepgram budget.
+const overBudgetTerms = Array.from({ length: 200 }, (_, index) => `Term${index}`)
+
 const meta = {
   title: 'pages/Dictionary',
   component: Dictionary,
@@ -87,6 +112,53 @@ export const CloudEngineIgnoresHotwords: Story = {
         throw new Error('The engine notice must point to the AI prompt injection toggle')
       }
     })
+  },
+}
+
+export const DeepgramOptInOff: Story = {
+  parameters: { tauri: { settings: deepgramEngineSettings(false) } },
+  play: async ({ canvasElement }) => {
+    await waitFor(() => {
+      const notice = engineNotice(canvasElement)
+      if (!notice?.textContent?.includes('does not receive your hotwords')) {
+        throw new Error('Dictionary did not warn that Deepgram receives no hotwords without the profile opt-in')
+      }
+      if (!notice.textContent.includes('Send dictionary terms to Deepgram')) {
+        throw new Error('The Deepgram notice must name the profile option')
+      }
+      if (notice.querySelector('a')?.getAttribute('href') !== '/voice-engine') {
+        throw new Error('The Deepgram notice must link to the voice engine settings')
+      }
+    })
+  },
+}
+
+export const DeepgramOverTokenBudget: Story = {
+  parameters: {
+    tauri: {
+      settings: deepgramEngineSettings(true, {
+        customHotwordThemes: [{ id: 'storybook', name: 'Storybook terms', words: overBudgetTerms }],
+      }),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() => {
+      if (!engineNotice(canvasElement)?.textContent?.includes('exceed the Deepgram limit (500)')) {
+        throw new Error('Dictionary did not warn that the hotword list exceeds the Deepgram token limit')
+      }
+    })
+  },
+}
+
+export const DeepgramSendsHotwords: Story = {
+  parameters: { tauri: { settings: deepgramEngineSettings(true) } },
+  play: async ({ canvasElement }) => {
+    // The seeded list is small and the profile opted in, so no notice may appear once the engine has resolved.
+    await waitFor(() => {
+      if (!(canvasElement.textContent ?? '').includes('SayIt')) throw new Error('Dictionary did not render the seeded hotwords')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    if (engineNotice(canvasElement)) throw new Error('An opted-in Deepgram profile within budget must not show a notice')
   },
 }
 

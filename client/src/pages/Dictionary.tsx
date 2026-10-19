@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus, AlertTriangle } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus, AlertTriangle, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -66,6 +67,19 @@ function buildHotwordCapabilityRows(
   }
 
   return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/** Warning strip stating that the engine dictation uses will not apply the hotword list as the user expects. */
+function HotwordEngineNotice({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="status"
+      className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs leading-relaxed text-warning-strong"
+    >
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <p className="min-w-0">{children}</p>
+    </div>
+  )
 }
 
 /** Above this total hotword count, show a soft hint that too many terms can counterintuitively lower accuracy. */
@@ -210,6 +224,11 @@ export default function Dictionary() {
       : t(dictationEngine.mode === 'local' ? 'mode.local' : 'mode.server')
   const tokensNearBudget = hotwordTokens >= HOTWORD_TOKEN_BUDGET * 0.8
   const tokensOverBudget = hotwordTokens > HOTWORD_TOKEN_BUDGET
+  // The matrix reports Deepgram as sending hotwords, but only when the profile opted in, and Deepgram
+  // rejects a list over its token budget, after which recognition continues without the terms.
+  const deepgramEngine = dictationEngine?.capabilityKey === 'deepgram' ? dictationEngine : null
+  const deepgramOptInOff = deepgramEngine !== null && !deepgramEngine.deepgramKeytermsEnabled
+  const deepgramOverBudget = deepgramEngine !== null && deepgramEngine.deepgramKeytermsEnabled && tokensOverBudget
   // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
   const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
   const budgetText = t('dict.budgetLabel', {
@@ -349,21 +368,29 @@ export default function Dictionary() {
           </p>
 
           {engineIgnoresHotwords && (
-            <div
-              role="status"
-              className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs leading-relaxed text-warning-strong"
-            >
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <p className="min-w-0">
-                <RichText
-                  text={t('dict.engineIgnores', {
-                    engine: engineLabel,
-                    toggle: t('hotwordInject.title'),
-                    page: t('nav.aiInstructions'),
-                  })}
-                />
-              </p>
-            </div>
+            <HotwordEngineNotice>
+              <RichText
+                text={t('dict.engineIgnores', {
+                  engine: engineLabel,
+                  toggle: t('hotwordInject.title'),
+                  page: t('nav.aiInstructions'),
+                })}
+              />
+            </HotwordEngineNotice>
+          )}
+          {deepgramOptInOff && (
+            <HotwordEngineNotice>
+              <RichText text={t('dict.engineDeepgramGate', { option: t('asr.deepgramKeyterms') })} />{' '}
+              <Link to="/voice-engine" className="inline-flex items-center gap-0.5 underline underline-offset-2">
+                {t('files.hotwordsOpenVoiceEngine')}
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </HotwordEngineNotice>
+          )}
+          {deepgramOverBudget && (
+            <HotwordEngineNotice>
+              {t('files.hotwordsDeepgramBudget', { tokens: hotwordTokens, budget: HOTWORD_TOKEN_BUDGET })}
+            </HotwordEngineNotice>
           )}
 
           {!loading && (

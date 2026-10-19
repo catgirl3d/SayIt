@@ -24,6 +24,7 @@ describe('loadDictationHotwordEngine', () => {
       mode: 'server',
       capabilityKey: 'server',
       providerLabel: '',
+      deepgramKeytermsEnabled: false,
     })
     expect(mocks.getSetting).toHaveBeenCalledWith('workMode', 'server')
     expect(mocks.loadActiveAsrProfile).not.toHaveBeenCalled()
@@ -42,6 +43,7 @@ describe('loadDictationHotwordEngine', () => {
       mode: 'local',
       capabilityKey: 'local',
       providerLabel: '',
+      deepgramKeytermsEnabled: false,
     })
     expect(mocks.loadActiveAsrProfile).not.toHaveBeenCalled()
   })
@@ -54,6 +56,7 @@ describe('loadDictationHotwordEngine', () => {
       mode: 'cloud_api',
       capabilityKey: 'groq_whisper',
       providerLabel: findAsrProvider('groq_whisper')?.label,
+      deepgramKeytermsEnabled: false,
     })
   })
 
@@ -76,7 +79,24 @@ describe('loadDictationHotwordEngine', () => {
       mode: 'cloud_api',
       capabilityKey: 'future_provider',
       providerLabel: 'future_provider',
+      deepgramKeytermsEnabled: false,
     })
+  })
+
+  it('reports the Deepgram profile opt-in only when it is explicitly enabled', async () => {
+    mocks.getSetting.mockResolvedValue('cloud_api')
+
+    mocks.loadActiveAsrProfile.mockResolvedValueOnce({ provider: 'deepgram', deepgramKeytermsEnabled: true })
+    await expect(loadDictationHotwordEngine()).resolves.toMatchObject({
+      capabilityKey: 'deepgram',
+      deepgramKeytermsEnabled: true,
+    })
+
+    mocks.loadActiveAsrProfile.mockResolvedValueOnce({ provider: 'deepgram', deepgramKeytermsEnabled: false })
+    await expect(loadDictationHotwordEngine()).resolves.toMatchObject({ deepgramKeytermsEnabled: false })
+
+    mocks.loadActiveAsrProfile.mockResolvedValueOnce({ provider: 'deepgram' })
+    await expect(loadDictationHotwordEngine()).resolves.toMatchObject({ deepgramKeytermsEnabled: false })
   })
 
   it('claims no engine in Cloud API mode while no ASR service is configured', async () => {
