@@ -75,7 +75,7 @@ export function buildHotwordInjectionPart(hotwords: string[] | undefined): strin
   if (!hotwords || hotwords.length === 0) return null
   const terms = Array.from(new Set(hotwords.map((w) => w.trim()).filter(Boolean)))
   if (terms.length === 0) return null
-  return `User Glossary: The following are proper nouns and terms frequently used by the user. If you encounter phonetically similar or misrecognized words during cleanup, prioritize correcting them to the following spellings (preserving exact casing) and keep them intact:\n${terms.join(', ')}`
+  return `User Hotwords: The following are proper nouns and terms frequently used by the user. If you encounter phonetically similar or misrecognized words during cleanup, prioritize correcting them to the following spellings (preserving exact casing) and keep them intact:\n${terms.join(', ')}`
 }
 
 export function resolvePromptRouting(input: PromptRoutingInput): PromptResolution {
