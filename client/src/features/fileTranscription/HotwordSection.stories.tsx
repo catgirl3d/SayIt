@@ -160,7 +160,7 @@ export const DeepgramGateOff: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
 
-    await expect(canvas.getByText(/hotword sending is disabled in the Deepgram profile/)).toBeVisible()
+    await expect(canvas.getByText(/is turned off in the Deepgram profile/)).toBeVisible()
     await expect(canvas.getByRole('link', { name: /Open voice engine settings/ })).toBeVisible()
   },
 }

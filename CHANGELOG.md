@@ -26,6 +26,7 @@ Sections are ordered by version, newest first.
 - The provider lists in the speech recognition and AI service editors are now split into Global, China and custom or local endpoint groups, sorted alphabetically inside each group, instead of one hand-ordered list that started with the Chinese providers or the generic entry.
 - The Settings group in the left menu is now folded until you click its heading, so the menu leads with the workspace and voice pages. It opens on its own when you land on one of its pages, and stays as you left it while you move around.
 - The AI providers page no longer repeats its title and description inside the card. Test all now sits in the page header next to Help, New is a dashed tile at the end of the card grid (and the whole empty state when no service is saved), and the page subtitle says that a click on a card makes it active and that recognized text is sent to the service you choose.
+- The Hotwords page now says when dictation will not apply your hotwords. If the engine you dictate with does not send hotwords to speech recognition (Local mode, Groq, OpenAI, OpenRouter and MiMo speech recognition), it points to the "Send hotwords to the AI prompt" option on the AI cleanup page, which lets AI cleanup fix those terms instead. With Deepgram, it says when sending terms is switched off in the profile, with a link to the voice engine settings, or when the list exceeds Deepgram's 500-token limit.
 
 ### Fixed
 #### Desktop Client

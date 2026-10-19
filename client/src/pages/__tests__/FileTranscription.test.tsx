@@ -1162,7 +1162,7 @@ describe('file transcription page', () => {
     renderPage()
 
     await waitFor(() => expect(screen.getByText('No local models are installed. Download one in Voice Engine first.')).toBeTruthy())
-    expect(screen.getByRole('link', { name: 'Open Voice Engine settings' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open voice engine settings' })).toBeTruthy()
     const startButton = screen.getByRole('button', { name: 'Start transcription' })
     expect((startButton as HTMLButtonElement).disabled).toBe(true)
   })

@@ -7,9 +7,11 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { exportHotwords } from '@/services/exports'
 import { HOTWORD_TOKEN_BUDGET, HOTWORD_WORD_BUDGET } from '@/services/hotwords/budget'
+import { loadDictationHotwordEngine, type DictationHotwordEngine } from '@/services/hotwords/activeEngine'
 import { loadAsrHotwordCapabilityMatrix } from '@/services/hotwords/capabilityMatrix'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
 import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
+import HotwordEngineNotices from '@/components/HotwordEngineNotices'
 import SuggestedTermsPicker from '@/components/SuggestedTermsPicker'
 import TextReplacementSection from '@/components/TextReplacementSection'
 import TextFormatSection from '@/components/TextFormatSection'
@@ -125,6 +127,7 @@ export default function Dictionary() {
   useT()
   const [hotwordCapabilities, setHotwordCapabilities] = useState<Record<string, AsrHotwordCapability>>({})
   const [hotwordCapabilityLoadFailed, setHotwordCapabilityLoadFailed] = useState(false)
+  const [dictationEngine, setDictationEngine] = useState<DictationHotwordEngine | null>(null)
   const [tab, setTab] = useState<Tab>('hotwords')
   const [exportMessage, setExportMessage] = useState('')
   const [warnDismissed, setWarnDismissed] = useState(false)
@@ -179,6 +182,18 @@ export default function Dictionary() {
         if (!mounted) return
         console.warn('Failed to load ASR hotword capability matrix', error)
         setHotwordCapabilityLoadFailed(true)
+      })
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    void loadDictationHotwordEngine()
+      .then((engine) => {
+        if (mounted) setDictationEngine(engine)
+      })
+      .catch((error: unknown) => {
+        if (mounted) console.warn('Failed to resolve the dictation engine for the hotword notice', error)
       })
     return () => { mounted = false }
   }, [])
@@ -324,6 +339,12 @@ export default function Dictionary() {
             </Tooltip>
           </p>
 
+          <HotwordEngineNotices
+            engine={dictationEngine}
+            capabilities={hotwordCapabilities}
+            hotwordTokens={hotwordTokens}
+          />
+
           {!loading && (
             <div className="mb-4 -mt-2 space-y-1.5">
               <div className="flex items-center gap-1.5 text-xs">
@@ -361,7 +382,7 @@ export default function Dictionary() {
               </div>
               {hotwords.length > HOTWORD_WORD_BUDGET && (
                 <p className="text-xs text-amber-500">
-                  {t('dict.budgetWordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
+                  {t('hotwords.wordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
                 </p>
               )}
             </div>

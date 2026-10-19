@@ -156,16 +156,16 @@ export default function HotwordSection({
           <p className="text-xs text-muted-foreground">{summary}</p>
           {plan.notices.includes('deepgramGate') && (
             <p className="text-xs leading-relaxed text-warning-strong">
-              {t('files.hotwordsDeepgramGate')}{' '}
+              {t('hotwords.deepgramGate', { option: t('asr.deepgramKeyterms') })}{' '}
               <Link to="/voice-engine" className="inline-flex items-center gap-0.5 underline underline-offset-2">
-                {t('files.hotwordsOpenVoiceEngine')}
+                {t('common.openVoiceEngine')}
                 <ExternalLink className="h-3 w-3" />
               </Link>
             </p>
           )}
           {plan.notices.includes('deepgramTokenBudget') && (
             <p className="text-xs leading-relaxed text-warning-strong">
-              {t('files.hotwordsDeepgramBudget', {
+              {t('hotwords.deepgramBudget', {
                 tokens: plan.tokenEstimate,
                 budget: HOTWORD_TOKEN_BUDGET,
               })}
@@ -173,7 +173,7 @@ export default function HotwordSection({
           )}
           {plan.notices.includes('wordCap') && plan.wordCapLimit !== null && (
             <p className="text-xs leading-relaxed text-muted-foreground">
-              {t('dict.budgetWordCap', { wordBudget: plan.wordCapLimit })}
+              {t('hotwords.wordCap', { wordBudget: plan.wordCapLimit })}
             </p>
           )}
           {mode === 'selected' && (
