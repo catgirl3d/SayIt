@@ -1195,8 +1195,34 @@ describe('system audio subtitle session', () => {
       return provider
     }
 
+    // The experimental opt-in is read when a session starts, so it is stored before start().
+    function enableLeadingContext() {
+      native.settings.set('systemAudio.deepgramLeadingContext', true)
+    }
+
+    // Runs a cut piece followed by its continuation and reports what the provider was asked to recognize.
+    async function runTwoPieces(provider: TranscriptionProvider) {
+      native.captured.length = 0
+      scriptRecognition('a new campaign...', 'Fostering system works')
+      const start = vi.spyOn(provider, 'start')
+      sessionWith(provider)
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+      const run = {
+        sent: [...native.captured],
+        startOptions: start.mock.calls.map(([options]) => options),
+        caption: session.getSnapshot().caption,
+      }
+      await session.stop()
+      return run
+    }
+
     it('sends the tail of the previous piece as leading context and keeps the spoken span and the capital letter', async () => {
       const trace = enablePipelineDebug()
+      enableLeadingContext()
       scriptRecognition('a new campaign...', 'Fostering system works')
       const provider = acceptingProvider()
       const start = vi.spyOn(provider, 'start')
@@ -1218,7 +1244,8 @@ describe('system audio subtitle session', () => {
       expect(trace.getPipelineSnapshot().runs.map((run) => run.speechMs)).toEqual([188 * 32, 35 * 32])
     })
 
-    it('sends the plain piece to a provider that does not accept leading context, as before', async () => {
+    it('sends the plain piece to a provider that does not accept leading context, even with the setting on', async () => {
+      enableLeadingContext()
       scriptRecognition('a new campaign...', 'Fostering system works')
       const provider = new LocalProvider()
       const start = vi.spyOn(provider, 'start')
@@ -1234,7 +1261,49 @@ describe('system audio subtitle session', () => {
       expect(session.getSnapshot().caption).toBe('fostering system works')
     })
 
+    it('is off by default: an accepting provider gets the plain piece, byte for byte as a provider that does not accept context', async () => {
+      const plain = await runTwoPieces(new LocalProvider())
+      const accepting = await runTwoPieces(acceptingProvider())
+
+      expect(accepting.sent).toHaveLength(2)
+      expect(accepting.sent).toEqual(plain.sent)
+      expect(accepting.sent[1].length).toBe(9600 + 35 * 1024)
+      expect(accepting.startOptions.map((options) => Object.keys(options).sort()))
+        .toEqual(plain.startOptions.map((options) => Object.keys(options).sort()))
+      expect(accepting.startOptions.every((options) => !('leadingContextMs' in options))).toBe(true)
+      expect(accepting.caption).toBe('fostering system works')
+      expect(plain.caption).toBe('fostering system works')
+    })
+
+    it('treats a stored value other than true as off', async () => {
+      native.settings.set('systemAudio.deepgramLeadingContext', 'true')
+
+      const run = await runTwoPieces(acceptingProvider())
+
+      expect(run.sent[1].length).toBe(9600 + 35 * 1024)
+      expect(run.startOptions.every((options) => !('leadingContextMs' in options))).toBe(true)
+      expect(run.caption).toBe('fostering system works')
+    })
+
+    it('reads the setting when the session starts and keeps it for the whole session', async () => {
+      scriptRecognition('a new campaign...', 'Fostering system works')
+      const provider = acceptingProvider()
+      const start = vi.spyOn(provider, 'start')
+      sessionWith(provider)
+      await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })
+      enableLeadingContext()
+      frames(188, 0.9)
+      await settle()
+      speak()
+      await settle()
+
+      expect(start.mock.calls.every(([options]) => !('leadingContextMs' in options))).toBe(true)
+      expect(native.captured[1].length).toBe(9600 + 35 * 1024)
+      expect(session.getSnapshot().caption).toBe('fostering system works')
+    })
+
     it('still removes a mid-speech ellipsis from a piece that is sent with context', async () => {
+      enableLeadingContext()
       scriptRecognition('a new campaign...', 'Fostering system works...')
       sessionWith(acceptingProvider())
       await session.start({ deviceId: '', targetLanguage: '', asrOnly: true })

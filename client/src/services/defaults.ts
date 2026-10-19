@@ -96,6 +96,7 @@ export const DEFAULTS: Record<string, unknown> = {
   'systemAudio.liveRecognitionEnabled': false,
   'systemAudio.debugPipeline': false,
   'systemAudio.asrOnlyTest': false,
+  'systemAudio.deepgramLeadingContext': false, // Experimental: Deepgram batch pieces also carry the last second of the previous piece
   // systemAudio.targetLanguage intentionally has no static default: it follows the interface locale (see SystemAudio.tsx).
 
   // ── Text insertion ──

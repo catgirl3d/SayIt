@@ -258,6 +258,9 @@ export class SystemAudioSession {
   private segmenter = new SubtitleSegmenter(this.plan)
   // Fixed per start: the overlay window is sized once, so the layout must not change under a running session.
   private dual = false
+  // Experimental opt-in (systemAudio.deepgramLeadingContext), read once per start like the other settings. Off by
+  // default: a continuation piece is then sent plain, exactly as for a provider that does not accept leading context.
+  private deepgramLeadingContext = false
   private queue: SegmentJob[] = []
   private queuedBytes = 0
   private activeJob = 0
@@ -565,13 +568,14 @@ export class SystemAudioSession {
       if (generation !== this.generation) return
       const asrOnly = this.options!.asrOnly
       if (!reuseSnapshot) {
-        const [presets, language, hotwords, maxSegmentSeconds, dual, liveRecognitionEnabled, transcriptEnabled, transcriptDir] = await Promise.all([
+        const [presets, language, hotwords, maxSegmentSeconds, dual, liveRecognitionEnabled, deepgramLeadingContext, transcriptEnabled, transcriptDir] = await Promise.all([
           asrOnly ? Promise.resolve([]) : getPromptPresets(),
           getSystemAudioSourceLanguage(),
           loadActiveHotwords(),
           getSystemAudioMaxSegmentSeconds(),
           getSystemAudioDualSubtitles(),
           getSetting('systemAudio.liveRecognitionEnabled', false),
+          getSetting('systemAudio.deepgramLeadingContext', false),
           getSetting('systemAudio.transcriptEnabled', false),
           getSetting<string>('systemAudio.transcriptDir', ''),
         ])
@@ -579,6 +583,7 @@ export class SystemAudioSession {
         this.plan = segmentPlan(maxSegmentSeconds)
         this.segmenter = new SubtitleSegmenter(this.plan)
         this.dual = dual && !asrOnly
+        this.deepgramLeadingContext = deepgramLeadingContext === true
         if (this.freshStart) {
           this.freshStart = false
           if (transcriptEnabled === true) {
@@ -1238,10 +1243,11 @@ export class SystemAudioSession {
     } catch (error) { this.fail(t('systemAudio.notReady'), String(error)) }
   }
 
-  // The previous piece's tail is sent only to a provider that can drop its words, so the recognizer hears the sentence
-  // continue. Any other provider gets the plain piece, exactly as before. Span and duration stay the spoken span.
+  // The previous piece's tail is sent only when the experimental setting is on and the provider can drop its words, so
+  // the recognizer hears the sentence continue. Otherwise the piece goes out plain, exactly as before. Span and
+  // duration stay the spoken span.
   private leadingContextFor(job: SegmentJob): { audio: Uint8Array; leadingContextMs: number } | null {
-    if (!job.contextAudio || this.provider?.acceptsLeadingContext?.() !== true) return null
+    if (!this.deepgramLeadingContext || !job.contextAudio || this.provider?.acceptsLeadingContext?.() !== true) return null
     return {
       audio: withLeadingContext(job.audio, job.contextAudio),
       leadingContextMs: leadingContextMs(job.contextAudio.byteLength),
