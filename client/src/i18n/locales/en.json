@@ -661,6 +661,7 @@
   "dict.note.deepgram": "Only when the profile enables \"Send dictionary terms to Deepgram\" (paid); 500-token limit",
   "dict.note.clientCap": "SayIt sends at most {count}",
   "dict.caveat": "Hotwords only raise the **chance of a match** — they don't guarantee it, and **more is not better**. On local models that don't support ASR hotwords yet, turn on \"Send hotwords to the AI prompt\" and let AI cleanup fix the terms instead.",
+  "dict.engineIgnores": "**{engine}** does not send hotwords to speech recognition. To still get your terms right, turn on \"{toggle}\" on the {page} page and let AI cleanup fix them.",
   "dict.countHint": "You have **{count}** hotwords. **More is not better** — keep the list to terms you actually use.",
   "dict.dismissHint": "Dismiss",
   "dict.newCategoryPlaceholder": "New category, e.g. Project A / Medical terms / Meeting terms",
