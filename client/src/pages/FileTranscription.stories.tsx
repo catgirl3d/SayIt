@@ -258,7 +258,7 @@ export const CloudHotwordsHidden: Story = {
     await waitFor(() => expect(canvas.getByText('Hotwords')).toBeTruthy())
 
     await userEvent.click(canvas.getByRole('button', { name: 'Cloud profile' }))
-    await userEvent.click(await body.findByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    await userEvent.click(await body.findByRole('button', { name: 'OpenAI · whisper-1' }))
     await expect(canvas.queryByText('Hotwords')).toBeNull()
   },
 }

@@ -101,10 +101,10 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
 
     expect(labelsOf(t('asrProvider.groupGlobal'))).toEqual([
       'Deepgram',
-      'Gemini transcription',
+      'Gemini',
       'Groq Whisper',
-      'OpenAI transcription',
-      'OpenRouter transcription',
+      'OpenAI',
+      'OpenRouter',
     ])
     expect(labelsOf(t('asrProvider.groupChina'))).toEqual([
       'Doubao ASR',

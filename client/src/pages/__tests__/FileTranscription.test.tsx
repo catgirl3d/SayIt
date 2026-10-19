@@ -314,7 +314,7 @@ describe('file transcription page', () => {
     const durationSelect = await screen.findByRole('button', { name: 'Fragment duration' })
     expect(durationSelect.textContent).toContain('3 min')
     fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI · whisper-1' }))
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Fragment duration' })).toBeNull())
     expect(native.storeWrites).toContainEqual({ key: 'fileTranscription.cloudProfileId', value: 'cloud-fixed' })
@@ -424,7 +424,7 @@ describe('file transcription page', () => {
       },
       {
         id: 'cloud-profile-2',
-        label: 'OpenAI transcription',
+        label: 'OpenAI',
         provider: 'openai_transcribe',
         model: 'whisper-1',
         windowSecondsOptions: [300, 180],
@@ -454,7 +454,7 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Тривалість фрагмента' }))
     fireEvent.click(screen.getByRole('button', { name: '3 хв' }))
     fireEvent.click(screen.getByRole('button', { name: 'Хмарний профіль' }))
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI · whisper-1' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Хмарний профіль' }).textContent).toContain('whisper-1'))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Тривалість фрагмента' }).textContent).toContain('3 хв'))
 
@@ -585,7 +585,7 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
 
     const profileSelect = screen.getByRole('button', { name: 'Cloud profile' })
-    expect(profileSelect.textContent).toContain('OpenAI transcription')
+    expect(profileSelect.textContent).toContain('OpenAI')
     expect(profileSelect.textContent).toContain('whisper-1')
     expect(profileSelect.textContent).not.toContain('nova-3')
     expect(screen.queryByText('openai_transcribe')).toBeNull()
@@ -621,7 +621,7 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI · whisper-1' }))
     fireEvent.click(screen.getByRole('button', { name: 'Language' }))
     fireEvent.click(screen.getByRole('button', { name: 'Ukrainian' }))
     await waitFor(() => expect(native.storeWrites).toContainEqual({
@@ -649,7 +649,7 @@ describe('file transcription page', () => {
       request: expect.objectContaining({
         engine: 'cloud',
         cloud: expect.objectContaining({
-          label: 'OpenAI transcription',
+          label: 'OpenAI',
           config: expect.objectContaining({
             provider: 'openai_transcribe',
             extra: expect.objectContaining({ language: 'uk' }),
@@ -1031,7 +1031,7 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI · whisper-1' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose audio or video file' }))
     await waitFor(() => expect(screen.getByText('recording.mp4')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
@@ -1789,7 +1789,7 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cloud' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cloud profile' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Cloud profile' }))
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI transcription · whisper-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI · whisper-1' }))
     expect(screen.getByRole('button', { name: 'Cloud profile' }).textContent).toContain('whisper-1')
 
     act(() => { setLocale('uk') })
