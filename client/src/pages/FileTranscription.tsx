@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Feedback } from '@/components/ui/feedback'
 import { Select } from '@/components/ui/select'
 import { Tooltip } from '@/components/ui/tooltip'
 import SpeechLanguageSelect from '@/components/SpeechLanguageSelect'
@@ -57,6 +58,18 @@ function phaseLabel(phase: FilePhase): string {
     failed: 'files.phaseFailed',
   }
   return translate(labels[phase])
+}
+
+function VoiceEngineLink({ label, className }: { label: string; className?: string }) {
+  return (
+    <Link
+      className={cn('inline-flex items-center gap-1 font-medium underline underline-offset-2', className)}
+      to="/voice-engine"
+    >
+      {label}
+      <ExternalLink className="h-3 w-3" />
+    </Link>
+  )
 }
 
 function parentDirectory(path: string): string {
@@ -407,6 +420,8 @@ export default function FileTranscription() {
     }
   }
 
+  const retryRestoreAction = { label: t('files.retryRestore'), onClick: () => void retryRestore() }
+
   const retryJobOptions = async () => {
     if (retryingJobOptions) return
     const generation = ++jobOptionsRequest.current
@@ -516,10 +531,16 @@ export default function FileTranscription() {
         </div>
       </header>
 
-      {pageError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{pageError}</span>{initializationError !== null && !showRestoreError && <Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button>}</div>}
-      {showRestoreError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="flex-1">{restoreError}</span><Button type="button" variant="ghost" size="sm" onClick={() => void retryRestore()}>{t('files.retryRestore')}</Button></div>}
-      {snapshotError && <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{snapshotError}</div>}
-      {snapshot?.warning != null && <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-warning-strong" role="status"><Info className="mt-0.5 h-4 w-4 shrink-0" />{snapshot.warning}</div>}
+      {pageError && (
+        <Feedback
+          tone="error"
+          message={pageError}
+          actions={initializationError !== null && !showRestoreError ? [retryRestoreAction] : undefined}
+        />
+      )}
+      {showRestoreError && <Feedback tone="error" message={restoreError} actions={[retryRestoreAction]} />}
+      {snapshotError && <Feedback tone="error" message={snapshotError} />}
+      {snapshot?.warning != null && <Feedback tone="warning" message={snapshot.warning} />}
 
       <div className="grid gap-4 lg:grid-cols-[288px_minmax(0,1fr)]">
         <aside className="flex">
@@ -616,16 +637,15 @@ export default function FileTranscription() {
                     </Button>
                   </div>
                 ) : models.length === 0 ? (
-                  <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong">
-                    <div>{t('files.noInstalledModels')}</div>
-                    <Link
-                      className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
-                      to="/voice-engine"
-                    >
-                      {t('common.openVoiceEngine')}
-                      <ExternalLink className="h-3 w-3" />
-                    </Link>
-                  </div>
+                  <Feedback
+                    tone="warning"
+                    message={(
+                      <>
+                        <span className="block">{t('files.noInstalledModels')}</span>
+                        <VoiceEngineLink label={t('common.openVoiceEngine')} className="mt-1.5" />
+                      </>
+                    )}
+                  />
                 ) : (
                   <div className="space-y-1.5">
                     <span id="file-model-label" className="text-xs font-medium text-foreground">
@@ -683,25 +703,18 @@ export default function FileTranscription() {
                   >
                     {t('common.retry')}
                   </Button>
-                  <Link
-                    className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
-                    to="/voice-engine"
-                  >
-                    {t('files.openCloudSettings')}
-                    <ExternalLink className="h-3 w-3" />
-                  </Link>
+                  <VoiceEngineLink label={t('files.openCloudSettings')} />
                 </div>
               ) : cloudProfiles.length === 0 ? (
-                <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong">
-                  <div>{t('files.cloudNoProfiles')}</div>
-                  <Link
-                    className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
-                    to="/voice-engine"
-                  >
-                    {t('files.openCloudSettings')}
-                    <ExternalLink className="h-3 w-3" />
-                  </Link>
-                </div>
+                <Feedback
+                  tone="warning"
+                  message={(
+                    <>
+                      <span className="block">{t('files.cloudNoProfiles')}</span>
+                      <VoiceEngineLink label={t('files.openCloudSettings')} className="mt-1.5" />
+                    </>
+                  )}
+                />
               ) : (
                 <>
                   <div className="space-y-1.5">
@@ -762,35 +775,28 @@ export default function FileTranscription() {
                     </div>
                   )}
                   {selectedCloudProfile?.windowSecondsOptionsError && (
-                    <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong">
-                      <div>
-                        {t('files.cloudWindowOptionsFailed')}: {selectedCloudProfile.windowSecondsOptionsError}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8"
-                        onClick={() => void retryJobOptions()}
-                        disabled={retryingJobOptions}
-                      >
-                        {t('common.retry')}
-                      </Button>
-                    </div>
+                    <Feedback
+                      tone="warning"
+                      message={`${t('files.cloudWindowOptionsFailed')}: ${selectedCloudProfile.windowSecondsOptionsError}`}
+                      actions={[{
+                        label: t('common.retry'),
+                        onClick: () => void retryJobOptions(),
+                        disabled: retryingJobOptions,
+                      }]}
+                    />
                   )}
                   {selectedCloudProfile && !isCloudProfileReady(selectedCloudProfile) && (
-                    <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs text-warning-strong">
-                      <div>
-                        {t('files.cloudProfileMissing')}: {selectedCloudProfile.missing}
-                      </div>
-                      <Link
-                        className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
-                        to="/voice-engine"
-                      >
-                        {t('files.openCloudSettings')}
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    </div>
+                    <Feedback
+                      tone="warning"
+                      message={(
+                        <>
+                          <span className="block">
+                            {t('files.cloudProfileMissing')}: {selectedCloudProfile.missing}
+                          </span>
+                          <VoiceEngineLink label={t('files.openCloudSettings')} className="mt-1.5" />
+                        </>
+                      )}
+                    />
                   )}
                 </>
               )}

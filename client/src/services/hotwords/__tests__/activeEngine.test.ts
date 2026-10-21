@@ -65,6 +65,15 @@ describe('loadDictationHotwordEngine', () => {
       })
     })
 
+    it.each(['gemini_transcribe', 'qwen_audio_stream'])('keeps %s as its own capability key, not an Omni variant', async (provider) => {
+      mocks.loadActiveAsrProfile.mockResolvedValueOnce({ provider })
+
+      await expect(loadDictationHotwordEngine()).resolves.toMatchObject({
+        mode: 'cloud_api',
+        capabilityKey: provider,
+      })
+    })
+
     it('falls back to the raw provider id when the catalog does not know the provider', async () => {
       mocks.loadActiveAsrProfile.mockResolvedValueOnce({ provider: 'future_provider' })
 

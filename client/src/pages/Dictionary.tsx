@@ -203,6 +203,8 @@ export default function Dictionary() {
   const tokensOverBudget = hotwordTokens > HOTWORD_TOKEN_BUDGET
   // "Full" is at-or-over the budget: no further preset can be added even with zero new tokens.
   const tokensFull = hotwordTokens >= HOTWORD_TOKEN_BUDGET
+  // Only the dictation engine's own word cap applies; engines without one show no word-cap line.
+  const dictationWordCap = dictationEngine ? hotwordCapabilities[dictationEngine.capabilityKey]?.clientCap ?? null : null
   const budgetText = t('dict.budgetLabel', {
     tokens: hotwordTokens,
     tokenBudget: HOTWORD_TOKEN_BUDGET,
@@ -349,7 +351,7 @@ export default function Dictionary() {
             <div className="mb-4 -mt-2 space-y-1.5">
               <div className="flex items-center gap-1.5 text-xs">
                 <span className={cn(
-                  tokensOverBudget ? 'text-destructive' : tokensNearBudget ? 'text-amber-500' : 'text-muted-foreground',
+                  tokensOverBudget ? 'text-destructive' : tokensNearBudget ? 'text-warning-strong' : 'text-muted-foreground',
                 )}>
                   {budgetText}
                 </span>
@@ -375,28 +377,28 @@ export default function Dictionary() {
                 <div
                   className={cn(
                     'h-full rounded-full transition-[width]',
-                    tokensOverBudget ? 'bg-destructive' : tokensNearBudget ? 'bg-amber-500' : 'bg-primary/60',
+                    tokensOverBudget ? 'bg-destructive' : tokensNearBudget ? 'bg-warning' : 'bg-primary/60',
                   )}
                   style={{ width: `${Math.min(100, (hotwordTokens / HOTWORD_TOKEN_BUDGET) * 100)}%` }}
                 />
               </div>
-              {hotwords.length > HOTWORD_WORD_BUDGET && (
-                <p className="text-xs text-amber-500">
-                  {t('hotwords.wordCap', { wordBudget: HOTWORD_WORD_BUDGET })}
+              {dictationWordCap !== null && hotwords.length > dictationWordCap && (
+                <p className="text-xs text-warning-strong">
+                  {t('hotwords.wordCap', { wordBudget: dictationWordCap })}
                 </p>
               )}
             </div>
           )}
 
           {hotwords.length > HOTWORD_SOFT_LIMIT && !warnDismissed && (
-            <div className="mb-4 -mt-2 flex items-start gap-2 text-xs text-amber-500">
+            <div className="mb-4 -mt-2 flex items-start gap-2 text-xs text-warning-strong">
               <p>
                 <RichText text={t('dict.countHint', { count: hotwords.length })} />
               </p>
               <button
                 type="button"
                 onClick={() => setWarnDismissed(true)}
-                className="shrink-0 rounded p-0.5 text-amber-500/70 transition-colors hover:bg-amber-500/10 hover:text-amber-500"
+                className="shrink-0 rounded p-0.5 text-warning-strong/70 transition-colors hover:bg-warning/10 hover:text-warning-strong"
                 aria-label={t('dict.dismissHint')}
               >
                 <X className="h-3 w-3" />
@@ -470,7 +472,7 @@ export default function Dictionary() {
                               {t('dict.customCount', { active: activeWords.length, total: totalWords })}
                             </p>
                             {blocked && (
-                              <p className="mt-1 text-xs text-amber-500">
+                              <p className="mt-1 text-xs text-warning-strong">
                                 {tokensFull ? t('dict.budgetFullBlocked') : t('dict.budgetNoFit')}
                               </p>
                             )}
@@ -579,7 +581,7 @@ export default function Dictionary() {
                               {t('dict.builtinCount', { desc: setDef.description, active: activeWords.length, total: totalWords })}
                             </p>
                             {blocked && (
-                              <p className="mt-1 text-xs text-amber-500">
+                              <p className="mt-1 text-xs text-warning-strong">
                                 {tokensFull ? t('dict.budgetFullBlocked') : t('dict.budgetNoFit')}
                               </p>
                             )}
