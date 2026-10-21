@@ -16,12 +16,31 @@ const groqProfile = {
   omniPrompt: '',
 } satisfies AsrProfile
 
+const geminiProfile = {
+  id: 'asr-storybook-gemini',
+  provider: 'gemini_transcribe',
+  model: 'gemini-3.5-transcribe',
+  apiKey: 'gemini-storybook-key',
+  appId: '',
+  console: 'new',
+  otherKey: '',
+  workspaceId: '',
+  omniPrompt: '',
+} satisfies AsrProfile
+
 const hotwordSettings = {
   builtinSetWords: { ai: ['SayIt', 'Storybook'] },
   builtinSetActive: { ai: true },
   customHotwordThemes: [{ id: 'storybook', name: 'Storybook terms', words: ['Vitest'] }],
   customThemeActive: { storybook: true },
   manualHotwords: [],
+}
+
+// More than the 100-word client cap of Gemini, so the cap warning has something to report.
+const manyHotwordsSettings = {
+  ...hotwordSettings,
+  customHotwordThemes: [{ id: 'many', name: 'Many terms', words: Array.from({ length: 101 }, (_, i) => `term${i}`) }],
+  customThemeActive: { many: true },
 }
 
 const meta = {
@@ -36,6 +55,7 @@ const meta = {
           deepgram: { delivery: 'vocabulary', clientCap: 40 },
           server: { delivery: 'context', clientCap: null },
           groq_whisper: { delivery: 'not_wired_up', clientCap: null },
+          gemini_transcribe: { delivery: 'instruction', clientCap: 100 },
         }),
       },
     },
@@ -75,6 +95,16 @@ let modeBeforeStory: ReturnType<typeof getWorkMode> | null = null
 
 // The page reads the engine dictation really uses, so the mode is switched the way the app does.
 // The notice variants themselves are covered by the HotwordEngineNotices stories.
+async function enterCloudApiMode() {
+  modeBeforeStory = getWorkMode()
+  await switchProvider('cloud_api')
+}
+
+// Restored inside the run: the provider commands above exist only while the story's Tauri session is open.
+async function restoreWorkMode() {
+  if (modeBeforeStory !== null) await switchProvider(modeBeforeStory)
+}
+
 export const CloudEngineIgnoresHotwords: Story = {
   parameters: {
     tauri: {
@@ -87,10 +117,7 @@ export const CloudEngineIgnoresHotwords: Story = {
       },
     },
   },
-  beforeEach: async () => {
-    modeBeforeStory = getWorkMode()
-    await switchProvider('cloud_api')
-  },
+  beforeEach: enterCloudApiMode,
   play: async ({ canvasElement }) => {
     try {
       await waitFor(() => {
@@ -100,8 +127,65 @@ export const CloudEngineIgnoresHotwords: Story = {
         }
       })
     } finally {
-      // Restored inside the run: the provider commands above exist only while the story's Tauri session is open.
-      if (modeBeforeStory !== null) await switchProvider(modeBeforeStory)
+      await restoreWorkMode()
+    }
+  },
+}
+
+export const CloudEngineWithWordCap: Story = {
+  parameters: {
+    tauri: {
+      commands: providerSwitchCommands,
+      settings: {
+        ...manyHotwordsSettings,
+        'cloudAsr.profiles': [geminiProfile],
+        'cloudAsr.activeProfileId': geminiProfile.id,
+        'cloudAsr.autoCreatedProviders': [],
+      },
+    },
+  },
+  beforeEach: enterCloudApiMode,
+  play: async ({ canvasElement }) => {
+    try {
+      await waitFor(() => {
+        const text = canvasElement.textContent ?? ''
+        if (!text.includes('use only the first 100 words')) {
+          throw new Error('Dictionary did not show the word-cap warning for the Gemini engine')
+        }
+      })
+    } finally {
+      await restoreWorkMode()
+    }
+  },
+}
+
+export const CloudEngineWithoutWordCap: Story = {
+  parameters: {
+    tauri: {
+      commands: providerSwitchCommands,
+      settings: {
+        ...manyHotwordsSettings,
+        'cloudAsr.profiles': [groqProfile],
+        'cloudAsr.activeProfileId': groqProfile.id,
+        'cloudAsr.autoCreatedProviders': [],
+      },
+    },
+  },
+  beforeEach: enterCloudApiMode,
+  play: async ({ canvasElement }) => {
+    try {
+      // This notice appears only after both the engine and the capability matrix have loaded.
+      await waitFor(() => {
+        const text = canvasElement.textContent ?? ''
+        if (!text.includes('does not send hotwords to speech recognition')) {
+          throw new Error('Dictionary did not finish loading the cloud engine and capability matrix')
+        }
+      })
+      if ((canvasElement.textContent ?? '').includes('use only the first')) {
+        throw new Error('Dictionary showed the word-cap warning for an engine without a word cap')
+      }
+    } finally {
+      await restoreWorkMode()
     }
   },
 }
