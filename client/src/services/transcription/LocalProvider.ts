@@ -8,6 +8,7 @@ import { addRuntimeEvent } from '../debugLog'
 import { checkLocalModelInstalled, getSelectedLocalModelId } from '../localModelStatus'
 import { BufferedProvider } from './BufferedProvider'
 import { polishWithClientAi } from './clientAiPolish'
+import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './aiOutcome'
 import type { TranscriptionCallbacks } from './types'
 
 export class LocalProvider extends BufferedProvider {
@@ -97,11 +98,29 @@ export class LocalProvider extends BufferedProvider {
     }
 
     if (!this.isRunCurrent(runId)) return
-    this.callbacks.onASR?.({ text: asrText, asrMs, durationSec })
+    // An empty recognition runs no AI. The recorder persists the empty record from this ASR result,
+    // so the execution metadata must travel with it, not only with the final.
+    const emptyOutcome = asrText.trim()
+      ? undefined
+      : resolveAiOutcome({ kind: 'skipped', cause: 'empty_asr' })
+    this.callbacks.onASR?.({
+      text: asrText,
+      asrMs,
+      durationSec,
+      ...(emptyOutcome && outcomeToResultFields(emptyOutcome)),
+    })
 
-    if (!asrText.trim()) {
+    if (emptyOutcome) {
       if (!this.isRunCurrent(runId)) return
-      this.callbacks.onFinal?.({ asrText: '', llmText: '', asrMs, llmMs: 0, durationSec })
+      logAiOutcome('local', emptyOutcome, startOpts)
+      this.callbacks.onFinal?.({
+        asrText: '',
+        llmText: '',
+        asrMs,
+        llmMs: 0,
+        durationSec,
+        ...outcomeToResultFields(emptyOutcome),
+      })
       this.callbacks.onDone?.()
       return
     }

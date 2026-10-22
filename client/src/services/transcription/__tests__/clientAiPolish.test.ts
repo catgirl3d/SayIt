@@ -18,7 +18,7 @@ vi.mock('../../debugLog', () => ({
 
 import type { TextContext } from '@/types/appContext'
 import { resolveContextAwareOutput } from '../../contextAware'
-import { polishWithClientAi, skippedPolishResult } from '../clientAiPolish'
+import { polishWithClientAi, skipPolish, skippedPolishResult } from '../clientAiPolish'
 import type { StartOptions } from '../types'
 
 const ASR_COMMAND = 'make this more formal'
@@ -437,5 +437,182 @@ describe('skippedPolishResult', () => {
 
     expect(startOptions).toStrictEqual(before)
     expect(startOptions.textContext).toBe(originalTextContext)
+  })
+})
+
+describe('skipPolish', () => {
+  beforeEach(() => {
+    boundaries.addRuntimeEvent.mockReset()
+  })
+
+  it('returns the pure skipped result and writes one ai.outcome record with the cause', () => {
+    const result = skipPolish('recognized', makeStartOptions('selected'), 'integrated', 'cloud_api')
+
+    expect(result).toStrictEqual(skippedPolishResult('recognized', makeStartOptions('selected'), 'integrated'))
+    expect(boundaries.addRuntimeEvent).toHaveBeenCalledTimes(1)
+    expect(boundaries.addRuntimeEvent).toHaveBeenCalledWith('info', 'cloud_api', 'ai.outcome', {
+      source: 'none',
+      status: 'skipped',
+      reason: undefined,
+      attempted: false,
+      skipCause: 'integrated',
+      basis: 'skip',
+    })
+  })
+})
+
+describe('client AI polish ai.outcome record', () => {
+  const outcomeEvents = () => boundaries.addRuntimeEvent.mock.calls.filter(([, , message]) => message === 'ai.outcome')
+
+  beforeEach(() => {
+    boundaries.invoke.mockReset()
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') throw new Error('fixture rejection')
+      return undefined
+    })
+    boundaries.addRuntimeEvent.mockReset()
+    boundaries.getSetting.mockReset()
+    boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      const settings: Record<string, string> = {
+        'cloudAi.provider': 'ollama',
+        'cloudAi.apiUrl': 'http://127.0.0.1:11434',
+        'cloudAi.apiKey': '',
+        'cloudAi.model': 'fixture-model',
+      }
+      return settings[key] ?? fallback
+    })
+  })
+
+  it('records an applied, attempted run with the provider, model and latency', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_polish' ? { text: 'polished', elapsed_ms: 17 } : undefined
+    ))
+
+    await polishWithClientAi({ asrText: ASR_COMMAND, durationSec: 2, startOptions: { runId: 1 }, logSource: 'test' })
+
+    expect(outcomeEvents()).toStrictEqual([['info', 'test', 'ai.outcome', {
+      source: 'custom',
+      status: 'applied',
+      reason: undefined,
+      attempted: true,
+      skipCause: undefined,
+      basis: 'client',
+      provider: 'ollama',
+      model: 'fixture-model',
+      llmMs: 17,
+    }]])
+  })
+
+  it('records a rejected request as an attempted failure with its reason', async () => {
+    await polishWithClientAi({ asrText: ASR_COMMAND, durationSec: 2, startOptions: { runId: 2 }, logSource: 'test' })
+
+    expect(outcomeEvents()).toHaveLength(1)
+    expect(outcomeEvents()[0][3]).toMatchObject({
+      source: 'custom',
+      status: 'failed',
+      reason: 'provider_error',
+      attempted: true,
+    })
+  })
+
+  it('records an empty provider answer as an attempted empty_result failure', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_polish' ? { text: '', elapsed_ms: 9 } : undefined
+    ))
+
+    await polishWithClientAi({ asrText: ASR_COMMAND, durationSec: 2, startOptions: { runId: 3 }, logSource: 'test' })
+
+    expect(outcomeEvents()).toHaveLength(1)
+    expect(outcomeEvents()[0][3]).toMatchObject({ status: 'failed', reason: 'empty_result', attempted: true, llmMs: 9 })
+  })
+
+  it.each([
+    { name: 'an empty recognition', asrText: '  ', startOptions: { runId: 4 }, durationSec: 2, skipCause: 'empty_asr' },
+    { name: 'disabled AI', asrText: ASR_COMMAND, startOptions: { runId: 5, disableAi: true }, durationSec: 2, skipCause: 'ai_disabled' },
+    { name: 'a short recording', asrText: ASR_COMMAND, startOptions: { runId: 6, aiMinDurationSec: 5 }, durationSec: 1, skipCause: 'below_min_duration' },
+  ])('records $name as a skip that never issued a request', async ({ asrText, startOptions, durationSec, skipCause }) => {
+    await polishWithClientAi({ asrText, durationSec, startOptions, logSource: 'test' })
+
+    expect(boundaries.invoke).not.toHaveBeenCalled()
+    expect(outcomeEvents()).toHaveLength(1)
+    expect(outcomeEvents()[0][3]).toMatchObject({
+      source: 'none',
+      status: 'skipped',
+      attempted: false,
+      skipCause,
+    })
+  })
+
+  it('records an incomplete profile as unavailable and never attempted', async () => {
+    boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      const settings: Record<string, string> = {
+        'cloudAi.provider': 'openai_compat',
+        'cloudAi.apiUrl': 'https://example.test/v1',
+        'cloudAi.apiKey': '',
+        'cloudAi.model': 'fixture-model',
+      }
+      return settings[key] ?? fallback
+    })
+
+    await polishWithClientAi({ asrText: ASR_COMMAND, durationSec: 2, startOptions: { runId: 7 }, logSource: 'test' })
+
+    expect(boundaries.invoke).not.toHaveBeenCalled()
+    expect(outcomeEvents()).toHaveLength(1)
+    expect(outcomeEvents()[0][3]).toMatchObject({
+      source: 'custom',
+      status: 'unavailable',
+      reason: 'incomplete_profile',
+      attempted: false,
+      provider: 'openai_compat',
+    })
+  })
+
+  it.each([
+    { name: 'an applied run', startOptions: { runId: 10, aiOutcomeLog: false }, asrText: ASR_COMMAND },
+    { name: 'a skipped run', startOptions: { runId: 11, aiOutcomeLog: false, disableAi: true }, asrText: ASR_COMMAND },
+    { name: 'an empty recognition', startOptions: { runId: 12, aiOutcomeLog: false }, asrText: ' ' },
+  ])('writes no record for $name of a segment consumer, and leaves the result unchanged', async ({ startOptions, asrText }) => {
+    boundaries.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_polish' ? { text: 'polished', elapsed_ms: 17 } : undefined
+    ))
+    const withoutOptOut = await polishWithClientAi({
+      asrText,
+      durationSec: 2,
+      startOptions: { ...startOptions, aiOutcomeLog: undefined },
+      logSource: 'test',
+    })
+    boundaries.addRuntimeEvent.mockClear()
+
+    const polished = await polishWithClientAi({ asrText, durationSec: 2, startOptions, logSource: 'test' })
+
+    expect(outcomeEvents()).toHaveLength(0)
+    expect(polished).toStrictEqual(withoutOptOut)
+  })
+
+  it('writes no record for a run that was superseded while it was in flight', async () => {
+    const polished = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 8 },
+      logSource: 'test',
+      isCurrent: () => false,
+    })
+
+    expect(polished).toBeNull()
+    expect(outcomeEvents()).toHaveLength(0)
+  })
+
+  it('never logs recognized text, the selection or the provider error text', async () => {
+    await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 9, textContext: selectionContext() },
+      logSource: 'test',
+    })
+
+    const serialized = JSON.stringify(outcomeEvents())
+    expect(serialized).not.toContain(ASR_COMMAND)
+    expect(serialized).not.toContain('Original selection')
+    expect(serialized).not.toContain('fixture rejection')
   })
 })

@@ -10,6 +10,7 @@ import {
 } from './debugLog'
 import { getWSUrl } from './runtimeConfig'
 import { withLegacyServerTextContext } from './contextAware'
+import { normalizeServerLlmDebug, type ServerLlmEvidence } from './transcription/aiOutcome'
 import { setConnectionStatus } from '../stores/connectionStatus'
 import type { ActiveAppContext, TextContext } from '../types/appContext'
 import type { ClientRuntimeInfo } from '../types/appApi'
@@ -31,6 +32,8 @@ export interface FinalResult {
   asrEngine?: string
   asrModel?: string
   contextApplied?: boolean
+  /** Content-free projection of the server's llm_debug; absent when an older server sent none. */
+  llmDebug?: ServerLlmEvidence
 }
 
 export interface AudioStats {
@@ -278,6 +281,7 @@ export function connect(cbs: WSCallbacks): Promise<void> {
               asrEngine: msg.asr_engine || undefined,
               asrModel: msg.asr_model || undefined,
               contextApplied: explicitContextApplied ?? (legacyContextApplied ? true : undefined),
+              llmDebug: normalizeServerLlmDebug(msg?.llm_debug),
             })
             break
           }

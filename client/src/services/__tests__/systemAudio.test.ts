@@ -501,6 +501,8 @@ describe('system audio subtitle session', () => {
     await settle()
 
     expect(startOptions).toMatchObject({ disableAi: false, requireTranslation: true })
+    // One provider run per phrase: the per-run ai.outcome record would flood the bounded logs.
+    expect(startOptions).toMatchObject({ aiOutcomeLog: false })
     expect(session.getSnapshot()).toMatchObject({
       state: 'listening',
       caption: 'Original speech',

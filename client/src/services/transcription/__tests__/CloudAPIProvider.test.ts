@@ -356,6 +356,14 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     ])
     expect(asrResults[0]).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'local-whisper' })
     expect(finalResults[0]).toMatchObject({ asrEngine: 'openai_compat', asrModel: 'local-whisper' })
+    // The recorder persists the empty record from the ASR result, so it must carry the execution metadata.
+    expect(asrResults[0]).toMatchObject({ aiSource: 'none', aiStatus: 'skipped' })
+    expect(finalResults[0]).toMatchObject({ aiSource: 'none', aiStatus: 'skipped' })
+    const outcomes = mocks.addRuntimeEvent.mock.calls.filter(([, , message]) => message === 'ai.outcome')
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject(['info', 'cloud_api', 'ai.outcome', {
+      source: 'none', status: 'skipped', attempted: false, skipCause: 'empty_asr',
+    }])
   })
 
   it('stamps the snapshot engine and model for buffered profiles', async () => {
@@ -1660,6 +1668,11 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
       llmText: 'Original',
       aiStatus: 'skipped',
     }))
+    const outcomes = mocks.addRuntimeEvent.mock.calls.filter(([, , message]) => message === 'ai.outcome')
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject(['info', 'cloud_api', 'ai.outcome', {
+      source: 'none', status: 'skipped', attempted: false, skipCause: 'integrated',
+    }])
   })
 
   it('sends a translated Omni run through the client AI stage instead of the built-in cleanup', async () => {

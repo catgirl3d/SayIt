@@ -12,7 +12,14 @@ import {
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
-import { polishWithClientAi, skippedPolishResult, type ClientAiPolishResult } from '@/services/transcription/clientAiPolish'
+import {
+  logAiOutcome,
+  normalizeServerLlmDebug,
+  outcomeToResultFields,
+  resolveAiOutcome,
+  type ServerLlmEvidence,
+} from '@/services/transcription/aiOutcome'
+import { polishWithClientAi, skippedPolishResult, skipPolish, type ClientAiPolishResult } from '@/services/transcription/clientAiPolish'
 import { transcribeCustomAsr } from '@/services/transcription/customAsrRequest'
 import { readStoredServerAiSource } from '@/services/transcription/serverAiSource'
 import { resolveAiPolishRoute } from '@/services/transcription/aiPolicy'
@@ -84,7 +91,8 @@ export async function reprocessViaServer(
   const useCustomAi = aiEnabled && route === 'client'
   const useManagedAi = aiEnabled && !useCustomAi && !skipAiForDuration
 
-  const serverResult = await new Promise<ReprocessResult>((resolve, reject) => {
+  // The wire evidence only feeds the outcome resolver below and is split off before the result is returned.
+  const wireResult = await new Promise<ReprocessResult & { llmDebug?: ServerLlmEvidence }>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       try { socket.close() } catch { /* ignore */ }
       reject(new Error('Retranscription timed out'))
@@ -147,6 +155,7 @@ export async function reprocessViaServer(
             durationSec: Number(msg.duration_sec || 0),
             asrEngine: msg.asr_engine || undefined,
             asrModel: msg.asr_model || undefined,
+            llmDebug: normalizeServerLlmDebug(msg.llm_debug),
           })
         } else if (msg.type === 'done' && !resolved) {
           // "done" arrived without a "final" (the backend judged it silent or without a result)
@@ -180,23 +189,29 @@ export async function reprocessViaServer(
     }
   })
 
+  const { llmDebug, ...serverResult } = wireResult
+
   if (!serverResult.asrText.trim()) {
+    const outcome = resolveAiOutcome({ kind: 'skipped', cause: 'empty_asr' })
+    logAiOutcome('history', outcome, undefined)
     return {
       ...serverResult,
-      aiSource: 'none',
-      aiStatus: 'skipped',
+      ...outcomeToResultFields(outcome),
       aiProvider: undefined,
       aiModel: undefined,
     }
   }
 
   if (!useCustomAi) {
+    const outcome = resolveAiOutcome(
+      useManagedAi
+        ? { kind: 'server', llmMs: serverResult.llmMs, llmDebug }
+        : { kind: 'skipped', cause: aiEnabled ? 'below_min_duration' : 'ai_disabled' },
+    )
+    logAiOutcome('history', outcome, undefined, { llmMs: serverResult.llmMs, provider: llmDebug?.provider })
     return {
       ...serverResult,
-      aiSource: useManagedAi ? 'server' : 'none',
-      aiStatus: useManagedAi
-        ? serverResult.llmMs > 0 ? 'applied' : 'unavailable'
-        : 'skipped',
+      ...outcomeToResultFields(outcome),
       aiProvider: useManagedAi ? 'server' : undefined,
     }
   }
@@ -287,7 +302,7 @@ export async function reprocessViaCloudApi(
 
   // The Omni engine already cleaned the text, so the AI stage is skipped.
   const polish = route === 'integrated'
-    ? skippedPolishResult(asrText)
+    ? skipPolish(asrText, undefined, 'integrated', 'history')
     : await polishReprocessed(asrText, durationSec, aiEnabled, systemPrompt)
 
   // Stamp the model this snapshot actually used; the metadata writer must not

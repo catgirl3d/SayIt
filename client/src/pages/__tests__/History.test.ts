@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
+import { clearRuntimeEvents, getRuntimeEvents } from '@/services/debugLog'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -194,7 +195,7 @@ describe('history cloud ASR reprocessing', () => {
     })
     expect(profile).toMatchObject({ provider: 'deepgram', model: 'nova-3' })
     expect(settings).toEqual({ aiEnabled: false })
-    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual(['cloud_transcribe'])
+    expect(invokedCommands()).toEqual(['cloud_transcribe'])
   })
 
   it('ignores a warning returned for a non-Deepgram cloud provider', async () => {
@@ -247,8 +248,10 @@ describe('history cloud ASR reprocessing', () => {
     rejectFirst('sayit_error:asr_protocol_mismatch:route mismatch')
     const result = await pending
 
-    expect(mocks.invoke).toHaveBeenCalledTimes(2)
-    const requests = mocks.invoke.mock.calls.map(([, args]) => (args as {
+    // The ai.outcome record is mirrored to the main log through append_debug_log; only the ASR calls matter here.
+    const asrCalls = mocks.invoke.mock.calls.filter(([command]) => command !== 'append_debug_log')
+    expect(asrCalls).toHaveLength(2)
+    const requests = asrCalls.map(([, args]) => (args as {
       request: {
         audio_b64: string
         hotwords: string[]
@@ -565,7 +568,7 @@ describe('history cloud ASR reprocessing', () => {
       new ArrayBuffer(32000), [], aiEnabled, undefined, 'en',
     )
 
-    expect(mocks.invoke).toHaveBeenCalledTimes(1)
+    expect(invokedCommands()).toHaveLength(1)
     expect(result).toMatchObject({ aiSource: 'none', aiStatus: 'skipped' })
     expect(result.aiProvider).toBeUndefined()
     expect(result.aiModel).toBeUndefined()
@@ -612,7 +615,7 @@ describe('history cloud ASR reprocessing', () => {
 
     const result = await run()
 
-    expect(mocks.invoke).toHaveBeenCalledTimes(1)
+    expect(invokedCommands()).toHaveLength(1)
     expect(mocks.invoke).toHaveBeenCalledWith(asrCommand, expect.anything())
     expect(mocks.invoke).not.toHaveBeenCalledWith('cloud_polish', expect.anything())
     expect(result).toMatchObject({
@@ -932,6 +935,109 @@ describe('history server reprocessing', () => {
     })
     expect(result.aiProvider).toBeUndefined()
     expect(invokedCommands()).not.toContain('cloud_polish')
+  })
+
+  describe('ai.outcome evidence', () => {
+    const outcomeRecords = () => getRuntimeEvents().filter((event) => event.message === 'ai.outcome')
+
+    it.each([
+      {
+        name: 'llm_debug with a provider proves an applied call even when llm_ms is 0',
+        aiEnabled: true,
+        final: { llm_ms: 0, llm_debug: { provider: 'openai', model: 'm' } },
+        expected: { aiSource: 'server', aiStatus: 'applied', aiProvider: 'server' },
+        detail: { status: 'applied', attempted: true, basis: 'llm_debug', provider: 'openai' },
+      },
+      {
+        name: 'llm_debug error is an attempted call that stays unavailable',
+        aiEnabled: true,
+        final: { llm_ms: 0, llm_debug: { error: 'upstream timeout' } },
+        expected: { aiSource: 'server', aiStatus: 'unavailable', aiProvider: 'server' },
+        detail: { status: 'unavailable', attempted: true, basis: 'llm_debug' },
+      },
+      {
+        name: 'an empty llm_debug means the server never called its LLM',
+        aiEnabled: true,
+        final: { llm_ms: 0, llm_debug: {} },
+        expected: { aiSource: 'server', aiStatus: 'unavailable', aiProvider: 'server' },
+        detail: { status: 'unavailable', attempted: false, basis: 'llm_debug' },
+      },
+      {
+        name: 'an older server without llm_debug falls back to a positive llm_ms',
+        aiEnabled: true,
+        final: { llm_ms: 42 },
+        expected: { aiSource: 'server', aiStatus: 'applied', aiProvider: 'server' },
+        detail: { status: 'applied', attempted: true, basis: 'llm_ms' },
+      },
+      {
+        name: 'an older server without llm_debug and a zero llm_ms is unavailable',
+        aiEnabled: true,
+        final: { llm_ms: 0 },
+        expected: { aiSource: 'server', aiStatus: 'unavailable', aiProvider: 'server' },
+        detail: { status: 'unavailable', attempted: false, basis: 'llm_ms' },
+      },
+      {
+        name: 'a disabled AI is skipped',
+        aiEnabled: false,
+        final: { llm_ms: 0, llm_debug: {} },
+        expected: { aiSource: 'none', aiStatus: 'skipped', aiProvider: undefined },
+        detail: { status: 'skipped', attempted: false, skipCause: 'ai_disabled' },
+      },
+      {
+        name: 'an empty recognition is skipped',
+        aiEnabled: true,
+        final: { asr_text: '', llm_text: '', llm_ms: 0, llm_debug: {} },
+        expected: { aiSource: 'none', aiStatus: 'skipped', aiProvider: undefined },
+        detail: { status: 'skipped', attempted: false, skipCause: 'empty_asr' },
+      },
+    ])('records one outcome when $name', async ({ aiEnabled, final, expected, detail }) => {
+      clearRuntimeEvents()
+      mockSettings({ 'server.aiSource': 'managed' })
+      setServerFinal({
+        asr_text: 'raw server transcript',
+        llm_text: 'cleaned server transcript',
+        asr_ms: 10,
+        duration_sec: 1,
+        ...final,
+      })
+
+      const result = await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], aiEnabled, 'Be concise', null, 'en')
+
+      expect(result).toMatchObject(expected)
+      expect(result).not.toHaveProperty('llmDebug')
+      expect(outcomeRecords()).toHaveLength(1)
+      expect(outcomeRecords()[0]).toMatchObject({ source: 'history', detail: expect.objectContaining(detail) })
+    })
+
+    it('records a recording below the minimum duration as a duration skip', async () => {
+      clearRuntimeEvents()
+      mockSettings({ 'server.aiSource': 'managed', 'aiMinDurationSec': 10 })
+
+      await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, 'Be concise', null, 'en')
+
+      expect(outcomeRecords()).toHaveLength(1)
+      expect(outcomeRecords()[0].detail).toMatchObject({ skipCause: 'below_min_duration', attempted: false })
+    })
+
+    it('never puts the recognized text or the server error text in the record', async () => {
+      clearRuntimeEvents()
+      mockSettings({ 'server.aiSource': 'managed' })
+      setServerFinal({
+        asr_text: 'raw server transcript',
+        llm_text: 'cleaned server transcript',
+        asr_ms: 10,
+        llm_ms: 0,
+        duration_sec: 1,
+        llm_debug: { error: 'upstream said: secret-token', messages: [{ content: 'secret prompt' }] },
+      })
+
+      await reprocessViaServer(new ArrayBuffer(ONE_SECOND_RECORDING_BYTES), [], true, 'Be concise', null, 'en')
+
+      const serialized = JSON.stringify(outcomeRecords())
+      expect(serialized).not.toContain('raw server transcript')
+      expect(serialized).not.toContain('cleaned server transcript')
+      expect(serialized).not.toContain('secret')
+    })
   })
 
   it('runs the client cleanup for a custom server source and keeps the server text as its input', async () => {

@@ -132,6 +132,11 @@ export interface StartOptions {
    * can stream honor this and take their buffered route instead.
    */
   disableStreaming?: boolean
+  /**
+   * Segment consumers (computer subtitles) start one run per phrase, so a per-run `ai.outcome` record would
+   * flood the bounded runtime log and the main log file. They set false; absent means the run writes its record.
+   */
+  aiOutcomeLog?: boolean
 }
 
 export interface StopOptions {

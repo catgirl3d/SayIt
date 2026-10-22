@@ -57,6 +57,7 @@ import {
 import { getProvider } from './transcription'
 import { resolveAiPolishRoute } from './transcription/aiPolicy'
 import { polishWithClientAi } from './transcription/clientAiPolish'
+import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './transcription/aiOutcome'
 import { getRuntimeServerAiSource } from './transcription/serverAiSource'
 import { loadActiveHotwords } from './hotwords/settings'
 import type { SubtitleOverlayPayload } from './recorder/types'
@@ -567,11 +568,11 @@ export class SystemAudioSession {
           }
         }
         if (asrOnly) {
-          this.startOptions = { systemPrompt: '', language, hotwords: [...hotwords], disableAi: true, aiMinDurationSec: 0, requireTranslation: false, disableStreaming: true }
+          this.startOptions = { systemPrompt: '', language, hotwords: [...hotwords], disableAi: true, aiMinDurationSec: 0, requireTranslation: false, disableStreaming: true, aiOutcomeLog: false }
         } else {
           const targetLanguage = this.options!.targetLanguage
           if (!presets.some((preset) => preset.id === `${TRANSLATION_PRESET_PREFIX}${targetLanguage}`)) throw new Error(t('systemAudio.notReady'))
-          this.startOptions = { systemPrompt: buildSubtitlePrompt(subtitleLanguageName(targetLanguage)), language, hotwords: [...hotwords], disableAi: false, aiMinDurationSec: 0, requireTranslation: true, disableStreaming: true }
+          this.startOptions = { systemPrompt: buildSubtitlePrompt(subtitleLanguageName(targetLanguage)), language, hotwords: [...hotwords], disableAi: false, aiMinDurationSec: 0, requireTranslation: true, disableStreaming: true, aiOutcomeLog: false }
         }
         this.provider = this.dependencies.getProvider()
         this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''
@@ -1291,8 +1292,11 @@ export class SystemAudioSession {
     } catch (error) {
       // polishWithClientAi can reject before its own request-error handling, for example when the AI settings
       // cannot be read. The lane must not stay occupied: treat it as a failed translation.
-      addRuntimeEvent('warn', this.provider?.mode ?? 'unknown', 'Subtitle translation failed before its request', { error: String(error) })
-      polish = { llmText: '', llmMs: 0, aiSource: 'custom', aiStatus: 'failed' }
+      const logSource = this.provider?.mode ?? 'unknown'
+      addRuntimeEvent('warn', logSource, 'Subtitle translation failed before its request', { error: String(error) })
+      const outcome = resolveAiOutcome({ kind: 'client_error_before_request' })
+      logAiOutcome(logSource, outcome, this.startOptions ?? undefined)
+      polish = { llmText: '', llmMs: 0, ...outcomeToResultFields(outcome) }
     }
     if (generation !== this.generation || this.translating !== job) return
     this.translating = null

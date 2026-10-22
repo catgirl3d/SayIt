@@ -34,6 +34,10 @@ const ENABLE_INFO_CONSOLE = false
 const RECORDER_KEY_EVENT = /(Recording started|Recording stopped|Entered processing|Final result received|External text insertion succeeded|External text insertion failed|Processing timed out|Showing fallback card)/i
 const WEBSOCKET_KEY_EVENT = /(Connection closed|Connection timed out|Failed to send start|Failed to send stop|Connecting|Connected|Reconnected|Ready received|disconnect)/i
 const INSERTION_EVENT = /(Paste decision|External text insertion|fallback|Target is SayIt|Target is not editable)/i
+// The single structured record of whether and how a run's AI stage executed, written once per run by the
+// terminator that owns the decision (see services/transcription/aiOutcome.ts, which writes this same message).
+// Its source is the work mode or 'history', so the per-source allowlists below cannot match it.
+const AI_OUTCOME_EVENT = 'ai.outcome'
 
 let totalAudioBytes = 0
 
@@ -52,10 +56,12 @@ function shouldMirrorPayload(payload: unknown): boolean {
     return source === 'recorder' && RECORDER_KEY_EVENT.test(message)
       || source === 'websocket' && WEBSOCKET_KEY_EVENT.test(message)
       || source === 'backend'
-      // update 全放行：整条更新链路是用户**看不见**的（后台检查、后台下载、退出时安装），
-      // 出问题时日志是唯一线索。量也极小：启动一次 + 每 6 小时一次。
-      // 少了这条，"没有新版本"和"更新服务压根没跑起来"在日志里长得一模一样。
+      // update is let through entirely: the whole update chain is invisible to the user (background check,
+      // background download, install on exit), so when something goes wrong the log is the only clue. The
+      // volume is tiny too: once at startup plus once every 6 hours. Without this branch, "no new version"
+      // and "the update service never started at all" look exactly the same in the log.
       || source === 'update'
+      || message === AI_OUTCOME_EVENT
   }
 
   if (value.kind === 'ws_message') {
@@ -69,8 +75,10 @@ function shouldMirrorPayload(payload: unknown): boolean {
 function shouldKeepRuntimeEvent(event: RuntimeEvent): boolean {
   if (event.level === 'error' || event.level === 'warn') return true
   if (event.source === 'backend') return true
-  // 见 shouldMirrorPayload 里的同名分支：更新链路用户看不见，诊断只能靠日志
+  // See the matching branch in shouldMirrorPayload: the update chain is invisible to the user, so diagnosis
+  // can only rely on the log.
   if (event.source === 'update') return true
+  if (event.message === AI_OUTCOME_EVENT) return true
   if (event.source === 'websocket') {
     return WEBSOCKET_KEY_EVENT.test(event.message)
   }
@@ -213,7 +221,7 @@ export function hasActiveSession() {
 
 export function addMsg(direction: 'sent' | 'received', type: string, data: unknown) {
   const time = Date.now()
-  // 对 start 消息中的敏感字段脱敏后再记录
+  // Redact sensitive fields of the start message before recording it
   const sanitizedData = (type === 'start' && data && typeof data === 'object')
     ? sanitizeStartMessage(data as Record<string, unknown>)
     : data
@@ -312,16 +320,16 @@ function writeStr(view: DataView, offset: number, str: string) {
   }
 }
 
-/** 对 WebSocket start 消息中的敏感字段脱敏 */
+/** Redact sensitive fields of the WebSocket start message */
 function sanitizeStartMessage(data: Record<string, unknown>): Record<string, unknown> {
   const result = { ...data }
 
-  // system_prompt 截断到 50 字符
+  // Truncate system_prompt to 50 characters
   if (typeof result.system_prompt === 'string' && result.system_prompt.length > 50) {
     result.system_prompt = result.system_prompt.slice(0, 50) + '...[truncated]'
   }
 
-  // client_meta 中移除敏感字段
+  // Remove sensitive fields from client_meta
   if (result.client_meta && typeof result.client_meta === 'object') {
     const meta = { ...(result.client_meta as Record<string, unknown>) }
     delete meta.local_ip
