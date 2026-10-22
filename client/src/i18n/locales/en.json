@@ -35,6 +35,8 @@
   "systemAudio.transcriptUntranslatedMarker": "(no translation)",
   "systemAudio.asrOnlyTest": "Recognition-only test mode",
   "systemAudio.asrOnlyHint": "Subtitles show raw recognition without translation; the translation language is ignored.",
+  "systemAudio.deepgramLeadingContext": "Experimental: Deepgram overlap",
+  "systemAudio.deepgramLeadingContextHint": "Deepgram only: each fragment also gets the last second of the previous one, and the repeated words are removed. Sends about a fifth more audio to Deepgram.",
   "systemAudio.start": "Start subtitles",
   "systemAudio.pause": "Pause",
   "systemAudio.resume": "Resume",

@@ -2,13 +2,16 @@ import * as bridge from './bridge'
 import { t } from '@/i18n'
 import { getPromptPresets, getSetting, TRANSLATION_PRESET_PREFIX } from './store'
 import { normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
+import { cleanBatchCaptionText, endsSentence } from './batchCaptionText'
 import {
   DEFAULT_SEGMENT_SECONDS,
   FRAME_BYTES,
   FRAME_MS,
+  leadingContextMs,
   normalizeSegmentSeconds,
   segmentPlan,
   SubtitleSegmenter,
+  withLeadingContext,
   type SealedSubtitleSegment,
   type SegmentPlan,
   type SubtitleFrame,
@@ -123,6 +126,22 @@ interface SegmentSpan {
 interface SegmentJob extends SegmentSpan {
   audio: Uint8Array
   runId: number | null
+  /** Speech-order number of this batch piece within the session; the continuation chain compares neighbours. */
+  sequence: number
+  closeReason: SegmentCloseReason
+  continuesPrevious: boolean
+  contextAudio: Uint8Array | null
+}
+
+/**
+ * How the piece being recognized was cut, carried from its job until its recognition finishes. `leadingContext` is
+ * true when the recognizer received the previous piece's tail, which already gives it the sentence context.
+ */
+interface ActiveCut {
+  readonly sequence: number
+  readonly closeReason: SegmentCloseReason
+  readonly continuesPrevious: boolean
+  readonly leadingContext: boolean
 }
 
 /** One recognized segment waiting for, or undergoing, client-side translation. */
@@ -239,10 +258,18 @@ export class SystemAudioSession {
   private segmenter = new SubtitleSegmenter(this.plan)
   // Fixed per start: the overlay window is sized once, so the layout must not change under a running session.
   private dual = false
+  // Experimental opt-in (systemAudio.deepgramLeadingContext), read once per start like the other settings. Off by
+  // default: a continuation piece is then sent plain, exactly as for a provider that does not accept leading context.
+  private deepgramLeadingContext = false
   private queue: SegmentJob[] = []
   private queuedBytes = 0
   private activeJob = 0
   private activeSpan: SegmentSpan | null = null
+  private activeCut: ActiveCut | null = null
+  private batchSequence = 0
+  // The last piece whose recognition finished with text. The next piece continues the chain only when it is the
+  // immediate successor; a dropped, failed, skipped, or empty piece leaves a gap that breaks it.
+  private lastRecognizedPiece: { sequence: number; text: string } | null = null
   private consecutiveFailures = 0
   private translations: TranslationJob[] = []
   private translationBacklogMs = 0
@@ -541,13 +568,14 @@ export class SystemAudioSession {
       if (generation !== this.generation) return
       const asrOnly = this.options!.asrOnly
       if (!reuseSnapshot) {
-        const [presets, language, hotwords, maxSegmentSeconds, dual, liveRecognitionEnabled, transcriptEnabled, transcriptDir] = await Promise.all([
+        const [presets, language, hotwords, maxSegmentSeconds, dual, liveRecognitionEnabled, deepgramLeadingContext, transcriptEnabled, transcriptDir] = await Promise.all([
           asrOnly ? Promise.resolve([]) : getPromptPresets(),
           getSystemAudioSourceLanguage(),
           loadActiveHotwords(),
           getSystemAudioMaxSegmentSeconds(),
           getSystemAudioDualSubtitles(),
           getSetting('systemAudio.liveRecognitionEnabled', false),
+          getSetting('systemAudio.deepgramLeadingContext', false),
           getSetting('systemAudio.transcriptEnabled', false),
           getSetting<string>('systemAudio.transcriptDir', ''),
         ])
@@ -555,6 +583,7 @@ export class SystemAudioSession {
         this.plan = segmentPlan(maxSegmentSeconds)
         this.segmenter = new SubtitleSegmenter(this.plan)
         this.dual = dual && !asrOnly
+        this.deepgramLeadingContext = deepgramLeadingContext === true
         if (this.freshStart) {
           this.freshStart = false
           if (transcriptEnabled === true) {
@@ -595,38 +624,43 @@ export class SystemAudioSession {
           if (!ready.asr || (!asrOnly && provider.mode === 'server' && !ready.llm)) this.fail(t('systemAudio.notReady'))
         },
         onASR: (result) => {
-          if (generation !== this.generation || !this.activeJob) return
+          if (generation !== this.generation || !this.activeJob || !this.activeCut) return
           acceptAsrWarning(result.asrWarning)
           if (asrOnly) {
             setPipelineActivity({ phase: 'listening', stageStartedAt: null })
-            const caption = result.text.trim()
+            const caption = this.batchCaptionText(result.text.trim(), this.activeCut)
             if (caption) {
               this.publishedAsrJob = this.activeJob
               this.publishCaption(caption, generation)
             }
           } else {
             setPipelineActivity({ phase: 'translation', stageStartedAt: Date.now() })
-            const original = result.text.trim()
+            const original = this.batchCaptionText(result.text.trim(), this.activeCut)
             if (this.dual && original) this.publishSource(original, generation)
           }
         },
         onFinal: (result) => {
-          if (generation !== this.generation || !this.activeJob) return
+          if (generation !== this.generation || !this.activeJob || !this.activeCut) return
           acceptAsrWarning(result.asrWarning)
           const jobId = this.activeJob
           setPipelineActivity({ phase: 'listening', stageStartedAt: null })
-          if (!result.asrText.trim()) {
+          const cut = this.activeCut
+          const text = this.batchCaptionText(result.asrText.trim(), cut)
+          if (!text) {
             failRun(this.activeRunId, 'empty')
             return
           }
+          // The next piece may continue this text only once it is final, so the chain advances here.
+          this.lastRecognizedPiece = { sequence: cut.sequence, text }
+          const recognized: FinalResult = { ...result, asrText: text }
           // One speech-order sequence per recognized fragment: a translation that settles, drops, or is
           // cancelled later than a following one still reaches the journal in speech order.
           const transcriptSequence = ++this.journalSequence
           if (asrOnly) {
             this.consecutiveFailures = 0
-            const caption = result.asrText.trim()
+            const caption = text
             const runId = isPipelineDebugEnabled() ? this.activeRunId : null
-            const finishDetails = this.finishDetails(result, caption)
+            const finishDetails = this.finishDetails(recognized, caption)
             this.journal?.record({
               sequence: transcriptSequence,
               startedAt: this.activeSpan?.startedAt ?? Date.now(),
@@ -642,15 +676,15 @@ export class SystemAudioSession {
             }
             return
           }
-          if (this.activeSpan) this.recent.push(result.asrText.trim(), this.activeSpan)
+          if (this.activeSpan) this.recent.push(text, this.activeSpan)
           // Client-AI modes detach the translation from this run, so the next segment's ASR can start
           // while this text is still being translated.
           if (this.activeSplit) {
-            this.enqueueTranslation(result, transcriptSequence)
+            this.enqueueTranslation(recognized, transcriptSequence)
             this.pumpTranslation()
             return
           }
-          this.publishTranslationOutcome(result, this.activeRunId, generation, undefined, {
+          this.publishTranslationOutcome(recognized, this.activeRunId, generation, undefined, {
             sequence: transcriptSequence,
             span: this.activeSpan ?? undefined,
           })
@@ -1092,7 +1126,17 @@ export class SystemAudioSession {
     this.dropOldestToFit(segment.audio.byteLength)
     const runId = beginRun({ mode: this.provider?.mode ?? 'unknown', speechMs: segment.speechMs, closeReason: segment.closeReason, asrOnly: this.options?.asrOnly ?? false })
     const endedAt = Date.now()
-    this.queue.push({ audio: segment.audio, runId, startedAt: endedAt - segment.speechMs, endedAt })
+    this.batchSequence++
+    this.queue.push({
+      audio: segment.audio,
+      runId,
+      startedAt: endedAt - segment.speechMs,
+      endedAt,
+      sequence: this.batchSequence,
+      closeReason: segment.closeReason,
+      continuesPrevious: segment.continuesPrevious,
+      contextAudio: segment.contextAudio,
+    })
     this.queuedBytes += segment.audio.byteLength
     this.publishQueueDepth()
     this.processNext()
@@ -1118,6 +1162,7 @@ export class SystemAudioSession {
     setPipelineActivity({ phase: 'listening', stageStartedAt: null })
     this.activeJob = 0
     this.activeSpan = null
+    this.activeCut = null
     this.activeContext = undefined
     this.activeSplit = false
     this.publishedAsrJob = 0
@@ -1156,6 +1201,13 @@ export class SystemAudioSession {
     this.queuedBytes -= job.audio.byteLength
     this.activeRunId = job.runId
     this.activeSpan = { startedAt: job.startedAt, endedAt: job.endedAt }
+    const leading = this.leadingContextFor(job)
+    this.activeCut = {
+      sequence: job.sequence,
+      closeReason: job.closeReason,
+      continuesPrevious: job.continuesPrevious,
+      leadingContext: leading !== null,
+    }
     this.activeContext = this.translationContext(job)
     // Client-AI modes can translate in a separate lane; a managed server run cannot.
     this.activeSplit = !this.options?.asrOnly && this.usesClientTranslation()
@@ -1181,12 +1233,41 @@ export class SystemAudioSession {
         disableAi: this.activeSplit || Boolean(this.startOptions.disableAi),
         textContext: this.activeContext,
         runId: this.activeJob,
+        ...(leading ? { leadingContextMs: leading.leadingContextMs } : {}),
       }
       if (!this.provider.start(startOptions)) throw new Error('ASR did not start')
       setPipelineActivity({ phase: 'asr', stageStartedAt: Date.now() })
-      this.provider.sendAudio(job.audio.buffer as ArrayBuffer)
+      const submitted = leading?.audio ?? job.audio
+      this.provider.sendAudio(submitted.buffer as ArrayBuffer)
       if (!this.provider.stop()) throw new Error('ASR did not accept the segment')
     } catch (error) { this.fail(t('systemAudio.notReady'), String(error)) }
+  }
+
+  // The previous piece's tail is sent only when the experimental setting is on and the provider can drop its words, so
+  // the recognizer hears the sentence continue. Otherwise the piece goes out plain, exactly as before. Span and
+  // duration stay the spoken span.
+  private leadingContextFor(job: SegmentJob): { audio: Uint8Array; leadingContextMs: number } | null {
+    if (!this.deepgramLeadingContext || !job.contextAudio || this.provider?.acceptsLeadingContext?.() !== true) return null
+    return {
+      audio: withLeadingContext(job.audio, job.contextAudio),
+      leadingContextMs: leadingContextMs(job.contextAudio.byteLength),
+    }
+  }
+
+  // Cleans one batch piece's text. The chain is read, never advanced, here: onASR and onFinal of the same piece
+  // must agree, and only onFinal records the cleaned text as the piece that the next one may continue.
+  private batchCaptionText(text: string, cut: ActiveCut): string {
+    const previous = this.lastRecognizedPiece
+    // With context words the recognizer already heard the sentence, so the first letter keeps the case it was given.
+    const continuesUnfinishedSentence = cut.continuesPrevious && !cut.leadingContext
+      && previous !== null
+      && previous.sequence === cut.sequence - 1
+      && !endsSentence(previous.text)
+    return cleanBatchCaptionText(text, {
+      cutMidSpeech: cut.closeReason === 'pause' || cut.closeReason === 'cap',
+      continuesUnfinishedSentence,
+      language: this.startOptions?.language ?? '',
+    })
   }
 
   // The speech recognized just before this segment, passed to the translation as read-only context.
@@ -1346,6 +1427,8 @@ export class SystemAudioSession {
     this.translationBacklogMs = 0
     this.recent.clear()
     this.activeSpan = null
+    this.activeCut = null
+    this.lastRecognizedPiece = null
     this.consecutiveFailures = 0
     this.activeContext = undefined
     this.activeSplit = false

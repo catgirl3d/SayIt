@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, waitFor, within } from 'storybook/test'
 import SystemAudio from './SystemAudio'
 import { switchProvider, getWorkMode } from '@/services/transcription'
 import {
@@ -32,6 +33,7 @@ const settings = {
   'systemAudio.liveRecognitionEnabled': false,
   'systemAudio.debugPipeline': false,
   'systemAudio.asrOnlyTest': false,
+  'systemAudio.deepgramLeadingContext': false,
   'systemAudio.transcriptEnabled': true,
   'systemAudio.transcriptDir': 'C:\\Storybook\\Subtitles',
   promptPresets: [],
@@ -166,7 +168,15 @@ export const PipelineDiagnostics: Story = {
         ...settings,
         'systemAudio.debugPipeline': true,
         'systemAudio.asrOnlyTest': true,
+        'systemAudio.deepgramLeadingContext': true,
       },
     },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const overlap = await canvas.findByRole('checkbox', { name: /experimental: deepgram overlap/i })
+    await waitFor(() => expect(overlap).toBeChecked())
+    await expect(overlap).toBeEnabled()
+    await expect(canvas.getByText(/deepgram only: each fragment also gets the last second/i)).toBeVisible()
   },
 }

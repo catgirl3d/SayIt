@@ -38,6 +38,7 @@ Sections are ordered by version, newest first.
 - History and Home now show read failures instead of empty history or zero statistics, and export failures are reported explicitly.
 - The note on Hotwords that Gemini and the Qwen audio stream use only the first 100 words now appears only when your dictation engine actually has that limit, instead of for every engine once the list passes 100 words.
 - Opening the Hotwords page for the first time no longer quietly turns on the built-in AI set. The set stays off until you switch it on; if you have already opened the page, your saved choice is kept.
+- Computer subtitles without live recognition lose fewer words where speech is cut into fragments: a cut now falls inside the pause instead of right before the next word, and each fragment starts with a short silence. This applies to every speech engine and was measured with Deepgram Nova-3, which with Ukrainian often dropped the start of a fragment, sometimes the whole fragment. An experimental option in the subtitle Diagnostics settings, off by default and for Deepgram only, also gives each fragment about the last second of the fragment before it, so the recognizer hears the sentence continue and the repeated words are removed; it sends roughly a fifth more audio to Deepgram. A fragment cut mid-speech no longer ends with "...", and the next one no longer starts with a capital letter mid-sentence (except in German).
 
 ## v0.3.0 — 2026-10-17
 

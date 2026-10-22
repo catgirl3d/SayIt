@@ -35,6 +35,8 @@
   "systemAudio.transcriptUntranslatedMarker": "(без перекладу)",
   "systemAudio.asrOnlyTest": "Тестовий режим: лише розпізнавання",
   "systemAudio.asrOnlyHint": "Субтитри показують розпізнаний текст без перекладу; мова перекладу не використовується.",
+  "systemAudio.deepgramLeadingContext": "Експеримент: накладання фрагментів для Deepgram",
+  "systemAudio.deepgramLeadingContextHint": "Лише для Deepgram: кожен фрагмент отримує ще й останню секунду попереднього, а повтори слів прибираються. Надсилає до Deepgram приблизно на п'яту частину більше аудіо.",
   "systemAudio.start": "Увімкнути субтитри",
   "systemAudio.pause": "Пауза",
   "systemAudio.resume": "Продовжити",

@@ -14,6 +14,7 @@ import {
 import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
 import { errorProtocolCode } from '@/lib/errorMessages'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
+import { withoutLeadingContext } from '../subtitleSegmentation'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -164,6 +165,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
   private activeRunId = 0
   private activeStartOpts: Readonly<StartOptions> | undefined
   private activeProfileSnapshot: Promise<AsrProfile | null> | null = null
+  // The ASR provider of the profile the last run resolved. It answers acceptsLeadingContext for the next run.
+  private resolvedAsrProvider: string | null = null
   private ready = false
 
   // Doubao / Qwen / Deepgram streaming state
@@ -203,6 +206,14 @@ export class CloudAPIProvider implements TranscriptionProvider {
     this.ready = true
     callbacks.onStateChange?.('connected')
     callbacks.onReady?.({ asr: true, llm: true })
+  }
+
+  // Answers from the profile the last run resolved, so it can be stale after a profile switch. That is safe: a run
+  // with leading context never opens a stream (see tryStartRealtimeStream) and always takes the buffered route, where
+  // runProcess checks the profile of the run itself, sends the context to Deepgram only and gives every other engine
+  // the plain piece.
+  acceptsLeadingContext(): boolean {
+    return this.resolvedAsrProvider === 'deepgram'
   }
 
   start(opts: StartOptions): boolean {
@@ -830,6 +841,16 @@ export class CloudAPIProvider implements TranscriptionProvider {
       const qwenWorkspaceId = profile?.workspaceId ?? ''
       if (!this.isRunCurrent(runId)) return
 
+      // A piece that carries leading context never opens any stream. Only the buffered route knows how to treat the
+      // context: Deepgram's HTTP request drops its words, and every other engine gets the plain piece. A stream, of
+      // any provider, would transcribe the context again and the user would see repeated words. The stream flags
+      // stay false, so sendAudio keeps only the full copy, no partial-result listener is created, and runProcess
+      // takes the buffered branch.
+      if ((startOpts.leadingContextMs ?? 0) > 0) {
+        addRuntimeEvent('info', 'cloud_api', 'Streaming skipped: the piece carries leading context', { asrProvider, runId })
+        return
+      }
+
       // Whether to enable live streaming display for this session: read the setting directly (single source
       // of truth, so a stale recorder cache cannot decide), fall back to this start's snapshot, and require the
       // current provider to be actually ready under its current configuration (qwen_realtime needs a WorkspaceId).
@@ -1015,6 +1036,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
       const profile = await profileSnapshot
       if (!profile) throw new Error('No active cloud ASR profile')
+      this.resolvedAsrProvider = profile.provider
       if (!this.isRunCurrent(runId)) return
       const asrProvider = profile.provider
       const isQwenOmni = isQwenOmniProvider(asrProvider)
@@ -1083,7 +1105,12 @@ export class CloudAPIProvider implements TranscriptionProvider {
           merged.set(new Uint8Array(buf), offset)
           offset += buf.byteLength
         }
-        const audioB64 = uint8ArrayToBase64(merged)
+        // Context words are dropped only by Deepgram. Every other engine gets the plain piece, byte for byte as before.
+        const leadingContextMs = startOpts.leadingContextMs ?? 0
+        const usesLeadingContext = leadingContextMs > 0 && asrProvider === 'deepgram'
+        const audioB64 = uint8ArrayToBase64(
+          leadingContextMs > 0 && !usesLeadingContext ? withoutLeadingContext(merged, leadingContextMs) : merged,
+        )
 
         const asrConfig: AsrProviderConfig = buildAsrProviderConfig(
           profile,
@@ -1106,6 +1133,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
               sample_rate: 16000,
               asr_config: asrConfig,
               hotwords: startOpts.hotwords ?? [],
+              ...(usesLeadingContext ? { leading_context_ms: leadingContextMs } : {}),
             },
           })
         if (!this.isRunCurrent(runId) || !asrResult) return

@@ -35,6 +35,9 @@ vi.mock('../clientAiPolish', async (importOriginal) => ({
 }))
 
 import { CloudAPIProvider } from '../CloudAPIProvider'
+import type { StartOptions } from '../types'
+import { withoutLeadingContext } from '../../subtitleSegmentation'
+import { uint8ArrayToBase64 } from '@/lib/encoding'
 
 describe('CloudAPIProvider selected-profile snapshots', () => {
   beforeEach(() => {
@@ -1709,5 +1712,164 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
       aiSource: 'custom',
       aiStatus: 'applied',
     }))
+  })
+})
+
+describe('CloudAPIProvider leading context', () => {
+  // A submitted piece is 300 ms of lead silence, then 31 frames of context, then the piece's own audio.
+  const LEAD_BYTES = 9600
+  const CONTEXT_BYTES = 31 * 1024
+  const OWN_BYTES = 2 * 1024
+  const LEADING_CONTEXT_MS = 1292
+
+  const deepgramProfile = { id: 'dg', provider: 'deepgram', apiKey: 'key-dg', appId: '', model: 'nova-3', omniPrompt: '' }
+  const openaiProfile = { id: 'oa', provider: 'openai_transcribe', apiKey: 'key-oa', appId: '', model: 'whisper-1', omniPrompt: '' }
+
+  beforeEach(() => {
+    mocks.invoke.mockReset()
+    mocks.loadActiveAsrProfile.mockReset()
+    mocks.getSetting.mockReset()
+    mocks.getSetting.mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
+    ))
+  })
+
+  async function runBatchPiece(profile: unknown, audio: Uint8Array, leadingContextMs?: number) {
+    mocks.loadActiveAsrProfile.mockResolvedValueOnce(profile)
+    const provider = new CloudAPIProvider()
+    let finished = () => {}
+    const done = new Promise<void>((resolve) => { finished = resolve })
+    await provider.connect({ onDone: () => finished() })
+    const leading = leadingContextMs === undefined ? {} : { leadingContextMs }
+    expect(provider.start({ runId: 1, language: 'auto', disableStreaming: true, ...leading })).toBe(true)
+    provider.sendAudio(audio.buffer as ArrayBuffer)
+    expect(provider.stop()).toBe(true)
+    await done
+    return provider
+  }
+
+  function cloudRequest() {
+    return mocks.invoke.mock.calls.find(([command]) => command === 'cloud_transcribe')?.[1].request as Record<string, unknown>
+  }
+
+  it('sends the context and its offset to the Deepgram batch route', async () => {
+    const audio = new Uint8Array(LEAD_BYTES + CONTEXT_BYTES + OWN_BYTES)
+    const provider = await runBatchPiece(deepgramProfile, audio, LEADING_CONTEXT_MS)
+
+    expect(provider.acceptsLeadingContext()).toBe(true)
+    expect(cloudRequest().leading_context_ms).toBe(LEADING_CONTEXT_MS)
+    expect(cloudRequest().audio_b64).toBe(uint8ArrayToBase64(audio))
+  })
+
+  it('strips the context for any other engine and sends the plain piece without a context field', async () => {
+    const audio = new Uint8Array(LEAD_BYTES + CONTEXT_BYTES + OWN_BYTES)
+    audio.fill(5, LEAD_BYTES, LEAD_BYTES + CONTEXT_BYTES)
+    audio.fill(7, LEAD_BYTES + CONTEXT_BYTES)
+    const provider = await runBatchPiece(openaiProfile, audio, LEADING_CONTEXT_MS)
+
+    expect(provider.acceptsLeadingContext()).toBe(false)
+    expect(cloudRequest()).not.toHaveProperty('leading_context_ms')
+    const plain = new Uint8Array(LEAD_BYTES + OWN_BYTES)
+    plain.fill(7, LEAD_BYTES)
+    expect(cloudRequest().audio_b64).toBe(uint8ArrayToBase64(plain))
+  })
+
+  it('omits the context field on a Deepgram run that carries no context', async () => {
+    await runBatchPiece(deepgramProfile, new Uint8Array(LEAD_BYTES + OWN_BYTES))
+
+    expect(cloudRequest()).not.toHaveProperty('leading_context_ms')
+  })
+
+  describe('with live streaming display enabled and streaming not disabled', () => {
+    const doubaoProfile = { id: 'db', provider: 'doubao_v2', apiKey: 'key-db', appId: 'app-db', model: 'Doubao-Seed-ASR-2.0', omniPrompt: '' }
+
+    beforeEach(() => {
+      mocks.listen.mockReset()
+      mocks.listen.mockImplementation(async () => () => {})
+    })
+
+    // Runs one piece on a provider that is allowed to stream. The pause after start lets the stream startup run to its
+    // end first, so a run that would open a stream has it ready when stop arrives.
+    async function runStreamablePiece(
+      profile: unknown,
+      audio: Uint8Array,
+      startOptions: Partial<StartOptions>,
+      provider = new CloudAPIProvider(),
+    ) {
+      mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+        key === 'streamingDisplayEnabled' ? true : fallback
+      ))
+      mocks.invoke.mockImplementation(async (command: string) => {
+        if (command === 'cloud_transcribe') return { text: 'recognized', elapsed_ms: 24 }
+        if (command === 'doubao_stream_finish' || command === 'deepgram_stream_finish') return 'streamed'
+        return undefined
+      })
+      mocks.loadActiveAsrProfile.mockResolvedValueOnce(profile)
+      let finished = () => {}
+      const done = new Promise<void>((resolve) => { finished = resolve })
+      await provider.connect({ onDone: () => finished() })
+      expect(provider.start({ runId: 1, language: 'auto', ...startOptions })).toBe(true)
+      provider.sendAudio(audio.buffer as ArrayBuffer)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(provider.stop()).toBe(true)
+      await done
+      return provider
+    }
+
+    function invokedCommands(): string[] {
+      return mocks.invoke.mock.calls.map(([command]) => String(command))
+    }
+
+    function openedStreams(): string[] {
+      return invokedCommands().filter((command) => command.endsWith('_stream_open'))
+    }
+
+    function subscribedToPartials(): boolean {
+      return mocks.listen.mock.calls.some(([eventName]) => eventName === 'asr-partial')
+    }
+
+    it('gives a Doubao run that follows a Deepgram run the plain piece and never opens a stream', async () => {
+      const audio = new Uint8Array(LEAD_BYTES + CONTEXT_BYTES + OWN_BYTES)
+      audio.fill(5, LEAD_BYTES, LEAD_BYTES + CONTEXT_BYTES)
+      audio.fill(7, LEAD_BYTES + CONTEXT_BYTES)
+      const provider = await runBatchPiece(deepgramProfile, audio, LEADING_CONTEXT_MS)
+      expect(provider.acceptsLeadingContext()).toBe(true)
+      mocks.invoke.mockClear()
+
+      await runStreamablePiece(doubaoProfile, audio, { leadingContextMs: LEADING_CONTEXT_MS }, provider)
+
+      expect(openedStreams()).toEqual([])
+      expect(invokedCommands()).not.toContain('doubao_stream_send')
+      expect(invokedCommands()).not.toContain('doubao_stream_finish')
+      expect(subscribedToPartials()).toBe(false)
+      expect(cloudRequest()).not.toHaveProperty('leading_context_ms')
+      expect(cloudRequest().audio_b64).toBe(uint8ArrayToBase64(withoutLeadingContext(audio, LEADING_CONTEXT_MS)))
+      expect(cloudRequest().asr_config).toMatchObject({ provider: 'doubao_v2' })
+    })
+
+    it('sends a Deepgram piece with context over the batch route instead of opening a socket', async () => {
+      const audio = new Uint8Array(LEAD_BYTES + CONTEXT_BYTES + OWN_BYTES)
+
+      await runStreamablePiece(deepgramProfile, audio, { leadingContextMs: LEADING_CONTEXT_MS })
+
+      expect(openedStreams()).toEqual([])
+      expect(invokedCommands()).not.toContain('deepgram_stream_finish')
+      expect(subscribedToPartials()).toBe(false)
+      expect(cloudRequest().leading_context_ms).toBe(LEADING_CONTEXT_MS)
+      expect(cloudRequest().audio_b64).toBe(uint8ArrayToBase64(audio))
+    })
+
+    it.each([
+      { name: 'Doubao', profile: doubaoProfile, open: 'doubao_stream_open', finish: 'doubao_stream_finish' },
+      { name: 'Deepgram', profile: deepgramProfile, open: 'deepgram_stream_open', finish: 'deepgram_stream_finish' },
+    ])('still streams a $name run that carries no context', async ({ profile, open, finish }) => {
+      await runStreamablePiece(profile, new Uint8Array(LEAD_BYTES + OWN_BYTES), {})
+
+      expect(openedStreams()).toEqual([open])
+      expect(invokedCommands()).toContain(finish)
+      expect(invokedCommands()).not.toContain('cloud_transcribe')
+      expect(subscribedToPartials()).toBe(true)
+    })
   })
 })

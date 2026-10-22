@@ -263,6 +263,103 @@ fn parse_batch_transcript(body: &str) -> Result<String, String> {
     Ok(text.trim().to_string())
 }
 
+/// Transcript of the words that begin after the leading context. Deepgram word timings are relative to the submitted
+/// audio, so a word belongs to the context when its midpoint lies before `leading_context_ms`. A word that straddles
+/// the boundary by its midpoint stays with the piece, which starts at that boundary.
+fn parse_batch_transcript_after_context(
+    body: &str,
+    leading_context_ms: u32,
+    language: &str,
+) -> Result<String, String> {
+    if leading_context_ms == 0 {
+        return parse_batch_transcript(body);
+    }
+    let data: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        diag::fail(
+            SCOPE,
+            "parse_response",
+            format!("Invalid Deepgram batch JSON: {}", error),
+        )
+    })?;
+    let words = data
+        .pointer("/results/channels/0/alternatives/0/words")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            diag::fail(
+                SCOPE,
+                "parse_response",
+                "Deepgram batch response is missing the word timings needed for leading context"
+                    .to_string(),
+            )
+        })?;
+    let boundary_seconds = f64::from(leading_context_ms) / 1000.0;
+    let mut kept = Vec::new();
+    for word in words {
+        let start = word.get("start").and_then(serde_json::Value::as_f64);
+        let end = word.get("end").and_then(serde_json::Value::as_f64);
+        let (Some(start), Some(end)) = (start, end) else {
+            return Err(diag::fail(
+                SCOPE,
+                "parse_response",
+                "Deepgram word is missing its timing".to_string(),
+            ));
+        };
+        if (start + end) / 2.0 < boundary_seconds {
+            continue;
+        }
+        let text = word
+            .get("punctuated_word")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| word.get("word").and_then(serde_json::Value::as_str))
+            .ok_or_else(|| {
+                diag::fail(
+                    SCOPE,
+                    "parse_response",
+                    "Deepgram word is missing its text".to_string(),
+                )
+            })?;
+        kept.push(text);
+    }
+    Ok(join_batch_words(&kept, language))
+}
+
+/// Characters of scripts written without word spacing: Han (including extension A and the compatibility ideographs),
+/// Hiragana, Katakana, CJK symbols and punctuation, and the full-width forms block (which holds half-width Katakana).
+fn is_unspaced_script_char(character: char) -> bool {
+    matches!(
+        character,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{3040}'..='\u{309F}'
+            | '\u{30A0}'..='\u{30FF}'
+            | '\u{3000}'..='\u{303F}'
+            | '\u{FF00}'..='\u{FFEF}'
+    )
+}
+
+/// Joins batch words into text. Explicit Chinese and Japanese never get spaces. Every other language, including the
+/// "multi" code-switching mode that can return Japanese, uses a single space between words, except between two words
+/// that meet at CJK characters, so mixed Latin and Japanese text keeps the spaces only where a Latin word is involved.
+fn join_batch_words(words: &[&str], language: &str) -> String {
+    let spaced = !separator_for_language(language).is_empty();
+    let mut joined = String::new();
+    for word in words {
+        let needs_space = spaced
+            && match (joined.chars().next_back(), word.chars().next()) {
+                (Some(previous), Some(next)) => {
+                    !(is_unspaced_script_char(previous) && is_unspaced_script_char(next))
+                }
+                _ => false,
+            };
+        if needs_space {
+            joined.push(' ');
+        }
+        joined.push_str(word);
+    }
+    joined.trim().to_string()
+}
+
 fn resolve_model(config: &AsrProviderConfig) -> String {
     config
         .extra
@@ -622,7 +719,11 @@ async fn is_keyterm_limit_response(mut response: reqwest::Response) -> bool {
     has_keyterm_limit_message(&body)
 }
 
-async fn parse_batch_response(response: reqwest::Response) -> Result<String, String> {
+async fn parse_batch_response(
+    response: reqwest::Response,
+    leading_context_ms: u32,
+    language: &str,
+) -> Result<String, String> {
     let body = response.text().await.map_err(|error| {
         let timed_out = error.is_timeout();
         log_transport_error("http_body_error", &error.without_url().to_string());
@@ -633,7 +734,7 @@ async fn parse_batch_response(response: reqwest::Response) -> Result<String, Str
             diag::fail(SCOPE, "http_body", detail)
         }
     })?;
-    parse_batch_transcript(&body)
+    parse_batch_transcript_after_context(&body, leading_context_ms, language)
 }
 
 /// Completed audio uses the prerecorded endpoint; `base` allows local HTTP fixtures.
@@ -645,7 +746,21 @@ async fn run_batch(
     hotwords: &[String],
     request_timeout: Duration,
 ) -> Result<CloudTranscribeResult, String> {
+    run_batch_with_context(base, pcm, sample_rate, config, hotwords, request_timeout, 0).await
+}
+
+/// `leading_context_ms` is the offset where the piece's own audio starts; zero keeps the plain transcript.
+async fn run_batch_with_context(
+    base: &str,
+    pcm: &[u8],
+    sample_rate: u32,
+    config: &AsrProviderConfig,
+    hotwords: &[String],
+    request_timeout: Duration,
+    leading_context_ms: u32,
+) -> Result<CloudTranscribeResult, String> {
     let start = Instant::now();
+    let language = resolve_language(config);
     let keyterms = resolve_keyterms(config, hotwords);
     let response = send_batch(base, pcm, sample_rate, config, &keyterms, request_timeout).await?;
     let status = response.status();
@@ -660,7 +775,7 @@ async fn run_batch(
             if !retry.status().is_success() {
                 return Err(keyterm_retry_failed());
             }
-            let text = match parse_batch_response(retry).await {
+            let text = match parse_batch_response(retry, leading_context_ms, &language).await {
                 Ok(text) => text,
                 Err(_) => return Err(keyterm_retry_failed()),
             };
@@ -671,7 +786,10 @@ async fn run_batch(
     } else if !status.is_success() {
         return Err(batch_http_error(status, &headers));
     } else {
-        (parse_batch_response(response).await?, None)
+        (
+            parse_batch_response(response, leading_context_ms, &language).await?,
+            None,
+        )
     };
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -704,6 +822,45 @@ pub async fn transcribe(
     hotwords: &[String],
     request_timeout: Option<Duration>,
 ) -> Result<CloudTranscribeResult, String> {
+    transcribe_batch(
+        audio_pcm_b64,
+        sample_rate,
+        config,
+        hotwords,
+        request_timeout,
+        0,
+    )
+    .await
+}
+
+/// Buffered transcription of a piece whose first `leading_context_ms` were already transcribed as the previous piece;
+/// the words inside that context are dropped from the returned transcript.
+pub async fn transcribe_leading_context(
+    audio_pcm_b64: &str,
+    sample_rate: u32,
+    config: &AsrProviderConfig,
+    hotwords: &[String],
+    leading_context_ms: u32,
+) -> Result<CloudTranscribeResult, String> {
+    transcribe_batch(
+        audio_pcm_b64,
+        sample_rate,
+        config,
+        hotwords,
+        None,
+        leading_context_ms,
+    )
+    .await
+}
+
+async fn transcribe_batch(
+    audio_pcm_b64: &str,
+    sample_rate: u32,
+    config: &AsrProviderConfig,
+    hotwords: &[String],
+    request_timeout: Option<Duration>,
+    leading_context_ms: u32,
+) -> Result<CloudTranscribeResult, String> {
     if missing_api_key(config) {
         return Err(missing_key_error());
     }
@@ -734,13 +891,14 @@ pub async fn transcribe(
             hotwords.len()
         ),
     );
-    run_batch(
+    run_batch_with_context(
         BATCH_URL,
         &pcm,
         sample_rate,
         config,
         hotwords,
         request_timeout.unwrap_or(Duration::from_secs(60)),
+        leading_context_ms,
     )
     .await
 }
@@ -2879,6 +3037,245 @@ mod tests {
             " ".repeat(MAX_KEYTERM_ERROR_BODY_BYTES)
         );
         assert!(!has_keyterm_limit_message(oversized.as_bytes()));
+    }
+
+    fn word_json(word: &str, punctuated: &str, start: f64, end: f64) -> serde_json::Value {
+        serde_json::json!({ "word": word, "punctuated_word": punctuated, "start": start, "end": end })
+    }
+
+    fn context_body() -> String {
+        serde_json::json!({ "results": { "channels": [{ "alternatives": [{
+            "transcript": "Old boundary, world.",
+            "words": [
+                word_json("old", "Old", 0.2, 0.9),
+                word_json("boundary", "boundary,", 0.5, 1.5),
+                word_json("world", "world.", 1.6, 2.0)
+            ]
+        }] }] } })
+        .to_string()
+    }
+
+    #[test]
+    fn leading_context_keeps_words_whose_midpoint_is_at_or_after_the_boundary() {
+        assert_eq!(
+            parse_batch_transcript_after_context(&context_body(), 1000, "en").unwrap(),
+            "boundary, world."
+        );
+    }
+
+    #[test]
+    fn zero_leading_context_returns_the_plain_transcript() {
+        let body =
+            r#"{"results":{"channels":[{"alternatives":[{"transcript":"  Plain text.  "}]}]}}"#;
+        assert_eq!(
+            parse_batch_transcript_after_context(body, 0, "en").unwrap(),
+            "Plain text."
+        );
+    }
+
+    #[test]
+    fn leading_context_requires_word_timings() {
+        let body = r#"{"results":{"channels":[{"alternatives":[{"transcript":"Plain text."}]}]}}"#;
+        let error = parse_batch_transcript_after_context(body, 1000, "en").unwrap_err();
+        assert!(error.contains("word timings"), "{error}");
+    }
+
+    #[test]
+    fn leading_context_joins_chinese_and_japanese_words_without_spaces() {
+        let body = serde_json::json!({ "results": { "channels": [{ "alternatives": [{
+            "transcript": "",
+            "words": [word_json("你", "你", 1.2, 1.4), word_json("好", "好。", 1.4, 1.6)]
+        }] }] } })
+        .to_string();
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "zh-CN").unwrap(),
+            "你好。"
+        );
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "ja-JP").unwrap(),
+            "你好。"
+        );
+    }
+
+    fn timed_words_body(words: &[&str]) -> String {
+        let words: Vec<serde_json::Value> = words
+            .iter()
+            .enumerate()
+            .map(|(index, word)| {
+                let start = 1.2 + 0.2 * index as f64;
+                word_json(word, word, start, start + 0.2)
+            })
+            .collect();
+        serde_json::json!({ "results": { "channels": [{ "alternatives": [{
+            "transcript": "",
+            "words": words
+        }] }] } })
+        .to_string()
+    }
+
+    #[test]
+    fn leading_context_joins_japanese_words_without_spaces_in_multi_language_mode() {
+        let body = timed_words_body(&[
+            "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}",
+            "\u{4e16}\u{754c}\u{3002}",
+        ]);
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "multi").unwrap(),
+            "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{4e16}\u{754c}\u{3002}"
+        );
+    }
+
+    #[test]
+    fn leading_context_puts_one_space_where_japanese_and_latin_words_meet_in_multi() {
+        let body = timed_words_body(&[
+            "\u{65e5}\u{672c}\u{8a9e}\u{3002}",
+            "Hello",
+            "\u{4e16}\u{754c}",
+        ]);
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "multi").unwrap(),
+            "\u{65e5}\u{672c}\u{8a9e}\u{3002} Hello \u{4e16}\u{754c}"
+        );
+    }
+
+    #[test]
+    fn leading_context_joins_adjacent_cjk_words_without_spaces_in_any_spaced_language() {
+        let body = timed_words_body(&["\u{4f60}", "\u{597d}\u{3002}"]);
+        for language in ["en", "ru", "multi"] {
+            assert_eq!(
+                parse_batch_transcript_after_context(&body, 1000, language).unwrap(),
+                "\u{4f60}\u{597d}\u{3002}",
+                "{language}"
+            );
+        }
+    }
+
+    #[test]
+    fn leading_context_joins_english_words_with_spaces() {
+        let body = timed_words_body(&["Hello", "there."]);
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "en").unwrap(),
+            "Hello there."
+        );
+    }
+
+    #[test]
+    fn leading_context_never_adds_spaces_for_explicit_chinese_or_japanese() {
+        let body = timed_words_body(&["Hello", "\u{4e16}\u{754c}", "ok"]);
+        for language in ["zh", "zh-CN", "ja", "ja-JP"] {
+            assert_eq!(
+                parse_batch_transcript_after_context(&body, 1000, language).unwrap(),
+                "Hello\u{4e16}\u{754c}ok",
+                "{language}"
+            );
+        }
+    }
+
+    #[test]
+    fn leading_context_word_join_recognizes_the_unspaced_script_ranges() {
+        for character in [
+            '\u{3400}', '\u{4dbf}', '\u{4e00}', '\u{9fff}', '\u{f900}', '\u{faff}', '\u{3040}',
+            '\u{309f}', '\u{30a0}', '\u{30ff}', '\u{3000}', '\u{303f}', '\u{ff00}', '\u{ff66}',
+            '\u{ff9f}', '\u{ffef}',
+        ] {
+            assert!(
+                is_unspaced_script_char(character),
+                "U+{:04X}",
+                character as u32
+            );
+        }
+        for character in [
+            'a', 'Z', '7', ' ', '.', '\u{0416}', '\u{ac00}', '\u{33ff}', '\u{2fff}', '\u{fb00}',
+        ] {
+            assert!(
+                !is_unspaced_script_char(character),
+                "U+{:04X}",
+                character as u32
+            );
+        }
+    }
+
+    #[test]
+    fn leading_context_falls_back_to_the_plain_word_when_no_punctuated_word_is_present() {
+        let body = serde_json::json!({ "results": { "channels": [{ "alternatives": [{
+            "transcript": "",
+            "words": [{ "word": "plain", "start": 1.2, "end": 1.4 }]
+        }] }] } })
+        .to_string();
+        assert_eq!(
+            parse_batch_transcript_after_context(&body, 1000, "en").unwrap(),
+            "plain"
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_leading_context_filters_the_normal_response() {
+        let (base, server) = spawn_sequence_server(vec![(200, context_body())]);
+        let config = test_config(serde_json::json!({}));
+        let result = run_batch_with_context(
+            &base,
+            &[3u8; FRAME_BYTES],
+            16000,
+            &config,
+            &[],
+            TEST_BATCH_TIMEOUT,
+            1000,
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(result.result.text, "boundary, world.");
+        assert!(result.warning.is_none());
+    }
+
+    #[tokio::test]
+    async fn batch_leading_context_is_applied_on_the_keyterm_retry_path() {
+        let (base, server) = spawn_sequence_server(vec![
+            (400, KEYTERM_LIMIT_BODY.to_string()),
+            (200, context_body()),
+        ]);
+        let config = test_config(serde_json::json!({ "keyterms_enabled": true }));
+        let terms = ["Ada".to_string()];
+        let result = run_batch_with_context(
+            &base,
+            &[3u8; FRAME_BYTES],
+            16000,
+            &config,
+            &terms,
+            TEST_BATCH_TIMEOUT,
+            1000,
+        )
+        .await
+        .unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(result.result.text, "boundary, world.");
+        assert_eq!(
+            result.warning,
+            Some(super::super::types::AsrWarningCode::DeepgramKeytermLimit)
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_leading_context_rejects_a_response_without_word_timings() {
+        let (base, server) = spawn_sequence_server(vec![(
+            200,
+            r#"{"results":{"channels":[{"alternatives":[{"transcript":"plain"}]}]}}"#.to_string(),
+        )]);
+        let config = test_config(serde_json::json!({}));
+        let error = run_batch_with_context(
+            &base,
+            &[3u8; FRAME_BYTES],
+            16000,
+            &config,
+            &[],
+            TEST_BATCH_TIMEOUT,
+            1000,
+        )
+        .await
+        .unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("word timings"), "{error}");
     }
 
     #[tokio::test]

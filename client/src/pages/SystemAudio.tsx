@@ -101,6 +101,7 @@ export default function SystemAudio() {
   const [loadError, setLoadError] = useState('')
   const [pipelineDebugEnabled, setPipelineDebugEnabledState] = useState(false)
   const [asrOnlyTest, setAsrOnlyTest] = useState(false)
+  const [deepgramLeadingContext, setDeepgramLeadingContext] = useState(false)
   const [dualSubtitles, setDualSubtitles] = useState(false)
   const [liveRecognitionEnabled, setLiveRecognitionEnabled] = useState(false)
   const [liveRecognitionReady, setLiveRecognitionReady] = useState(false)
@@ -147,6 +148,7 @@ export default function SystemAudio() {
       getPromptPresets(),
       getSetting<boolean>('systemAudio.debugPipeline', false),
       getSetting<boolean>('systemAudio.asrOnlyTest', false),
+      getSetting<boolean>('systemAudio.deepgramLeadingContext', false),
       getSystemAudioMaxSegmentSeconds(),
       getSystemAudioDualSubtitles(),
       getSetting<boolean>('systemAudio.liveRecognitionEnabled', false).then((savedLiveRecognitionEnabled) => {
@@ -156,7 +158,7 @@ export default function SystemAudio() {
         }
         return savedLiveRecognitionEnabled
       }),
-    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedMaxSegmentSeconds, savedDualSubtitles]) => {
+    ]).then(([outputs, savedDevice, savedSourceLanguage, language, presets, debugPipeline, asrOnly, savedDeepgramLeadingContext, savedMaxSegmentSeconds, savedDualSubtitles]) => {
       if (disposed) return
       setDevices(outputs)
       setDeviceId(savedDevice)
@@ -166,9 +168,10 @@ export default function SystemAudio() {
       setPipelineDebugEnabledState(debugPipeline)
       setPipelineDebugEnabled(debugPipeline)
       setAsrOnlyTest(asrOnly)
+      setDeepgramLeadingContext(savedDeepgramLeadingContext)
       // Recognition-only mode disables the translation controls above, so a saved "on" must stay
-      // visible instead of hiding behind a collapsed row.
-      if (debugPipeline || asrOnly) setDiagnosticsOpen(true)
+      // visible instead of hiding behind a collapsed row. An enabled experiment is shown the same way.
+      if (debugPipeline || asrOnly || savedDeepgramLeadingContext) setDiagnosticsOpen(true)
       const options = buildTranslationOptions(presets)
       setPresets(presets)
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
@@ -399,8 +402,23 @@ export default function SystemAudio() {
                     />
                     {t('systemAudio.asrOnlyTest')}
                   </label>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={deepgramLeadingContext}
+                      disabled={active || pending}
+                      onChange={(event) => {
+                        const enabled = event.target.checked
+                        setDeepgramLeadingContext(enabled)
+                        void setSetting('systemAudio.deepgramLeadingContext', enabled)
+                      }}
+                      className="rounded"
+                    />
+                    {t('systemAudio.deepgramLeadingContext')}
+                  </label>
                 </div>
                 <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('systemAudio.deepgramLeadingContextHint')}</p>
               </div>
             </CollapsibleRow>
           </div>

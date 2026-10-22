@@ -163,6 +163,27 @@ pub async fn list_remote_models(config: AiProviderConfig) -> Result<ModelListRes
 pub async fn cloud_transcribe(
     request: CloudTranscribeRequest,
 ) -> Result<CloudTranscribeResult, String> {
+    if request.leading_context_ms > 0 {
+        // Only Deepgram returns word timings that let the context words be dropped. Any other engine would
+        // transcribe the context again, so the request fails rather than showing repeated words.
+        if request.asr_config.provider != "deepgram" {
+            return Err(error_protocol::encode(
+                "connect_failed",
+                format!(
+                    "ASR provider {} does not support leading context",
+                    request.asr_config.provider
+                ),
+            ));
+        }
+        return asr_deepgram::transcribe_leading_context(
+            &request.audio_b64,
+            request.sample_rate,
+            &request.asr_config,
+            &request.hotwords,
+            request.leading_context_ms,
+        )
+        .await;
+    }
     dispatch_cloud_transcribe(
         &request.asr_config,
         &request.audio_b64,
@@ -264,6 +285,53 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
 mod tests {
     use super::*;
 
+    #[test]
+    fn leading_context_request_field_defaults_to_zero() {
+        let request: CloudTranscribeRequest = serde_json::from_value(serde_json::json!({
+            "audio_b64": "",
+            "sample_rate": 16000,
+            "asr_config": serde_json::to_value(asr_config("deepgram", "key")).unwrap(),
+        }))
+        .unwrap();
+        assert_eq!(request.leading_context_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn leading_context_is_refused_by_every_provider_except_deepgram() {
+        for provider in ["doubao", "qwen", "openai_compat"] {
+            let error = cloud_transcribe(CloudTranscribeRequest {
+                audio_b64: String::new(),
+                sample_rate: 16000,
+                asr_config: asr_config(provider, "key"),
+                hotwords: Vec::new(),
+                leading_context_ms: 1292,
+            })
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains("does not support leading context"),
+                "{provider}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn leading_context_for_deepgram_takes_the_deepgram_batch_route() {
+        let error = cloud_transcribe(CloudTranscribeRequest {
+            audio_b64: String::new(),
+            sample_rate: 16000,
+            asr_config: asr_config("deepgram", ""),
+            hotwords: Vec::new(),
+            leading_context_ms: 1292,
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Deepgram ASR is missing the API Key"),
+            "{error}"
+        );
+    }
+
     fn asr_config(provider: &str, api_key: &str) -> AsrProviderConfig {
         AsrProviderConfig {
             provider: provider.to_string(),
@@ -326,6 +394,7 @@ mod tests {
                 sample_rate: 16000,
                 asr_config: asr_config(provider, ""),
                 hotwords: Vec::new(),
+                leading_context_ms: 0,
             })
             .await
             .unwrap_err();
@@ -357,6 +426,7 @@ mod tests {
             sample_rate: 16000,
             asr_config: config,
             hotwords: Vec::new(),
+            leading_context_ms: 0,
         })
         .await
         .unwrap();
@@ -484,6 +554,7 @@ mod tests {
             sample_rate: 16000,
             asr_config: asr_config(provider, ""),
             hotwords: Vec::new(),
+            leading_context_ms: 0,
         })
         .await
         .unwrap_err();

@@ -140,6 +140,11 @@ export interface StartOptions {
    * flood the bounded runtime log and the main log file. They set false; absent means the run writes its record.
    */
   aiOutcomeLog?: boolean
+  /**
+   * Milliseconds at the start of the submitted audio that are context from the previous piece, ending where this
+   * piece's own audio starts. Only a provider that answered `acceptsLeadingContext` true for this run receives it.
+   */
+  leadingContextMs?: number
 }
 
 export interface StopOptions {
@@ -201,4 +206,11 @@ export interface TranscriptionProvider {
    * can only deliver it through a compatibility shim built for selection editing answers false.
    */
   acceptsTextContext?(): boolean
+
+  /**
+   * Whether `StartOptions.leadingContextMs` can be honored for the next run: the recognizer drops the words inside
+   * the context. Absent or false means the caller must submit the plain piece. A provider may answer from its last
+   * known configuration; the run itself re-checks the configuration it actually uses.
+   */
+  acceptsLeadingContext?(): boolean
 }
