@@ -21,7 +21,8 @@ import { getSetting } from '../store'
 import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
 import { resolveAiPolishRoute } from './aiPolicy'
-import { polishWithClientAi, skippedPolishResult } from './clientAiPolish'
+import { polishWithClientAi, skipPolish } from './clientAiPolish'
+import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './aiOutcome'
 import { transcribeCustomAsr } from './customAsrRequest'
 import {
   DEEPGRAM_KEYTERM_LIMIT,
@@ -1120,25 +1121,34 @@ export class CloudAPIProvider implements TranscriptionProvider {
       // Restore space-free hotwords that the ASR split with a space (e.g. Doubao recognizing "SayIt" as "Say It")
       asrText = restoreHotwordSpacing(asrText, startOpts.hotwords ?? [])
 
+      // An empty recognition runs no AI. The recorder persists the empty record from this ASR result,
+      // so the execution metadata must travel with it, not only with the final.
+      const emptyOutcome = asrText.trim()
+        ? undefined
+        : resolveAiOutcome({ kind: 'skipped', cause: 'empty_asr' })
+
       // Report the intermediate ASR result (before the AI stage)
       this.callbacks.onASR?.({
         text: asrText,
         asrMs,
         durationSec,
         ...(this.asrWarning && { asrWarning: this.asrWarning }),
+        ...(emptyOutcome && outcomeToResultFields(emptyOutcome)),
         ...(!asrText.trim() && requestModel && {
           asrEngine: requestEngine,
           asrModel: requestModel,
         }),
       })
 
-      if (!asrText.trim()) {
+      if (emptyOutcome) {
+        logAiOutcome('cloud_api', emptyOutcome, startOpts)
         this.callbacks.onFinal?.({
           asrText: '',
           llmText: '',
           asrMs,
           llmMs: 0,
           durationSec,
+          ...outcomeToResultFields(emptyOutcome),
           ...(this.asrWarning && { asrWarning: this.asrWarning }),
           ...(requestModel && {
             asrEngine: requestEngine,
@@ -1159,7 +1169,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         selectionAiChosen: Boolean(startOpts.selectionAiConfig),
       })
       const polish = route === 'integrated'
-        ? skippedPolishResult(asrText, startOpts)
+        ? skipPolish(asrText, startOpts, 'integrated', 'cloud_api')
         : await polishWithClientAi({
           asrText,
           durationSec,

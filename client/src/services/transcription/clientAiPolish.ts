@@ -4,6 +4,13 @@ import { addRuntimeEvent } from '../debugLog'
 import { loadRuntimeAiConfig } from '../aiRuntimeConfig'
 import { assessAiConfig, buildAiProviderConfig } from '@/features/settings/aiProviderCatalog'
 import { errorProtocolCode } from '@/lib/errorMessages'
+import {
+  logAiOutcome,
+  outcomeToResultFields,
+  resolveAiOutcome,
+  type AiOutcomeEvidence,
+  type AiSkipCause,
+} from './aiOutcome'
 import type { AiExecutionSource, AiExecutionStatus, AiFailureReason, StartOptions } from './types'
 
 interface AiResult {
@@ -53,29 +60,36 @@ function safeFallbackText(asrText: string, startOptions?: Readonly<Pick<StartOpt
 /**
  * Result of a run whose AI stage does not execute: empty recognition, AI disabled, a recording
  * below the duration threshold, or an ASR engine with built-in cleanup (the integrated route).
+ *
+ * Pure: it writes no `ai.outcome` record, so a caller that skips without entering
+ * polishWithClientAi logs through {@link skipPolish}. The cause never changes the result
+ * fields; it only labels the log, and the default is for callers that do not log.
  */
 export function skippedPolishResult(
   asrText: string,
   startOptions?: Readonly<Pick<StartOptions, 'textContext'>>,
+  cause: AiSkipCause = 'ai_disabled',
 ): ClientAiPolishResult {
   return {
     llmText: safeFallbackText(asrText, startOptions),
     llmMs: 0,
     contextApplied: startOptions?.textContext ? false : undefined,
-    aiSource: 'none',
-    aiStatus: 'skipped',
+    ...outcomeToResultFields(resolveAiOutcome({ kind: 'skipped', cause })),
   }
 }
 
 /**
- * Map one rejected custom-AI request to the reason the user sees. The Rust adapters
- * reject an empty completion with the stable `empty_completion` code instead of
- * resolving with empty text, so that case is classified here, not in the success path.
+ * A skipped result together with its single `ai.outcome` record, for terminators that skip the
+ * AI stage on their own authority (the integrated-ASR route) instead of entering polishWithClientAi.
  */
-function classifyPolishFailure(error: unknown, timedOut: boolean): AiFailureReason {
-  if (timedOut) return 'timeout'
-  if (errorProtocolCode(error) === 'empty_completion') return 'empty_result'
-  return 'provider_error'
+export function skipPolish(
+  asrText: string,
+  startOptions: Readonly<Pick<StartOptions, 'textContext' | 'aiOutcomeLog'>> | undefined,
+  cause: AiSkipCause,
+  logSource: string,
+): ClientAiPolishResult {
+  logAiOutcome(logSource, resolveAiOutcome({ kind: 'skipped', cause }), startOptions)
+  return skippedPolishResult(asrText, startOptions, cause)
 }
 
 /**
@@ -93,14 +107,16 @@ export async function polishWithClientAi(
   const disableAi = startOptions?.disableAi ?? false
   const aiMinDurationSec = Math.max(0, Number(startOptions?.aiMinDurationSec) || 0)
 
-  if (!asrText.trim() || disableAi) return skippedPolishResult(asrText, startOptions)
+  // An empty recognition wins over a disabled AI: the log should say there was nothing to clean up.
+  if (!asrText.trim()) return skipPolish(asrText, startOptions, 'empty_asr', logSource)
+  if (disableAi) return skipPolish(asrText, startOptions, 'ai_disabled', logSource)
 
   if (aiMinDurationSec > 0 && durationSec < aiMinDurationSec) {
     addRuntimeEvent('info', logSource, 'AI cleanup skipped below duration threshold', {
       durationSec,
       aiMinDurationSec,
     })
-    return skippedPolishResult(asrText, startOptions)
+    return skipPolish(asrText, startOptions, 'below_min_duration', logSource)
   }
 
   // A frozen selection-edit snapshot wins over the active profile for this run; the
@@ -112,6 +128,17 @@ export async function polishWithClientAi(
   // "use this provider's default" (Ollama falls back to qwen2.5:7b), so only keyed
   // providers treat it as a hard stop. The backend, not this check, owns the default.
   const model = config.model.trim() ? config.model : ''
+  // The single place that turns this run's evidence into metadata and its `ai.outcome` record;
+  // the provider and model names are the only configuration that reaches the log.
+  const conclude = (evidence: AiOutcomeEvidence, llmMs: number) => {
+    const outcome = resolveAiOutcome(evidence)
+    logAiOutcome(logSource, outcome, startOptions, {
+      provider: config.provider || undefined,
+      model: model || undefined,
+      llmMs,
+    })
+    return outcomeToResultFields(outcome)
+  }
   const { complete, hasUrl, hasKey, hasModel } = assessAiConfig(config)
   if (!complete) {
     addRuntimeEvent('warn', logSource, 'Custom AI is selected but its active profile is incomplete', {
@@ -124,9 +151,7 @@ export async function polishWithClientAi(
       llmText: safeFallbackText(asrText, startOptions),
       llmMs: 0,
       contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'custom',
-      aiStatus: 'unavailable',
-      aiFailureReason: 'incomplete_profile',
+      ...conclude({ kind: 'client_profile_incomplete' }, 0),
       aiProvider: config.provider || undefined,
       aiModel: model || undefined,
     }
@@ -188,9 +213,7 @@ export async function polishWithClientAi(
       llmText: succeeded ? result.text : safeFallbackText(asrText, startOptions),
       llmMs: result.elapsed_ms,
       contextApplied: startOptions?.textContext ? succeeded : undefined,
-      aiSource: 'custom',
-      aiStatus: succeeded ? 'applied' : 'failed',
-      aiFailureReason: succeeded ? undefined : 'empty_result',
+      ...conclude({ kind: 'client_result', hasText: succeeded }, result.elapsed_ms),
       aiProvider: config.provider,
       aiModel: model || undefined,
     }
@@ -206,9 +229,11 @@ export async function polishWithClientAi(
       llmText: safeFallbackText(asrText, startOptions),
       llmMs: 0,
       contextApplied: startOptions?.textContext ? false : undefined,
-      aiSource: 'custom',
-      aiStatus: 'failed',
-      aiFailureReason: classifyPolishFailure(error, timedOut),
+      ...conclude({
+        kind: 'client_error',
+        timedOut,
+        emptyCompletion: errorProtocolCode(error) === 'empty_completion',
+      }, 0),
       aiProvider: config.provider,
       aiModel: model || undefined,
     }

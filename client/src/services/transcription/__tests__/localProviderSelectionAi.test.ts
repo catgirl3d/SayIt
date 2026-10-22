@@ -50,3 +50,42 @@ describe('LocalProvider selection-edit service', () => {
     }))
   })
 })
+
+describe('LocalProvider empty recognition', () => {
+  beforeEach(() => {
+    invokeMock.mockReset()
+    getSettingMock.mockReset()
+    runtimeEvents.addRuntimeEvent.mockReset()
+    getSettingMock.mockImplementation((key: string, fallback: unknown) =>
+      Promise.resolve(key === 'localAsr.modelId' ? 'sensevoice-small-gguf' : fallback))
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'list_downloaded_models') return Promise.resolve([{ id: 'sensevoice-small-gguf', complete: true }])
+      if (cmd === 'local_transcribe') return Promise.resolve({ text: '  ', elapsed_ms: 12 })
+      return Promise.resolve('')
+    })
+  })
+
+  it('stamps the skipped AI metadata on the ASR result and the final, and writes one outcome record', async () => {
+    const provider = new LocalProvider()
+    const onASR = vi.fn()
+    const onFinal = vi.fn()
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    await provider.connect({ onASR, onFinal, onDone: finish })
+
+    provider.start({ runId: 6 })
+    provider.sendAudio(new ArrayBuffer(32_000))
+    provider.stop()
+    await done
+
+    // The recorder persists the empty record from the ASR result, so it must carry the execution metadata.
+    expect(onASR).toHaveBeenCalledWith(expect.objectContaining({ aiSource: 'none', aiStatus: 'skipped' }))
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ aiSource: 'none', aiStatus: 'skipped' }))
+    expect(invokeMock).not.toHaveBeenCalledWith('cloud_polish', expect.anything())
+    const outcomes = runtimeEvents.addRuntimeEvent.mock.calls.filter(([, , message]) => message === 'ai.outcome')
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject(['info', 'local', 'ai.outcome', {
+      source: 'none', status: 'skipped', attempted: false, skipCause: 'empty_asr',
+    }])
+  })
+})

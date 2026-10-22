@@ -7,6 +7,7 @@ import { assessAiConfig } from '@/features/settings/aiProviderCatalog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
 import { resolveAiPolishRoute, type AiPolishRoute } from './aiPolicy'
+import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './aiOutcome'
 import {
   getRuntimeServerAiSource,
   loadServerAiSource,
@@ -67,19 +68,25 @@ export class ServerProvider implements TranscriptionProvider {
       onASR: (result) => {
         if (this.activeRunId === 0) return
         const isEmpty = !result.text.trim()
+        // An empty recognition runs no AI; the recorder's dedicated empty-result branch persists it to
+        // history before the final result arrives. The run's single ai.outcome record is written by onFinal.
+        const skipped = isEmpty
+          ? outcomeToResultFields(resolveAiOutcome({ kind: 'skipped', cause: 'empty_asr' }))
+          : undefined
         callbacks.onASR?.({
           text: result.text,
           asrMs: result.asrMs,
           durationSec: result.durationSec,
-          // An empty recognition runs no AI; the recorder's dedicated empty-result branch persists it to
-          // history before the final result arrives.
-          aiSource: isEmpty ? 'none' : undefined,
-          aiStatus: isEmpty ? 'skipped' : undefined,
+          aiSource: skipped?.aiSource,
+          aiStatus: skipped?.aiStatus,
         })
       },
-      onFinal: (result) => {
+      onFinal: (serverResult) => {
         const runId = this.activeRunId
         if (runId === 0) return
+        // The wire evidence feeds the outcome resolver only; it must not ride along into the public
+        // FinalResult that the client route spreads into its callback.
+        const { llmDebug, ...result } = serverResult
         if (this.runRoute === 'client') {
           this.customFinalPending = true
           void this.handleCustomFinal(runId, result)
@@ -87,6 +94,15 @@ export class ServerProvider implements TranscriptionProvider {
         }
 
         const aiDisabled = this.activeStartOpts?.disableAi ?? false
+        // An empty recognition never reaches the server's LLM, so it is a skip, not an unavailable AI.
+        const outcome = resolveAiOutcome(
+          !result.asrText.trim()
+            ? { kind: 'skipped', cause: 'empty_asr' }
+            : aiDisabled
+              ? { kind: 'skipped', cause: 'ai_disabled' }
+              : { kind: 'server', llmMs: result.llmMs, llmDebug },
+        )
+        logAiOutcome('server', outcome, this.activeStartOpts, { llmMs: result.llmMs, provider: llmDebug?.provider })
         callbacks.onFinal?.({
           asrText: result.asrText,
           llmText: result.llmText,
@@ -96,9 +112,8 @@ export class ServerProvider implements TranscriptionProvider {
           asrEngine: result.asrEngine,
           asrModel: result.asrModel,
           contextApplied: result.contextApplied,
-          aiSource: aiDisabled ? 'none' : 'server',
-          aiStatus: aiDisabled ? 'skipped' : result.llmMs > 0 ? 'applied' : 'unavailable',
-          aiProvider: aiDisabled ? undefined : 'server',
+          ...outcomeToResultFields(outcome),
+          aiProvider: outcome.source === 'none' ? undefined : 'server',
         })
       },
       onDone: () => {
