@@ -9,6 +9,7 @@ import {
   normalizeBuiltinSetWords,
   normalizeCustomThemeActive,
   normalizeCustomThemes,
+  withBuiltinSetActiveDefaults,
   withBuiltinSetDefaults,
   type CustomTheme,
 } from './model'
@@ -24,10 +25,11 @@ export interface HotwordCatalog {
 /**
  * Canonical active hotword list shared by dictation, re-recognition, and subtitle sessions.
  *
- * This loader deliberately does not seed the `ai` set as active and does not migrate legacy
- * `manualHotwords`; both are hydration rules of the dictionary manager (`useHotwordsManager`),
- * which persists the seeded state when the dictionary page runs. Until that happens, these
- * read-only sessions see exactly the active flags already saved in the store.
+ * Built-in sets without a saved active flag resolve through `withBuiltinSetActiveDefaults`, the
+ * same rule the dictionary manager (`useHotwordsManager`) hydrates with, so these read-only
+ * sessions and the dictionary page agree before the page has ever persisted its state. Migrating
+ * legacy `manualHotwords` stays a manager-only hydration rule: the migrated category starts
+ * inactive, so it does not change the list these sessions compose.
  */
 export async function loadActiveHotwords(): Promise<string[]> {
   return (await loadHotwordCatalog()).activeWords
@@ -45,7 +47,9 @@ export async function loadHotwordCatalog(): Promise<HotwordCatalog> {
     getSetting(CUSTOM_THEME_ACTIVE_KEY, {}),
   ])
   const builtinSetWords = withBuiltinSetDefaults(normalizeBuiltinSetWords(rawSetWords as Record<string, unknown>))
-  const builtinSetActive = normalizeBuiltinSetActive(rawSetActive as Record<string, unknown>)
+  const builtinSetActive = withBuiltinSetActiveDefaults(
+    normalizeBuiltinSetActive(rawSetActive as Record<string, unknown>),
+  )
   const customThemes = normalizeCustomThemes(rawCustomThemes)
   const customThemeActive = normalizeCustomThemeActive(rawCustomThemeActive as Record<string, unknown>, customThemes)
   return {

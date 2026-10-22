@@ -22,6 +22,8 @@ import {
   toggleThemeWord,
   uniqueThemeName,
   uniqueWords,
+  withBuiltinSetActiveDefaults,
+  withBuiltinSetDefaults,
 } from './model'
 import {
   builtinSetActivationFits,
@@ -103,16 +105,8 @@ export function useHotwordsManager() {
       const savedSetWords = normalizeBuiltinSetWords(rawSetWords)
       const savedSetActive = normalizeBuiltinSetActive(rawSetActive)
 
-      const nextSetWords: Record<string, string[]> = {}
-      const nextSetActive: Record<string, boolean> = {}
-
-      for (const [key, setDef] of Object.entries(BUILTIN_SETS)) {
-        const defaults = uniqueWords(setDef.words)
-        nextSetWords[key] = savedSetWords[key] ?? defaults
-        nextSetActive[key] = typeof savedSetActive[key] === 'boolean'
-          ? savedSetActive[key]
-          : key === 'ai'
-      }
+      const nextSetWords = withBuiltinSetDefaults(savedSetWords)
+      const nextSetActive = withBuiltinSetActiveDefaults(savedSetActive)
 
       let nextCustomThemes = normalizeCustomThemes(rawCustomThemes)
       const migratedManualWords = legacyWordsToMigrate(legacyManualWords, nextSetWords, nextSetActive)

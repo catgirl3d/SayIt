@@ -37,6 +37,7 @@ Sections are ordered by version, newest first.
 - Full-backup restores and Electron imports now fail closed without partial data changes, so failed imports can be retried.
 - History and Home now show read failures instead of empty history or zero statistics, and export failures are reported explicitly.
 - The note on Hotwords that Gemini and the Qwen audio stream use only the first 100 words now appears only when your dictation engine actually has that limit, instead of for every engine once the list passes 100 words.
+- Opening the Hotwords page for the first time no longer quietly turns on the built-in AI set. The set stays off until you switch it on; if you have already opened the page, your saved choice is kept.
 
 ## v0.3.0 — 2026-10-17
 

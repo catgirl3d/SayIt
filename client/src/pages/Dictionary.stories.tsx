@@ -2,6 +2,8 @@ import { fireEvent, waitFor } from '@testing-library/react'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import Dictionary from './Dictionary'
 import type { AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { BUILTIN_SETS } from '@/services/hotwords/model'
+import { getSetting } from '@/services/store'
 import { getWorkMode, switchProvider } from '@/services/transcription'
 
 const groqProfile = {
@@ -76,6 +78,37 @@ export const Loaded: Story = {
       const bodyText = document.body.textContent ?? ''
       if (!canvasText.includes('SayIt') || !bodyText.includes('Deepgram')) {
         throw new Error('Dictionary did not render the seeded hotword and capability payload')
+      }
+    })
+  },
+}
+
+// A fresh install has no saved hotword state. null replaces the meta's seeded keys instead of being
+// deep-merged with them, and the store reads it back like a missing key.
+export const FreshInstall: Story = {
+  parameters: {
+    tauri: {
+      settings: {
+        builtinSetWords: null,
+        builtinSetActive: null,
+        customHotwordThemes: null,
+        customThemeActive: null,
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    // Opening the page persists the flags it resolved; the AI set must stay off on screen and in the store.
+    await waitFor(async () => {
+      const label = Array.from(canvasElement.querySelectorAll('p'))
+        .find((p) => p.textContent === BUILTIN_SETS.ai.label)
+      const aiSwitch = label?.parentElement?.parentElement?.querySelector('[role="switch"]')
+      if (!aiSwitch) throw new Error('Dictionary did not render the built-in AI set')
+      if (aiSwitch.getAttribute('aria-checked') !== 'false') {
+        throw new Error('Dictionary showed the built-in AI set as on for a fresh install')
+      }
+      const stored = await getSetting<Record<string, unknown>>('builtinSetActive', {})
+      if (stored.ai !== false) {
+        throw new Error('Dictionary did not persist the built-in AI set as off')
       }
     })
   },

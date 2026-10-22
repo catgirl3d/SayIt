@@ -17,9 +17,21 @@ vi.mock('@/services/store', () => ({
 
 import { loadActiveHotwords, loadHotwordCatalog } from '../settings'
 
+function activeFlags(...activeKeys: string[]): Record<string, boolean> {
+  return Object.fromEntries(Object.keys(BUILTIN_SETS).map((key) => [key, activeKeys.includes(key)]))
+}
+
 describe('loadActiveHotwords', () => {
   beforeEach(() => {
     mocks.settings = {}
+  })
+
+  it('treats a built-in set without a saved active flag as off', async () => {
+    // A fresh install has saved nothing; the dictionary page resolves the same flags.
+    const catalog = await loadHotwordCatalog()
+
+    expect(catalog.builtinSetActive).toEqual(activeFlags())
+    expect(catalog.activeWords).toEqual([])
   })
 
   it('uses default words for an enabled built-in set that was never saved', async () => {
@@ -59,7 +71,7 @@ describe('loadActiveHotwords', () => {
 
     expect(catalog.builtinSetWords.ai).toEqual(['GPT'])
     expect(catalog.builtinSetWords.code).toEqual(BUILTIN_SETS.code.words)
-    expect(catalog.builtinSetActive).toEqual({ ai: true, code: true })
+    expect(catalog.builtinSetActive).toEqual(activeFlags('ai', 'code'))
     expect(catalog.customThemes).toEqual([{ id: 'theme_a', name: 'Mine', words: ['SayIt fork'] }])
     expect(catalog.customThemeActive).toEqual({ theme_a: true })
     expect(catalog.activeWords).toEqual(['GPT', ...BUILTIN_SETS.code.words, 'SayIt fork'])

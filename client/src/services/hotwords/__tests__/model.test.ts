@@ -9,6 +9,7 @@ import {
   removeThemeWord,
   toggleThemeWord,
   uniqueThemeName,
+  withBuiltinSetActiveDefaults,
   withBuiltinSetDefaults,
   type CustomTheme,
 } from '../model'
@@ -70,6 +71,14 @@ describe('built-in hotword sets', () => {
 
   it('keep a saved empty word list instead of restoring defaults', () => {
     expect(withBuiltinSetDefaults({ code: [] }).code).toEqual([])
+  })
+
+  it('leave sets without a saved active flag off', () => {
+    // A fresh install has saved no flags, so no set, the AI one included, may come on by itself.
+    const filled = withBuiltinSetActiveDefaults({ code: true })
+    expect(Object.keys(filled)).toEqual(Object.keys(BUILTIN_SETS))
+    expect(filled.ai).toBe(false)
+    expect(filled.code).toBe(true)
   })
 
   it('migrate legacy words that only an inactive set covers', () => {
