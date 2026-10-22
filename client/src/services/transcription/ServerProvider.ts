@@ -7,7 +7,7 @@ import { assessAiConfig } from '@/features/settings/aiProviderCatalog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
 import { resolveAiPolishRoute, type AiPolishRoute } from './aiPolicy'
-import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './aiOutcome'
+import { logAiOutcome, outcomeToResultFields, resolveAiOutcome, resolveServerModeAiProvider } from './aiOutcome'
 import {
   getRuntimeServerAiSource,
   loadServerAiSource,
@@ -99,7 +99,7 @@ export class ServerProvider implements TranscriptionProvider {
           !result.asrText.trim()
             ? { kind: 'skipped', cause: 'empty_asr' }
             : aiDisabled
-              ? { kind: 'skipped', cause: 'ai_disabled' }
+              ? { kind: 'skipped', cause: this.activeStartOpts?.disableAiCause ?? 'ai_disabled' }
               : { kind: 'server', llmMs: result.llmMs, llmDebug },
         )
         logAiOutcome('server', outcome, this.activeStartOpts, { llmMs: result.llmMs, provider: llmDebug?.provider })
@@ -113,7 +113,7 @@ export class ServerProvider implements TranscriptionProvider {
           asrModel: result.asrModel,
           contextApplied: result.contextApplied,
           ...outcomeToResultFields(outcome),
-          aiProvider: outcome.source === 'none' ? undefined : 'server',
+          aiProvider: resolveServerModeAiProvider(outcome.source),
         })
       },
       onDone: () => {
@@ -192,8 +192,8 @@ export class ServerProvider implements TranscriptionProvider {
   }
 
   stop(opts?: StopOptions): boolean {
-    if (opts?.disableAi && this.activeStartOpts) {
-      this.activeStartOpts = { ...this.activeStartOpts, disableAi: true }
+    if (opts?.disableAi && this.activeStartOpts && !this.activeStartOpts.disableAi) {
+      this.activeStartOpts = { ...this.activeStartOpts, disableAi: true, disableAiCause: opts.disableAiCause }
     }
     return ws.sendStop(this.runRoute === 'client' ? { ...opts, disableAi: true } : opts)
   }

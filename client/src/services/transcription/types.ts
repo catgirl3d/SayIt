@@ -1,6 +1,7 @@
 // 转写 Provider 抽象层类型定义
 // 所有工作模式（服务器 / 云 API / 本地）共享此接口
 
+import type { AiSkipCause } from './aiOutcome'
 import type { ActiveAppContext, TextContext } from '../../types/appContext'
 import type { ClientRuntimeInfo } from '../../types/appApi'
 import type { SelectionAiConfig } from './selectionAi'
@@ -111,6 +112,8 @@ export interface StartOptions {
   runId: number
   systemPrompt?: string
   disableAi?: boolean
+  /** Why disableAi is set; log-only. Absent means a plain disabled AI. */
+  disableAiCause?: AiSkipCause
   /** Passive translated captions require the AI stage even for ASR routes with built-in cleanup. */
   requireTranslation?: boolean
   /** 录音未达到该时长时只做识别，不调用 AI。0 / undefined = 不设门槛。 */
@@ -147,6 +150,8 @@ export interface StopOptions {
    * 只能追加跳过理由，不能反过来把 AI 打开。
    */
   disableAi?: boolean
+  /** Why disableAi was added at stop time; log-only. Absent means a plain disabled AI. */
+  disableAiCause?: AiSkipCause
   audioStats?: {
     avgRms: number
     peakRms: number

@@ -109,7 +109,7 @@ export async function polishWithClientAi(
 
   // An empty recognition wins over a disabled AI: the log should say there was nothing to clean up.
   if (!asrText.trim()) return skipPolish(asrText, startOptions, 'empty_asr', logSource)
-  if (disableAi) return skipPolish(asrText, startOptions, 'ai_disabled', logSource)
+  if (disableAi) return skipPolish(asrText, startOptions, startOptions?.disableAiCause ?? 'ai_disabled', logSource)
 
   if (aiMinDurationSec > 0 && durationSec < aiMinDurationSec) {
     addRuntimeEvent('info', logSource, 'AI cleanup skipped below duration threshold', {

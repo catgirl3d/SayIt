@@ -3,6 +3,7 @@ import { startCapture, stopCapture } from '../audio'
 import { getProvider, type TranscriptionProvider, type TranscriptionCallbacks, type FinalResult, type WorkMode } from '../transcription'
 import { loadSelectionAiConfig } from '../transcription/selectionAi'
 import { DEEPGRAM_KEYTERM_LIMIT, type AsrWarningCode, type AiFailureReason } from '../transcription/types'
+import { resolveServerModeAiProvider } from '../transcription/aiOutcome'
 import {
   CUSTOM_ASR_PROVIDER,
   formatAsrHistoryProvider,
@@ -2262,6 +2263,7 @@ export class RecorderOrchestrator {
     this.provider.stop({
       pttHoldMs,
       disableAi: skipAiForShortSpeech || undefined,
+      disableAiCause: skipAiForShortSpeech ? 'below_min_duration' : undefined,
       audioStats: this.audioStatsTotalFrames > 0 ? {
         avgRms: Math.round((this.audioStatsRmsSum / this.audioStatsTotalFrames) * 10000) / 10000,
         peakRms: Math.round(this.audioStatsPeakRms * 10000) / 10000,
@@ -2555,7 +2557,7 @@ export class RecorderOrchestrator {
       }
       return {
         asrProvider,
-        aiProvider: finalResult?.aiSource === 'none' ? undefined : 'server',
+        aiProvider: resolveServerModeAiProvider(finalResult?.aiSource),
         ...executionMeta,
       }
     }

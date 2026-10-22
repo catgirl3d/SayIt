@@ -57,11 +57,11 @@ let ws: WebSocket | null = null
 let callbacks: WSCallbacks = {}
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let intentionalClose = false
-/** 连接建立的时间戳，用于日志里计算连接存活时长 */
+/** Timestamp of when the connection was established, used in logs to compute connection lifetime */
 let connectStartMs = 0
 let openedAtMs = 0
 
-/** 抓取一小段调用栈（去掉本函数与 Error 头两行），用于日志里定位「谁触发了连接/关闭」。 */
+/** Captures a short call stack (dropping this function's own frame and the Error header lines), used in logs to pinpoint who triggered the connection/close. */
 function shortCallerStack(): string {
   const raw = new Error().stack || ''
   return raw
@@ -71,15 +71,15 @@ function shortCallerStack(): string {
     .join(' <- ')
 }
 
-// --- 重连退避 ---
+// --- Reconnect backoff ---
 let reconnectAttempts = 0
 const RECONNECT_BASE_MS = 3000
 const RECONNECT_MAX_MS = 30_000
-// 服务端限流类关闭码（1013 服务器满、4029 该 IP 并发超限）：退避更久，避免重连风暴
+// Server throttling close codes (1013 server full, 4029 concurrent limit exceeded for this IP): back off longer to avoid a reconnect storm
 const RECONNECT_LIMIT_MIN_MS = 15_000
 const LIMIT_CLOSE_CODES = new Set([1013, 4029])
 
-/** 计算下次重连延迟：指数退避 + ±20% 抖动；限流码时至少退避 RECONNECT_LIMIT_MIN_MS */
+/** Computes the next reconnect delay: exponential backoff with ±20% jitter; for throttling close codes, backs off at least RECONNECT_LIMIT_MIN_MS */
 function computeReconnectDelayMs(closeCode?: number): number {
   const exp = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempts, RECONNECT_MAX_MS)
   const base = closeCode !== undefined && LIMIT_CLOSE_CODES.has(closeCode)
@@ -166,14 +166,14 @@ export function connect(cbs: WSCallbacks): Promise<void> {
   callbacks = cbs
 
   if (ws?.readyState === WebSocket.OPEN) {
-    // 已经连上，直接复用（connect 幂等）。这是每次开始录音的正常路径，不记日志避免刷屏；
-    // 真正异常的连接场景由 开始连接/连接成功/主动关闭/关闭未就绪连接 等日志覆盖。
+    // Already connected, reuse it directly (connect is idempotent). This is the normal path on every recording start, so nothing is logged to avoid flooding the log;
+    // truly abnormal connection scenarios are covered by logs such as connect start, connect success, intentional close, and closing a not-yet-ready connection.
     return Promise.resolve()
   }
 
   if (ws) {
-    // 上一条连接还在（可能仍在 CONNECTING，或刚 open 尚未标记就绪）。这里会主动关掉它再重连，
-    // 这正是「连上几秒就被自己关掉、且没发 start」最可能的元凶——记录下来看看是谁触发的。
+    // The previous connection is still around (it may still be CONNECTING, or just opened but not yet marked ready). It is proactively closed here before reconnecting;
+    // this is exactly the most likely culprit behind "connected for a few seconds, then closed by itself without ever sending start", so it is recorded to see who triggered it.
     const prevState = ws.readyState
     addRuntimeEvent('warn', 'websocket', 'connect() closed the previous unready connection before reconnecting', {
       prevReadyState: prevState, // 0=CONNECTING 1=OPEN 2=CLOSING 3=CLOSED
@@ -231,8 +231,8 @@ export function connect(cbs: WSCallbacks): Promise<void> {
     }
 
     socket.onmessage = (e) => {
-      // 已被 cancel/disconnect 替换的旧 socket 即使队列里还有消息，也绝不能
-      // 投递给新会话的 callbacks。
+      // A stale socket already replaced by cancel/disconnect must never deliver
+      // its queued messages to the new session's callbacks, even if messages remain in the queue.
       if (ws !== socket) return
       if (typeof e.data !== 'string') return
       try {
@@ -338,8 +338,8 @@ export function connect(cbs: WSCallbacks): Promise<void> {
         reconnectAttempts++
         reconnectTimer = setTimeout(() => connect(callbacks), delay)
       } else {
-        // 主动关闭这一路以前是完全静默的（切换供应商/地址、connect() 替换旧连接、disconnect()）。
-        // 现在也记一条，标明是客户端主动关的，便于区分「服务端踢」还是「客户端自己关」。
+        // Client-initiated closes used to be completely silent (switching provider/address, connect() replacing an old connection, disconnect()).
+        // They now also log one line marking the close as client-initiated, to tell a server kick apart from the client closing on its own.
         addRuntimeEvent('warn', 'websocket', `Connection closed intentionally code=${ev.code} reason=${ev.reason || '-'}`, {
           code: ev.code,
           aliveMs,
@@ -466,7 +466,7 @@ export function sendStart(opts?: {
 
 export function sendStop(opts?: {
   pttHoldMs?: number
-  /** 松键时补上的「这次别做 AI」。服务端在收到 stop 之后才开始 ASR+AI，来得及。 */
+  /** The "skip AI for this turn" flag, applied on key release. The server only starts ASR+AI after receiving stop, so there is still time to apply it. */
   disableAi?: boolean
   audioStats?: AudioStats
 }): boolean {

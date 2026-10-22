@@ -17,6 +17,7 @@ import {
   normalizeServerLlmDebug,
   outcomeToResultFields,
   resolveAiOutcome,
+  resolveServerModeAiProvider,
   type ServerLlmEvidence,
 } from '@/services/transcription/aiOutcome'
 import { polishWithClientAi, skippedPolishResult, skipPolish, type ClientAiPolishResult } from '@/services/transcription/clientAiPolish'
@@ -212,7 +213,7 @@ export async function reprocessViaServer(
     return {
       ...serverResult,
       ...outcomeToResultFields(outcome),
-      aiProvider: useManagedAi ? 'server' : undefined,
+      aiProvider: resolveServerModeAiProvider(outcome.source),
     }
   }
 
@@ -397,11 +398,7 @@ export async function buildReprocessMetadata(
   // server
   return {
     asrProvider: (result.asrModel || result.asrEngine || 'server').replace(/^.*\//, ''),
-    aiProvider: result.aiSource === 'custom'
-      ? result.aiProvider || null
-      : result.aiSource === 'none'
-        ? null
-        : 'server',
+    aiProvider: resolveServerModeAiProvider(result.aiSource, result.aiProvider || undefined) || null,
     aiModel: result.aiModel || null,
     aiSource: result.aiSource,
     aiStatus: result.aiStatus,
