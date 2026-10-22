@@ -13,6 +13,7 @@ import {
   normalizeServerLlmDebug,
   outcomeToResultFields,
   resolveAiOutcome,
+  resolveServerModeAiProvider,
   type AiOutcome,
   type AiOutcomeEvidence,
 } from '../aiOutcome'
@@ -188,6 +189,18 @@ describe('outcomeToResultFields', () => {
       expect(keys).not.toContain('skipCause')
       expect(keys).not.toContain('basis')
     }
+  })
+})
+
+describe('resolveServerModeAiProvider', () => {
+  it.each([
+    { source: 'custom', customProvider: 'ollama', expected: 'ollama' },
+    { source: 'custom', customProvider: undefined, expected: undefined },
+    { source: 'none', customProvider: 'ollama', expected: undefined },
+    { source: 'server', customProvider: undefined, expected: 'server' },
+    { source: undefined, customProvider: undefined, expected: 'server' },
+  ] as const)('maps source $source with provider $customProvider to $expected', ({ source, customProvider, expected }) => {
+    expect(resolveServerModeAiProvider(source, customProvider)).toBe(expected)
   })
 })
 

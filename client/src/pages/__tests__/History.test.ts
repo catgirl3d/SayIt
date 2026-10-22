@@ -821,6 +821,28 @@ describe('history cloud ASR reprocessing', () => {
   })
 })
 
+describe('history server reprocessing metadata', () => {
+  it.each([
+    { aiSource: 'custom', aiProvider: 'ollama', expected: 'ollama' },
+    { aiSource: 'custom', aiProvider: '', expected: null },
+    { aiSource: 'none', aiProvider: undefined, expected: null },
+    { aiSource: 'server', aiProvider: undefined, expected: 'server' },
+    { aiSource: undefined, aiProvider: undefined, expected: 'server' },
+  ] as const)('attributes server aiSource $aiSource with provider $aiProvider to $expected', async ({ aiSource, aiProvider, expected }) => {
+    const meta = await buildReprocessMetadata('server', {
+      asrText: 'raw server transcript',
+      llmText: 'raw server transcript',
+      asrMs: 10,
+      llmMs: 0,
+      durationSec: 1,
+      aiSource,
+      aiProvider,
+    })
+
+    expect(meta.aiProvider).toBe(expected)
+  })
+})
+
 /** 1 second of 16 kHz mono 16-bit PCM. */
 const ONE_SECOND_RECORDING_BYTES = 32000
 

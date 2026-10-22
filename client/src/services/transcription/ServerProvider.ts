@@ -7,7 +7,7 @@ import { assessAiConfig } from '@/features/settings/aiProviderCatalog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
 import { resolveAiPolishRoute, type AiPolishRoute } from './aiPolicy'
-import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './aiOutcome'
+import { logAiOutcome, outcomeToResultFields, resolveAiOutcome, resolveServerModeAiProvider } from './aiOutcome'
 import {
   getRuntimeServerAiSource,
   loadServerAiSource,
@@ -113,7 +113,7 @@ export class ServerProvider implements TranscriptionProvider {
           asrModel: result.asrModel,
           contextApplied: result.contextApplied,
           ...outcomeToResultFields(outcome),
-          aiProvider: outcome.source === 'none' ? undefined : 'server',
+          aiProvider: resolveServerModeAiProvider(outcome.source),
         })
       },
       onDone: () => {

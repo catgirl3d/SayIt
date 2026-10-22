@@ -145,6 +145,19 @@ export function outcomeToResultFields(outcome: AiOutcome): {
 }
 
 /**
+ * The provider label a server-mode run is attributed to: the client-side provider named by the result
+ * for a custom AI, nothing when no AI stage ran, and the managed server otherwise (including a result
+ * that carries no source at all).
+ */
+export function resolveServerModeAiProvider(
+  source: AiExecutionSource | undefined,
+  customProvider?: string,
+): string | undefined {
+  if (source === 'custom') return customProvider
+  return source === 'none' ? undefined : 'server'
+}
+
+/**
  * Write the single structured `ai.outcome` record for a run. Call it from the component that owns
  * the decision, exactly once per run. `extra` carries only content-free scalars (durations,
  * provider and model names); never pass text, editor context or selection.
