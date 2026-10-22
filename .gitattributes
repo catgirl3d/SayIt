@@ -2,3 +2,13 @@
 # executes the file through a VM (the vitest/Vite SSR transform), so tests
 # that import these scripts fail on Windows checkouts (core.autocrlf=true).
 *.mjs text eol=lf
+
+# Rust sources and TOML manifests must keep LF on disk as well. On Windows
+# checkouts (core.autocrlf=true) they otherwise land as CRLF, while cargo,
+# tauri dev and rust-analyzer rewrite them with LF (observed:
+# client/src-tauri/Cargo.toml was the only LF TOML in a CRLF checkout). Each
+# rewrite changes the file size and mtime without changing the normalized
+# content, so the index stat cache goes stale and `git status` reports the
+# file as modified while `git diff` is empty.
+*.toml text eol=lf
+*.rs text eol=lf
