@@ -738,6 +738,7 @@ async fn parse_batch_response(
 }
 
 /// Completed audio uses the prerecorded endpoint; `base` allows local HTTP fixtures.
+#[cfg(test)]
 async fn run_batch(
     base: &str,
     pcm: &[u8],
