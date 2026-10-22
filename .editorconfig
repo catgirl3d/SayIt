@@ -1,0 +1,17 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Keep in sync with the eol=lf rules in .gitattributes. Other files follow the
+# checkout line endings (core.autocrlf=true gives CRLF on Windows), so
+# EditorConfig must not force LF on them and re-introduce the same stat-cache
+# churn.
+[*.{toml,rs,mjs}]
+end_of_line = lf
+
+# Trailing double spaces are a hard line break in Markdown.
+[*.md]
+trim_trailing_whitespace = false
