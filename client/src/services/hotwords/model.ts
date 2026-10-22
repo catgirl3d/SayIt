@@ -265,6 +265,19 @@ export function normalizeBuiltinSetActive(value: unknown): Record<string, boolea
   return result
 }
 
+/**
+ * Fills built-in sets that have no saved active flag. A set without a flag is off until the user
+ * switches it on. The dictionary manager and the read-only sessions share this rule, so opening the
+ * dictionary page never changes what the next dictation sends.
+ */
+export function withBuiltinSetActiveDefaults(savedActive: Record<string, boolean>): Record<string, boolean> {
+  const result: Record<string, boolean> = {}
+  for (const key of Object.keys(BUILTIN_SETS)) {
+    result[key] = savedActive[key] ?? false
+  }
+  return result
+}
+
 export function normalizeCustomThemes(value: unknown): CustomTheme[] {
   if (!Array.isArray(value)) return []
 
