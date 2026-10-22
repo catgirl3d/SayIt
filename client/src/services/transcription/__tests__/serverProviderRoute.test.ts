@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { TranscriptionCallbacks, FinalResult, StartOptions } from '../types'
+import type { TranscriptionCallbacks, FinalResult, StartOptions, StopOptions } from '../types'
 
 type ServerAiSource = 'managed' | 'custom'
 
@@ -235,12 +235,16 @@ describe('ServerProvider AI route snapshots', () => {
       .map(([, logSource, , detail]) => ({ logSource, detail }))
 
     // The wire layer hands the provider its own final shape, which carries the normalized llm_debug.
-    async function deliverManagedFinal(wireFinal: Record<string, unknown>, opts: Partial<StartOptions> = {}) {
+    async function deliverManagedFinal(
+      wireFinal: Record<string, unknown>,
+      opts: Partial<StartOptions> = {},
+      stopOptions: StopOptions = {},
+    ) {
       const onFinal = vi.fn()
       const provider = new ServerProvider()
       await provider.connect({ onFinal })
       expect(provider.start({ runId: 1, ...opts })).toBe(true)
-      expect(provider.stop()).toBe(true)
+      expect(provider.stop(stopOptions)).toBe(true)
       wireCallbacks?.onFinal?.({ ...serverResult, ...wireFinal } as FinalResult)
       expect(onFinal).toHaveBeenCalledTimes(1)
       return onFinal.mock.calls[0][0] as FinalResult
@@ -299,6 +303,40 @@ describe('ServerProvider AI route snapshots', () => {
       const final = await deliverManagedFinal(
         { llmMs: 0, llmDebug: { skipped: true, errored: false } },
         { disableAi: true },
+      )
+
+      expect(final).toMatchObject({ aiSource: 'none', aiStatus: 'skipped', aiProvider: undefined })
+      expect(outcomeRecords()[0].detail).toMatchObject({ skipCause: 'ai_disabled', attempted: false })
+    })
+
+    it('keeps the stop-time skip cause for a short recording on the managed server', async () => {
+      const final = await deliverManagedFinal(
+        { llmMs: 0, llmDebug: { skipped: true, errored: false } },
+        {},
+        { disableAi: true, disableAiCause: 'below_min_duration' },
+      )
+
+      expect(final).toMatchObject({ aiSource: 'none', aiStatus: 'skipped', aiProvider: undefined })
+      expect(outcomeRecords()).toHaveLength(1)
+      expect(outcomeRecords()[0].detail).toMatchObject({ skipCause: 'below_min_duration', attempted: false })
+    })
+
+    it('falls back to a plain ai_disabled cause when stop disables AI without a cause', async () => {
+      const final = await deliverManagedFinal(
+        { llmMs: 0, llmDebug: { skipped: true, errored: false } },
+        {},
+        { disableAi: true },
+      )
+
+      expect(final).toMatchObject({ aiSource: 'none', aiStatus: 'skipped', aiProvider: undefined })
+      expect(outcomeRecords()[0].detail).toMatchObject({ skipCause: 'ai_disabled', attempted: false })
+    })
+
+    it('keeps the start-time ai_disabled cause when stop later adds a short-speech cause', async () => {
+      const final = await deliverManagedFinal(
+        { llmMs: 0, llmDebug: { skipped: true, errored: false } },
+        { disableAi: true },
+        { disableAi: true, disableAiCause: 'below_min_duration' },
       )
 
       expect(final).toMatchObject({ aiSource: 'none', aiStatus: 'skipped', aiProvider: undefined })

@@ -2262,6 +2262,7 @@ export class RecorderOrchestrator {
     this.provider.stop({
       pttHoldMs,
       disableAi: skipAiForShortSpeech || undefined,
+      disableAiCause: skipAiForShortSpeech ? 'below_min_duration' : undefined,
       audioStats: this.audioStatsTotalFrames > 0 ? {
         avgRms: Math.round((this.audioStatsRmsSum / this.audioStatsTotalFrames) * 10000) / 10000,
         peakRms: Math.round(this.audioStatsPeakRms * 10000) / 10000,

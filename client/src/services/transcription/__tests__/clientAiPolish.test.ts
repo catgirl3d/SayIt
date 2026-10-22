@@ -543,6 +543,31 @@ describe('client AI polish ai.outcome record', () => {
     })
   })
 
+  it('records the stop-time skip cause for a disabled run, and ai_disabled when no cause is given', async () => {
+    const withCause = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 1,
+      startOptions: { runId: 20, disableAi: true, disableAiCause: 'below_min_duration' },
+      logSource: 'test',
+    })
+
+    expect(outcomeEvents()).toHaveLength(1)
+    expect(outcomeEvents()[0][3]).toMatchObject({ source: 'none', attempted: false, skipCause: 'below_min_duration' })
+    boundaries.addRuntimeEvent.mockClear()
+
+    const withoutCause = await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 1,
+      startOptions: { runId: 21, disableAi: true },
+      logSource: 'test',
+    })
+
+    expect(outcomeEvents()).toHaveLength(1)
+    expect(outcomeEvents()[0][3]).toMatchObject({ source: 'none', attempted: false, skipCause: 'ai_disabled' })
+    expect(withCause).toStrictEqual(withoutCause)
+    expect(boundaries.invoke).not.toHaveBeenCalled()
+  })
+
   it('records an incomplete profile as unavailable and never attempted', async () => {
     boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
       const settings: Record<string, string> = {
