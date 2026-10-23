@@ -835,6 +835,44 @@ describe('settings rows and dialogs', () => {
       expect(pageMocks.setSetting).not.toHaveBeenCalled()
     })
 
+    it('is hidden for an engine that cannot accept leading context', async () => {
+      pageMocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'doubao-account',
+        provider: 'doubao_v2',
+        model: 'Doubao-Seed-ASR-2.0',
+        apiKey: 'key',
+      })
+
+      const { loaded } = await renderRows()
+
+      expect(loaded).not.toContain('Experimental: Deepgram overlap')
+      expect(loaded).not.toContain('Deepgram only: each fragment also gets the last second')
+      expect(switchByLabel(LABEL)).toBeUndefined()
+    })
+
+    it('is hidden outside the Cloud API engine even with a Deepgram profile saved', async () => {
+      vi.mocked(getWorkMode).mockReturnValue('server')
+
+      const { loaded } = await renderRows()
+
+      expect(loaded).not.toContain('Experimental: Deepgram overlap')
+      expect(switchByLabel(LABEL)).toBeUndefined()
+    })
+
+    it('does not expand the diagnostics row for a saved value its hidden switch cannot show', async () => {
+      pageMocks.loadActiveAsrProfile.mockResolvedValue({
+        id: 'doubao-account',
+        provider: 'doubao_v2',
+        model: 'Doubao-Seed-ASR-2.0',
+        apiKey: 'key',
+      })
+
+      const { loaded } = await renderRows({ [SETTING]: true })
+
+      expect(diagnosticsToggle(loaded)).toContain('aria-expanded="false"')
+      expect(loaded).not.toContain('Experimental: Deepgram overlap')
+    })
+
     it('shows a saved "on" and opens the diagnostics row so the experiment stays visible', async () => {
       const { loaded } = await renderRows({ [SETTING]: true })
 

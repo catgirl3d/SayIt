@@ -161,6 +161,7 @@ export const CloudConfigured: Story = {
 
 export const PipelineDiagnostics: Story = {
   parameters: {
+    systemAudioMode: 'cloud_api',
     systemAudioTrace: true,
     tauri: {
       commands: commands(),
@@ -189,5 +190,28 @@ export const PipelineDiagnostics: Story = {
     await waitFor(() => expect(overlap).toBeChecked())
     await expect(overlap).toBeEnabled()
     await expect(canvas.getByText(/deepgram only: each fragment also gets the last second/i)).toBeVisible()
+  },
+}
+
+export const DiagnosticsOtherEngine: Story = {
+  parameters: {
+    systemAudioMode: 'cloud_api',
+    tauri: {
+      commands: commands(),
+      settings: {
+        ...settings,
+        'systemAudio.debugPipeline': true,
+        'cloudAsr.profiles': [{ ...asrProfile, id: 'storybook-doubao', provider: 'doubao_v2', model: 'Doubao-Seed-ASR-2.0' }],
+        'cloudAsr.activeProfileId': 'storybook-doubao',
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // The section is open because the trace switch is saved on; only the Deepgram experiment is absent.
+    await expect(await canvas.findByRole('switch', { name: /^pipeline debug$/i })).toBeChecked()
+    await expect(canvas.getByRole('switch', { name: /^recognition-only test mode$/i })).toBeVisible()
+    await expect(canvas.queryByRole('switch', { name: /experimental: deepgram overlap/i })).toBeNull()
+    await expect(canvas.queryByText(/deepgram only: each fragment also gets the last second/i)).toBeNull()
   },
 }
