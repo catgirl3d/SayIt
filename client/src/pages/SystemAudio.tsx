@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { ArrowRight, Captions, ChevronDown, Lock, Pause, Play, Square, RefreshCw, Stethoscope, type LucideIcon } from 'lucide-react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { ArrowRight, Captions, Lock, Pause, Play, Square, RefreshCw, Stethoscope } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
@@ -64,6 +64,7 @@ export function SystemAudioControls({ state, busy, onAction }: { state: SystemAu
 // One diagnostics switch with its own explanation. Each item owns a row because the three long labels
 // and their hints used to share one wrapped line, which read as a single dense block. The switch sits
 // at the row end, as on the General settings page, so the text column keeps a single left edge.
+// The rows live in the diagnostics dialog, which opens from a settings row like the other two dialogs.
 function DiagnosticsToggle({ id, checked, onChange, label, hint, disabled = false }: { id: string; checked: boolean; onChange: () => void; label: string; hint: string; disabled?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-6">
@@ -72,32 +73,6 @@ function DiagnosticsToggle({ id, checked, onChange, label, hint, disabled = fals
         <p className="text-xs leading-5 text-muted-foreground">{hint}</p>
       </div>
       <Switch labelledBy={id} checked={checked} onChange={onChange} disabled={disabled} className="mt-0.5 shrink-0" />
-    </div>
-  )
-}
-
-// The content stays mounted and is hidden rather than unmounted, so the controls inside keep their
-// state and a collapsed row never changes what the page has loaded.
-function CollapsibleRow({ id, icon: Icon, title, description, open, onToggle, children }: { id: string; icon: LucideIcon; title: string; description: string; open: boolean; onToggle: () => void; children: ReactNode }) {
-  return (
-    <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={onToggle}
-        className="flex w-full items-center gap-4 px-6 py-3.5 text-left transition-colors hover:bg-accent"
-      >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
-          <Icon className="h-4 w-4" aria-hidden />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium">{title}</span>
-          <span className="block truncate text-xs text-muted-foreground">{description}</span>
-        </span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-      </button>
-      <div id={id} hidden={!open} className="px-6 pb-4 pl-[4.5rem]">{children}</div>
     </div>
   )
 }
@@ -121,7 +96,9 @@ export default function SystemAudio() {
   const [liveRecognitionEnabled, setLiveRecognitionEnabled] = useState(false)
   const [liveRecognitionReady, setLiveRecognitionReady] = useState(false)
   const [liveRecognitionError, setLiveRecognitionError] = useState('')
-  const [activeAsrProvider, setActiveAsrProvider] = useState('')
+  // Null until the active profile has been resolved, so a summary never states a provider-dependent
+  // switch as off while the provider that decides whether it applies is still unknown.
+  const [activeAsrProvider, setActiveAsrProvider] = useState<string | null>(null)
   const [captionsOpen, setCaptionsOpen] = useState(false)
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const locale = useLocale()
@@ -133,7 +110,7 @@ export default function SystemAudio() {
   // Mirrors the runtime gate: live recognition is implemented only by CloudAPIProvider, and only
   // the Deepgram profile can open it; every other engine keeps batch recognition, so the page must
   // not offer the setting at all.
-  const liveRecognitionSupported = mode === 'cloud_api' && isLiveRecognitionProvider(activeAsrProvider)
+  const liveRecognitionSupported = mode === 'cloud_api' && isLiveRecognitionProvider(activeAsrProvider ?? '')
   // The overlap experiment is a Deepgram request shape: the session only attaches the previous
   // fragment's tail when the provider accepts leading context, which no other engine does. Offering
   // the switch elsewhere would advertise a setting that changes nothing.
@@ -149,6 +126,16 @@ export default function SystemAudio() {
       liveRecognitionSupported && liveRecognitionEnabled ? t('systemAudio.summaryLive') : '',
     ].filter(Boolean).join(' · ')
     : ''
+  // One-line state of the diagnostics row, so a test mode that was left on stays visible with the
+  // dialog closed. It names only what will actually run: the overlap experiment counts where it is
+  // offered. Empty until the saved values and the provider that gates the experiment have loaded.
+  const diagnosticsSummary = ready && activeAsrProvider !== null
+    ? [
+      pipelineDebugEnabled ? t('systemAudio.debug.toggle') : '',
+      asrOnlyTest ? t('systemAudio.summaryRecognitionTest') : '',
+      deepgramOverlapSupported && deepgramLeadingContext ? t('systemAudio.summaryDeepgramOverlap') : '',
+    ].filter(Boolean).join(' · ') || t('systemAudio.summaryOff')
+    : ''
   const deviceOptions: SelectOption[] = [
     { value: '', label: t('systemAudio.defaultOutput') },
     ...devices.map((device) => ({ value: device.id, label: device.name })),
@@ -159,20 +146,6 @@ export default function SystemAudio() {
 
   useEffect(() => {
     let disposed = false
-    // The saved switches that reveal the diagnostics row and the provider that decides whether the
-    // experiment is offered load independently. The reveal waits for both, so a saved experiment
-    // never expands a section that cannot show its switch.
-    let savedDebugPipeline = false
-    let savedAsrOnly = false
-    let savedOverlap = false
-    let settingsLoaded = false
-    let providerLoaded = false
-    let provider = ''
-    const revealSavedOptions = () => {
-      if (disposed || !settingsLoaded || !providerLoaded) return
-      const overlapApplies = savedOverlap && mode === 'cloud_api' && provider === 'deepgram'
-      if (savedDebugPipeline || savedAsrOnly || overlapApplies) setDiagnosticsOpen(true)
-    }
     void Promise.all([
       listSystemAudioDevices(),
       getSetting<string>('systemAudio.deviceId', ''),
@@ -202,11 +175,6 @@ export default function SystemAudio() {
       setPipelineDebugEnabled(debugPipeline)
       setAsrOnlyTest(asrOnly)
       setDeepgramLeadingContext(savedDeepgramLeadingContext)
-      savedDebugPipeline = debugPipeline
-      savedAsrOnly = asrOnly
-      savedOverlap = savedDeepgramLeadingContext
-      settingsLoaded = true
-      revealSavedOptions()
       const options = buildTranslationOptions(presets)
       setPresets(presets)
       setTargetLanguage(options.some((option) => option.value === language) ? language : defaultSubtitleTargetLanguage(options))
@@ -215,14 +183,10 @@ export default function SystemAudio() {
     // Resolved independently from the settings batch: a slow saved switch value must not delay
     // knowing whether this engine supports live recognition.
     void loadActiveAsrProfile().then((activeProfile) => {
-      provider = activeProfile?.provider ?? ''
-      providerLoaded = true
-      if (!disposed) setActiveAsrProvider(provider)
-      revealSavedOptions()
+      if (!disposed) setActiveAsrProvider(activeProfile?.provider ?? '')
     }).catch((error: unknown) => {
-      providerLoaded = true
       addRuntimeEvent('warn', 'system-audio', 'Failed to load the active ASR profile for live-recognition support', { error: String(error) })
-      revealSavedOptions()
+      if (!disposed) setActiveAsrProvider('')
     })
     // Navigation does not own the listening session; only its controls or app teardown stop it.
     return () => { disposed = true }
@@ -404,55 +368,15 @@ export default function SystemAudio() {
               onConfigure={() => setCaptionsOpen(true)}
             />
             <SubtitleSavingSettings active={active} pending={pending} onPendingChange={setPending} />
-            <CollapsibleRow
-              id="subtitle-diagnostics"
+            {/* Not marked locked: the pipeline trace switch stays editable during a session, so only some
+                of the dialog's controls are read-only and a lock would overstate it. */}
+            <SettingsRow
               icon={Stethoscope}
               title={t('systemAudio.diagnostics')}
-              description={t('systemAudio.diagnosticsDesc')}
-              open={diagnosticsOpen}
-              onToggle={() => setDiagnosticsOpen(!diagnosticsOpen)}
-            >
-              <div className="space-y-4">
-                <DiagnosticsToggle
-                  id="subtitle-diagnostics-debug-label"
-                  checked={pipelineDebugEnabled}
-                  onChange={() => {
-                    const enabled = !pipelineDebugEnabled
-                    setPipelineDebugEnabledState(enabled)
-                    setPipelineDebugEnabled(enabled)
-                    void setSetting('systemAudio.debugPipeline', enabled)
-                  }}
-                  label={t('systemAudio.debug.toggle')}
-                  hint={t('systemAudio.debug.toggleHint')}
-                />
-                <DiagnosticsToggle
-                  id="subtitle-diagnostics-asr-only-label"
-                  checked={asrOnlyTest}
-                  onChange={() => {
-                    const enabled = !asrOnlyTest
-                    setAsrOnlyTest(enabled)
-                    void setSetting('systemAudio.asrOnlyTest', enabled)
-                  }}
-                  label={t('systemAudio.asrOnlyTest')}
-                  hint={t('systemAudio.asrOnlyHint')}
-                  disabled={active || pending}
-                />
-                {deepgramOverlapSupported && (
-                  <DiagnosticsToggle
-                    id="subtitle-diagnostics-overlap-label"
-                    checked={deepgramLeadingContext}
-                    onChange={() => {
-                      const enabled = !deepgramLeadingContext
-                      setDeepgramLeadingContext(enabled)
-                      void setSetting('systemAudio.deepgramLeadingContext', enabled)
-                    }}
-                    label={t('systemAudio.deepgramLeadingContext')}
-                    hint={t('systemAudio.deepgramLeadingContextHint')}
-                    disabled={active || pending}
-                  />
-                )}
-              </div>
-            </CollapsibleRow>
+              summary={diagnosticsSummary}
+              configureLabel={t('systemAudio.configureDiagnostics')}
+              onConfigure={() => setDiagnosticsOpen(true)}
+            />
           </div>
         </CardContent>
       </Card>
@@ -522,6 +446,50 @@ export default function SystemAudio() {
             </div>
             {/* The page-level alert is behind the dimmed backdrop and hidden from assistive technology while a dialog is open. */}
             {liveRecognitionError && <p role="alert" className="text-sm leading-6 text-destructive">{liveRecognitionError}</p>}
+          </div>
+        </Modal>
+      )}
+      {diagnosticsOpen && (
+        <Modal title={t('systemAudio.diagnostics')} onClose={() => setDiagnosticsOpen(false)} showCloseButton panelClassName="w-[520px]">
+          <div className="mt-4 space-y-5">
+            <DiagnosticsToggle
+              id="subtitle-diagnostics-debug-label"
+              checked={pipelineDebugEnabled}
+              onChange={() => {
+                const enabled = !pipelineDebugEnabled
+                setPipelineDebugEnabledState(enabled)
+                setPipelineDebugEnabled(enabled)
+                void setSetting('systemAudio.debugPipeline', enabled)
+              }}
+              label={t('systemAudio.debug.toggle')}
+              hint={t('systemAudio.debug.toggleHint')}
+            />
+            <DiagnosticsToggle
+              id="subtitle-diagnostics-asr-only-label"
+              checked={asrOnlyTest}
+              onChange={() => {
+                const enabled = !asrOnlyTest
+                setAsrOnlyTest(enabled)
+                void setSetting('systemAudio.asrOnlyTest', enabled)
+              }}
+              label={t('systemAudio.asrOnlyTest')}
+              hint={t('systemAudio.asrOnlyHint')}
+              disabled={active || pending}
+            />
+            {deepgramOverlapSupported && (
+              <DiagnosticsToggle
+                id="subtitle-diagnostics-overlap-label"
+                checked={deepgramLeadingContext}
+                onChange={() => {
+                  const enabled = !deepgramLeadingContext
+                  setDeepgramLeadingContext(enabled)
+                  void setSetting('systemAudio.deepgramLeadingContext', enabled)
+                }}
+                label={t('systemAudio.deepgramLeadingContext')}
+                hint={t('systemAudio.deepgramLeadingContextHint')}
+                disabled={active || pending}
+              />
+            )}
           </div>
         </Modal>
       )}

@@ -127,6 +127,11 @@ beforeEach(() => {
 
 const CONFIGURE_CAPTIONS = 'Configure captions'
 const CONFIGURE_SAVING = 'Configure saving subtitles'
+const CONFIGURE_DIAGNOSTICS = 'Configure diagnostics'
+
+/** The markup of a settings row's button, found by the accessible name that names its action. */
+const settingsRow = (markup: string, configureLabel: string) => markup.match(new RegExp(`<button\\b[^>]*aria-label="${configureLabel}"[\\s\\S]*?</button>`))?.[0] ?? ''
+const diagnosticsRow = (markup: string) => settingsRow(markup, CONFIGURE_DIAGNOSTICS)
 
 /**
  * Opens a settings dialog the way a user does, through its row button. The open dialog is page
@@ -647,16 +652,19 @@ describe('settings rows and dialogs', () => {
     return { beforeLoad, loaded: page() }
   }
 
-  it('keeps both dialogs closed and the captions summary empty until the saved values have loaded', async () => {
+  it('keeps every dialog closed and the row summaries empty until the saved values have loaded', async () => {
     const { beforeLoad, loaded } = await renderRows()
 
     for (const markup of [beforeLoad, loaded]) {
       expect(markup).toContain('aria-label="Configure captions"')
       expect(markup).toContain('aria-label="Configure saving subtitles"')
+      expect(markup).toContain('aria-label="Configure diagnostics"')
       expect(markup).not.toContain('role="dialog"')
     }
     expect(beforeLoad).not.toContain('Up to ')
     expect(loaded).toContain('Up to 6s · translation only')
+    expect(diagnosticsRow(beforeLoad)).not.toContain('>Off<')
+    expect(diagnosticsRow(loaded)).toContain('>Off<')
   })
 
   it('marks the page title with the shared alpha badge', async () => {
@@ -712,6 +720,29 @@ describe('settings rows and dialogs', () => {
     expect(markup).toContain('role="dialog" aria-label="Saving subtitles"')
     expect(markup).toContain('Journal folder')
     expect(markup).not.toContain('Maximum caption length')
+  })
+
+  it('opens the diagnostics dialog from its row button instead of expanding the page', async () => {
+    await renderRows()
+
+    openSettingsDialog(CONFIGURE_DIAGNOSTICS)
+    const markup = page()
+    expect(markup).toContain('role="dialog" aria-label="Diagnostics"')
+    expect(markup).toContain('Pipeline debug')
+    expect(markup).toContain('Recognition-only test mode')
+    expect(markup).not.toContain('Maximum caption length')
+    expect(markup).not.toContain('Journal folder')
+  })
+
+  it('names the diagnostics that are on in the row summary without opening the dialog', async () => {
+    const { loaded } = await renderRows({
+      'systemAudio.debugPipeline': true,
+      'systemAudio.asrOnlyTest': true,
+      'systemAudio.deepgramLeadingContext': true,
+    })
+
+    expect(loaded).not.toContain('role="dialog"')
+    expect(diagnosticsRow(loaded)).toContain('>Pipeline debug · Recognition-only test · Deepgram overlap<')
   })
 
   it('does not take the saving settings into the page-level alert or its load', async () => {
@@ -798,11 +829,10 @@ describe('settings rows and dialogs', () => {
   })
 
   it('shows a lock instead of a chevron on the settings rows while a session runs', async () => {
-    const rowMarkup = (markup: string, configureLabel: string) => markup.match(new RegExp(`<button\\b[^>]*aria-label="${configureLabel}"[\\s\\S]*?</button>`))?.[0] ?? ''
     const { loaded } = await renderRows()
-    for (const label of ['Configure captions', 'Configure saving subtitles']) {
-      expect(rowMarkup(loaded, label)).toContain('lucide-chevron-right')
-      expect(rowMarkup(loaded, label)).not.toContain('lucide-lock')
+    for (const label of [CONFIGURE_CAPTIONS, CONFIGURE_SAVING]) {
+      expect(settingsRow(loaded, label)).toContain('lucide-chevron-right')
+      expect(settingsRow(loaded, label)).not.toContain('lucide-lock')
     }
 
     const current = systemAudioSession.getSnapshot()
@@ -810,10 +840,13 @@ describe('settings rows and dialogs', () => {
     try {
       pageMocks.stateCursor = 0
       const markup = page()
-      for (const label of ['Configure captions', 'Configure saving subtitles']) {
-        expect(rowMarkup(markup, label)).toContain('lucide-lock')
-        expect(rowMarkup(markup, label)).not.toContain('lucide-chevron-right')
+      for (const label of [CONFIGURE_CAPTIONS, CONFIGURE_SAVING]) {
+        expect(settingsRow(markup, label)).toContain('lucide-lock')
+        expect(settingsRow(markup, label)).not.toContain('lucide-chevron-right')
       }
+      // The pipeline trace switch stays editable during a session, so this row is not locked as a whole.
+      expect(diagnosticsRow(markup)).toContain('lucide-chevron-right')
+      expect(diagnosticsRow(markup)).not.toContain('lucide-lock')
     } finally {
       getSnapshot.mockRestore()
     }
@@ -822,16 +855,22 @@ describe('settings rows and dialogs', () => {
   describe('experimental Deepgram overlap switch', () => {
     const LABEL = 'subtitle-diagnostics-overlap-label'
     const SETTING = 'systemAudio.deepgramLeadingContext'
-    const diagnosticsToggle = (markup: string) => markup.match(/<button\b[^>]*aria-controls="subtitle-diagnostics"[^>]*>/)?.[0] ?? ''
     const switchByLabel = (labelId: string) => pageMocks.switchProps.find((props) => props.labelledBy === labelId)
+    // The switches live in the diagnostics dialog, so every lookup first opens it through its row.
+    async function renderWithDiagnosticsOpen(settings: Record<string, unknown> = {}) {
+      const rendered = await renderRows(settings)
+      openSettingsDialog(CONFIGURE_DIAGNOSTICS)
+      pageMocks.switchProps.length = 0
+      return { ...rendered, opened: page() }
+    }
 
-    it('is off by default, enabled for editing, and keeps the diagnostics row closed', async () => {
+    it('is off by default, enabled for editing, and absent while the diagnostics dialog is closed', async () => {
       expect(getDefault(SETTING)).toBe(false)
-      const { loaded } = await renderRows()
+      const { loaded, opened } = await renderWithDiagnosticsOpen()
 
+      expect(loaded).not.toContain('Deepgram only: each fragment also gets the last second of the previous one')
+      expect(opened).toContain('Deepgram only: each fragment also gets the last second of the previous one')
       expect(switchByLabel(LABEL)).toMatchObject({ checked: false, disabled: false })
-      expect(loaded).toContain('Deepgram only: each fragment also gets the last second of the previous one')
-      expect(diagnosticsToggle(loaded)).toContain('aria-expanded="false"')
       expect(pageMocks.setSetting).not.toHaveBeenCalled()
     })
 
@@ -843,23 +882,26 @@ describe('settings rows and dialogs', () => {
         apiKey: 'key',
       })
 
-      const { loaded } = await renderRows()
+      const { opened } = await renderWithDiagnosticsOpen()
 
-      expect(loaded).not.toContain('Experimental: Deepgram overlap')
-      expect(loaded).not.toContain('Deepgram only: each fragment also gets the last second')
+      // The dialog is open (its other switch renders), so the missing switch is the engine gate and not a closed dialog.
+      expect(switchByLabel('subtitle-diagnostics-debug-label')).toBeDefined()
+      expect(opened).not.toContain('Experimental: Deepgram overlap')
+      expect(opened).not.toContain('Deepgram only: each fragment also gets the last second')
       expect(switchByLabel(LABEL)).toBeUndefined()
     })
 
     it('is hidden outside the Cloud API engine even with a Deepgram profile saved', async () => {
       vi.mocked(getWorkMode).mockReturnValue('server')
 
-      const { loaded } = await renderRows()
+      const { opened } = await renderWithDiagnosticsOpen()
 
-      expect(loaded).not.toContain('Experimental: Deepgram overlap')
+      expect(switchByLabel('subtitle-diagnostics-debug-label')).toBeDefined()
+      expect(opened).not.toContain('Experimental: Deepgram overlap')
       expect(switchByLabel(LABEL)).toBeUndefined()
     })
 
-    it('does not expand the diagnostics row for a saved value its hidden switch cannot show', async () => {
+    it('does not name a saved value in the summary when its switch cannot be shown', async () => {
       pageMocks.loadActiveAsrProfile.mockResolvedValue({
         id: 'doubao-account',
         provider: 'doubao_v2',
@@ -869,20 +911,22 @@ describe('settings rows and dialogs', () => {
 
       const { loaded } = await renderRows({ [SETTING]: true })
 
-      expect(diagnosticsToggle(loaded)).toContain('aria-expanded="false"')
-      expect(loaded).not.toContain('Experimental: Deepgram overlap')
+      expect(diagnosticsRow(loaded)).toContain('>Off<')
+      expect(loaded).not.toContain('Deepgram overlap')
     })
 
-    it('shows a saved "on" and opens the diagnostics row so the experiment stays visible', async () => {
-      const { loaded } = await renderRows({ [SETTING]: true })
+    it('shows a saved "on" in the summary and in the dialog, which stays closed until opened', async () => {
+      const { loaded, opened } = await renderWithDiagnosticsOpen({ [SETTING]: true })
 
       expect(pageMocks.getSetting).toHaveBeenCalledWith(SETTING, false)
+      expect(loaded).not.toContain('role="dialog"')
+      expect(diagnosticsRow(loaded)).toContain('>Deepgram overlap<')
+      expect(opened).toContain('role="dialog" aria-label="Diagnostics"')
       expect(switchByLabel(LABEL)).toMatchObject({ checked: true, disabled: false })
-      expect(diagnosticsToggle(loaded)).toContain('aria-expanded="true"')
     })
 
     it('saves the switch value when it is toggled', async () => {
-      await renderRows()
+      await renderWithDiagnosticsOpen()
 
       switchByLabel(LABEL)?.onChange()
       expect(pageMocks.setSetting).toHaveBeenCalledExactlyOnceWith(SETTING, true)
@@ -901,7 +945,7 @@ describe('settings rows and dialogs', () => {
     })
 
     it('is locked while a subtitle session is active, because the session reads it at start', async () => {
-      await renderRows({ [SETTING]: true })
+      await renderWithDiagnosticsOpen({ [SETTING]: true })
       const current = systemAudioSession.getSnapshot()
       const getSnapshot = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...current, state: 'listening' })
 

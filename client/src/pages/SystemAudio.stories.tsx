@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, waitFor, within } from 'storybook/test'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
 import SystemAudio from './SystemAudio'
 import { switchProvider, getWorkMode } from '@/services/transcription'
 import {
@@ -74,6 +74,16 @@ function commands() {
     qwen_audio_stream_close: () => undefined,
     deepgram_stream_close: () => undefined,
   }
+}
+
+/** The settings dialogs are Modals portaled into document.body, outside the story canvas. */
+function bodyOf(canvasElement: HTMLElement) {
+  return within(canvasElement.ownerDocument.body)
+}
+
+async function openDiagnosticsDialog(canvasElement: HTMLElement) {
+  await userEvent.click(await within(canvasElement).findByRole('button', { name: /^configure diagnostics$/i }))
+  return bodyOf(canvasElement).findByRole('dialog', { name: /^diagnostics$/i })
 }
 
 const meta = {
@@ -174,22 +184,51 @@ export const PipelineDiagnostics: Story = {
     },
   },
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement)
-    // Every diagnostics switch keeps its own explanation next to it; the story protects all three
-    // pairs, not only the experiment whose saved value opened the section.
-    const debug = await canvas.findByRole('switch', { name: /^pipeline debug$/i })
+    // The saved switches show in the row summary with the dialog closed.
+    const row = await within(canvasElement).findByRole('button', { name: /^configure diagnostics$/i })
+    await waitFor(() => expect(row).toHaveTextContent('Pipeline debug · Recognition-only test · Deepgram overlap'))
+    await expect(bodyOf(canvasElement).queryByRole('dialog')).toBeNull()
+
+    // Every diagnostics switch keeps its own explanation next to it; the story protects all three pairs.
+    const dialog = within(await openDiagnosticsDialog(canvasElement))
+    const debug = dialog.getByRole('switch', { name: /^pipeline debug$/i })
     await expect(debug).toBeChecked()
     await expect(debug).toBeEnabled()
-    await expect(canvas.getByText(/records each processing run/i)).toBeVisible()
+    await expect(dialog.getByText(/records each processing run/i)).toBeVisible()
 
-    const asrOnly = await canvas.findByRole('switch', { name: /^recognition-only test mode$/i })
+    const asrOnly = dialog.getByRole('switch', { name: /^recognition-only test mode$/i })
     await expect(asrOnly).toBeChecked()
-    await expect(canvas.getByText(/subtitles show raw recognition without translation/i)).toBeVisible()
+    await expect(dialog.getByText(/subtitles show raw recognition without translation/i)).toBeVisible()
 
-    const overlap = await canvas.findByRole('switch', { name: /^experimental: deepgram overlap$/i })
+    const overlap = dialog.getByRole('switch', { name: /^experimental: deepgram overlap$/i })
     await waitFor(() => expect(overlap).toBeChecked())
     await expect(overlap).toBeEnabled()
-    await expect(canvas.getByText(/deepgram only: each fragment also gets the last second/i)).toBeVisible()
+    await expect(dialog.getByText(/deepgram only: each fragment also gets the last second/i)).toBeVisible()
+  },
+}
+
+export const DiagnosticsDialog: Story = {
+  parameters: {
+    systemAudioMode: 'cloud_api',
+    tauri: {
+      commands: commands(),
+      settings,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const row = await within(canvasElement).findByRole('button', { name: /^configure diagnostics$/i })
+    await waitFor(() => expect(row).toHaveTextContent(/Off$/))
+
+    const dialogElement = await openDiagnosticsDialog(canvasElement)
+    const dialog = within(dialogElement)
+    const overlap = await dialog.findByRole('switch', { name: /^experimental: deepgram overlap$/i })
+    await expect(overlap).not.toBeChecked()
+    await userEvent.click(overlap)
+    await waitFor(() => expect(overlap).toBeChecked())
+
+    await userEvent.click(dialog.getByRole('button', { name: /^close$/i }))
+    await waitFor(() => expect(bodyOf(canvasElement).queryByRole('dialog')).toBeNull())
+    await expect(row).toHaveTextContent('Deepgram overlap')
   },
 }
 
@@ -207,11 +246,11 @@ export const DiagnosticsOtherEngine: Story = {
     },
   },
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement)
-    // The section is open because the trace switch is saved on; only the Deepgram experiment is absent.
-    await expect(await canvas.findByRole('switch', { name: /^pipeline debug$/i })).toBeChecked()
-    await expect(canvas.getByRole('switch', { name: /^recognition-only test mode$/i })).toBeVisible()
-    await expect(canvas.queryByRole('switch', { name: /experimental: deepgram overlap/i })).toBeNull()
-    await expect(canvas.queryByText(/deepgram only: each fragment also gets the last second/i)).toBeNull()
+    const dialog = within(await openDiagnosticsDialog(canvasElement))
+    // The trace switch is saved on; only the Deepgram experiment is absent from the dialog.
+    await expect(await dialog.findByRole('switch', { name: /^pipeline debug$/i })).toBeChecked()
+    await expect(dialog.getByRole('switch', { name: /^recognition-only test mode$/i })).toBeVisible()
+    await expect(dialog.queryByRole('switch', { name: /experimental: deepgram overlap/i })).toBeNull()
+    await expect(dialog.queryByText(/deepgram only: each fragment also gets the last second/i)).toBeNull()
   },
 }
