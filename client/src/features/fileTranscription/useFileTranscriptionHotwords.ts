@@ -15,7 +15,8 @@ import {
 } from './hotwordPlan'
 
 // Per-job hotword state for the Files page: the mode and category selection, the shared
-// catalog and capability matrix loads with their retries, and the derived start plan.
+// catalog and capability matrix loads with their retries, and the derived start plan. A job
+// starts without hotwords; the dictionary is used only after the user turns it on for the file.
 export function useFileTranscriptionHotwords({
   engine,
   cloudProfile: selectedCloudProfile,
@@ -23,7 +24,7 @@ export function useFileTranscriptionHotwords({
   engine: FileTranscriptionEngine
   cloudProfile: FileTranscriptionCloudProfile | null
 }) {
-  const [hotwordMode, setHotwordMode] = useState<HotwordMode>('active')
+  const [hotwordMode, setHotwordMode] = useState<HotwordMode>('none')
   const [hotwordSelection, setHotwordSelection] = useState<HotwordCategorySelection>({
     builtinKeys: [],
     themeIds: [],

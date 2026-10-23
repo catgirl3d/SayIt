@@ -59,10 +59,11 @@ function CategoryRow({ label, wordCount, checked, disabled, onToggle }: Category
 }
 
 /**
- * Per-job hotwords source for the Files page. The default is the active dictionary used by
- * dictation; the other modes replace it for this run without changing the global one. The page
- * renders this section only when the engine and provider use hotwords; every remaining
- * condition that would keep them from being sent is stated here.
+ * Per-job hotwords source for the Files page. Each file starts without hotwords; turning the
+ * dictionary on either uses the active dictionary from dictation or replaces it for this run
+ * without changing the global one. The page renders this section only when the engine and
+ * provider use hotwords; every remaining condition that would keep them from being sent is
+ * stated here.
  */
 export default function HotwordSection({
   mode,
@@ -132,7 +133,9 @@ export default function HotwordSection({
         ]}
       />
 
-      {catalogError ? (
+      {mode === 'none' ? (
+        <p className="text-xs text-muted-foreground">{summary}</p>
+      ) : catalogError ? (
         <div className="space-y-1.5">
           <p role="alert" className="text-xs text-destructive">
             {t('files.hotwordsLoadFailed')}: {catalogError}

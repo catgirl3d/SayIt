@@ -697,6 +697,8 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
+    fireEvent.click(screen.getByRole('radio', { name: 'Active' }))
+
     const startButton = screen.getByRole('button', { name: 'Start transcription' })
     await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(startButton)
@@ -837,6 +839,8 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
+    fireEvent.click(await screen.findByRole('radio', { name: 'Active' }))
+
     await waitFor(() => expect(screen.getByText('Could not read hotwords: hotwords offline')).toBeTruthy())
     expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
 
@@ -854,7 +858,7 @@ describe('file transcription page', () => {
     }))
   })
 
-  it('blocks a cloud start when provider capabilities fail and recovers after retry', async () => {
+  it('starts a cloud job without hotwords when provider capabilities are unreadable', async () => {
     let capabilityAttempts = 0
     native.settings.set('builtinSetActive', { ai: true })
     cloudProfiles.loadAsrProfiles.mockResolvedValue({
@@ -866,8 +870,7 @@ describe('file transcription page', () => {
       if (command === 'list_downloaded_models') return []
       if (command === 'asr_hotword_capability_matrix') {
         capabilityAttempts += 1
-        if (capabilityAttempts === 1) throw new Error('capabilities offline')
-        return { deepgram: { delivery: 'vocabulary', clientCap: null } }
+        throw new Error('capabilities offline')
       }
       if (command === 'start_file_transcription') {
         return fileSnapshot({ phase: 'completed', error: null, engine: 'cloud', cloudLabel: 'Deepgram' })
@@ -888,24 +891,21 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
-    await waitFor(() => expect(screen.getAllByText('Could not read provider capabilities')).toHaveLength(2))
-    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect(capabilityAttempts).toBe(1))
+    expect(screen.queryByText('Could not read provider capabilities')).toBeNull()
+    expect(screen.queryByText('Hotwords')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(capabilityAttempts).toBe(2))
-    await waitFor(() => expect(
-      (screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled,
-    ).toBe(false))
-    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
-    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({
-      hotwords: BUILTIN_SETS.ai.words,
-    })))
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(startButton)
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: [] })))
     await waitFor(() => expect(native.invoke).toHaveBeenCalledWith('start_file_transcription', {
-      request: expect.objectContaining({ hotwords: BUILTIN_SETS.ai.words }),
+      request: expect.objectContaining({ hotwords: [] }),
     }))
   })
 
-  it('keeps a cloud start blocked while provider capabilities are loading', async () => {
+  it('starts a cloud job without hotwords while provider capabilities are loading', async () => {
     let resolveCapabilities: (matrix: Record<string, { delivery: 'vocabulary'; clientCap: null }>) => void = () => undefined
     const pendingCapabilities = new Promise<Record<string, { delivery: 'vocabulary'; clientCap: null }>>((resolve) => {
       resolveCapabilities = resolve
@@ -937,21 +937,19 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
-    expect((screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled).toBe(true)
+    const startButton = screen.getByRole('button', { name: 'Start transcription' })
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))
     expect(screen.queryByText('Could not read provider capabilities')).toBeNull()
+    fireEvent.click(startButton)
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: [] })))
 
     await act(async () => {
       resolveCapabilities({ deepgram: { delivery: 'vocabulary', clientCap: null } })
       await pendingCapabilities
     })
-    await waitFor(() => expect(
-      (screen.getByRole('button', { name: 'Start transcription' }) as HTMLButtonElement).disabled,
-    ).toBe(false))
-    fireEvent.click(screen.getByRole('button', { name: 'Start transcription' }))
-    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ hotwords: BUILTIN_SETS.ai.words })))
   })
 
-  it('starts with no hotwords after selecting None and sends an empty payload', async () => {
+  it('starts with no hotwords by default and sends an empty payload', async () => {
     native.settings.set('builtinSetActive', { ai: true })
     cloudProfiles.loadAsrProfiles.mockResolvedValue({
       profiles: [cloudProfile({ deepgramKeytermsEnabled: true })],
@@ -978,8 +976,10 @@ describe('file transcription page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose output folder' }))
     await waitFor(() => expect(screen.getByText('C:/output')).toBeTruthy())
 
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'None' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('radio', { name: 'None' }))
+    const noneOption = await screen.findByRole('radio', { name: 'None' })
+    expect(noneOption.getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: 'Active' }).getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText('Hotwords are not used')).toBeTruthy()
 
     const startButton = screen.getByRole('button', { name: 'Start transcription' })
     await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false))

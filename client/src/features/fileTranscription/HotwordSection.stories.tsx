@@ -43,7 +43,7 @@ interface HarnessProps {
 }
 
 function Harness({
-  initialMode = 'active',
+  initialMode = 'none',
   initialSelection = { builtinKeys: [], themeIds: [] },
   catalog: catalogValue = catalog,
   catalogError = '',
@@ -106,6 +106,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const ActiveHotwords: Story = {
+  args: { initialMode: 'active' },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
 
@@ -146,8 +147,18 @@ export const NoHotwords: Story = {
   },
 }
 
+export const NoHotwordsHidesCatalogFailure: Story = {
+  args: { initialMode: 'none', catalog: null, catalogError: 'settings store unavailable' },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    await expect(canvas.getByText('Hotwords are not used')).toBeVisible()
+    await expect(canvas.queryByText(/Could not read hotwords/)).toBeNull()
+  },
+}
+
 export const LoadingCatalog: Story = {
-  args: { catalog: null, catalogError: '' },
+  args: { initialMode: 'active', catalog: null, catalogError: '' },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
 
@@ -156,7 +167,7 @@ export const LoadingCatalog: Story = {
 }
 
 export const DeepgramGateOff: Story = {
-  args: { provider: 'deepgram', deepgramKeytermsEnabled: false },
+  args: { initialMode: 'active', provider: 'deepgram', deepgramKeytermsEnabled: false },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
 
@@ -166,7 +177,7 @@ export const DeepgramGateOff: Story = {
 }
 
 export const DeepgramTokenBudget: Story = {
-  args: { provider: 'deepgram', deepgramKeytermsEnabled: true, catalog: overBudgetCatalog },
+  args: { initialMode: 'active', provider: 'deepgram', deepgramKeytermsEnabled: true, catalog: overBudgetCatalog },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
 
@@ -175,7 +186,7 @@ export const DeepgramTokenBudget: Story = {
 }
 
 export const WordCapReached: Story = {
-  args: { provider: 'gemini_transcribe', providerClientCap: 100, catalog: wordCapCatalog },
+  args: { initialMode: 'active', provider: 'gemini_transcribe', providerClientCap: 100, catalog: wordCapCatalog },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
 
@@ -184,7 +195,7 @@ export const WordCapReached: Story = {
 }
 
 export const HotwordsLoadError: Story = {
-  args: { catalog: null, catalogError: 'settings store unavailable' },
+  args: { initialMode: 'active', catalog: null, catalogError: 'settings store unavailable' },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
 

@@ -229,6 +229,10 @@ export const CloudHotwordsGate: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
 
+    await expect(await canvas.findByText('Hotwords are not used')).toBeInTheDocument()
+    await expect(canvas.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
+
+    await userEvent.click(canvas.getByRole('radio', { name: 'Active' }))
     await waitFor(() => expect(
       canvas.getByText(/is turned off in the Deepgram profile/),
     ).toBeTruthy())
