@@ -174,7 +174,18 @@ export const PipelineDiagnostics: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    const overlap = await canvas.findByRole('checkbox', { name: /experimental: deepgram overlap/i })
+    // Every diagnostics switch keeps its own explanation next to it; the story protects all three
+    // pairs, not only the experiment whose saved value opened the section.
+    const debug = await canvas.findByRole('switch', { name: /^pipeline debug$/i })
+    await expect(debug).toBeChecked()
+    await expect(debug).toBeEnabled()
+    await expect(canvas.getByText(/records each processing run/i)).toBeVisible()
+
+    const asrOnly = await canvas.findByRole('switch', { name: /^recognition-only test mode$/i })
+    await expect(asrOnly).toBeChecked()
+    await expect(canvas.getByText(/subtitles show raw recognition without translation/i)).toBeVisible()
+
+    const overlap = await canvas.findByRole('switch', { name: /^experimental: deepgram overlap$/i })
     await waitFor(() => expect(overlap).toBeChecked())
     await expect(overlap).toBeEnabled()
     await expect(canvas.getByText(/deepgram only: each fragment also gets the last second/i)).toBeVisible()

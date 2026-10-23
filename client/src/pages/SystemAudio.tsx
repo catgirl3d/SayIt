@@ -61,6 +61,21 @@ export function SystemAudioControls({ state, busy, onAction }: { state: SystemAu
   )
 }
 
+// One diagnostics switch with its own explanation. Each item owns a row because the three long labels
+// and their hints used to share one wrapped line, which read as a single dense block. The switch sits
+// at the row end, as on the General settings page, so the text column keeps a single left edge.
+function DiagnosticsToggle({ id, checked, onChange, label, hint, disabled = false }: { id: string; checked: boolean; onChange: () => void; label: string; hint: string; disabled?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-6">
+      <div className="min-w-0 space-y-0.5">
+        <p id={id} className="text-sm font-medium">{label}</p>
+        <p className="text-xs leading-5 text-muted-foreground">{hint}</p>
+      </div>
+      <Switch labelledBy={id} checked={checked} onChange={onChange} disabled={disabled} className="mt-0.5 shrink-0" />
+    </div>
+  )
+}
+
 // The content stays mounted and is hidden rather than unmounted, so the controls inside keep their
 // state and a collapsed row never changes what the page has loaded.
 function CollapsibleRow({ id, icon: Icon, title, description, open, onToggle, children }: { id: string; icon: LucideIcon; title: string; description: string; open: boolean; onToggle: () => void; children: ReactNode }) {
@@ -372,53 +387,43 @@ export default function SystemAudio() {
               open={diagnosticsOpen}
               onToggle={() => setDiagnosticsOpen(!diagnosticsOpen)}
             >
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={pipelineDebugEnabled}
-                      onChange={(event) => {
-                        const enabled = event.target.checked
-                        setPipelineDebugEnabledState(enabled)
-                        setPipelineDebugEnabled(enabled)
-                        void setSetting('systemAudio.debugPipeline', enabled)
-                      }}
-                      className="rounded"
-                    />
-                    {t('systemAudio.debug.toggle')}
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={asrOnlyTest}
-                      disabled={active || pending}
-                      onChange={(event) => {
-                        const enabled = event.target.checked
-                        setAsrOnlyTest(enabled)
-                        void setSetting('systemAudio.asrOnlyTest', enabled)
-                      }}
-                      className="rounded"
-                    />
-                    {t('systemAudio.asrOnlyTest')}
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={deepgramLeadingContext}
-                      disabled={active || pending}
-                      onChange={(event) => {
-                        const enabled = event.target.checked
-                        setDeepgramLeadingContext(enabled)
-                        void setSetting('systemAudio.deepgramLeadingContext', enabled)
-                      }}
-                      className="rounded"
-                    />
-                    {t('systemAudio.deepgramLeadingContext')}
-                  </label>
-                </div>
-                <p className="text-xs text-muted-foreground">{t('systemAudio.asrOnlyHint')}</p>
-                <p className="text-xs text-muted-foreground">{t('systemAudio.deepgramLeadingContextHint')}</p>
+              <div className="space-y-4">
+                <DiagnosticsToggle
+                  id="subtitle-diagnostics-debug-label"
+                  checked={pipelineDebugEnabled}
+                  onChange={() => {
+                    const enabled = !pipelineDebugEnabled
+                    setPipelineDebugEnabledState(enabled)
+                    setPipelineDebugEnabled(enabled)
+                    void setSetting('systemAudio.debugPipeline', enabled)
+                  }}
+                  label={t('systemAudio.debug.toggle')}
+                  hint={t('systemAudio.debug.toggleHint')}
+                />
+                <DiagnosticsToggle
+                  id="subtitle-diagnostics-asr-only-label"
+                  checked={asrOnlyTest}
+                  onChange={() => {
+                    const enabled = !asrOnlyTest
+                    setAsrOnlyTest(enabled)
+                    void setSetting('systemAudio.asrOnlyTest', enabled)
+                  }}
+                  label={t('systemAudio.asrOnlyTest')}
+                  hint={t('systemAudio.asrOnlyHint')}
+                  disabled={active || pending}
+                />
+                <DiagnosticsToggle
+                  id="subtitle-diagnostics-overlap-label"
+                  checked={deepgramLeadingContext}
+                  onChange={() => {
+                    const enabled = !deepgramLeadingContext
+                    setDeepgramLeadingContext(enabled)
+                    void setSetting('systemAudio.deepgramLeadingContext', enabled)
+                  }}
+                  label={t('systemAudio.deepgramLeadingContext')}
+                  hint={t('systemAudio.deepgramLeadingContextHint')}
+                  disabled={active || pending}
+                />
               </div>
             </CollapsibleRow>
           </div>

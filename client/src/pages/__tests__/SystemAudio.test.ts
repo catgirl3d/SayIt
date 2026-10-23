@@ -10,9 +10,8 @@ import type { SelectOption } from '@/components/ui/select'
 import type { PromptPreset } from '@/services/store'
 
 const pageMocks = vi.hoisted(() => ({
-  switchProps: [] as Array<{ checked: boolean; disabled?: boolean; label?: string; onChange: () => void }>,
+  switchProps: [] as Array<{ checked: boolean; disabled?: boolean; label?: string; labelledBy?: string; onChange: () => void }>,
   buttonProps: [] as Array<{ children?: unknown; ariaLabel?: string; disabled?: boolean; onClick?: (event?: unknown) => void }>,
-  checkboxProps: new Map<string, { checked: boolean; disabled?: boolean; onChange: (event: { target: { checked: boolean } }) => void }>(),
   effects: [] as Array<() => void | (() => void)>,
   stateValues: [] as unknown[],
   stateCursor: 0,
@@ -30,22 +29,6 @@ vi.mock('@/services/transcription', async (importOriginal) => {
 vi.mock('@/features/settings/asrProfileStore', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/settings/asrProfileStore')>()
   return { ...actual, loadActiveAsrProfile: pageMocks.loadActiveAsrProfile }
-})
-
-// The diagnostics checkboxes are plain inputs wrapped in a label, so no component spy can reach them. Every JSX
-// element passes through the runtime, which records the props of each checkbox under its label text.
-vi.mock('react/jsx-dev-runtime', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react/jsx-dev-runtime')>()
-  return {
-    ...actual,
-    jsxDEV: ((type: unknown, props: { children?: unknown }, ...rest: unknown[]) => {
-      const [input, text] = Array.isArray(props.children) ? props.children as Array<{ props?: { type?: string } } | string> : []
-      if (type === 'label' && typeof text === 'string' && typeof input === 'object' && input.props?.type === 'checkbox') {
-        pageMocks.checkboxProps.set(text, input.props as never)
-      }
-      return (actual.jsxDEV as (...args: unknown[]) => unknown)(type, props, ...rest)
-    }) as typeof actual.jsxDEV,
-  }
 })
 
 vi.mock('react', async (importOriginal) => {
@@ -643,7 +626,6 @@ describe('settings rows and dialogs', () => {
   const page = () => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
 
   async function renderRows(settings: Record<string, unknown> = {}, presets: PromptPreset[] = []) {
-    pageMocks.checkboxProps.clear()
     pageMocks.effects.length = 0
     pageMocks.switchProps.length = 0
     pageMocks.buttonProps.length = 0
@@ -659,6 +641,9 @@ describe('settings rows and dialogs', () => {
     pageMocks.effects[0]?.()
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     pageMocks.stateCursor = 0
+    // Keep the spy on the loaded render: the first pass still shows the pre-load defaults, and a
+    // switch lookup must not match its stale props.
+    pageMocks.switchProps.length = 0
     return { beforeLoad, loaded: page() }
   }
 
@@ -834,16 +819,17 @@ describe('settings rows and dialogs', () => {
     }
   })
 
-  describe('experimental Deepgram overlap checkbox', () => {
-    const LABEL = 'Experimental: Deepgram overlap'
+  describe('experimental Deepgram overlap switch', () => {
+    const LABEL = 'subtitle-diagnostics-overlap-label'
     const SETTING = 'systemAudio.deepgramLeadingContext'
     const diagnosticsToggle = (markup: string) => markup.match(/<button\b[^>]*aria-controls="subtitle-diagnostics"[^>]*>/)?.[0] ?? ''
+    const switchByLabel = (labelId: string) => pageMocks.switchProps.find((props) => props.labelledBy === labelId)
 
     it('is off by default, enabled for editing, and keeps the diagnostics row closed', async () => {
       expect(getDefault(SETTING)).toBe(false)
       const { loaded } = await renderRows()
 
-      expect(pageMocks.checkboxProps.get(LABEL)).toMatchObject({ checked: false, disabled: false })
+      expect(switchByLabel(LABEL)).toMatchObject({ checked: false, disabled: false })
       expect(loaded).toContain('Deepgram only: each fragment also gets the last second of the previous one')
       expect(diagnosticsToggle(loaded)).toContain('aria-expanded="false"')
       expect(pageMocks.setSetting).not.toHaveBeenCalled()
@@ -853,25 +839,27 @@ describe('settings rows and dialogs', () => {
       const { loaded } = await renderRows({ [SETTING]: true })
 
       expect(pageMocks.getSetting).toHaveBeenCalledWith(SETTING, false)
-      expect(pageMocks.checkboxProps.get(LABEL)).toMatchObject({ checked: true, disabled: false })
+      expect(switchByLabel(LABEL)).toMatchObject({ checked: true, disabled: false })
       expect(diagnosticsToggle(loaded)).toContain('aria-expanded="true"')
     })
 
-    it('saves the checkbox value when it is toggled', async () => {
+    it('saves the switch value when it is toggled', async () => {
       await renderRows()
 
-      pageMocks.checkboxProps.get(LABEL)?.onChange({ target: { checked: true } })
+      switchByLabel(LABEL)?.onChange()
       expect(pageMocks.setSetting).toHaveBeenCalledExactlyOnceWith(SETTING, true)
       pageMocks.stateCursor = 0
+      pageMocks.switchProps.length = 0
       page()
-      expect(pageMocks.checkboxProps.get(LABEL)).toMatchObject({ checked: true })
+      expect(switchByLabel(LABEL)).toMatchObject({ checked: true })
 
-      pageMocks.checkboxProps.get(LABEL)?.onChange({ target: { checked: false } })
+      switchByLabel(LABEL)?.onChange()
       expect(pageMocks.setSetting).toHaveBeenLastCalledWith(SETTING, false)
       expect(pageMocks.setSetting).toHaveBeenCalledTimes(2)
       pageMocks.stateCursor = 0
+      pageMocks.switchProps.length = 0
       page()
-      expect(pageMocks.checkboxProps.get(LABEL)).toMatchObject({ checked: false })
+      expect(switchByLabel(LABEL)).toMatchObject({ checked: false })
     })
 
     it('is locked while a subtitle session is active, because the session reads it at start', async () => {
@@ -881,9 +869,12 @@ describe('settings rows and dialogs', () => {
 
       try {
         pageMocks.stateCursor = 0
+        pageMocks.switchProps.length = 0
         page()
-        expect(pageMocks.checkboxProps.get(LABEL)).toMatchObject({ checked: true, disabled: true })
-        expect(pageMocks.checkboxProps.get('Recognition-only test mode')).toMatchObject({ disabled: true })
+        expect(switchByLabel(LABEL)).toMatchObject({ checked: true, disabled: true })
+        expect(switchByLabel('subtitle-diagnostics-asr-only-label')).toMatchObject({ disabled: true })
+        // The trace switch only records diagnostics, so it stays available while a session runs.
+        expect(switchByLabel('subtitle-diagnostics-debug-label')).toMatchObject({ disabled: false })
       } finally {
         getSnapshot.mockRestore()
       }
