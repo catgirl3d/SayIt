@@ -989,6 +989,16 @@ unsafe fn mark_clipboard_history_excluded() {
         .encode_utf16()
         .collect();
     write_dword_format(&exclude, 0);
+
+    // "Clipboard Viewer Ignore" is the marker third-party clipboard managers honor
+    // (KeePass 2.x uses it too). The three Microsoft formats above only cover Win+V:
+    // Ditto 3.25.113 (2025-09) ignored all of them and honored only this format.
+    // Ditto's source gained the Microsoft markers only in 2025-12, then put them
+    // behind a toggle in 2026-01, while ClipboardViewer.cpp:GetIgnoreClipboardChange
+    // has always skipped this format unconditionally. Do not remove it assuming the
+    // markers above cover third-party managers. Presence alone is enough; the value is unused.
+    let viewer_ignore: Vec<u16> = "Clipboard Viewer Ignore\0".encode_utf16().collect();
+    write_dword_format(&viewer_ignore, 0);
 }
 
 #[cfg(windows)]

@@ -7,6 +7,7 @@ Sections are ordered by version, newest first.
 
 ### Fixed
 #### Desktop Client
+- Inserted text no longer shows up in Ditto's clipboard history. The clipboard write now also carries the "Clipboard Viewer Ignore" format that Ditto honors, alongside the existing Microsoft markers, and restoring the previous clipboard after a paste gets the same treatment.
 - Dictation hotkeys no longer stop responding until restart when setting up a recording fails. The recorder shows "Recording couldn't start", returns to idle and releases its start lock, so the next press begins a new recording. The keyboard hook also recovers its internal locks after a panic instead of failing every later shortcut.
 
 #### Recordings
