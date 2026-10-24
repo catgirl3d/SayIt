@@ -44,6 +44,7 @@ import {
   type ServerAiSource,
 } from '@/services/transcription/serverAiSource'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
+import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { describeProviderError } from '@/lib/errorMessages'
 import {
   applyProviderSwitch,
@@ -296,6 +297,21 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
   const [serverAiSourceError, setServerAiSourceError] = useState(false)
   const [serverAiSourceLoaded, setServerAiSourceLoaded] = useState(false)
   const [isServerMode, setIsServerMode] = useState(false)
+  const aiEnabled = useAiEnabled()
+  const aiReady = useAiEnabledReady()
+  /**
+   * Whether these services take part in automatic AI processing right now. The cards stay
+   * editable and testable, so this is a status note, not a disabled state. The server-managed
+   * copy names the selected-text exception instead of guessing per card. Until the initial AI
+   * value is known, show nothing rather than claiming the toggle is off.
+   */
+  const servicesInactiveReason: 'aiOff' | 'serverManaged' | null = !aiReady
+    ? null
+    : !aiEnabled
+      ? 'aiOff'
+      : serverAiSourceLoaded && isServerMode && serverAiSource === 'managed'
+        ? 'serverManaged'
+        : null
 
   /**
    * Batch "test all" runner. Its commit callback persists the collected checks
@@ -968,6 +984,20 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
                 <Feedback className="mt-2" tone="error" message={t('ai.err.saveFailed')} />
               )}
             </section>
+          )}
+
+          {loaded && !noProfiles && servicesInactiveReason && (
+            <div
+              role="status"
+              className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2"
+            >
+              <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                {t('ai.inactiveBadge')}
+              </span>
+              <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                {t(servicesInactiveReason === 'aiOff' ? 'ai.inactiveAiOff' : 'ai.inactiveServerManaged')}
+              </p>
+            </div>
           )}
 
           <fieldset className="min-w-0">

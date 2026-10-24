@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
+import { setAiEnabled } from '@/stores/aiEnabled'
 import AIProviderSection from './AIProviderSection'
 import type { AiProfile } from './aiProviderCatalog'
 
@@ -68,6 +69,10 @@ const remoteCatalog = {
 
 const emptySettings = settingsFor([], '', 'cloud_api', 'managed')
 
+const aiCleanup = (enabled: boolean) => async () => {
+  await setAiEnabled(enabled)
+}
+
 /** The editor is a Modal portaled into document.body, outside the story canvas. */
 function bodyOf(canvasElement: HTMLElement) {
   return within(canvasElement.ownerDocument.body)
@@ -81,6 +86,8 @@ async function openNewDialog(canvasElement: HTMLElement) {
 const meta = {
   title: 'settings/AIProviderSection',
   component: AIProviderSection,
+  parameters: { tauri: { commands: { set_tray_ai_enabled: () => null } } },
+  beforeEach: aiCleanup(true),
 } satisfies Meta<typeof AIProviderSection>
 
 export default meta
@@ -110,6 +117,35 @@ export const ServerModeCustomAI: Story = {
     tauri: {
       settings: settingsFor(profiles, profiles[2].id, 'server', 'custom'),
     },
+  },
+}
+
+export const ServerModeManagedAI: Story = {
+  parameters: {
+    tauri: {
+      settings: settingsFor(profiles, profiles[0].id, 'server', 'managed'),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    await expect(await canvas.findByText(/server handles ai processing for ordinary dictation/i)).toBeVisible()
+  },
+}
+
+export const AiCleanupOff: Story = {
+  parameters: {
+    tauri: {
+      settings: settingsFor(profiles, profiles[0].id, 'cloud_api', 'managed'),
+    },
+  },
+  beforeEach: aiCleanup(false),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    await expect(await canvas.findByText(/ai processing is off/i)).toBeVisible()
+    // The hint must not make the editable and testable cards look unavailable.
+    await expect(canvas.getByRole('button', { name: /^new$/i })).toBeEnabled()
   },
 }
 

@@ -134,6 +134,7 @@ export const AiCleanupOff: Story = {
     await expect(await canvas.findByText(/works only while ai processing is on/i)).toBeVisible()
     await expect(canvas.queryByText(/ai refers to text near the cursor/i)).toBeNull()
     await expect(canvas.getByRole('switch', { name: /context and selection awareness/i })).toHaveAttribute('aria-checked', 'true')
+    await expect(canvas.getByRole('switch', { name: /context and selection awareness/i })).toBeDisabled()
   },
 }
 

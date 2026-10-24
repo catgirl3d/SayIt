@@ -11,13 +11,15 @@ import {
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
   normalizeContextSelectionEditPrompt,
 } from '@/services/contextAware'
-import { useAiEnabled } from '@/hooks/useAiEnabled'
+import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { useT } from '@/i18n/useT'
 import ContextSelectionModelSetting from './ContextSelectionModelSetting'
 
 export default function ContextAwareSection() {
   const t = useT()
   const aiEnabled = useAiEnabled()
+  const aiReady = useAiEnabledReady()
+  const aiInactive = aiReady && !aiEnabled
   const [contextAwareWriting, setContextAwareWriting] = useState(false)
   const [contextPromptOpen, setContextPromptOpen] = useState(false)
   const [contextSelectionEditPrompt, setContextSelectionEditPrompt] = useState(CONTEXT_SELECTION_EDIT_PROMPT)
@@ -88,7 +90,7 @@ export default function ContextAwareSection() {
       <Card>
         <CardContent className="space-y-4 p-6">
           <div className="flex items-center gap-1.5">
-            <h2 id="context-aware-heading" className="text-lg font-semibold">{t('settings.contextAware.title')}</h2>
+            <h2 id="context-aware-heading" className={`text-lg font-semibold ${aiInactive ? 'text-muted-foreground' : ''}`}>{t('settings.contextAware.title')}</h2>
             <Tooltip
               variant="light"
               content={(
@@ -109,10 +111,10 @@ export default function ContextAwareSection() {
             <div>
               <p id="context-aware-label" className="text-sm font-medium">{t('settings.contextAware.enable')}</p>
               <p className="text-xs text-muted-foreground">
-                {aiEnabled ? t('settings.contextAware.descContinue') : t('settings.contextAware.needsAi')}
+                {aiInactive ? t('settings.contextAware.needsAi') : t('settings.contextAware.descContinue')}
               </p>
             </div>
-            <Switch labelledBy="context-aware-label" checked={contextAwareWriting} onChange={() => void toggleContextAwareWriting()} noAnimation={!animate} hidden={!ready} />
+            <Switch labelledBy="context-aware-label" checked={contextAwareWriting} onChange={() => void toggleContextAwareWriting()} disabled={aiInactive} noAnimation={!animate} hidden={!ready} />
           </div>
 
           <div className="flex items-center justify-between border-t border-border pt-4">

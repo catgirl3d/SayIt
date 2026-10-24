@@ -5,6 +5,10 @@ Sections are ordered by version, newest first.
 
 ## v0.3.2 (unreleased)
 
+### Changed
+#### Desktop Client
+- Settings now say when an AI-dependent option has no effect. With AI processing off, hotword injection and context awareness keep their saved choice but are shown as disabled with the reason; the AI providers page explains that saved services are not used for automatic processing while keeping them editable and testable. In Server mode, the note makes clear that a service chosen for selected-text editing can still be used.
+
 ### Fixed
 #### Desktop Client
 - Inserted text no longer shows up in Ditto's clipboard history. The clipboard write now also carries the "Clipboard Viewer Ignore" format that Ditto honors, alongside the existing Microsoft markers, and restoring the previous clipboard after a paste gets the same treatment.
