@@ -23,6 +23,9 @@ fn check_record_id(id: &str) -> Result<(), String> {
 /// backup (see `backup.rs`), so they are not trusted input.
 fn audio_file_in_dir(dir: &Path, file_path: &str) -> Option<PathBuf> {
     let path = PathBuf::from(file_path);
+    if !crate::path_guard::is_local_absolute_path(&path) {
+        return None;
+    }
     if !crate::path_guard::has_extension(&path, &["wav"]) {
         return None;
     }
@@ -223,6 +226,24 @@ mod tests {
         delete_audio_file_from(&audio, &alias).unwrap();
         assert!(notes.exists());
         assert_eq!(fs::read(&notes).unwrap(), b"text");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_local_path_is_not_accepted_as_an_audio_path() {
+        let root = temp_root();
+        let audio = root.join("audio");
+        fs::create_dir_all(&audio).unwrap();
+        let file = audio.join("a.wav");
+        fs::write(&file, b"x").unwrap();
+        let verbatim = format!(r"\\?\{}", file.to_string_lossy());
+
+        assert!(!audio_file_exists_in(&audio, &verbatim));
+        assert_eq!(read_audio_file_from(&audio, &verbatim).unwrap(), None);
+        delete_audio_file_from(&audio, &verbatim).unwrap();
+        assert!(file.exists());
 
         let _ = fs::remove_dir_all(&root);
     }
