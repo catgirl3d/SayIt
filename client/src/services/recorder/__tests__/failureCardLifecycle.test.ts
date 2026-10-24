@@ -1609,3 +1609,27 @@ describe('exclusive system-audio ownership', () => {
     recorder.cleanup()
   })
 })
+
+describe('recorder start lock recovery', () => {
+  it('releases the start lock after a preparation error and starts on the next press', async () => {
+    const recorder = await createRecorderWithProfile(CLEARED_PROFILE)
+
+    harness.promptPresets = [{
+      id: 'intent',
+      name: 'Intent',
+      builtin: true,
+    } as unknown as PromptPreset]
+    await recorder.refreshRuntimeSettings()
+
+    await expect(startRealRecording(recorder)).resolves.toBeDefined()
+    expect(recorder.getState()).toBe('idle')
+    expect(recorder.testSeam().startRecordingLock).toBe(false)
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(latestPayload('present_overlay')).toMatchObject({ state: 'error' })
+
+    configureRealPromptFixture()
+    await recorder.refreshRuntimeSettings()
+    await startRealRecording(recorder)
+    expect(recorder.getState()).toBe('recording')
+  })
+})
