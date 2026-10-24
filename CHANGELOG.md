@@ -7,7 +7,7 @@ Sections are ordered by version, newest first.
 
 ### Fixed
 #### Recordings
-- Recording commands now accept only `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside is reported as missing, and deleting it does nothing.
+- Recording commands now accept only local absolute paths to `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside, including UNC, device, verbatim, or relative paths, is reported as missing, and deleting it does nothing.
 
 ## v0.3.1 — 2026-10-24
 

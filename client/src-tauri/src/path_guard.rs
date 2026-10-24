@@ -22,6 +22,26 @@ pub fn is_record_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
+/// Whether the path is absolute and local to a disk. UNC, device, verbatim,
+/// and drive-relative Windows paths are rejected before any filesystem call,
+/// so a caller-controlled path cannot trigger SMB or device access just by
+/// being resolved.
+pub fn is_local_absolute_path(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        path.is_absolute()
+            && matches!(
+                path.components().next(),
+                Some(std::path::Component::Prefix(prefix))
+                    if matches!(prefix.kind(), std::path::Prefix::Disk(_))
+            )
+    }
+    #[cfg(not(windows))]
+    {
+        path.is_absolute()
+    }
+}
+
 /// Whether the path ends in one of the allowed extensions, ignoring case.
 pub fn has_extension(path: &Path, allowed: &[&str]) -> bool {
     path.extension()
@@ -52,6 +72,34 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         std::env::temp_dir().join(format!("sayit-path-guard-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_absolute_paths_only() {
+        assert!(is_local_absolute_path(Path::new(
+            r"C:\Users\alina\audio\a.wav"
+        )));
+        assert!(!is_local_absolute_path(Path::new(
+            r"\\?\C:\Users\alina\audio\a.wav"
+        )));
+        assert!(!is_local_absolute_path(Path::new(r"\\server\share\a.wav")));
+        assert!(!is_local_absolute_path(Path::new(
+            r"\\?\UNC\server\share\a.wav"
+        )));
+        assert!(!is_local_absolute_path(Path::new(r"\\.\pipe\a.wav")));
+        assert!(!is_local_absolute_path(Path::new(r"C:a.wav")));
+        assert!(!is_local_absolute_path(Path::new(r"\a.wav")));
+        assert!(!is_local_absolute_path(Path::new("a.wav")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_absolute_paths_only_unix() {
+        assert!(is_local_absolute_path(Path::new("/home/alina/audio/a.wav")));
+        assert!(!is_local_absolute_path(Path::new("a.wav")));
+        assert!(!is_local_absolute_path(Path::new("./a.wav")));
+        assert!(!is_local_absolute_path(Path::new("../a.wav")));
     }
 
     #[test]
