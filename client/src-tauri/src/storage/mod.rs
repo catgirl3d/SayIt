@@ -12,9 +12,10 @@ pub use usage::{UsageBackup, UsageEventInput, UsageSummary, parse_usage_backup};
 
 /// Default settings values (mirrors electron-app/electron/store.ts)
 const DEFAULT_SETTINGS: &[(&str, &str)] = &[
-    // 按住说话的默认键。不能是 Shift：长按右 Shift 会触发 Windows 筛选键，
-    // 导致松开后录音停不下来。与 src/services/defaults.ts、keyboard/mod.rs 的
-    // DEFAULT_PTT_SETTING 保持一致。
+    // Default push-to-talk key. It must not be Shift: holding the right Shift
+    // key enables Windows Filter Keys, which leaves recording running after the
+    // key is released. Keep this in sync with src/services/defaults.ts and
+    // DEFAULT_PTT_SETTING in keyboard/mod.rs.
     ("shortcutPTT", r#""ControlRight""#),
     ("shortcutPTTCombo", r#""Alt+Q""#),
     ("shortcutHandsFree", r#""AltRight""#),
@@ -1792,6 +1793,7 @@ mod tests {
             storage
                 .restore_full_transaction(
                     replacement_settings.as_object().unwrap(),
+                    &[],
                     None,
                     None,
                     Some(&replacement_history),
@@ -1852,6 +1854,7 @@ mod tests {
         let error = storage
             .restore_full_transaction(
                 replacement_settings.as_object().unwrap(),
+                &[],
                 None,
                 None,
                 Some(&replacement_history),
@@ -2775,6 +2778,7 @@ impl Storage {
     pub fn restore_full_transaction(
         &self,
         app_settings: &serde_json::Map<String, Value>,
+        settings_exclude: &[&str],
         prompt_presets: Option<&[Value]>,
         app_prompt_rules: Option<&[Value]>,
         history: Option<&[Value]>,
@@ -2785,7 +2789,13 @@ impl Storage {
         let db = self.db.lock().unwrap();
         let tx = db.unchecked_transaction()?;
 
-        Self::apply_config_on(&tx, app_settings, &[], prompt_presets, app_prompt_rules)?;
+        Self::apply_config_on(
+            &tx,
+            app_settings,
+            settings_exclude,
+            prompt_presets,
+            app_prompt_rules,
+        )?;
         if let Some(items) = history {
             Self::replace_collection_on(&tx, "history", items)?;
         }

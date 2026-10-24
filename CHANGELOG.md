@@ -14,6 +14,10 @@ Sections are ordered by version, newest first.
 #### Recordings
 - Recording commands now accept only local absolute paths to `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside, including UNC, device, verbatim, or relative paths, is reported as missing, and deleting it does nothing.
 
+#### Backup & Restore
+- A full backup is now accepted only when it contains `backup.json` plus flat `.wav` members (an optional empty `audio/` folder entry is tolerated). Archives with executable or other non-audio members, `../` or drive-relative names, nested folders, duplicate entries, or unexpected entries are rejected before anything is written, and a backup without a format version is rejected too. A history record whose audio path has a parent-directory component or whose file name is not a plain, safe `.wav` name (including drive-relative or stream paths and Windows reserved device names) rejects the archive instead of being imported. Non-`.wav` files in the audio folder are no longer packed into new backups.
+- Restoring a backup no longer overwrites local identity or internal bookkeeping from another PC: the device id, the first-run autostart migration flags, and the WebDAV result plus last-backup/last-attempt timestamps stay local and are left out of new backups and configuration exports. User-visible settings are still exported and restored, including the automatic update-check preference, microphone and system-audio selections, local model folder and compute backend, and the subtitle output folder, so restoring a backup on the same machine brings the saved configuration back. The actual autostart registration is OS state and remains outside the backup, as before.
+
 ## v0.3.1 — 2026-10-24
 
 ### Added
