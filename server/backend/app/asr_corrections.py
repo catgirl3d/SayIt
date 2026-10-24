@@ -1,18 +1,24 @@
-"""ASR 纠错反馈：接收用户主动提交的 (音频, 原始 ASR 文本, 用户修正文本) 样本。
+"""ASR correction feedback: receives samples the user submits on purpose: (audio, original ASR text, user-corrected text).
 
-这条通道和「服务端静默录音」不是一回事：每一个字节都是用户在历史记录里点了
-「提交纠正」、看过同意文案之后才发出来的，所以公开版允许存在（见 .kiro/decisions.md）。
+This channel is not the same as silent recording on the server. Every byte is sent only after the user
+has clicked "submit correction" in the history view and has seen the consent text. That is why the public
+version is allowed to have it (see .kiro/decisions.md).
 
-几条约束都不是随手加的：
+Each of the constraints below was added deliberately:
 
-- **只收服务器模式的样本。** 只有服务器上的模型是我们能改的；云 API / 本地模型认错了，
-  把用户音频收到这里既没用，又是一次用户没预期的隐私事件。
-- **文本只入库，绝不进日志。** 日志一律只记字符数（与 pitfalls #15 同口径）。
-- **请求体大小必须在这里自己数。** backend 和 gateway 两层都没有任何 HTTP body 上限，
-  不数就是一个任意大小的公网文件上传口。
-- **限流计数放数据库，不放内存。** 每次部署都 `systemctl restart`，内存计数归零等于没限。
-- **配额用数据库里的 SUM(audio_bytes)，不去 rglob 目录。** 样本是长期累积的，
-  每个请求都扫一遍目录会越来越慢。
+- **Only server-mode samples are accepted.** Only the models running on the server are ones we can change.
+  If a cloud API or a local model misrecognized the audio, sending the user's audio here is useless, and it
+  would be a privacy event the user did not expect.
+- **Text is stored in the database only and never goes into the logs.** Logs record character counts only
+  (same convention as pitfalls #15).
+- **The request body size is capped in two places.** The outer BodyLimitMiddleware (bodylimit.py) caps the
+  whole request at the ASGI layer, before multipart parsing spools anything to disk. The byte count in this
+  handler stays as a second layer: it also enforces the exact audio cap (MAX_AUDIO_BYTES), which the coarser
+  middleware limit does not.
+- **Rate-limit counters live in the database, not in memory.** Every deployment runs `systemctl restart`,
+  so in-memory counters would reset to zero and the limit would mean nothing.
+- **The quota uses SUM(audio_bytes) from the database, not an rglob over the directory.** Samples accumulate
+  over time, and scanning the directory on every request would get slower and slower.
 """
 from __future__ import annotations
 

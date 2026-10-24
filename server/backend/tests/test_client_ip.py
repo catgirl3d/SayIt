@@ -1,6 +1,6 @@
 """Shared HTTP client IP extraction tests.
 
-Pins the contract that ratelimit, diagnostics, and asr_corrections rely on:
+Pins the contract that ratelimit and asr_corrections rely on:
 the left-most X-Forwarded-For entry wins, otherwise the direct peer address,
 otherwise "unknown". Behind the ALB the direct peer is the proxy address for
 every user, so losing the forwarded header silently merges all clients into

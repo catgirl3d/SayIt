@@ -141,7 +141,10 @@ class LLMEngine:
             return result, ms, debug
         except Exception as e:
             logger.exception("LLM %s failed, returning original", provider)
-            return text, 0, {"error": str(e)}
+            # debug is sent to the client, and the client only checks whether the "error" key exists
+            # (aiOutcome.ts uses `'error' in debug`). Send the exception type only; the full text is
+            # in the logger.exception line above.
+            return text, 0, {"error": type(e).__name__}
 
     # ── internals ──
 

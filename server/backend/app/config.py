@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,11 +17,27 @@ _DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
 # Sub-configs — mirror the YAML structure
 # ---------------------------------------------------------------------------
 
+_KIB = 1024
+_MIB = 1024 * 1024
+
+
+@dataclass(slots=True)
+class BodyLimitConfig:
+    """HTTP request body limits in bytes.
+
+    The asr-corrections handler keeps its own exact 10 MiB audio check behind this outer layer;
+    these limits only stop oversize bodies before they are read.
+    """
+    asr_corrections: int = 11 * _MIB  # Recording up to 10 MiB + text and hotwords under 50 KiB
+    default: int = 1 * _MIB           # Everything else is a GET or a small POST
+
+
 @dataclass(slots=True)
 class ServerConfig:
     host: str = "127.0.0.1"
     port: int = 8000
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    body_limits: BodyLimitConfig = field(default_factory=BodyLimitConfig)
 
 
 @dataclass(slots=True)
@@ -337,6 +354,32 @@ def _auto_infer_llm(profile: LLMProfile) -> LLMProfile:
     return profile
 
 
+_BODY_LIMIT_KEYS = {
+    # YAML key -> (field name, unit in bytes)
+    "asr_corrections_mib": ("asr_corrections", _MIB),
+    "default_kib": ("default", _KIB),
+}
+
+
+def _load_body_limits(raw: dict) -> BodyLimitConfig:
+    """Read server.body_limits. An invalid value logs a warning and the default is used; nothing is raised.
+    load_config runs at import time of main.py, so a typo must not stop the whole backend from starting."""
+    values = {}
+    for key, value in raw.items():
+        spec = _BODY_LIMIT_KEYS.get(key)
+        if spec is None:
+            logging.getLogger("sayit.config").warning("server.body_limits: unknown key %r ignored", key)
+            continue
+        field_name, unit = spec
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            logging.getLogger("sayit.config").warning(
+                "server.body_limits.%s: invalid value %r, using default", key, value
+            )
+            continue
+        values[field_name] = int(value * unit)
+    return BodyLimitConfig(**values)
+
+
 # ---------------------------------------------------------------------------
 # Main loader
 # ---------------------------------------------------------------------------
@@ -443,6 +486,7 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
             host=host,
             port=port,
             cors_origins=_env_list("SAYIT_CORS_ORIGINS", list(server_raw.get("cors_origins") or defaults.server.cors_origins)),
+            body_limits=_load_body_limits(_pick(server_raw, "body_limits", default={}) or {}),
         ),
         gateway=GatewayConfig(
             host=str(gateway_raw.get("host") or defaults.gateway.host),

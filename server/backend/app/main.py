@@ -12,23 +12,23 @@ from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .asr import ASREngine
 from .asr_corrections import router as asr_corrections_router
-from .client_ip import get_client_ip
 from .config import load_config
 from .db import Database
-from .diagnostics import create_upload_token, router as diagnostics_router
+from .errors import public_error_message
 from .llm import LLMEngine
 from .logging_setup import attach_database_log_handler, bind_log_context, configure_logging, reset_log_context
 from .ratelimit import RateLimitMiddleware
 from .notice import read_notice
 from .releases import read_public_download, read_release_manifest, resolve_release_file
 from .telemetry import TelemetryService
+from .bodylimit import BodyLimitMiddleware, build_body_limit_rules
 
 cfg = load_config()
 configure_logging(cfg.logging.level, cfg.logging.file, cfg.logging.retention_days, cfg.telemetry.node_id)
@@ -147,21 +147,33 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="SayIt", lifespan=_lifespan)
 app.state.config = cfg
-app.include_router(diagnostics_router)
 app.include_router(asr_corrections_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cfg.server.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Middleware order: in Starlette, the middleware added LAST is the OUTERMOST. CORS must be added last so
+# that it is the outermost layer; then the 429 from rate limiting and the 413 from the body size limit
+# also carry the CORS headers. Otherwise the browser blocks the desktop client's fetch and the user only
+# sees a "network error". Previously CORS was added first and rate limiting after it, which put rate
+# limiting on the outside, so its 429 had no CORS header.
+# Outer to inner: CORS -> rate limiting -> body size limit -> application.
+app.add_middleware(BodyLimitMiddleware, **build_body_limit_rules(cfg.server.body_limits))
 app.add_middleware(
     RateLimitMiddleware,
     requests_per_minute=120,
     burst=30,
     exclude_paths=("/healthz", "/ws/"),
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cfg.server.cors_origins,
+    # Credentials are not allowed: neither the desktop app nor the website needs them. If credentials
+    # were enabled together with allow_origins=*, other sites could read responses from here using
+    # credentials cached by the browser or cookies (Starlette echoes the requesting origin back instead
+    # of *, when the request carries a cookie).
+    # Origins stay *: the desktop UI runs under http://tauri.localhost, and a fixed allowlist that
+    # misses one entry would silently break things like the update check.
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -349,13 +361,17 @@ def _client_ip(ws: WebSocket) -> tuple[str | None, str | None]:
 
 
 def _client_ip_key(direct: str | None, forwarded: str | None) -> str:
-    """用于“按 IP 限流/计数”的真实客户端 IP。
+    """The real client IP used as the key for per-IP rate limiting and connection counting.
 
-    ALB 后 ws.client.host 恒为 ALB 内网地址（所有用户相同），必须取 X-Forwarded-For
-    的真实客户端 IP；且 XFF 可能是 "client, proxy1, ..." 列表，取最左第一个（与 diagnostics 一致）。
+    Behind the ALB, ws.client.host is always the ALB's internal address (the same for every user),
+    so the client IP must come from X-Forwarded-For. The header may be a "client, proxy1, ..." list,
+    so the left-most entry is taken. This is consistent with client_ip.get_client_ip, which applies
+    the same rule to HTTP requests.
 
-    注意：最左值理论上可被客户端伪造。单层可信 ALB 场景足够；若前置更多不可信代理，
-    应按“可信代理跳数”从右侧取值，避免被伪造成他人 IP 定向占额。
+    Note: the left-most value can in theory be forged by the client. A single trusted ALB hop is
+    enough for this deployment. If more untrusted proxies were placed in front, the value should be
+    taken from the right by counting trusted hops, so that a client cannot forge another user's IP
+    and use up that user's quota.
     """
     if forwarded:
         first = forwarded.split(",")[0].strip()
@@ -514,71 +530,6 @@ async def healthz():
         "asr_model": model_name,
         "llm": cfg.llm.enabled and llm_engine is not None,
     }
-
-
-# ── Feedback ──────────────────────────────────────────────────────────────────
-_feedback_timestamps: dict[str, list[float]] = defaultdict(list)
-_FEEDBACK_WINDOW = 600  # 10 minutes
-_FEEDBACK_LIMIT = 3
-
-
-@app.post("/api/feedback")
-async def post_feedback(request: Request):
-    request_body = await request.json()
-    # --- validate machine_id ---
-    machine_id = (request_body.get("machine_id") or "").strip()
-    if not machine_id:
-        return JSONResponse({"error": "machine_id required"}, 400)
-
-    # --- validate feedback_text ---
-    feedback_text = (request_body.get("feedback_text") or "").strip()
-    if len(feedback_text) < 2 or len(feedback_text) > 1000:
-        return JSONResponse({"error": "feedback_text must be 2-1000 chars"}, 400)
-
-    # --- truncate long fields ---
-    transcript = request_body.get("transcript")
-    if isinstance(transcript, dict):
-        for k in ("asr_text", "ai_text"):
-            if isinstance(transcript.get(k), str) and len(transcript[k]) > 5000:
-                transcript[k] = transcript[k][:5000]
-    else:
-        transcript = None
-
-    context = request_body.get("context")
-    if isinstance(context, dict):
-        for k in ("ai_system_prompt", "ai_prompt_append"):
-            if isinstance(context.get(k), str) and len(context[k]) > 5000:
-                context[k] = context[k][:5000]
-    else:
-        context = None
-
-    # --- rate limit by machine_id: 3 per 10 min ---
-    now = time.time()
-    ts_list = _feedback_timestamps[machine_id]
-    _feedback_timestamps[machine_id] = [t for t in ts_list if now - t < _FEEDBACK_WINDOW]
-    if len(_feedback_timestamps[machine_id]) >= _FEEDBACK_LIMIT:
-        return JSONResponse({"error": "rate limited"}, 429)
-    _feedback_timestamps[machine_id].append(now)
-
-    # --- store ---
-    db = database
-    if db:
-        client_ip = get_client_ip(request)
-        db.execute(
-            "INSERT INTO feedback (machine_id, app_version, client_ip, feedback_text, transcript_json, context_json, created_at)"
-            f" VALUES ({','.join([db.dialect.placeholder] * 7)})",
-            (
-                machine_id,
-                (request_body.get("app_version") or "")[:64],
-                client_ip[:64],
-                feedback_text,
-                json.dumps(transcript, ensure_ascii=False) if transcript else None,
-                json.dumps(context, ensure_ascii=False) if context else None,
-                int(now * 1000),
-            ),
-        )
-    logger.info("Feedback from %s: %s", machine_id, feedback_text[:100])
-    return JSONResponse({"ok": True}, 200)
 
 
 @app.get("/api/notice")
@@ -787,10 +738,12 @@ async def ws_transcribe(ws: WebSocket):
                 use_web_demo_profile=is_web_demo,
             )
         except Exception as exc:
-            logger.exception("Pipeline failed")
+            # The original text goes only to the server log and the telemetry table; the client gets a
+            # fixed sentence plus a reference id (see errors.py)
+            public_message, ref = public_error_message(exc, where="pipeline", cid=cid, sid=current_session_id)
             if telemetry:
-                telemetry.mark_failure(current_session_id, cid, "pipeline_exception", str(exc))
-            await ws.send_json({"type": "error", "message": str(exc)})
+                telemetry.mark_failure(current_session_id, cid, "pipeline_exception", f"ref={ref} {exc}")
+            await ws.send_json({"type": "error", "message": public_message})
             await ws.send_json({"type": "done"})
             return
 
@@ -991,9 +944,6 @@ async def ws_transcribe(ws: WebSocket):
                 active = True
             elif cmd == "ping":
                 await ws.send_json({"type": "pong", "ts": int(time.time() * 1000)})
-            elif cmd == "request_upload_token":
-                token = create_upload_token()
-                await ws.send_json({"type": "upload_token", "token": token})
     except WebSocketDisconnect:
         logger.info("ws disconnected by client")
     except Exception:

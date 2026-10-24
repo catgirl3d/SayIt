@@ -20,6 +20,16 @@ Sections are ordered by version, newest first.
 - A full backup is now accepted only when it contains `backup.json` plus flat `.wav` members (an optional empty `audio/` folder entry is tolerated). Archives with executable or other non-audio members, `../` or drive-relative names, nested folders, duplicate entries, or unexpected entries are rejected before anything is written, and a backup without a format version is rejected too. A history record whose audio path has a parent-directory component or whose file name is not a plain, safe `.wav` name (including drive-relative or stream paths and Windows reserved device names) rejects the archive instead of being imported. Non-`.wav` files in the audio folder are no longer packed into new backups.
 - Restoring a backup no longer overwrites local identity or internal bookkeeping from another PC: the device id, the first-run autostart migration flags, and the WebDAV result plus last-backup/last-attempt timestamps stay local and are left out of new backups and configuration exports. User-visible settings are still exported and restored, including the automatic update-check preference, microphone and system-audio selections, local model folder and compute backend, and the subtitle output folder, so restoring a backup on the same machine brings the saved configuration back. The actual autostart registration is OS state and remains outside the backup, as before.
 
+#### Self-hosted Server
+- The optional HTTPS gateway (`server/gateway`) no longer serves files outside its web folder. A path with `..` (including backslash and percent-encoded forms), or a link that points outside, now gets 404 instead of the file. A static file requested with a query string, such as `/app.js?v=2`, is now served instead of the start page. The Docker setup does not run this gateway and was not affected.
+- The server now limits HTTP request bodies by the bytes actually received: an ASR correction upload over 11 MiB, or any other request over 1 MiB, gets 413, and nothing from the rejected request is kept on disk or stored. Chunked uploads and requests with a wrong Content-Length are covered too. The limits can be changed under `server.body_limits` in `config.yaml`; WebSocket dictation audio is not affected.
+- Rate-limit (429) and size-limit (413) responses now carry CORS headers, so the desktop app shows the real error instead of a network error. CORS no longer allows credentials; requests from any origin are still accepted.
+- Dictation errors from the server no longer include internal exception text. The app gets "Internal server error (ref: …)" or "Server processing timed out (ref: …)", and the full error with the same reference goes to the server log. A failed AI processing step reports only the error type.
+
+### Removed
+#### Self-hosted Server
+- Removed the feedback endpoint (`POST /api/feedback`) and the diagnostics upload endpoints (`/api/diagnostics` and the WebSocket `request_upload_token` command). The desktop app stopped calling them when GitHub Issue reporting replaced them. Existing feedback rows stay in the database; reports already saved under `runtime/diagnostics_reports` are no longer served and can be deleted.
+
 ## v0.3.1 — 2026-10-24
 
 ### Added

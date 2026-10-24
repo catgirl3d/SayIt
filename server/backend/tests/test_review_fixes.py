@@ -1,11 +1,10 @@
-"""Tests for telemetry edge cases, ratelimit, diagnostics, and config."""
+"""Tests for telemetry edge cases, ratelimit, and config."""
 from __future__ import annotations
 
 import shutil
 import tempfile
 import time
 import unittest
-import zipfile
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,7 +12,6 @@ from fastapi.testclient import TestClient
 
 from backend.app.config import Config, TelemetryConfig, LoggingConfig
 from backend.app.db import Database
-from backend.app.diagnostics import router as diagnostics_router
 from backend.app.ratelimit import RateLimitMiddleware
 from backend.app.telemetry import TelemetryService
 
@@ -133,48 +131,6 @@ class TelemetryQueryTests(unittest.TestCase):
     def test_metric_by_group_rejects_invalid_field(self) -> None:
         with self.assertRaises(ValueError):
             self.service.metric_by_group({}, "1; DROP TABLE usage_sessions--")
-
-
-# ── Diagnostics tests ───────────────────────────────────────────────
-
-class DiagnosticsTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.app = FastAPI()
-        self.app.include_router(diagnostics_router)
-        self.client = TestClient(self.app)
-
-    def test_upload_rejects_non_zip(self) -> None:
-        r = self.client.post(
-            "/api/diagnostics",
-            files={"diagnostics": ("report.txt", b"hello", "text/plain")},
-        )
-        self.assertEqual(r.status_code, 400)
-
-    def test_upload_accepts_valid_zip(self) -> None:
-        import io
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("manifest.json", '{"systemInfo": {"appVersion": "0.1.0"}}')
-        buf.seek(0)
-        r = self.client.post(
-            "/api/diagnostics",
-            files={"diagnostics": ("diag.zip", buf.read(), "application/zip")},
-        )
-        self.assertEqual(r.status_code, 200)
-        data = r.json()
-        self.assertIn("ticket_id", data)
-        # ticket_id should be a 32-char hex string (not predictable)
-        self.assertRegex(data["ticket_id"], r"^[a-f0-9]{32}$")
-
-    def test_get_nonexistent_ticket_returns_404(self) -> None:
-        r = self.client.get("/api/diagnostics/" + "a" * 32)
-        self.assertEqual(r.status_code, 404)
-
-    def test_get_invalid_ticket_format_returns_400(self) -> None:
-        r = self.client.get("/api/diagnostics/../etc/passwd")
-        # FastAPI path param won't contain /, but test direct invalid format
-        r = self.client.get("/api/diagnostics/invalid-format!")
-        self.assertEqual(r.status_code, 400)
 
 
 if __name__ == "__main__":
