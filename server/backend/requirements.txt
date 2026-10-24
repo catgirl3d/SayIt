@@ -1,4 +1,9 @@
 fastapi==0.135.2
+# fastapi 0.135.2 accepts any starlette >= 0.46. The Docker image runs Python 3.10, where 1.7.0 is the
+# newest compatible release (1.10+ needs 3.11). The body-limit middleware relies on starlette >= 1.6
+# closing multipart temp files itself when parsing is aborted. When upgrading, re-run backend/tests
+# (MultipartTempFileTests guards this).
+starlette==1.7.0
 # multipart 上传（诊断包、ASR 纠错样本）依赖它。缺了不是接口 404，是 FastAPI
 # 在路由注册期就抛 RuntimeError —— 整个后端起不来，所以必须显式 pin。
 python-multipart==0.0.22

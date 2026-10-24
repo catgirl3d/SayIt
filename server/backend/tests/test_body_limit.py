@@ -14,7 +14,7 @@ import weakref
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.testclient import TestClient
 
 from backend.app import asr_corrections, main
@@ -34,6 +34,7 @@ def _run_asgi(app, *, path: str, chunks: list[bytes], headers: list[tuple[bytes,
         "type": "http",
         "method": "POST",
         "path": path,
+        "query_string": b"",
         "headers": headers or [],
         "client": ("127.0.0.1", 1),
     }
@@ -134,6 +135,73 @@ class MiddlewareUnitTests(unittest.TestCase):
         asyncio.run(_mw(inner)({"type": "websocket", "path": "/ws/transcribe", "headers": []}, None, None))
         self.assertEqual(called, ["websocket"])
 
+    def test_unexpected_error_after_rejection_propagates(self):
+        # Only the disconnect we fabricate may be swallowed; a real bug in the inner app must surface
+        async def inner(scope, receive, send):
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            raise RuntimeError("boom")
+
+        pending = [
+            {"type": "http.request", "body": b"a" * 60, "more_body": True},
+            {"type": "http.request", "body": b"a" * 60, "more_body": False},
+        ]
+        sent: list[dict] = []
+
+        async def receive():
+            return pending.pop(0) if pending else {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/x",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+        }
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            asyncio.run(_mw(inner)(scope, receive, send))
+        statuses = [m["status"] for m in sent if m["type"] == "http.response.start"]
+        self.assertEqual(statuses, [413], "the 413 must already have been sent before the error propagated")
+
+    def test_json_body_over_limit_is_413_not_an_error(self):
+        # request.json() raises ClientDisconnect on the fabricated disconnect; that one must be swallowed
+        app = FastAPI()
+
+        @app.post("/j")
+        async def j(request: Request):  # pragma: no cover - the handler must not finish when over limit
+            await request.json()
+            return {"ok": True}
+
+        wrapped = BodyLimitMiddleware(
+            app,
+            exact={"/j": BodyLimitRule(100, {"error": "too_big"})},
+            prefixes=[],
+            default=BodyLimitRule(10, {"error": "default"}),
+        )
+        status, body, sent = _run_asgi(
+            wrapped,
+            path="/j",
+            chunks=[b'{"a":"' + b"x" * 60, b"y" * 60 + b'"}'],
+            headers=[(b"content-type", b"application/json")],
+        )
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(body), {"error": "too_big"})
+        self.assertEqual(sum(1 for m in sent if m["type"] == "http.response.start"), 1)
+
+    def test_log_path_is_escaped_against_log_injection(self):
+        # uvicorn percent-decodes the path, so %0A arrives here as a real newline
+        with self.assertLogs("sayit.bodylimit", "WARNING") as logs:
+            status, _, _ = _run_asgi(_mw(_Recorder()), path="/x\nFORGED", chunks=[b"a" * 200])
+        self.assertEqual(status, 413)
+        self.assertEqual(len(logs.records), 1)
+        message = logs.records[0].getMessage()
+        self.assertNotIn("\n", message, "a raw newline in the path would forge a log line")
+        self.assertIn(r"path='/x\nFORGED'", message)
+
 
 class ConfigTests(unittest.TestCase):
     def test_defaults(self):
@@ -159,6 +227,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(c.default, BodyLimitConfig().default)
         self.assertFalse(hasattr(c, "diagnostics"))
         self.assertFalse(hasattr(c, "feedback"))
+
+    def test_non_mapping_body_limits_fall_back_to_defaults(self):
+        # body_limits: 5, a list or a string in YAML must not crash the import of main.py
+        for raw in (5, [1, 2], "x"):
+            with self.subTest(raw=raw):
+                with self.assertLogs("sayit.config", "WARNING") as logs:
+                    c = _load_body_limits(raw)
+                self.assertEqual(c, BodyLimitConfig())
+                self.assertIn(type(raw).__name__, logs.output[0])
 
     def test_rules_keep_client_error_formats(self):
         rules = build_body_limit_rules(BodyLimitConfig())
@@ -302,7 +379,13 @@ class MainAppTests(unittest.TestCase):
 
 
 class MultipartTempFileTests(unittest.TestCase):
-    """Multipart aborted mid-way: the temp files the framework created must be closed, and the final answer is 413, not 400/500."""
+    """Guards the starlette pin in requirements.txt (starlette >= 1.6.0).
+
+    Multipart aborted mid-way: the temp files the framework created must be closed, and the final answer is 413, not 400/500.
+    Starlette 1.6.0 and later close the spooled files themselves when parsing is aborted. The middleware no longer forces
+    a garbage collection, so this test fails on starlette < 1.6.0 (verified on 1.4.1), which is the intended signal
+    that the pin must not be lowered or that the middleware needs a fix again.
+    """
 
     def test_spooled_files_are_closed(self):
         import starlette.formparsers as fp
@@ -352,9 +435,8 @@ class MultipartTempFileTests(unittest.TestCase):
             )
         self.assertEqual(status, 413, body)
         self.assertTrue(created, "test precondition: the parser should have created a temp file")
-        # Starlette only closes the file itself on MultiPartException. The middleware runs gc.collect()
-        # on the reject path to release file objects held in reference cycles. This test does NOT call gc itself:
-        # the point is to verify that the middleware does it.
+        # No gc.collect() is called here or in the middleware: on starlette >= 1.6.0 the parser closes the
+        # spooled files when it aborts, so the file must already be closed when the request ends.
         alive_open = [r() for r in created if r() is not None and not r().closed]
         self.assertEqual(alive_open, [], "the temp file was not released after the over-limit abort")
 
