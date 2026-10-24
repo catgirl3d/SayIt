@@ -1,6 +1,6 @@
 {
   "name": "sayit-gateway",
   "type": "module",
-  "scripts": { "start": "node proxy.mjs" },
+  "scripts": { "start": "node proxy.mjs", "test": "node --test static-path.test.mjs" },
   "dependencies": { "http-proxy": "^1.18.1" }
 }

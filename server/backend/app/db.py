@@ -193,6 +193,7 @@ class Database:
                     payload_json TEXT
                 )
                 """,
+                # The /api/feedback endpoint was removed. The table is kept so that existing rows survive without a migration.
                 f"""
                 CREATE TABLE IF NOT EXISTS feedback (
                     id {self.dialect.autoincrement_pk},

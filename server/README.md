@@ -237,7 +237,6 @@ python -m pytest backend/tests/ -v
 | GET | `/api/public/config` | Public site configuration |
 | GET | `/api/public/downloads/windows/latest` | Latest Windows client download |
 | GET | `/api/notice` | Current client notice |
-| POST | `/api/feedback` | Submit feedback |
 
 Hotwords are loaded from `prompts/hotwords.txt` and can also be supplied per WebSocket session.
 
