@@ -8,6 +8,7 @@ mod inject;
 mod keyboard;
 mod locale;
 mod models;
+mod path_guard;
 mod providers;
 mod storage;
 mod window;

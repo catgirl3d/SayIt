@@ -9,6 +9,9 @@ Sections are ordered by version, newest first.
 #### Desktop Client
 - Dictation hotkeys no longer stop responding until restart when setting up a recording fails. The recorder shows "Recording couldn't start", returns to idle and releases its start lock, so the next press begins a new recording. The keyboard hook also recovers its internal locks after a panic instead of failing every later shortcut.
 
+#### Recordings
+- Recording commands now accept only local absolute paths to `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside, including UNC, device, verbatim, or relative paths, is reported as missing, and deleting it does nothing.
+
 ## v0.3.1 — 2026-10-24
 
 ### Added
