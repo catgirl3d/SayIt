@@ -50,6 +50,8 @@ describe('Tauri security configuration', () => {
     expect(cspSources(csp, 'default-src')).toEqual(["'self'"])
     // The AudioWorklet has data- and blob-URL fallbacks, so those sources stay.
     expect(cspSources(csp, 'script-src')).toEqual(["'self'", 'blob:', 'data:'])
+    expect(cspSources(csp, 'style-src')).toEqual(["'self'", "'unsafe-inline'"])
+    expect(cspSources(csp, 'font-src')).toEqual(["'self'", 'data:'])
     expect(cspSources(csp, 'object-src')).toEqual(["'none'"])
     expect(cspSources(csp, 'base-uri')).toEqual(["'self'"])
     expect(cspSources(csp, 'form-action')).toEqual(["'none'"])

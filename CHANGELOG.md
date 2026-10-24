@@ -5,6 +5,10 @@ Sections are ordered by version, newest first.
 
 ## v0.3.2 (unreleased)
 
+### Changed
+#### Desktop Client
+- The Nunito font used by the title bar, the welcome guide and the About page is now bundled with the app instead of being fetched from Google Fonts. The interface keeps its font offline, and starting the main window no longer sends a request to Google. The Content Security Policy no longer lists Google Fonts origins either.
+
 ### Fixed
 #### Desktop Client
 - Inserted text no longer shows up in Ditto's clipboard history. The clipboard write now also carries the "Clipboard Viewer Ignore" format that Ditto honors, alongside the existing Microsoft markers, and restoring the previous clipboard after a paste gets the same treatment.
