@@ -10,6 +10,7 @@ Sections are ordered by version, newest first.
 - Inserted text no longer shows up in Ditto's clipboard history. The clipboard write now also carries the "Clipboard Viewer Ignore" format that Ditto honors, alongside the existing Microsoft markers, and restoring the previous clipboard after a paste gets the same treatment.
 - Dictation hotkeys no longer stop responding until restart when setting up a recording fails. The recorder shows "Recording couldn't start", returns to idle and releases its start lock, so the next press begins a new recording. The keyboard hook also recovers its internal locks after a panic instead of failing every later shortcut.
 - History and Favorites now list day groups newest first by the real date. The groups used to be sorted by their translated labels, so after a month change an older day could sit above the newest one, English months followed alphabetical order, and days within a month could be out of order ("October 9" above "October 13").
+- A failed "Transcribe again" attempt in History now shows the reason on the entry instead of silently stopping, and says when the recording file is gone.
 
 #### Recordings
 - Recording commands now accept only local absolute paths to `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside, including UNC, device, verbatim, or relative paths, is reported as missing, and deleting it does nothing.

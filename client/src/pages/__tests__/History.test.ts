@@ -42,6 +42,8 @@ vi.mock('@/services/bridge', () => ({
 }))
 
 import History, { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
+import * as bridge from '@/services/bridge'
+import type { HistoryRecord } from '@/services/store'
 import { getRuntimeServerAiSource, setRuntimeServerAiSource } from '@/services/transcription/serverAiSource'
 
 function mockCloudProfile(provider = 'openai_transcribe') {
@@ -1239,5 +1241,42 @@ describe('history server reprocessing', () => {
     })
     expect(result.aiProvider).toBeUndefined()
     expect(result.aiModel).toBeUndefined()
+  })
+})
+
+describe('history rerun failure feedback', () => {
+  const missingAudioRecord: HistoryRecord = {
+    id: 'history-missing-audio',
+    timestamp: Date.now(),
+    asrText: 'previous words',
+    llmText: 'previous words',
+    asrMs: 10,
+    llmMs: 0,
+    durationSec: 1,
+    charCount: 14,
+    workMode: 'cloud_api',
+    audioFilePath: 'C:\\recordings\\gone.wav',
+  }
+
+  beforeEach(() => {
+    mocks.listHistory.mockReset().mockResolvedValue([missingAudioRecord])
+    mocks.countHistory.mockReset().mockResolvedValue(1)
+    mocks.listen.mockReset().mockResolvedValue(() => undefined)
+    mocks.exportHistory.mockReset().mockResolvedValue({ canceled: true, filePath: null })
+    vi.mocked(bridge.readAudioFile).mockReset().mockResolvedValue(null)
+    clearRuntimeEvents()
+  })
+
+  it('tells the user the recording is gone instead of silently stopping', async () => {
+    render(createElement(History))
+
+    fireEvent.click(await screen.findByRole('button', { name: t('record.details') }))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.reprocess') }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(
+      t('record.reprocessFailed', { reason: t('record.audioMissing') }),
+    )
+    expect(bridge.readAudioFile).toHaveBeenCalledWith(missingAudioRecord.audioFilePath)
   })
 })

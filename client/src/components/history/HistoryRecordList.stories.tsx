@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, userEvent, within } from 'storybook/test'
+import { t } from '@/i18n'
 import type { HistoryRecord } from '@/services/store'
 import HistoryRecordList from './HistoryRecordList'
 
@@ -70,6 +72,7 @@ const meta = {
     layout: 'padded',
     tauri: {
       commands: {
+        append_debug_log: () => undefined,
         copy_text: () => undefined,
         audio_file_exists: () => true,
         read_audio_file: () => EMPTY_WAV_BASE64,
@@ -148,5 +151,21 @@ export const EmptyHistory: Story = {
   args: {
     records: [],
     onDelete: () => undefined,
+  },
+}
+
+export const ReprocessFailure: Story = {
+  args: {
+    records: [records[0]],
+    onDelete: () => undefined,
+    onReprocess: () => Promise.reject('sayit_error:server_timeout:Retranscription timed out'),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole('button', { name: t('record.details') }))
+    await userEvent.click(await canvas.findByRole('button', { name: t('record.reprocess') }))
+    await expect(await canvas.findByRole('alert')).toHaveTextContent(
+      t('record.reprocessFailed', { reason: 'Retranscription timed out' }),
+    )
   },
 }
