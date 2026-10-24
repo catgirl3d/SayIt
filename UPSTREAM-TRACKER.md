@@ -1,13 +1,13 @@
 # Upstream port tracker
 
 Progress list for porting upstream `crosswk/SayIt` features into this fork.
-Covers upstream 0.2.1 (`8687e9b`) and 0.2.2 (`c704300`), plus follow-up fixes.
+Covers upstream 0.2.1 (`8687e9b`), 0.2.2 (`c704300`) and the selected 0.2.3 ports tracked in #53, plus follow-up fixes.
 
 - Detailed per-topic analysis lives in the git-ignored `dev-scripts/upstream-slices/` folder.
 - The local `dev-scripts/upstream-decisions/` journal remains the authoritative record for accept/reject decisions on upstream commits; this file mirrors progress in one readable list.
 - Update this file when a port lands or a decision changes. Keep one row per feature.
 
-Last updated: 2026-10-18 (History AI policy unified with the live route, #33; journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits. PR ports are final, no re-porting planned: #87 → fork PR #22 and #85 → fork PR #25 (both merged); #86 declined; #83 not ported; server reasoning config and a separate chat-audio route also declined; all four upstream PR heads are kept on local `pr/*` branches).
+Last updated: 2026-10-24 (Ditto clipboard-history exclusion ported from `c813028`, #53 item 9, fork `e581d6a`. Earlier 2026-10-18: History AI policy unified with the live route, #33; journal decisions recorded: `8687e9b`/`c704300` partial/adapted, `9158443` and PR #78 `0ceba3e` rejected — no pending upstream commits. PR ports are final, no re-porting planned: #87 → fork PR #22 and #85 → fork PR #25 (both merged); #86 declined; #83 not ported; server reasoning config and a separate chat-audio route also declined; all four upstream PR heads are kept on local `pr/*` branches).
 
 ## Ported
 
@@ -26,6 +26,7 @@ Last updated: 2026-10-18 (History AI policy unified with the live route, #33; jo
 | Hotword capability matrix (Rust) + dynamic Dictionary support table + ignored-hotword diagnostics | `df2ef41` |
 | OpenRouter AI cleanup provider preset (upstream PR #87, via fork PR #22) | `f6275b9`, `3cef9c2` |
 | Selected-text editing model override (upstream PR #85, via fork PR #25) | `1f5d99b`, `0baee8f` |
+| Ditto clipboard-history exclusion via `Clipboard Viewer Ignore` (upstream `c813028`, #53 item 9) | `e581d6a` |
 
 ## Partial
 
