@@ -1673,7 +1673,38 @@ export class RecorderOrchestrator {
 
   // ── Recording lifecycle ──
 
+  /**
+   * Outer safety net for the preparation stage.
+   *
+   * startRecordingInner's own try/catch only covers provider connection and audio
+   * capture. A throw earlier — context capture, prompt routing, malformed stored
+   * data — previously escaped through `void this.startRecording()` and left
+   * startRecordingLock set forever, so every later PTT press was ignored until
+   * restart. Release the lock and return to idle for any setup failure.
+   */
   async startRecording() {
+    try {
+      await this.startRecordingInner()
+    } catch (error) {
+      const runId = this.activeRunId
+      addRuntimeEvent('error', 'recorder', 'Failed to start recording', {
+        error: String(error),
+        stage: 'setup',
+        runId,
+      })
+      this.startRecordingLock = false
+      this.pendingStopWhileStarting = false
+      this.restoreSystemMuteIfNeeded()
+      if (runId !== 0) {
+        this.finishRun(runId)
+        this.provider.cancel()
+      }
+      this.overlayService.showError(t('recorder.startFailed'))
+      this.resetToIdle({ keepOverlay: true })
+    }
+  }
+
+  private async startRecordingInner() {
     const provider = this.provider
     const providerMode = provider.mode
     if (providerMode === 'local' && !this.fileTranscriptionAdmissionReady) {
