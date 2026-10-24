@@ -410,7 +410,8 @@ fn validate_fork_release_url(url: &str, version: &str) -> Result<(), String> {
 }
 
 /// Validate the manifest's SHA-512: canonical padded Base64 that decodes to exactly
-/// 64 bytes. Returns the decoded digest bytes for stream comparison.
+/// 64 bytes. The download compares the completed file's Base64 digest against this
+/// value; the decoded bytes are returned for callers that need them.
 fn validate_sha512_base64(sha512: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;
     if !SHA512_BASE64_PATTERN.is_match(sha512) {
@@ -742,16 +743,12 @@ async fn run_verified_download(
     version: &str,
     sha512: &str,
 ) -> Result<(), String> {
-    use futures_util::StreamExt;
-    use sha2::{Digest, Sha512};
-    use std::io::Write;
-
     // Authorization for a previous download is revoked the moment a new one starts.
     *lock_verified_update() = None;
 
     validate_numeric_version(version)?;
     validate_fork_release_url(url, version)?;
-    let expected_digest = validate_sha512_base64(sha512)?;
+    validate_sha512_base64(sha512)?;
 
     // A User-Agent is mandatory: production AWS WAF's NoUserAgent_HEADER rule
     // rejects UA-less requests with 403.
@@ -761,27 +758,6 @@ async fn run_verified_download(
         .build()
         .map_err(|e| format!("Failed to initialize download client: {}", e))?;
 
-    emit_update_progress(app, 0, 0, "downloading", None);
-
-    let resp = client
-        .get(url)
-        .timeout(std::time::Duration::from_secs(300))
-        .send()
-        .await
-        .map_err(|e| {
-            let msg = format!("Download failed: {}", e);
-            emit_update_progress(app, 0, 0, "failed", Some(&msg));
-            msg
-        })?;
-
-    if !resp.status().is_success() {
-        let msg = format!("Download failed: HTTP {}", resp.status());
-        emit_update_progress(app, 0, 0, "failed", Some(&msg));
-        return Err(msg);
-    }
-
-    let total = resp.content_length().unwrap_or(0);
-
     // The final path is derived from the validated version — never from the URL,
     // never from frontend data.
     let temp_dir = update_temp_dir();
@@ -790,57 +766,21 @@ async fn run_verified_download(
     let final_path = final_package_path(version);
     let part_path = part_package_path(&final_path);
 
-    let mut file = match std::fs::File::create(&part_path) {
-        Ok(f) => f,
-        Err(e) => {
-            let msg = format!("Failed to create file: {}", e);
-            emit_update_progress(app, 0, 0, "failed", Some(&msg));
-            return Err(msg);
-        }
-    };
+    let (downloaded, total) = fetch_installer_part(
+        &client,
+        url,
+        &part_path,
+        &mut |done, total, status, error| emit_update_progress(app, done, total, status, error),
+    )
+    .await?;
 
-    let mut downloaded: u64 = 0;
-    let mut hasher = Sha512::new();
-    let mut stream = resp.bytes_stream();
-    let mut last_emit = std::time::Instant::now();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = match chunk {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("Download interrupted: {}", e);
-                emit_update_progress(app, downloaded, total, "failed", Some(&msg));
-                let _ = std::fs::remove_file(&part_path);
-                return Err(msg);
-            }
-        };
-        if let Err(e) = file.write_all(&chunk) {
-            let msg = format!("Failed to write file: {}", e);
-            emit_update_progress(app, downloaded, total, "failed", Some(&msg));
-            let _ = std::fs::remove_file(&part_path);
-            return Err(msg);
-        }
-        hasher.update(&chunk);
-        downloaded += chunk.len() as u64;
-
-        // Emit progress every 200ms to avoid flooding the event bus
-        if last_emit.elapsed().as_millis() >= 200 {
-            emit_update_progress(app, downloaded, total, "downloading", None);
-            last_emit = std::time::Instant::now();
-        }
-    }
-
-    if let Err(e) = file.flush() {
-        let _ = std::fs::remove_file(&part_path);
-        let msg = format!("Failed to flush file: {}", e);
-        emit_update_progress(app, downloaded, total, "failed", Some(&msg));
-        return Err(msg);
-    }
-    drop(file);
-
-    // Verification happens BEFORE "completed": a hash mismatch must never leave an
-    // authorized package behind.
-    if hasher.finalize().as_slice() != expected_digest.as_slice() {
+    // The whole file is hashed: a digest streamed from the new bytes alone would
+    // miss everything a previous attempt already left in the `.part`.
+    let actual = file_sha512_base64(&part_path).map_err(|e| {
+        emit_update_progress(app, downloaded, total, "failed", Some(&e));
+        e
+    })?;
+    if actual != sha512 {
         let _ = std::fs::remove_file(&part_path);
         let msg = "Update package integrity check failed (SHA-512 mismatch)".to_string();
         write_log_line("[update] downloaded package failed SHA-512 verification, discarded");
@@ -865,11 +805,6 @@ async fn run_verified_download(
         return Err(msg);
     }
 
-    // No second hash pass here: the streamed digest above was computed over the exact
-    // bytes that were written, and the rename is a same-volume metadata move — it
-    // cannot alter content. Replacement between now and the launch is caught by the
-    // mandatory re-hash in install_downloaded_update, immediately before spawn.
-
     // The verified package is the only thing the fixed directory needs; other
     // versions lying around from earlier runs are now dead weight.
     prune_stale_packages(&temp_dir, &installer_filename(version));
@@ -882,6 +817,115 @@ async fn run_verified_download(
 
     emit_update_progress(app, downloaded, total.max(downloaded), "completed", None);
     Ok(())
+}
+
+/// Download the installer into `part_path`, resuming from an existing partial file.
+///
+/// A retry sends `Range: bytes=N-`; a server that ignores it returns 200 and the file
+/// is truncated. A network or timeout failure keeps the `.part` for the next attempt;
+/// a local write failure discards it because its contents can no longer be trusted.
+async fn fetch_installer_part(
+    client: &reqwest::Client,
+    url: &str,
+    part_path: &std::path::Path,
+    progress: &mut (dyn FnMut(u64, u64, &str, Option<&str>) + Send),
+) -> Result<(u64, u64), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    let resume_from = std::fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
+    progress(resume_from, 0, "downloading", None);
+
+    let mut request = client.get(url).timeout(std::time::Duration::from_secs(300));
+    if resume_from > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={}-", resume_from));
+    }
+
+    let resp = request.send().await.map_err(|e| {
+        let msg = format!("Download failed: {}", e);
+        progress(resume_from, 0, "failed", Some(&msg));
+        msg
+    })?;
+
+    if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        let _ = std::fs::remove_file(part_path);
+        let msg = "Download failed: HTTP 416 Range Not Satisfiable".to_string();
+        progress(resume_from, 0, "failed", Some(&msg));
+        return Err(msg);
+    }
+    if !resp.status().is_success() {
+        let msg = format!("Download failed: HTTP {}", resp.status());
+        progress(resume_from, 0, "failed", Some(&msg));
+        return Err(msg);
+    }
+
+    let resumed = resume_from > 0 && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let total = resp
+        .content_length()
+        .map(|len| len.saturating_add(if resumed { resume_from } else { 0 }))
+        .unwrap_or(0);
+
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(resumed)
+        .truncate(!resumed)
+        .open(part_path)
+    {
+        Ok(file) => file,
+        Err(e) => {
+            let msg = format!("Failed to create file: {}", e);
+            progress(resume_from, total, "failed", Some(&msg));
+            return Err(msg);
+        }
+    };
+
+    let mut downloaded = if resumed { resume_from } else { 0 };
+    progress(downloaded, total, "downloading", None);
+
+    let mut stream = resp.bytes_stream();
+    let mut last_emit = std::time::Instant::now();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                let _ = file.flush();
+                drop(file);
+                let msg = format!("Download interrupted: {}", e);
+                write_log_line(
+                    "[update] download interrupted; partial file kept for the next attempt",
+                );
+                progress(downloaded, total, "failed", Some(&msg));
+                return Err(msg);
+            }
+        };
+        if let Err(e) = file.write_all(&chunk) {
+            drop(file);
+            let _ = std::fs::remove_file(part_path);
+            let msg = format!("Failed to write file: {}", e);
+            progress(downloaded, total, "failed", Some(&msg));
+            return Err(msg);
+        }
+        downloaded += chunk.len() as u64;
+
+        // Emit progress every 200ms to avoid flooding the event bus
+        if last_emit.elapsed().as_millis() >= 200 {
+            progress(downloaded, total, "downloading", None);
+            last_emit = std::time::Instant::now();
+        }
+    }
+
+    if let Err(e) = file.flush() {
+        drop(file);
+        let _ = std::fs::remove_file(part_path);
+        let msg = format!("Failed to flush file: {}", e);
+        progress(downloaded, total, "failed", Some(&msg));
+        return Err(msg);
+    }
+    drop(file);
+
+    Ok((downloaded, total))
 }
 
 /// Remove every file in the update directory except `keep`.
@@ -1435,5 +1479,162 @@ mod update_tests {
             authorize_install(Some(&verified), "0.2.1", VALID_SHA512).unwrap(),
             path
         );
+    }
+}
+
+#[cfg(test)]
+mod resume_download_tests {
+    use super::fetch_installer_part;
+    use std::io::{ErrorKind, Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    fn serve(responses: Vec<Vec<u8>>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(conn) => break conn,
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                panic!("test server timed out waiting for a connection");
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(e) => panic!("test server failed to accept: {}", e),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut req = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut buf).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    req.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8_lossy(&req).to_lowercase());
+                stream.write_all(&response).unwrap();
+            }
+            requests
+        });
+        (format!("http://{}/SayIt.exe", addr), handle)
+    }
+
+    fn part_file(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("sayit-resume-{}-{}", tag, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("SayIt.exe.part")
+    }
+
+    fn cleanup(part: &std::path::Path) {
+        let _ = std::fs::remove_file(part);
+        if let Some(dir) = part.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn resumes_from_an_existing_part_file() {
+        let part = part_file("resume");
+        std::fs::write(&part, b"HELLO ").unwrap();
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 6-10/11\r\nConnection: close\r\n\r\nWORLD".to_vec(),
+        ]);
+        let client = reqwest::Client::new();
+        let (done, total) = fetch_installer_part(&client, &url, &part, &mut |_, _, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), b"HELLO WORLD");
+        assert_eq!((done, total), (11, 11));
+        let requests = server.join().unwrap();
+        assert!(requests[0].contains("range: bytes=6-"), "{}", requests[0]);
+        cleanup(&part);
+    }
+
+    #[tokio::test]
+    async fn starts_over_when_the_server_ignores_the_range() {
+        let part = part_file("restart");
+        std::fs::write(&part, b"STALE BYTES").unwrap();
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nNEW!".to_vec(),
+        ]);
+        let client = reqwest::Client::new();
+        let (done, total) = fetch_installer_part(&client, &url, &part, &mut |_, _, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), b"NEW!");
+        assert_eq!((done, total), (4, 4));
+        let requests = server.join().unwrap();
+        assert!(requests[0].contains("range: bytes=11-"), "{}", requests[0]);
+        cleanup(&part);
+    }
+
+    #[tokio::test]
+    async fn range_not_satisfiable_deletes_the_part() {
+        let part = part_file("416");
+        std::fs::write(&part, b"TOO LONG ALREADY").unwrap();
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        ]);
+        let client = reqwest::Client::new();
+        let result = fetch_installer_part(&client, &url, &part, &mut |_, _, _, _| {}).await;
+        assert!(result.is_err(), "{:?}", result);
+        assert!(!part.exists());
+        server.join().unwrap();
+        cleanup(&part);
+    }
+
+    #[tokio::test]
+    async fn fresh_download_sends_no_range() {
+        let part = part_file("fresh");
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".to_vec(),
+        ]);
+        let client = reqwest::Client::new();
+        fetch_installer_part(&client, &url, &part, &mut |_, _, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), b"abc");
+        let requests = server.join().unwrap();
+        assert!(!requests[0].contains("range:"), "{}", requests[0]);
+        cleanup(&part);
+    }
+
+    #[tokio::test]
+    async fn keeps_the_part_file_after_a_mid_stream_disconnect() {
+        let part = part_file("disconnect");
+        let (url, server) = serve(vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nHELLO ".to_vec(),
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 6-10/11\r\nConnection: close\r\n\r\nWORLD".to_vec(),
+        ]);
+        let client = reqwest::Client::new();
+        let first = fetch_installer_part(&client, &url, &part, &mut |_, _, _, _| {}).await;
+        assert!(first.is_err(), "{:?}", first);
+        assert_eq!(std::fs::read(&part).unwrap(), b"HELLO ");
+
+        let (done, total) = fetch_installer_part(&client, &url, &part, &mut |_, _, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&part).unwrap(), b"HELLO WORLD");
+        assert_eq!((done, total), (11, 11));
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("range: bytes=6-"), "{}", requests[1]);
+        cleanup(&part);
     }
 }
