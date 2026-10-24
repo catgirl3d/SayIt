@@ -26,7 +26,7 @@ export const WithIcon: Story = {
 
 export const WithoutIcon: Story = {
   args: {
-    title: 'Cleanup presets',
+    title: 'AI presets',
     children: (
       <>
         <p>Presets control how the recognized transcript is cleaned before insertion.</p>

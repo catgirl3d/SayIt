@@ -44,7 +44,7 @@ type Story = StoryObj<typeof meta>
 
 export const Default: Story = {
   args: {
-    items: ['Intent cleanup', 'Faithful transcription', 'Translate to English'],
+    items: ['Intent processing', 'Faithful transcription', 'Translate to English'],
   },
 }
 

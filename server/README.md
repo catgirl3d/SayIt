@@ -4,7 +4,7 @@
 
 **Just say it, and write well**
 
-Self-hosted speech-to-text server with real-time ASR and optional AI cleanup.
+Self-hosted speech-to-text server with real-time ASR and optional AI processing.
 
 [Quick Start](#quick-start) · [Architecture](#architecture) · [Configuration](#configuration) · [Deployment](#deployment) · [License](#license)
 
@@ -14,7 +14,7 @@ Self-hosted speech-to-text server with real-time ASR and optional AI cleanup.
 
 ## What is SayIt?
 
-SayIt is a self-hosted speech-to-text service with configurable ASR engines (Qwen3-ASR, FireRedASR2, and Sber GigaAM) and optional AI cleanup. It provides:
+SayIt is a self-hosted speech-to-text service with configurable ASR engines (Qwen3-ASR, FireRedASR2, and Sber GigaAM) and optional AI processing. It provides:
 
 - **Browser Demo** — Record and transcribe directly in the browser, no install needed
 - **Windows Desktop Integration** — Push-to-talk clients can stream audio and receive cleaned text
@@ -26,7 +26,7 @@ The ASR workload runs on the server GPU; the optional LLM and PostgreSQL service
 ## Features
 
 - 🎯 **Real-time ASR** — Qwen3-ASR-1.7B by default, with FireRedASR2 and Sber GigaAM alternatives
-- ✨ **AI Cleanup** — Optional written-text cleanup through OpenAI, Azure OpenAI, Groq, or Ollama
+- ✨ **AI Processing** — Optional written-text processing through OpenAI, Azure OpenAI, Groq, or Ollama
 - 🔥 **Hotword Boosting** — Custom vocabulary for domain-specific terms
 - 📊 **Session Telemetry** — Session analytics and performance measurements are persisted for operators
 - 🐳 **Docker Ready** — `docker compose up` with GPU support, model baked into image
@@ -108,7 +108,7 @@ server/
 │   │   ├── main.py       # Routes, WebSocket handler
 │   │   ├── config.py     # Nested config dataclasses
 │   │   ├── asr.py        # ASR engines + VAD
-│   │   ├── llm.py        # AI cleanup (multi-provider)
+│   │   ├── llm.py        # AI processing (multi-provider)
 │   │   ├── telemetry.py  # Usage tracking + analytics
 │   │   ├── db.py         # SQLite / PostgreSQL abstraction
 │   │   └── ratelimit.py  # Token-bucket rate limiter

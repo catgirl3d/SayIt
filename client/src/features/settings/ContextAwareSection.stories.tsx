@@ -131,7 +131,7 @@ export const AiCleanupOff: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     // The saved preference stays on, but the hint explains why nothing is read.
-    await expect(await canvas.findByText(/works only while ai cleanup is on/i)).toBeVisible()
+    await expect(await canvas.findByText(/works only while ai processing is on/i)).toBeVisible()
     await expect(canvas.queryByText(/ai refers to text near the cursor/i)).toBeNull()
     await expect(canvas.getByRole('switch', { name: /context and selection awareness/i })).toHaveAttribute('aria-checked', 'true')
   },

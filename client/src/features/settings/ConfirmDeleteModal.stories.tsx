@@ -12,7 +12,7 @@ type Story = StoryObj<typeof meta>
 
 export const Default: Story = {
   args: {
-    title: 'Delete this cleanup preset?',
+    title: 'Delete this AI preset?',
     body: 'The preset and its shortcut will be removed from this device. This cannot be undone.',
     onCancel: () => undefined,
     onConfirm: () => undefined,

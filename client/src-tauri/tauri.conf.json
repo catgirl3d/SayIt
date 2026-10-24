@@ -46,7 +46,7 @@
       "icons/128x128.png",
       "icons/128x128@2x.png"
     ],
-    "shortDescription": "Voice input with AI cleanup",
+    "shortDescription": "Voice input with AI processing",
     "longDescription": "SayIt - Just say it, and write well. Turn speech into polished writing with AI in real time.",
     "copyright": "© 2026 Liu Qianglong & Claude",
     "category": "Productivity",

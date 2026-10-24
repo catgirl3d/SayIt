@@ -54,7 +54,7 @@ export const CloudEngineIgnoresHotwords: Story = {
 
     await expect(notice).toHaveTextContent('Groq Whisper does not send hotwords to speech recognition')
     await expect(notice).toHaveTextContent('Send hotwords to the AI prompt')
-    await expect(notice).toHaveTextContent('AI cleanup')
+    await expect(notice).toHaveTextContent('AI processing')
   },
 }
 

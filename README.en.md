@@ -22,7 +22,7 @@ Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcr
 
 This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG.md) ([Ukrainian translation](CHANGELOG.uk.md)).
 
-**English, Ukrainian, Russian, and Chinese dictation:** built-in cleanup prompts are available in English and Ukrainian. Choose their instruction language separately in AI settings; on a fresh setup it follows the UI language. Set the ASR recognition language independently and use a model that supports the language you speak.
+**English, Ukrainian, Russian, and Chinese dictation:** built-in AI processing prompts are available in English and Ukrainian. Choose their instruction language separately in AI settings; on a fresh setup it follows the UI language. Set the ASR recognition language independently and use a model that supports the language you speak.
 
 <div align="center">
 
@@ -38,11 +38,11 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 
 - **Voice typing anywhere** — dictate into editors, chat apps, browsers, and other Windows software.
 - **Live computer subtitles & translation** — translate spoken audio from videos, calls (Zoom, Discord), and any app in real time via native Windows WASAPI loopback, with no extra drivers needed. Includes a click-through overlay, dual-subtitle display (original speech alongside translation), and independent language controls.
-- **Editable AI cleanup** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
-- **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped. Selection edits use your current AI model by default; choose a separate saved model in Settings → AI cleanup → Context awareness.
+- **Editable AI processing** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
+- **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped. Selection edits use your current AI model by default; choose a separate saved model in Settings → AI processing → Context awareness.
 - **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, connect to the public trial server, or host your own backend.
 - **English and Ukrainian interface** — the UI follows your system language and can be switched at any time.
-- **Hotwords and per-app rules** — improve names and technical terms, then change cleanup behavior automatically for different apps.
+- **Hotwords and per-app rules** — improve names and technical terms, then change AI processing behavior automatically for different apps.
 - **Overlay feedback** — a small waveform overlay shows recording state and elapsed time, with optional live captions while you speak.
 - **Transparent data flow** — the app shows which mode is active and where audio and text are processed.
 - **Local history and diagnostics** — review recordings, re-transcribe them, and collect useful troubleshooting details without guesswork.
@@ -51,11 +51,11 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 
 | Mode | Best for | Data flow |
 | --- | --- | --- |
-| **Local mode** | Privacy and offline use | Speech recognition stays on your PC. With AI cleanup off, nothing leaves the device. |
+| **Local mode** | Privacy and offline use | Speech recognition stays on your PC. With AI processing off, nothing leaves the device. |
 | **Cloud API mode** | The best balance for personal use | Your PC talks directly to the ASR and AI providers you configure. No SayIt server is involved. |
 | **Server mode** | Teams and managed deployments | Audio is processed by a SayIt backend you control—or by the public trial server for a quick start. |
 
-The current local catalog contains 15 downloadable GGUF model variants, with GPU acceleration when available: Parakeet Unified EN, Parakeet TDT v3 and 1.1B, SenseVoice Small, Fun-ASR Nano and MLT Nano, Nemotron 3.5 ASR (40 languages), GigaAM v3 (RNN-T and CTC), Qwen3-ASR 0.6B and two 1.7B quantizations, and Whisper Small, Large v3, and Large v3 Turbo. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI cleanup works with DeepSeek, Qwen, Doubao, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
+The current local catalog contains 15 downloadable GGUF model variants, with GPU acceleration when available: Parakeet Unified EN, Parakeet TDT v3 and 1.1B, SenseVoice Small, Fun-ASR Nano and MLT Nano, Nemotron 3.5 ASR (40 languages), GigaAM v3 (RNN-T and CTC), Qwen3-ASR 0.6B and two 1.7B quantizations, and Whisper Small, Large v3, and Large v3 Turbo. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI processing works with DeepSeek, Qwen, Doubao, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
 
 ## A closer look
 
@@ -73,9 +73,9 @@ The current local catalog contains 15 downloadable GGUF model variants, with GPU
 
 <br>
 
-<img src="docs/images/readme/ai-cleanup-en.png" width="760" alt="AI cleanup settings showing built-in presets and per-app prompt rules">
+<img src="docs/images/readme/ai-cleanup-en.png" width="760" alt="AI processing settings showing built-in presets and per-app prompt rules">
 
-*AI cleanup — every built-in preset is editable, and per-app rules can switch presets based on the app you are typing into.*
+*AI processing — every built-in preset is editable, and per-app rules can switch presets based on the app you are typing into.*
 
 <br>
 
@@ -107,7 +107,7 @@ For regular use, choose Local mode or add your own cloud provider keys from the 
 
 ## Self-hosting
 
-The backend combines FastAPI, WebSocket streaming, Qwen3-ASR, and an optional OpenAI-compatible cleanup model. Docker Compose is the recommended deployment path.
+The backend combines FastAPI, WebSocket streaming, Qwen3-ASR, and an optional OpenAI-compatible processing model. Docker Compose is the recommended deployment path.
 
 ```bash
 git clone https://github.com/catgirl3d/SayIt.git

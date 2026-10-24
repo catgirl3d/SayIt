@@ -29,7 +29,7 @@ function Inputs({ ptt, combo }: { ptt: string; combo: string }) {
       <ComboShortcutInput
         value={combo}
         onChange={() => undefined}
-        label="Toggle AI cleanup"
+        label="Toggle AI processing"
         description="Use a combination that is not already reserved."
         comboOnly
       />

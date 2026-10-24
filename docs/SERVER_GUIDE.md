@@ -67,7 +67,7 @@ After opening SayIt, go to the **Settings** window:
 4. **Successful Status:**
    - A green confirmation message will appear below the input field:
      ```text
-     Saved. Connected. This server only does speech recognition, with AI cleanup off — you'll get the raw transcript, unpolished. · ASR: Sber GigaAM (v2_rnnt)
+     Saved. Connected. This server only does speech recognition, with AI processing off — you'll get the raw transcript, unpolished. · ASR: Sber GigaAM (v2_rnnt)
      ```
    - A green **• Connected** indicator will appear in the top-right corner of the mode selection panel.
 
