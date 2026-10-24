@@ -61,3 +61,23 @@ describe('history AI execution mark', () => {
     expect(screen.queryByText(t('record.aiNotAppliedUnavailable'))).toBeNull()
   })
 })
+
+describe('history day groups', () => {
+  afterEach(() => setLocale('en'))
+
+  it('orders day headings by date, not by their localized text', () => {
+    setLocale('en')
+    render(
+      <HistoryRecordList
+        records={[
+          record({ id: 'oct', timestamp: new Date(2026, 9, 1, 12).getTime(), asrText: 'newer' }),
+          record({ id: 'sep', timestamp: new Date(2026, 8, 30, 12).getTime(), asrText: 'older' }),
+        ]}
+        onDelete={() => undefined}
+      />,
+    )
+
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent)
+    expect(headings).toEqual(['October 1, 2026', 'September 30, 2026'])
+  })
+})

@@ -107,11 +107,40 @@ const callbacks = {
   onSaveAsrCorrection: () => undefined,
 }
 
+function crossMonthRecord(id: string, timestamp: number, asrText: string): HistoryRecord {
+  return {
+    id,
+    timestamp,
+    asrText,
+    llmText: asrText,
+    asrMs: 480,
+    llmMs: 0,
+    durationSec: 2.4,
+    charCount: asrText.length,
+    workMode: 'cloud_api',
+    asrProvider: 'deepgram',
+  }
+}
+
+// Fixed dates keep the headings stable and pin the month-boundary order.
+const crossMonthRecords = [
+  crossMonthRecord('history-october', new Date(2026, 9, 13, 12).getTime(), 'Newest October note'),
+  crossMonthRecord('history-september', new Date(2026, 8, 30, 12).getTime(), 'Older September note'),
+  crossMonthRecord('history-august', new Date(2026, 7, 18, 12).getTime(), 'Oldest August note'),
+]
+
 export const RichHistory: Story = {
   args: {
     records,
     ...callbacks,
     highlight: 'release',
+  },
+}
+
+export const CrossMonthDayGroups: Story = {
+  args: {
+    records: crossMonthRecords,
+    ...callbacks,
   },
 }
 
