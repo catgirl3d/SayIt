@@ -41,6 +41,37 @@ const MAX_HOTWORDS: usize = 1000;
 /// are usage data, not configuration. Both are legacy counter keys that old
 /// config files may still carry; usage now lives in `usage_events`.
 const CONFIG_EXCLUDE: &[&str] = &["stats", "userStats"];
+/// app_settings keys that hold local identity or internal bookkeeping rather
+/// than user-visible preferences. They are never written into a backup and never
+/// applied from one: a foreign archive must not clone the local device identity,
+/// replay another machine's first-run autostart migration, or move its WebDAV
+/// scheduler state here.
+///
+/// Everything else is a user setting and belongs to a full backup, including
+/// the update-check preference, microphone/system-audio selections, local model
+/// folder and compute backend, and absolute output folders: restoring a backup
+/// on the same machine must reproduce the saved configuration. The actual
+/// autostart registration lives in the OS, not in `app_settings`, so it is
+/// outside both the backup and this list.
+const LOCAL_STATE_KEYS: &[&str] = &[
+    "deviceId",
+    "autoLaunchInitialized",
+    "autoLaunchArgsMigrated",
+    "webdav.lastResult",
+    "webdav.lastBackupAt",
+    "webdav.lastAttemptAt",
+];
+
+/// Everything a configuration export/import must skip: the legacy usage
+/// counters plus the local-state keys. A full backup skips only
+/// [`LOCAL_STATE_KEYS`] and carries usage in its own section.
+fn config_exclusions() -> Vec<&'static str> {
+    CONFIG_EXCLUDE
+        .iter()
+        .copied()
+        .chain(LOCAL_STATE_KEYS.iter().copied())
+        .collect()
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,11 +87,13 @@ pub struct ConfigExportSelection {
     prompt_preset_ids: Vec<String>,
 }
 
-/// 全量备份里除配置之外还装什么。
+/// What a full backup carries besides the configuration.
 ///
-/// 两个字段都**不给 serde 默认值**：调用方必须显式表态。给默认值的那一版是个陷阱 ——
-/// 漏传参数时会静默按「全都要」打包，而含音频的包可以有几个 GB，自动备份场景下
-/// 意味着每次悄悄上传几个 GB。宁可让反序列化直接失败，报一条看得见的错。
+/// Neither field gets a serde default: the caller must state the scope
+/// explicitly. Defaulting them is a trap — an omitted argument would silently
+/// pack "everything", and an archive with audio can be several gigabytes, which
+/// in the automatic-backup path means quietly uploading gigabytes every time.
+/// Failing deserialization with a visible error is preferable.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupScope {
@@ -144,7 +177,8 @@ fn timestamped_backup_path(prefix: &str, extension: &str) -> PathBuf {
     backup_dir().join(format!("{}-{}.{}", prefix, timestamp, extension))
 }
 
-/// 取路径的文件名部分（兼容 / 和 \ 分隔符，跨平台备份用）。
+/// Returns the file-name part of a path. Both separators are accepted so a
+/// backup made on another platform still yields the recording name.
 fn basename(path: &str) -> String {
     path.rsplit(|c| c == '/' || c == '\\')
         .next()
@@ -152,9 +186,115 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
+const BACKUP_ENTRY_NAME: &str = "backup.json";
+const AUDIO_ENTRY_PREFIX: &str = "audio/";
+
+/// Device names Windows reserves in every directory. `create_new` on one of
+/// them opens a device instead of a file, so a backup must never publish such a
+/// name.
+const WINDOWS_RESERVED_FILE_STEMS: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "conin$",
+    "conout$",
+];
+
+/// Validates one flat recording name taken from a backup.
+///
+/// A backup recording is stored as `audio/<name>.wav`, so `<name>` must be a
+/// single plain `.wav` segment. This is deliberately stricter than
+/// [`basename`]: `basename` would silently flatten `../x.wav` or `C:x.wav` and
+/// still write the result, while a hostile name has to be rejected before any
+/// file is created. The returned name is safe to join under the audio directory.
+fn validate_audio_file_name(name: &str) -> Result<&str, String> {
+    if name.is_empty() {
+        return Err("the name is empty".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("the name is not a file name".to_string());
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err("the name contains a path separator".to_string());
+    }
+    if name.contains(':') {
+        return Err("the name contains a drive or stream separator".to_string());
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return Err("the name contains characters Windows does not allow".to_string());
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err("the name ends with a dot or a space".to_string());
+    }
+    if !name.to_ascii_lowercase().ends_with(".wav") {
+        return Err("only .wav audio files are supported".to_string());
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if WINDOWS_RESERVED_FILE_STEMS.contains(&stem.as_str()) {
+        return Err("the name is reserved by Windows".to_string());
+    }
+    Ok(name)
+}
+
+/// Checks one archive member before the restore writes anything.
+///
+/// A SayIt full backup contains exactly `backup.json` and flat
+/// `audio/<name>.wav` members (the optional `audio/` folder entry is tolerated).
+/// Anything else — an executable, a nested or traversal path, a drive-relative
+/// name, an absolute path — is rejected as a whole archive instead of being
+/// ignored or flattened.
+fn validate_archive_entry(name: &str, is_dir: bool) -> Result<Option<&str>, String> {
+    if name == BACKUP_ENTRY_NAME {
+        if is_dir {
+            return Err("backup.json must be a file, not a folder".to_string());
+        }
+        return Ok(None);
+    }
+    if name == AUDIO_ENTRY_PREFIX {
+        if !is_dir {
+            return Err("audio/ must be a folder, not a file".to_string());
+        }
+        return Ok(None);
+    }
+    let Some(file_name) = name.strip_prefix(AUDIO_ENTRY_PREFIX) else {
+        return Err(format!("The backup contains an unexpected entry: {name}"));
+    };
+    if is_dir {
+        return Err(format!("The backup contains an unexpected folder: {name}"));
+    }
+    validate_audio_file_name(file_name)
+        .map(Some)
+        .map_err(|reason| format!("The backup audio entry '{name}' is not allowed: {reason}"))
+}
+
+/// Validates every member name up front, so a rejected archive leaves no files
+/// and no database changes behind. Duplicate names are rejected too: a zip may
+/// legally carry them, and silently keeping the first or the last one would
+/// make the restore depend on the reader's ordering.
+fn validate_archive_entries(archive: &mut zip::ZipArchive<fs::File>) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let name = entry.name().to_string();
+        // Windows matches file names case-insensitively using Unicode case
+        // folding, not ASCII. An ASCII-only key would let `Ä.wav` and `ä.wav`
+        // both pass and then silently alias to one file on disk.
+        if !seen.insert(name.to_uppercase()) {
+            return Err(format!("The backup contains duplicate entries: {name}"));
+        }
+        let _ = validate_archive_entry(&name, entry.is_dir())?;
+    }
+    Ok(())
+}
+
 fn build_config_value(storage: &Storage) -> Result<Value, String> {
     let app_settings = storage
-        .export_app_settings(CONFIG_EXCLUDE)
+        .export_app_settings(&config_exclusions())
         .map_err(|error| format!("Failed to export app settings: {}", error))?;
 
     Ok(json!({
@@ -326,7 +466,7 @@ fn build_full_value(storage: &Storage, scope: BackupScope) -> Result<Value, Stri
             "includeAudio": scope.include_audio,
         },
         "appSettings": storage
-            .export_app_settings(&[])
+            .export_app_settings(LOCAL_STATE_KEYS)
             .map_err(|error| format!("Failed to export app settings: {}", error))?,
         "promptPresets": storage
             .export_collection("promptPresets")
@@ -376,10 +516,16 @@ fn check_kind_and_version(
             }
         ));
     }
+    // A missing version is not a legacy version: every export this app ever
+    // wrote carries one. Treating it as zero would accept a hand-made JSON that
+    // merely declares the right `kind`.
     let version = data
         .get("formatVersion")
         .and_then(Value::as_i64)
-        .unwrap_or(0);
+        .ok_or_else(|| "This file has no valid formatVersion and cannot be imported".to_string())?;
+    if version < 1 {
+        return Err(format!("The backup version ({}) is not supported", version));
+    }
     if version > max_version {
         return Err(format!(
             "The backup version ({}) is newer than this app supports ({}). Update SayIt before importing it.",
@@ -394,11 +540,12 @@ fn is_selected_config(data: &Value) -> bool {
         && data.get("formatVersion").and_then(Value::as_i64) == Some(SELECTED_CONFIG_FORMAT_VERSION)
 }
 
-/// 应用完整配置部分（设置 + Prompt 预设 + 分应用规则），两档共用。
 fn array_section<'a>(data: &'a Value, key: &str) -> Option<&'a [Value]> {
     data.get(key).and_then(Value::as_array).map(Vec::as_slice)
 }
 
+/// Applies the full configuration part (settings, prompt presets, per-app
+/// rules); both import profiles share it.
 fn apply_config_part(
     storage: &Storage,
     data: &Value,
@@ -445,6 +592,12 @@ fn publish_audio_file<R: Read>(
 }
 
 /// Rewrites one history record to the local audio directory.
+///
+/// The old machine's absolute path is reduced to its file name, which must be a
+/// safe `.wav` name. A record whose path cannot be rewritten that way loses the
+/// field entirely: keeping the original path would let a crafted backup point a
+/// record at an arbitrary local file, and clearing history deletes whatever
+/// path the record carries.
 fn rewrite_audio_path(rec: &Value, adir: &Path) -> Value {
     let mut rec = rec.clone();
     if let Some(obj) = rec.as_object_mut() {
@@ -454,16 +607,72 @@ fn rewrite_audio_path(rec: &Value, adir: &Path) -> Value {
             .map(|s| s.to_string())
         {
             let base = basename(&p);
-            if !base.is_empty() {
-                let new_path = adir.join(&base);
-                obj.insert(
-                    "audioFilePath".to_string(),
-                    Value::String(new_path.to_string_lossy().to_string()),
-                );
+            match validate_audio_file_name(&base) {
+                Ok(base) => {
+                    let new_path = adir.join(base);
+                    obj.insert(
+                        "audioFilePath".to_string(),
+                        Value::String(new_path.to_string_lossy().to_string()),
+                    );
+                }
+                Err(_) => {
+                    obj.remove("audioFilePath");
+                }
             }
         }
     }
     rec
+}
+
+/// Validates every `audioFilePath` in the archive's history before the restore
+/// writes anything.
+///
+/// A real record stores the recording path of the machine that made the backup,
+/// so absolute paths and plain file names are accepted. Traversal components and
+/// names that are not safe `.wav` file names are rejected as a malformed
+/// archive: silently dropping the field would make the import succeed while the
+/// archive is still hostile.
+fn validate_history_audio_paths(data: &Value) -> Result<(), String> {
+    let Some(history) = data.get("history").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for (index, record) in history.iter().enumerate() {
+        let Some(object) = record.as_object() else {
+            // The collection validation rejects non-object records later; keep
+            // this pass focused on the audio path.
+            continue;
+        };
+        match object.get("audioFilePath") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(path)) => {
+                if path
+                    .split(|c| c == '/' || c == '\\')
+                    .any(|part| part == "..")
+                {
+                    return Err(format!(
+                        "History record {} has an audioFilePath with a parent-directory component",
+                        index + 1
+                    ));
+                }
+                let base = basename(path);
+                validate_audio_file_name(&base).map_err(|reason| {
+                    format!(
+                        "History record {} has an invalid audioFilePath '{}': {}",
+                        index + 1,
+                        path,
+                        reason
+                    )
+                })?;
+            }
+            Some(_) => {
+                return Err(format!(
+                    "History record {} has an invalid audioFilePath",
+                    index + 1
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn next_import_id(prefix: &str, used_ids: &mut HashSet<String>, sequence: &mut usize) -> String {
@@ -785,7 +994,7 @@ fn build_selected_import_plan(
     })
 }
 
-// ─── 导出 ───
+// ─── Export ───
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -828,7 +1037,10 @@ fn collect_audio_export_files(include_audio: bool) -> Vec<AudioExportFile> {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.is_empty() {
+            // Only recordings belong in a backup. Without this filter a stray
+            // executable in the audio folder would be packed and later accepted
+            // by a restore, so export and import enforce the same rule.
+            if validate_audio_file_name(&name).is_ok() {
                 files.push(AudioExportFile {
                     path,
                     name,
@@ -879,7 +1091,8 @@ pub async fn export_config(
     Ok(path)
 }
 
-/// 打包过程中的一帧进度。`phase` 取值与前端 `BackupExportProgress['phase']` 对齐。
+/// One progress frame while packing. The `phase` values match the frontend
+/// `BackupExportProgress['phase']`.
 pub struct ArchiveProgress<'a> {
     pub phase: &'static str,
     pub current_file: Option<&'a str>,
@@ -890,17 +1103,22 @@ pub struct ArchiveProgress<'a> {
     pub percent: f64,
 }
 
-/// 把配置（+ 按 scope 决定的历史 / 音频）打成 zip 写到 `output`。
+/// Packs the configuration (plus history and audio, as `scope` decides) into a
+/// zip written to `output`.
 ///
-/// 本地「全部数据」导出与 WebDAV 备份共用这一份实现，两者的差别只在落地位置和
-/// 进度事件名。刻意不让 WebDAV 自己写一套打包：一旦两份代码分家，就会出现
-/// 「本地导出能恢复、云端备份恢复不了」这种只在换机时才暴露的问题。
+/// The local "all data" export and the WebDAV backup share this one
+/// implementation; they differ only in the destination and the progress event
+/// name. WebDAV deliberately does not get its own packer: once the two code
+/// paths diverge, the failure mode is "local export restores, cloud backup does
+/// not", which only shows up when switching machines.
 ///
-/// 先写 `.part` 再原子 rename，失败时清掉临时文件 —— 中断留下的半个 zip 不能
-/// 长得像一个有效备份。
+/// Writes a `.part` file first and renames it atomically; a failed pack removes
+/// the temporary file — an interrupted half-written zip must not look like a
+/// valid backup.
 ///
-/// 总量（文件数 / 字节数）通过 `on_progress` 报出去，不作为返回值：调用方要的是
-/// 打包完成后**zip 本身**的大小（用来算上传进度），那个得 stat 产物文件才知道。
+/// Counts (files / bytes) are reported through `on_progress` instead of being
+/// returned: the caller needs the size of the finished zip itself (to compute
+/// upload progress), which requires statting the output file.
 pub fn write_backup_archive(
     storage: &Storage,
     scope: BackupScope,
@@ -1038,8 +1256,9 @@ pub async fn export_full(
     let output = timestamped_backup_path("sayit-backup", "zip");
     let out_path = output.to_string_lossy().to_string();
 
-    // 失败分支也要报出总量，所以在回调里留一份最近值：write_backup_archive 出错时
-    // 只给 Err(String)，拿不到它内部算出的 totals。
+    // The failure branch must also report the totals, so keep the latest values
+    // in the callback: when write_backup_archive fails it only returns
+    // Err(String), and the totals it computed internally are unavailable.
     let mut seen_totals = (0u64, 0u64);
     let export_result = {
         let progress_app = app.clone();
@@ -1091,7 +1310,7 @@ pub async fn export_full(
             Ok(out_path)
         }
         Err(error) => {
-            // 临时文件已由 write_backup_archive 清理。
+            // The temporary file has already been removed by write_backup_archive.
             emit_export_progress(
                 &app,
                 BackupExportProgress {
@@ -1112,7 +1331,7 @@ pub async fn export_full(
     }
 }
 
-// ─── 导入 ───
+// ─── Import ───
 
 fn content_fingerprint(content: &str) -> String {
     let mut hash = 0xcbf29ce484222325u64;
@@ -1215,19 +1434,26 @@ fn validate_config_collection(key: &str, items: &[Value]) -> Result<(), String> 
     Ok(())
 }
 
-fn full_config_preview_sections(data: &Value) -> Result<Vec<ConfigImportSectionPreview>, String> {
+fn full_config_preview_sections(
+    data: &Value,
+    settings_exclude: &[&str],
+) -> Result<Vec<ConfigImportSectionPreview>, String> {
     let mut sections = Vec::new();
 
     if let Some(value) = data.get("appSettings") {
         let settings = value
             .as_object()
             .ok_or_else(|| "appSettings has an invalid format".to_string())?;
-        if !settings.is_empty() {
+        let importable = settings
+            .keys()
+            .filter(|key| !settings_exclude.contains(&key.as_str()))
+            .count();
+        if importable > 0 {
             sections.push(ConfigImportSectionPreview {
                 kind: "appSettings".to_string(),
-                total: settings.len(),
+                total: importable,
                 added: 0,
-                updated: settings.len(),
+                updated: importable,
                 skipped: 0,
             });
         }
@@ -1283,7 +1509,7 @@ pub async fn inspect_config_import(
         return Err("Unsupported configuration scope or version".to_string());
     }
 
-    let sections = full_config_preview_sections(&data)?;
+    let sections = full_config_preview_sections(&data, &config_exclusions())?;
     Ok(ConfigImportPreview {
         scope: "full".to_string(),
         format_version: version,
@@ -1323,7 +1549,7 @@ pub async fn import_config(
         storage
             .apply_config_transaction(
                 &plan.app_settings,
-                CONFIG_EXCLUDE,
+                &config_exclusions(),
                 plan.prompt_presets.as_deref(),
                 None,
             )
@@ -1340,13 +1566,15 @@ pub async fn import_config(
     if data.get("scope").is_some() || version > FORMAT_VERSION {
         return Err("Unsupported configuration scope or version".to_string());
     }
-    full_config_preview_sections(&data)?;
+    full_config_preview_sections(&data, &config_exclusions())?;
     if file_fingerprint != expected_import_token {
         return Err("The configuration file changed; select it again and reconfirm".to_string());
     }
 
-    // A full config import excludes the legacy counter keys so it cannot overwrite local counts.
-    apply_config_part(storage.inner(), &data, CONFIG_EXCLUDE)?;
+    // A full config import excludes the legacy counter keys and the
+    // machine-local keys: it must not overwrite local counts, identity, or
+    // device selections.
+    apply_config_part(storage.inner(), &data, &config_exclusions())?;
     Ok(ConfigImportResult {
         changed_sections: vec!["fullConfig".to_string()],
         added: 0,
@@ -1373,10 +1601,14 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("Not a valid backup archive: {}", e))?;
 
+    // Reject a malformed or hostile archive before anything is read or written:
+    // only backup.json and flat .wav recordings are legitimate members.
+    validate_archive_entries(&mut archive)?;
+
     // 1. Read and validate backup.json
     let mut json_str = String::new();
     {
-        let mut entry = archive.by_name("backup.json").map_err(|_| {
+        let mut entry = archive.by_name(BACKUP_ENTRY_NAME).map_err(|_| {
             "The archive is missing backup.json and may not be a SayIt full backup".to_string()
         })?;
         entry
@@ -1386,7 +1618,10 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
     let data: Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse backup.json: {}", e))?;
     check_kind_and_version(&data, "full", FULL_FORMAT_VERSION)?;
-    full_config_preview_sections(&data)?;
+    // Validate the shape of every setting here; local keys are skipped later,
+    // but a full backup is still valid when the only settings it carries are
+    // machine-local.
+    full_config_preview_sections(&data, &[])?;
     for key in ["history", "manualCorrections", "feedbackQueue"] {
         if let Some(value) = data.get(key) {
             let items = value
@@ -1395,6 +1630,7 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
             validate_config_collection(key, items)?;
         }
     }
+    validate_history_audio_paths(&data)?;
 
     // Validate the usage section up front: a malformed one must abort the
     // restore before any part of it is applied.
@@ -1411,17 +1647,19 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
             let name = entry.name().to_string();
-            let Some(rest) = name.strip_prefix("audio/") else {
+            let Some(rest) = name.strip_prefix(AUDIO_ENTRY_PREFIX) else {
                 continue;
             };
             if rest.is_empty() || entry.is_dir() {
                 continue;
             }
-            let base = basename(rest);
-            if base.is_empty() {
-                continue;
-            }
-            publish_audio_file(&adir, &base, &mut entry, &mut created)?;
+            // `validate_archive_entries` already accepted this name; validating
+            // again keeps the write path safe on its own and never flattens a
+            // hostile name into the audio directory.
+            let base = validate_audio_file_name(rest).map_err(|reason| {
+                format!("The backup audio entry '{name}' is not allowed: {reason}")
+            })?;
+            publish_audio_file(&adir, base, &mut entry, &mut created)?;
         }
 
         let empty_settings = Map::new();
@@ -1443,6 +1681,7 @@ pub fn apply_full_backup(storage: &Storage, in_path: &str) -> Result<(), String>
         storage
             .restore_full_transaction(
                 app_settings,
+                LOCAL_STATE_KEYS,
                 prompt_presets,
                 app_prompt_rules,
                 history.as_deref(),
@@ -1495,12 +1734,14 @@ mod tests {
         (storage, dir)
     }
 
-    /// 不含历史时，`history` 字段必须**整个缺席**，不能是空数组。
+    /// When history is not included, the `history` field must be **absent
+    /// entirely**, not an empty array.
     ///
-    /// 这是「只备份配置」这一档能安全恢复的全部依据：`apply_full_backup` 用
-    /// `if let Some(history)` 判断，字段缺席就保留本机历史，写成空数组则会把本机
-    /// 历史整表清空 —— 一个「只想同步设置」的用户会因此丢掉全部记录，而且备份和
-    /// 恢复都不会报任何错。
+    /// This is the entire basis for safely restoring the config-only profile:
+    /// `apply_full_backup` uses `if let Some(history)`, so an absent field keeps
+    /// the local history, while an empty array would wipe the local history
+    /// table — a user who only wanted to sync settings would lose every record,
+    /// and neither the backup nor the restore would report any error.
     #[test]
     fn config_only_backup_omits_history_instead_of_emptying_it() {
         let (storage, dir) = temp_storage("scope");
@@ -1526,7 +1767,8 @@ mod tests {
         );
         assert!(config_only.get("manualCorrections").is_none());
         assert!(config_only.get("feedbackQueue").is_none());
-        // 配置部分照旧在，且 kind 仍是 full —— 用现有的导入路径就能恢复。
+        // The configuration part is still present and kind is still full; the
+        // existing import path can restore it.
         assert_eq!(
             config_only.get("kind").and_then(Value::as_str),
             Some("full")
@@ -1558,7 +1800,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// 不含音频时不去扫 audio 目录，也就不会把别的备份的录音塞进来。
+    /// When audio is not included the audio directory is not scanned, so another
+    /// backup's recordings cannot be pulled in.
     #[test]
     fn audio_files_are_only_collected_when_requested() {
         assert!(collect_audio_export_files(false).is_empty());
@@ -1630,7 +1873,7 @@ mod tests {
             "appPromptRules": [],
         });
 
-        assert!(full_config_preview_sections(&data).is_err());
+        assert!(full_config_preview_sections(&data, &[]).is_err());
     }
 
     #[test]
@@ -1755,6 +1998,22 @@ mod tests {
         zip.finish().unwrap();
     }
 
+    /// Writes an archive with caller-provided member names, used to build the
+    /// malformed archives the restore must reject.
+    fn write_archive_zip(path: &Path, payload: &Value, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("backup.json", options).unwrap();
+        zip.write_all(serde_json::to_string(payload).unwrap().as_bytes())
+            .unwrap();
+        for (name, bytes) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
     fn restorable_validation_payload(history: Value) -> Value {
         json!({
             "kind": "full",
@@ -1840,6 +2099,444 @@ mod tests {
         assert_eq!(storage.get("history", None), original_history);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_non_wav_audio_entry_before_writing() {
+        let (storage, dir) = temp_storage("reject-non-wav");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let original_history = json!([{ "id": "local-1", "timestamp": 1 }]);
+        storage.set("history", &original_history).unwrap();
+        let adir = audio_dir();
+        fs::create_dir_all(&adir).unwrap();
+        let name = format!("reject-{}.exe", uuid::Uuid::new_v4());
+        let entry_name = format!("audio/{name}");
+        let backup_path = dir.join("reject-non-wav.zip");
+        write_archive_zip(
+            &backup_path,
+            &restorable_validation_payload(json!([{ "id": "restored-1", "timestamp": 2 }])),
+            &[(entry_name.as_str(), b"MZ")],
+        );
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+        assert!(error.contains(".wav"), "unexpected error: {error}");
+        assert!(!adir.join(&name).exists());
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        assert_eq!(storage.get("history", None), original_history);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_traversal_audio_entry_before_writing() {
+        let (storage, dir) = temp_storage("reject-traversal");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let adir = audio_dir();
+        fs::create_dir_all(&adir).unwrap();
+        let name = format!("escape-{}.wav", uuid::Uuid::new_v4());
+        let entry_name = format!("audio/../{name}");
+        let outside = adir.parent().unwrap().join(&name);
+        let backup_path = dir.join("reject-traversal.zip");
+        write_archive_zip(
+            &backup_path,
+            &restorable_validation_payload(json!([])),
+            &[(entry_name.as_str(), b"escape")],
+        );
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+        assert!(
+            error.contains("path separator"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !outside.exists(),
+            "the traversal entry must not escape the audio directory"
+        );
+        assert!(
+            !adir.join(&name).exists(),
+            "a rejected entry must not be flattened into the audio directory"
+        );
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_drive_relative_audio_entry() {
+        let (storage, dir) = temp_storage("reject-drive-relative");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let name = format!("C:escape-{}.wav", uuid::Uuid::new_v4());
+        let entry_name = format!("audio/{name}");
+        let backup_path = dir.join("reject-drive-relative.zip");
+        write_archive_zip(
+            &backup_path,
+            &restorable_validation_payload(json!([])),
+            &[(entry_name.as_str(), b"escape")],
+        );
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+        assert!(error.contains("drive"), "unexpected error: {error}");
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_unexpected_archive_entries() {
+        let (storage, dir) = temp_storage("reject-unexpected-entry");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let name = format!("escape-{}.exe", uuid::Uuid::new_v4());
+        let entry_name = format!("../{name}");
+        let backup_path = dir.join("reject-unexpected-entry.zip");
+        write_archive_zip(
+            &backup_path,
+            &restorable_validation_payload(json!([])),
+            &[(entry_name.as_str(), b"MZ")],
+        );
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+        assert!(
+            error.contains("unexpected entry"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_duplicate_entries_differing_in_unicode_case() {
+        let (storage, dir) = temp_storage("duplicate-unicode-case");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let backup_path = dir.join("duplicate-unicode-case.zip");
+        write_archive_zip(
+            &backup_path,
+            &restorable_validation_payload(json!([])),
+            &[
+                ("audio/\u{00C4}.wav", b"upper"),
+                ("audio/\u{00E4}.wav", b"lower"),
+            ],
+        );
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+        assert!(error.contains("duplicate"), "unexpected error: {error}");
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_tolerates_an_audio_directory_entry() {
+        let (storage, dir) = temp_storage("audio-dir-entry");
+        let adir = audio_dir();
+        fs::create_dir_all(&adir).unwrap();
+        let name = format!("dir-entry-{}.wav", uuid::Uuid::new_v4());
+        let backup_path = dir.join("audio-dir-entry.zip");
+        let payload = restorable_validation_payload(json!([{
+            "id": "restored-1",
+            "timestamp": 2,
+            "audioFilePath": format!("C:\\old\\{name}"),
+        }]));
+        {
+            let file = fs::File::create(&backup_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::FileOptions::default();
+            zip.start_file("backup.json", options).unwrap();
+            zip.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+                .unwrap();
+            zip.add_directory("audio/", options).unwrap();
+            zip.start_file(format!("audio/{name}"), options).unwrap();
+            zip.write_all(b"wav-bytes").unwrap();
+            zip.finish().unwrap();
+        }
+
+        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
+
+        assert_eq!(fs::read(adir.join(&name)).unwrap(), b"wav-bytes");
+        assert_eq!(
+            storage.get("history", None)[0]["audioFilePath"],
+            json!(adir.join(&name).to_string_lossy())
+        );
+
+        let _ = fs::remove_file(adir.join(&name));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_unsafe_history_audio_paths() {
+        let (storage, dir) = temp_storage("history-unsafe-path");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        for (index, (path, needle)) in [
+            ("../evil.wav", "parent-directory"),
+            ("C:evil.exe", "invalid audioFilePath"),
+            ("C:evil.wav", "invalid audioFilePath"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let payload = restorable_validation_payload(json!([{
+                "id": "restored-1",
+                "timestamp": 2,
+                "audioFilePath": *path,
+            }]));
+            let backup_path = dir.join(format!("history-unsafe-{index}.zip"));
+            write_archive_zip(&backup_path, &payload, &[]);
+
+            let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+            assert!(error.contains(*needle), "unexpected error: {error}");
+        }
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_a_backup_without_format_version() {
+        let (storage, dir) = temp_storage("missing-version");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let backup_path = dir.join("missing-version.zip");
+        let payload = json!({
+            "kind": "full",
+            "appSettings": { "cloudAi.model": "restored-model" },
+            "promptPresets": [],
+            "appPromptRules": [],
+            "usage": { "firstUsedAt": null, "events": [] },
+        });
+        write_archive_zip(&backup_path, &payload, &[]);
+
+        let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+        assert!(error.contains("formatVersion"), "unexpected error: {error}");
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_rejects_out_of_range_format_versions() {
+        let (storage, dir) = temp_storage("invalid-version");
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        for (index, version) in [0_i64, -1, FULL_FORMAT_VERSION + 1].iter().enumerate() {
+            let payload = json!({
+                "kind": "full",
+                "formatVersion": version,
+                "appSettings": { "cloudAi.model": "restored-model" },
+                "promptPresets": [],
+                "appPromptRules": [],
+                "usage": { "firstUsedAt": null, "events": [] },
+            });
+            let backup_path = dir.join(format!("invalid-version-{index}.zip"));
+            write_archive_zip(&backup_path, &payload, &[]);
+
+            let error = apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap_err();
+
+            assert!(
+                error.contains("version") || error.contains("formatVersion"),
+                "unexpected error for version {version}: {error}"
+            );
+        }
+        assert_eq!(storage.get("cloudAi.model", None), json!("local-model"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_restore_keeps_local_identity_and_state_but_restores_preferences() {
+        let (storage, dir) = temp_storage("local-state");
+        let local_state = [
+            ("deviceId", json!("local-device")),
+            ("autoLaunchInitialized", json!("true")),
+            ("autoLaunchArgsMigrated", json!("true")),
+            ("webdav.lastResult", json!({ "ok": true })),
+            ("webdav.lastBackupAt", json!(111)),
+            ("webdav.lastAttemptAt", json!(222)),
+        ];
+        let saved_preferences = [
+            ("autoCheckUpdate", json!(true)),
+            ("selectedMic", json!("local-mic")),
+            ("systemAudio.deviceId", json!("local-system-mic")),
+            ("systemAudio.transcriptDir", json!("C:\\local\\subtitles")),
+            ("localAsr.modelsDir", json!("C:\\local\\models")),
+            ("localAsr.accelerator", json!("cpu")),
+        ];
+        for (key, value) in local_state.iter().chain(saved_preferences.iter()) {
+            storage.set(key, value).unwrap();
+        }
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+
+        let payload = json!({
+            "kind": "full",
+            "formatVersion": 2,
+            "appSettings": {
+                "deviceId": "imported-device",
+                "autoCheckUpdate": false,
+                "autoLaunchInitialized": "",
+                "autoLaunchArgsMigrated": "",
+                "selectedMic": "imported-mic",
+                "systemAudio.deviceId": "imported-system-mic",
+                "systemAudio.transcriptDir": "D:\\imported\\subtitles",
+                "localAsr.modelsDir": "D:\\imported\\models",
+                "localAsr.accelerator": "gpu",
+                "webdav.lastResult": { "ok": false },
+                "webdav.lastBackupAt": 999,
+                "webdav.lastAttemptAt": 999,
+                "cloudAi.model": "restored-model",
+            },
+            "promptPresets": [],
+            "appPromptRules": [],
+            "usage": { "firstUsedAt": null, "events": [] },
+        });
+        let backup_path = dir.join("local-state.zip");
+        write_archive_zip(&backup_path, &payload, &[]);
+        apply_full_backup(&storage, &backup_path.to_string_lossy()).unwrap();
+
+        for (key, value) in &local_state {
+            assert_eq!(&storage.get(key, None), value, "{key} must stay local");
+        }
+        let restored_preferences = [
+            ("autoCheckUpdate", json!(false)),
+            ("selectedMic", json!("imported-mic")),
+            ("systemAudio.deviceId", json!("imported-system-mic")),
+            (
+                "systemAudio.transcriptDir",
+                json!("D:\\imported\\subtitles"),
+            ),
+            ("localAsr.modelsDir", json!("D:\\imported\\models")),
+            ("localAsr.accelerator", json!("gpu")),
+        ];
+        for (key, value) in &restored_preferences {
+            assert_eq!(
+                &storage.get(key, None),
+                value,
+                "{key} must be restored from the backup"
+            );
+        }
+        assert_eq!(storage.get("cloudAi.model", None), json!("restored-model"));
+
+        let exported = build_full_value(
+            &storage,
+            BackupScope {
+                include_history: false,
+                include_audio: false,
+            },
+        )
+        .unwrap();
+        let settings = exported["appSettings"].as_object().unwrap();
+        for key in LOCAL_STATE_KEYS {
+            assert!(!settings.contains_key(*key), "{key} must not be exported");
+        }
+        for (key, value) in &restored_preferences {
+            assert_eq!(
+                settings.get(*key),
+                Some(value),
+                "{key} must stay in the backup"
+            );
+        }
+        assert_eq!(
+            settings.get("cloudAi.model"),
+            Some(&json!("restored-model"))
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_import_keeps_local_state_but_applies_user_preferences() {
+        let (storage, dir) = temp_storage("config-local-state");
+        storage.set("deviceId", &json!("local-device")).unwrap();
+        storage.set("autoCheckUpdate", &json!(true)).unwrap();
+        storage.set("cloudAi.model", &json!("local-model")).unwrap();
+        let data = json!({
+            "appSettings": {
+                "deviceId": "imported-device",
+                "autoCheckUpdate": false,
+                "cloudAi.model": "imported-model",
+            },
+        });
+
+        apply_config_part(&storage, &data, &config_exclusions()).unwrap();
+
+        assert_eq!(storage.get("deviceId", None), json!("local-device"));
+        assert_eq!(storage.get("autoCheckUpdate", None), json!(false));
+        assert_eq!(storage.get("cloudAi.model", None), json!("imported-model"));
+
+        // The preview counts only settings the import will actually apply:
+        // autoCheckUpdate and cloudAi.model, but not deviceId.
+        let preview = full_config_preview_sections(&data, &config_exclusions()).unwrap();
+        let app_settings = preview
+            .iter()
+            .find(|section| section.kind == "appSettings")
+            .unwrap();
+        assert_eq!((app_settings.total, app_settings.updated), (2, 2));
+
+        let exported = build_config_value(&storage).unwrap();
+        let settings = exported["appSettings"].as_object().unwrap();
+        for key in LOCAL_STATE_KEYS {
+            assert!(!settings.contains_key(*key), "{key} must not be exported");
+        }
+        assert_eq!(settings.get("autoCheckUpdate"), Some(&json!(false)));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_names_must_be_flat_wav_files() {
+        for valid in ["take.wav", "TAKE.WAV", "take-1.wav"] {
+            assert_eq!(validate_audio_file_name(valid).unwrap(), valid);
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../take.wav",
+            "sub/take.wav",
+            "C:take.wav",
+            "take.exe",
+            "con.wav",
+            "take.wav:stream",
+            "take.wav ",
+            "take?.wav",
+        ] {
+            assert!(
+                validate_audio_file_name(invalid).is_err(),
+                "{invalid} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn history_audio_paths_are_rewritten_only_for_safe_wav_names() {
+        let adir = PathBuf::from("audio-root");
+        let rewritten = rewrite_audio_path(
+            &json!({ "id": "h1", "audioFilePath": "D:\\old\\take.wav" }),
+            &adir,
+        );
+        assert_eq!(
+            rewritten["audioFilePath"],
+            json!(adir.join("take.wav").to_string_lossy().to_string())
+        );
+        let dropped =
+            rewrite_audio_path(&json!({ "id": "h2", "audioFilePath": "C:take.wav" }), &adir);
+        assert!(dropped.get("audioFilePath").is_none());
+    }
+
+    #[test]
+    fn audio_export_skips_files_that_are_not_wav() {
+        let adir = audio_dir();
+        fs::create_dir_all(&adir).unwrap();
+        let tag = uuid::Uuid::new_v4();
+        let wav = format!("export-check-{tag}.wav");
+        let exe = format!("export-check-{tag}.exe");
+        fs::write(adir.join(&wav), b"wav").unwrap();
+        fs::write(adir.join(&exe), b"exe").unwrap();
+
+        let names = collect_audio_export_files(true)
+            .into_iter()
+            .map(|file| file.name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&wav));
+        assert!(!names.contains(&exe));
+
+        let _ = fs::remove_file(adir.join(&wav));
+        let _ = fs::remove_file(adir.join(&exe));
     }
 
     #[test]
