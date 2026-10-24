@@ -26,7 +26,8 @@ fn audio_file_in_dir(dir: &Path, file_path: &str) -> Option<PathBuf> {
     if !crate::path_guard::has_extension(&path, &["wav"]) {
         return None;
     }
-    crate::path_guard::existing_file_in_dir(&path, dir)
+    let target = crate::path_guard::existing_file_in_dir(&path, dir)?;
+    crate::path_guard::has_extension(&target, &["wav"]).then_some(target)
 }
 
 fn save_audio_file_in(dir: &Path, id: &str, wav_base64: &str) -> Result<String, String> {
@@ -197,6 +198,31 @@ mod tests {
         assert_eq!(fs::read(&outside).unwrap(), b"secret");
         assert_eq!(fs::read(&nested_file).unwrap(), b"nested");
         assert_eq!(fs::read(&non_audio).unwrap(), b"text");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_wav_alias_to_a_non_audio_file_is_rejected() {
+        let root = temp_root();
+        let audio = root.join("audio");
+        fs::create_dir_all(&audio).unwrap();
+        let notes = audio.join("notes.txt");
+        fs::write(&notes, b"text").unwrap();
+        let alias = audio.join("alias.wav");
+        if std::os::windows::fs::symlink_file("notes.txt", &alias).is_err() {
+            eprintln!("skipping: file symlinks are unavailable");
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        let alias = alias.to_string_lossy().to_string();
+
+        assert!(!audio_file_exists_in(&audio, &alias));
+        assert_eq!(read_audio_file_from(&audio, &alias).unwrap(), None);
+        delete_audio_file_from(&audio, &alias).unwrap();
+        assert!(notes.exists());
+        assert_eq!(fs::read(&notes).unwrap(), b"text");
 
         let _ = fs::remove_dir_all(&root);
     }
