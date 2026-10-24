@@ -10,7 +10,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
+import { errorDetailText } from '@/lib/errorMessages'
 import { historyAiNotAppliedDisplay, historyFailureReasonDisplay } from '@/i18n/displayNames'
+import { addRuntimeEvent } from '@/services/debugLog'
 import { useRecordingPlayback } from './useRecordingPlayback'
 import { AudioProgressBar } from './AudioProgressBar'
 import { AsrCorrectionDialog } from './AsrCorrectionDialog'
@@ -122,6 +124,7 @@ function HistoryItem({
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState('')
   const [reprocessing, setReprocessing] = useState(false)
+  const [reprocessError, setReprocessError] = useState('')
   const [downloading, setDownloading] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState<'idle' | 'ok' | 'fail'>('idle')
   const [downloadPath, setDownloadPath] = useState('')
@@ -156,12 +159,17 @@ function HistoryItem({
   const handleReprocess = useCallback(async () => {
     if (!onReprocess || reprocessing) return
     setReprocessing(true)
+    setReprocessError('')
     try {
       await onReprocess()
+    } catch (error) {
+      const reason = errorDetailText(error).trim() || t('record.reprocessUnknown')
+      setReprocessError(reason)
+      addRuntimeEvent('warn', 'history', 'Transcribe again failed', { recordId: record.id, error: reason })
     } finally {
       setReprocessing(false)
     }
-  }, [onReprocess, reprocessing])
+  }, [onReprocess, reprocessing, record.id])
 
   // ── 编辑：自动保存（失焦 / 离开页面即存，无需按钮）──
   // 用 ref 保存最新值，供失焦回调与卸载清理读取，避免闭包拿到旧值。
@@ -515,6 +523,11 @@ function HistoryItem({
                 {downloadStatus === 'fail' && downloadPath && (
                   <div className="col-span-2 mt-1 text-xs text-destructive break-all">
                     {t('record.downloadFailed', { path: downloadPath })}
+                  </div>
+                )}
+                {reprocessError && !reprocessing && (
+                  <div role="alert" className="col-span-2 mt-1 text-xs text-destructive break-all">
+                    {t('record.reprocessFailed', { reason: reprocessError })}
                   </div>
                 )}
                 {/* 音频进度条 + 倍速 */}

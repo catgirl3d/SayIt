@@ -546,12 +546,13 @@ export default function History() {
   }
 
   const handleReprocess = async (record: HistoryRecord) => {
-    if (!record.audioFilePath) return
+    const audioMissingError = () => new Error(t('record.audioMissing'))
+    if (!record.audioFilePath) throw audioMissingError()
     const warningGeneration = ++reprocessWarningGeneration.current
     setReprocessWarning(null)
 
     const base64 = await bridge.readAudioFile(record.audioFilePath)
-    if (!base64) return
+    if (!base64) throw audioMissingError()
 
     // Decode base64 WAV → PCM
     const binaryStr = atob(base64)

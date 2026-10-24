@@ -116,6 +116,11 @@ function decodeError(error: unknown): DecodedError {
     : { code: null, text: parts.text }
 }
 
+/** Raw explanation without the internal `sayit_error:<code>:` envelope, for places that show the cause as-is. */
+export function errorDetailText(error: unknown): string {
+  return decodeError(error).text
+}
+
 /**
  * 从各种异常文本里抠出 HTTP 状态码（`HTTP 401` / `status: 403` / `http=403` / `(404)`）。
  *

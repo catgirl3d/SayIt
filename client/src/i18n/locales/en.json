@@ -579,6 +579,8 @@
   "record.downloadFailed": "Download failed: {path}",
   "record.openFolder": "Open containing folder",
   "record.reprocess": "Transcribe again",
+  "record.reprocessFailed": "Couldn't transcribe again: {reason}",
+  "record.reprocessUnknown": "Unknown error",
   "asrCorrection.entry": "Fix transcription",
   "asrCorrection.entrySubmitted": "Correction submitted",
   "asrCorrection.entryNoAudio": "The recording for this entry is gone, so it can't be submitted",
