@@ -1,0 +1,13 @@
+{
+  "identifier": "main-window",
+  "description": "Permissions used by the main window's frontend: window controls, file dialogs, and opening links in the system browser.",
+  "windows": ["main"],
+  "permissions": [
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "shell:allow-open",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
+}
