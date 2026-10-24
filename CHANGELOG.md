@@ -30,6 +30,8 @@ Sections are ordered by version, newest first.
 - The Hotwords page now says when dictation will not apply your hotwords. If the engine you dictate with does not send hotwords to speech recognition (Local mode, Groq, OpenAI, OpenRouter and MiMo speech recognition), it points to the "Send hotwords to the AI prompt" option on the AI cleanup page, which lets AI cleanup fix those terms instead. With Deepgram, it says when sending terms is switched off in the profile, with a link to the voice engine settings, or when the list exceeds Deepgram's 500-token limit.
 
 ### Fixed
+#### File Transcription
+- Transcribing a file whose name contains a dot (for example `savefrom-story.com_Instagram_...`) no longer fails at the final export. The export name was cut at the last dot in the source name, so the first run silently saved TXT and Markdown under a shortened name, and every later run of that file failed with "Could not find an unused pair of final export filenames". Both export names now keep the whole source name and the job id.
 #### Desktop Client
 - Saving a new AI service after typing a model name no longer also creates a card for the preset model that was filled in beforehand, and no longer makes that card the active one. Test connection now tests the model you entered, and a model you removed no longer comes back after loading the model list.
 - Dialogs no longer close when you select text in a field and release the mouse outside the dialog. Before, such a drag closed the dialog and discarded what you had typed.

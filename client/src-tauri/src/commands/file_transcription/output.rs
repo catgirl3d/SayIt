@@ -267,9 +267,9 @@ fn unique_export_pair(
         } else {
             format!(" ({index})")
         };
-        let base = output_directory.join(format!("{title} - transcription - {job_id}{suffix}"));
-        let txt_path = base.with_extension("txt");
-        let markdown_path = base.with_extension("md");
+        let stem = format!("{title} - transcription - {job_id}{suffix}");
+        let txt_path = output_directory.join(format!("{stem}.txt"));
+        let markdown_path = output_directory.join(format!("{stem}.md"));
         let txt = match claim_new_file_io(&txt_path) {
             Ok(file) => file,
             Err(error) => {
@@ -402,6 +402,58 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
                 .contains("job-123")
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_dotted_source_title_keeps_the_whole_export_name() {
+        let dir = test_dir("dotted-title-export-name");
+
+        let (txt, markdown) =
+            export_documents(&dir.join("meeting.v2.final.mp4"), &dir, "text", "job-dot").unwrap();
+
+        assert_eq!(
+            txt.file_name().unwrap(),
+            std::ffi::OsStr::new("meeting.v2.final - transcription - job-dot.txt")
+        );
+        assert_eq!(
+            markdown.file_name().unwrap(),
+            std::ffi::OsStr::new("meeting.v2.final - transcription - job-dot.md")
+        );
+        assert!(txt.exists());
+        assert!(markdown.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_dotted_source_is_not_blocked_by_preexisting_truncated_export_names() {
+        let dir = test_dir("dotted-title-truncated-collision");
+        let foreign_txt = dir.join("savefrom-story.txt");
+        let foreign_markdown = dir.join("savefrom-story.md");
+        std::fs::write(&foreign_txt, b"foreign txt").unwrap();
+        std::fs::write(&foreign_markdown, b"foreign markdown").unwrap();
+
+        let (txt, markdown) = export_documents(
+            &dir.join("savefrom-story.com_Instagram_abc.mp4"),
+            &dir,
+            "new text",
+            "job-dot",
+        )
+        .unwrap();
+
+        assert_eq!(
+            txt.file_name().unwrap(),
+            std::ffi::OsStr::new("savefrom-story.com_Instagram_abc - transcription - job-dot.txt")
+        );
+        assert_eq!(
+            markdown.file_name().unwrap(),
+            std::ffi::OsStr::new("savefrom-story.com_Instagram_abc - transcription - job-dot.md")
+        );
+        assert_eq!(std::fs::read(&foreign_txt).unwrap(), b"foreign txt");
+        assert_eq!(
+            std::fs::read(&foreign_markdown).unwrap(),
+            b"foreign markdown"
         );
         std::fs::remove_dir_all(dir).ok();
     }
