@@ -67,15 +67,15 @@ The current local catalog contains 15 downloadable GGUF model variants, with GPU
 
 <br>
 
-<img src="docs/images/readme/voice-engine-en.png" width="760" alt="Voice engine settings with Local, Cloud API, and Server mode cards above the model list">
+<img src="docs/images/readme/voice-engine-en.png" width="760" alt="Voice engine settings with Local, Cloud API, and Server mode cards, speech language, and ASR providers">
 
-*Voice engine — choose Local, Cloud API, or Server mode, then download and switch recognition models. Detected GPUs are used automatically.*
+*Voice engine — choose Local, Cloud API, or Server mode, pick the speech language, and configure an ASR provider; per-provider latency is measured right on the card.*
 
 <br>
 
-<img src="docs/images/readme/ai-cleanup-en.png" width="760" alt="AI processing settings showing built-in presets and per-app prompt rules">
+<img src="docs/images/readme/ai-processing-en.png" width="760" alt="AI processing settings with the toggle, hotkey, dictionary terms, and context awareness">
 
-*AI processing — every built-in preset is editable, and per-app rules can switch presets based on the app you are typing into.*
+*AI processing — toggle it on, bind a hotkey, pass dictionary terms into the prompt, and enable context awareness; built-in presets and per-app rules follow below.*
 
 <br>
 
@@ -85,15 +85,15 @@ The current local catalog contains 15 downloadable GGUF model variants, with GPU
 
 <br>
 
-<img src="docs/images/readme/history-en.png" width="760" alt="History list with search, raw ASR text, timings, and playback controls">
+<img src="docs/images/readme/history-en.png" width="760" alt="History list grouped by day, with search, All and Starred filters, dictation text, and timestamps">
 
-*History — searchable local records. Expand one to see the raw ASR text, timings, audio playback, and re-transcribe.*
+*History — a searchable local archive grouped by day. Expand a record to see the raw ASR text, timings, audio playback, and re-transcribe.*
 
 <br>
 
-<img src="docs/images/readme/appearance-en.png" width="760" alt="Appearance settings with app themes, waveform themes, overlay width, and a live overlay preview">
+<img src="docs/images/readme/appearance-en.png" width="760" alt="Appearance settings with light and dark themes, waveform styles, overlay width, and elapsed-time display">
 
-*Appearance — three app themes, waveform styles, overlay width, and live captions with a preview of the overlay.*
+*Appearance — light and dark themes, waveform styles, overlay width, and elapsed-time display, plus live captions and an interactive overlay preview.*
 
 </div>
 
