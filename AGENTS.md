@@ -3,7 +3,7 @@
 ## 1. Language and Code Comments Policy
 - **STRICT PROHIBITION**: NEVER write code comments, docstrings, log messages, or documentation in Chinese or other non-Latin/non-Cyrillic unknown languages.
 - **Allowed Languages**: All code comments, docstrings, and technical documentation must be written strictly in **English** (or Russian when specifically requested by the user).
-- **Existing Comments**: When modifying files with legacy Chinese comments, translate them to clear, high-fidelity English, fully preserving the architectural reasoning, or remove only truly obsolete notes.
+- **Existing Comments**: When modifying files with legacy Chinese comments, translate the comments in the code you change, plus any comment your change makes stale or misleading, into clear, high-fidelity English that fully preserves the architectural reasoning; remove only truly obsolete notes. Do not bulk-translate the rest of the file inside a functional change: it buries the real diff and makes review and upstream ports harder. Translating a whole file is its own dedicated change (a separate commit or PR).
 
 ## 2. Code Quality & Precision
 - Always follow surgical precision and exact match editing rules.
