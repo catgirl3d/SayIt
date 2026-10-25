@@ -4,9 +4,9 @@ import { t } from '@/i18n'
 declare const __SAYIT_DEFAULT_SERVER_URL__: string
 
 const BUILTIN_DEFAULT_SERVER_URL =
-  typeof __SAYIT_DEFAULT_SERVER_URL__ === 'string' && __SAYIT_DEFAULT_SERVER_URL__.trim()
+  typeof __SAYIT_DEFAULT_SERVER_URL__ === 'string'
     ? __SAYIT_DEFAULT_SERVER_URL__.trim()
-    : 'https://sayitapp.site'
+    : ''
 
 const BACKEND_BASE_URL_STORE_KEY = 'backendBaseUrl'
 
@@ -88,6 +88,11 @@ export function getBackendBaseUrl(): string {
   return backendBaseUrl
 }
 
+/** Message for operations that need a server address but none is configured. */
+export function serverNotConfiguredMessage(): string {
+  return t('runtimeConfig.serverNotConfigured', { section: t('nav.voiceEngine') })
+}
+
 // Update checking no longer has any relationship with the speech backend: the update
 // source is the pinned fork release manifest (see services/projectLinks.ts and
 // features/update/updateChecker.ts). A user-configurable backend URL must never
@@ -129,7 +134,8 @@ export function getWSUrl(): string {
   if (explicit) return explicit
 
   const base = getBackendBaseUrl()
+  if (!base) return ''
   if (base.startsWith('https://')) return `${base.replace(/^https:\/\//, 'wss://')}/ws/transcribe`
   if (base.startsWith('http://')) return `${base.replace(/^http:\/\//, 'ws://')}/ws/transcribe`
-  return `${resolveBuiltinDefaultBaseUrl().replace(/^https?:\/\//, 'wss://')}/ws/transcribe`
+  return ''
 }

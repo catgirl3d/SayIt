@@ -8,7 +8,7 @@ import {
   addRuntimeEvent,
   hasActiveSession,
 } from './debugLog'
-import { getWSUrl } from './runtimeConfig'
+import { getWSUrl, serverNotConfiguredMessage } from './runtimeConfig'
 import { withLegacyServerTextContext } from './contextAware'
 import { normalizeServerLlmDebug, type ServerLlmEvidence } from './transcription/aiOutcome'
 import { setConnectionStatus } from '../stores/connectionStatus'
@@ -193,6 +193,12 @@ export function connect(cbs: WSCallbacks): Promise<void> {
     serverSupportsTextContext = false
     updateGlobalState('connecting')
     const wsUrl = getWSUrl()
+    if (!wsUrl) {
+      updateGlobalState('error')
+      addRuntimeEvent('error', 'websocket', 'No server address is configured')
+      reject(new Error(serverNotConfiguredMessage()))
+      return
+    }
     connectStartMs = Date.now()
     addRuntimeEvent('info', 'websocket', 'Connecting', { url: wsUrl, caller: shortCallerStack() })
 

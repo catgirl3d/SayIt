@@ -3,6 +3,7 @@ import { expect, fn, waitFor, within } from 'storybook/test'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import NoticeBanner from './NoticeBanner'
 import type { RemoteNotice } from '@/services/notice'
+import { initRuntimeConfig } from '@/services/runtimeConfig'
 
 const DEV_NOTICE_KEY = '__devNotice'
 const serverNoticeStub = fn(() => new Response(
@@ -12,7 +13,7 @@ const serverNoticeStub = fn(() => new Response(
     title: 'Server-provided notice',
     body: 'This notice was loaded through the backend API.',
     minVersion: '0.0.0',
-    linkUrl: 'https://sayitapp.site/status',
+    linkUrl: 'https://server.example/status',
     linkLabel: 'View service status',
     dismissible: true,
   }),
@@ -67,6 +68,9 @@ const meta = {
   parameters: {
     layout: 'padded',
     tauri: {
+      commands: {
+        wait_for_backend_tls_ready: () => undefined,
+      },
       settings: {
         dismissedNoticeIds: [],
       },
@@ -85,7 +89,7 @@ export const WarningWithLink: Story = {
         level: 'warning',
         title: 'Scheduled service maintenance',
         body: 'Cloud recognition may be unavailable for a short period.',
-        linkUrl: 'https://sayitapp.site/status',
+        linkUrl: 'https://server.example/status',
         linkLabel: 'View service status',
       }}
     />
@@ -112,14 +116,16 @@ export const ServerNotice: Story = {
     tauri: {
       settings: {
         dismissedNoticeIds: [],
+        backendBaseUrl: 'https://server.example',
       },
     },
     network: {
-      'https://sayitapp.site/api/notice': serverNoticeStub,
+      'https://server.example/api/notice': serverNoticeStub,
     },
   },
-  beforeEach: () => {
+  beforeEach: async () => {
     serverNoticeStub.mockClear()
+    await initRuntimeConfig()
   },
   play: async ({ canvasElement }) => {
     await waitFor(() => expect(serverNoticeStub).toHaveBeenCalledTimes(1))

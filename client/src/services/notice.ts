@@ -130,6 +130,7 @@ async function loadRaw(): Promise<unknown> {
   }
 
   const baseUrl = getBackendBaseUrl()
+  if (!baseUrl) return null
   const resp = await fetch(`${baseUrl}/api/notice`, {
     cache: 'no-store',
     signal: AbortSignal.timeout(8000),

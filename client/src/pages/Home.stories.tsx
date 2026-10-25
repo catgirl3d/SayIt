@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import type { RemoteNotice } from '@/services/notice'
+import { initRuntimeConfig } from '@/services/runtimeConfig'
 import type { UsageSummary } from '@/types/usage'
 import Home from './Home'
 
@@ -24,7 +25,7 @@ const serverNotice = {
   level: 'warning',
   title: 'Scheduled service maintenance',
   body: 'Cloud recognition may be unavailable for a short period.',
-  linkUrl: 'https://sayitapp.site/status',
+  linkUrl: 'https://server.example/status',
   linkLabel: 'View service status',
   minVersion: '0.0.0',
   dismissible: false,
@@ -67,12 +68,13 @@ export const WithUsage: Story = {
 }
 
 export const ServerNotice: Story = {
-  beforeEach: () => {
+  beforeEach: async () => {
     localStorage.removeItem('__devNotice')
+    await initRuntimeConfig()
   },
   parameters: {
     network: {
-      'https://sayitapp.site/api/notice': () => new Response(JSON.stringify(serverNotice), {
+      'https://server.example/api/notice': () => new Response(JSON.stringify(serverNotice), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -80,11 +82,13 @@ export const ServerNotice: Story = {
     tauri: {
       commands: {
         usage_summary: () => usageSummary,
+        wait_for_backend_tls_ready: () => undefined,
       },
       settings: {
         shortcutHandsFree: 'AltRight',
         shortcutPTT: 'ControlRight',
         dismissedNoticeIds: [],
+        backendBaseUrl: 'https://server.example',
       },
     },
   },

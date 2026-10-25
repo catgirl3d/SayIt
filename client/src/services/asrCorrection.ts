@@ -1,6 +1,6 @@
 import { t } from '@/i18n'
 import * as bridge from '@/services/bridge'
-import { getBackendBaseUrl } from '@/services/runtimeConfig'
+import { getBackendBaseUrl, serverNotConfiguredMessage } from '@/services/runtimeConfig'
 import { getSetting, setSetting, type HistoryRecord } from '@/services/store'
 import { normalizeForDiff } from '@/lib/asrDiff'
 
@@ -39,6 +39,8 @@ export type AsrCorrectionErrorCode =
   | 'network'
   /** 这台后端没有这个接口（自建服务器版本较旧，或官方后端还没更新） */
   | 'not_supported'
+  /** No server address is configured yet */
+  | 'server_not_configured'
   | 'server'
 
 export interface AsrCorrectionResult {
@@ -97,6 +99,8 @@ function messageForCode(code: AsrCorrectionErrorCode, status?: number): string {
       return t('asrCorrection.errorNetwork')
     case 'not_supported':
       return t('asrCorrection.errorNotSupported')
+    case 'server_not_configured':
+      return serverNotConfiguredMessage()
     default:
       return t('asrCorrection.errorServer', { status: status ?? 0 })
   }
@@ -116,6 +120,11 @@ export async function submitAsrCorrection(
   record: HistoryRecord,
   correctedText: string,
 ): Promise<AsrCorrectionResult> {
+  const baseUrl = getBackendBaseUrl()
+  if (!baseUrl) {
+    return { ok: false, code: 'server_not_configured', message: messageForCode('server_not_configured') }
+  }
+
   const original = normalizeForDiff(record.asrText || '')
   const corrected = normalizeForDiff(correctedText)
   if (!original || !corrected) {
@@ -159,7 +168,7 @@ export async function submitAsrCorrection(
 
   let response: Response
   try {
-    response = await fetch(`${getBackendBaseUrl()}/api/asr-corrections`, { method: 'POST', body: form })
+    response = await fetch(`${baseUrl}/api/asr-corrections`, { method: 'POST', body: form })
   } catch {
     return { ok: false, code: 'network', message: messageForCode('network') }
   }
@@ -201,10 +210,13 @@ export async function submitAsrCorrection(
 
 /** 撤回：服务端会删掉音频并清掉文本。失败返回 false，调用方保持"已提交"状态不变。 */
 export async function withdrawAsrCorrection(correctionId: string): Promise<boolean> {
+  const baseUrl = getBackendBaseUrl()
+  if (!baseUrl) return false
+
   const clientInfo = await bridge.getClientRuntimeInfo().catch(() => null)
   try {
     const response = await fetch(
-      `${getBackendBaseUrl()}/api/asr-corrections/${encodeURIComponent(correctionId)}/withdraw`,
+      `${baseUrl}/api/asr-corrections/${encodeURIComponent(correctionId)}/withdraw`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

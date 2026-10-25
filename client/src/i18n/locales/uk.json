@@ -1508,6 +1508,7 @@
   "recorder.noTranscript": "Розпізнавання мовлення не повернуло тексту",
   "recorder.emptyAfterProcessing": "Розпізнавання повернуло текст, але після застосування правил автозаміни він повністю зник. Перевірте ці правила.",
   "runtimeConfig.emptyServerUrl": "Адреса сервера не може бути порожньою",
+  "runtimeConfig.serverNotConfigured": "Адресу сервера не задано. Вкажіть її в Налаштуваннях → {section}.",
   "userScene.development": "Розробка",
   "userScene.communication": "Спілкування та чати",
   "userScene.office": "Офісні документи",

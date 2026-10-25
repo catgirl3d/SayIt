@@ -129,8 +129,12 @@ export default function AsrTestSection({ workMode, speechLanguage }: { workMode:
         })
       } else {
         // Server mode
-        const { getWSUrl } = await import('@/services/runtimeConfig')
+        const { getWSUrl, serverNotConfiguredMessage } = await import('@/services/runtimeConfig')
         const wsUrl = getWSUrl()
+        if (!wsUrl) {
+          setError({ message: serverNotConfiguredMessage() })
+          return
+        }
 
         const r = await new Promise<{ text: string; asrMs: number }>((resolve, reject) => {
           const timeout = setTimeout(() => {

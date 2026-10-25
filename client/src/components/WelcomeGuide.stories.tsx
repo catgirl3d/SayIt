@@ -1,6 +1,7 @@
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { getWorkMode, switchProvider, type WorkMode } from '@/services/transcription'
+import { initRuntimeConfig } from '@/services/runtimeConfig'
 import WelcomeGuide from './WelcomeGuide'
 
 let previousWelcomeGuideMode: WorkMode | undefined
@@ -19,6 +20,7 @@ const meta = {
         shortcuts_changed: () => undefined,
         append_debug_log: () => undefined,
         unload_local_model: () => undefined,
+        wait_for_backend_tls_ready: () => undefined,
       },
       settings: {
         shortcutHandsFree: 'AltRight',
@@ -59,15 +61,17 @@ export const ServerModeHealthy: Story = {
         shortcutHandsFree: 'AltRight',
         shortcutPTT: 'ControlRight',
         workMode: 'server',
+        backendBaseUrl: 'https://server.example',
       },
     },
     network: {
-      'https://sayitapp.site/healthz': serverHealthStub,
+      'https://server.example/healthz': serverHealthStub,
     },
   },
   beforeEach: async () => {
     serverHealthStub.mockClear()
     if (getWorkMode() !== 'server') await switchProvider('server')
+    await initRuntimeConfig()
   },
   play: async ({ canvasElement }) => {
     await waitFor(() => expect(serverHealthStub).toHaveBeenCalledTimes(1))
