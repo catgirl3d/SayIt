@@ -1,7 +1,7 @@
 // Run: node --test server/gateway/
 // No third-party packages are needed. Every case asserts the status code. Cases that
 // escape the web directory also assert that the response did not fall back to index.html.
-import { test, before, after } from "node:test";
+import { test, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
@@ -88,4 +88,32 @@ test("unknown paths keep falling back to index.html", () => {
 test("requesting a directory stays 404 like before", () => {
   rejected("/fonts", 404);
   rejected("/fonts/", 404);
+});
+
+// Simulates a file that disappears (ENOENT) or becomes unreadable (EACCES) after the
+// existence check and realpath succeeded. The stat failure must become a 404, not an
+// exception that would escape the HTTPS request callback and crash the gateway.
+function withStatFailure(code, fn) {
+  const failing = mock.method(fs, "statSync", () => {
+    throw Object.assign(new Error(`${code}: simulated stat failure`), { code });
+  });
+  try {
+    fn();
+  } finally {
+    failing.mock.restore();
+  }
+}
+
+test("a file removed between existence check and stat answers 404 without throwing", () => {
+  withStatFailure("ENOENT", () => {
+    const r = resolveStaticRequest("/app.js", web);
+    assert.deepEqual(r, { status: 404 });
+  });
+});
+
+test("an unreadable file (EACCES) answers 404 without throwing", () => {
+  withStatFailure("EACCES", () => {
+    const r = resolveStaticRequest("/app.js", web);
+    assert.deepEqual(r, { status: 404 });
+  });
 });

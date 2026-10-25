@@ -47,19 +47,25 @@ export function resolveStaticRequest(rawUrl, rootDir) {
   // Resolve symbolic links and directory junctions, then check containment again.
   // A link inside the web directory can point outside it, and the lexical check above
   // cannot see that.
+  //
+  // Race: the file can be removed (or its permissions changed) between the existence
+  // check above, realpathSync and statSync below. These are separate filesystem calls, so
+  // each can fail on its own (ENOENT, EACCES, ELOOP). Every failure must become a 404.
+  // An exception here would escape the HTTPS request callback in proxy.mjs as an
+  // uncaught exception and kill the whole gateway process.
   let real;
   let realRoot;
   try {
     real = fs.realpathSync(candidate);
     realRoot = fs.realpathSync(root);
+    if (!isInside(real, realRoot)) return { status: 404 };
+
+    // Requested directory: the original implementation failed to read a directory and
+    // returned 404. Keep that behavior.
+    if (fs.statSync(real).isDirectory()) return { status: 404 };
   } catch {
     return { status: 404 };
   }
-  if (!isInside(real, realRoot)) return { status: 404 };
-
-  // Requested directory: the original implementation failed to read a directory and
-  // returned 404. Keep that behavior.
-  if (fs.statSync(real).isDirectory()) return { status: 404 };
 
   return { status: 200, file: real };
 }

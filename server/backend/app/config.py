@@ -364,6 +364,11 @@ _BODY_LIMIT_KEYS = {
 def _load_body_limits(raw: dict) -> BodyLimitConfig:
     """Read server.body_limits. An invalid value logs a warning and the default is used; nothing is raised.
     load_config runs at import time of main.py, so a typo must not stop the whole backend from starting."""
+    if not isinstance(raw, dict):
+        logging.getLogger("sayit.config").warning(
+            "server.body_limits must be a mapping, got %s; using defaults", type(raw).__name__
+        )
+        return BodyLimitConfig()
     values = {}
     for key, value in raw.items():
         spec = _BODY_LIMIT_KEYS.get(key)
