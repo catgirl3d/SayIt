@@ -4,9 +4,11 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
-import torch
+import pytest
 
-from backend.app.asr_gigaam import GigaAMASRBackend
+torch = pytest.importorskip("torch", reason="GigaAM adapter tests need torch")
+
+from backend.app.asr_gigaam import GigaAMASRBackend  # noqa: E402
 
 
 class _FakeDecoder:

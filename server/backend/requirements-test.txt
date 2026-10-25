@@ -1,0 +1,15 @@
+# Minimal test environment for CI: a subset of requirements.txt without the GPU
+# ASR stack (torch, torchaudio, vLLM, FunASR, GigaAM). Every shared pin must match
+# requirements.txt exactly; backend/tests/test_requirements_test_pins.py enforces it.
+fastapi==0.135.2
+starlette==1.7.0
+python-multipart==0.0.22
+uvicorn==0.42.0
+websockets==16.0
+python-dotenv==1.2.2
+PyYAML==6.0.3
+httpx==0.28.1
+numpy==2.2.6
+psutil==7.2.2
+# Test-only dependency; not part of the Docker image.
+pytest==8.4.2
