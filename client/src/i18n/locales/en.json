@@ -309,6 +309,7 @@
   "welcome.modeSubtitle": "Pick local, cloud API, or your own SayIt server. You can change this later in Settings.",
   "welcome.modeReady": "Ready",
   "welcome.modeNotReady": "Setup needed",
+  "welcome.serverAsrNotReady": "Server ASR isn't ready",
   "welcome.tryTitle": "Give it a try",
   "welcome.handsFreeShortcut": "Toggle recording shortcut",
   "welcome.clickToChange": "Use the button to change it",

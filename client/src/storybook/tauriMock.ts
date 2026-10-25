@@ -1,5 +1,6 @@
 import type { InvokeArgs } from '@tauri-apps/api/core'
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
+import { discardBackendBaseUrlForSession } from '@/services/runtimeConfig'
 
 export type JsonValue =
   | null
@@ -379,6 +380,9 @@ export async function tauriBeforeEach(context: TauriStoryContext): Promise<() =>
 
 export function cleanupTauriStory(): void {
   if (activeSession) closeSession(activeSession)
+  // The backend URL is module state, not a story setting. Drop it without waiting so the
+  // next initRuntimeConfig() is queued behind this reset and cannot observe a leaked URL.
+  void discardBackendBaseUrlForSession()
 }
 
 export function getTauriJournal(): TauriJournal {

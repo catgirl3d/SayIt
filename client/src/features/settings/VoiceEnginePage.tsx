@@ -31,6 +31,7 @@ export default function VoiceEnginePage() {
   // "choose a model", leaving seven peer headings and 27 controls on one screen with no clear priority.
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [workModeError, setWorkModeError] = useState<string>('')
+  const [workModeApplying, setWorkModeApplying] = useState(false)
 
   useEffect(() => {
     void getSpeechInputLanguage().then(setSpeechLanguage)
@@ -42,11 +43,14 @@ export default function VoiceEnginePage() {
 
   const handleWorkModeChange = async (mode: WorkMode) => {
     setWorkModeError('')
+    setWorkModeApplying(true)
     try {
       await applyWorkMode(mode)
     } catch (error) {
       setWorkModeError(error instanceof Error ? error.message : String(error))
       return
+    } finally {
+      setWorkModeApplying(false)
     }
     // Switching modes replaces the configuration cards below, so unsaved input from the previous mode disappears.
     // Clear the dirty flag with it; otherwise the recognition test keeps reporting stale unsaved changes.
@@ -68,7 +72,7 @@ export default function VoiceEnginePage() {
 
       <div className="space-y-6">
         <div className="space-y-2">
-          <WorkModeSection value={workMode} onChange={(m) => void handleWorkModeChange(m)} />
+          <WorkModeSection value={workMode} onChange={(m) => void handleWorkModeChange(m)} disabled={workModeApplying} />
           {workModeError && <p role="alert" className="text-sm leading-6 text-destructive">{workModeError}</p>}
         </div>
         <SpeechLanguageSection

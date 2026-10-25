@@ -309,6 +309,7 @@
   "welcome.modeSubtitle": "Локально, хмарний API або власний сервер SayIt. Це можна змінити пізніше в Налаштуваннях.",
   "welcome.modeReady": "Готово",
   "welcome.modeNotReady": "Потрібне налаштування",
+  "welcome.serverAsrNotReady": "ASR на сервері не готовий",
   "welcome.tryTitle": "Спробуйте самі",
   "welcome.handsFreeShortcut": "Клавіша перемикання запису",
   "welcome.clickToChange": "Натисніть кнопку, щоб змінити",

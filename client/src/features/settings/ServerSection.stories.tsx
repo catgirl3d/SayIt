@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
-import { resetBackendBaseUrl, setBackendBaseUrl } from '@/services/runtimeConfig'
+import { initRuntimeConfig, resetBackendBaseUrl, setBackendBaseUrl } from '@/services/runtimeConfig'
 import ServerSection from './ServerSection'
 
 const healthProbe = fn((_request: Request) => new Response(
@@ -16,6 +16,7 @@ const meta = {
       commands: {
         append_debug_log: () => undefined,
         list_downloaded_models: () => [],
+        wait_for_backend_tls_ready: () => undefined,
       },
     },
   },
@@ -29,6 +30,16 @@ type Story = StoryObj<typeof meta>
 
 export const Configured: Story = {
   args: { speechLanguage: 'en' },
+  parameters: {
+    tauri: {
+      settings: {
+        backendBaseUrl: 'https://server.example',
+      },
+    },
+  },
+  beforeEach: async () => {
+    await initRuntimeConfig()
+  },
 }
 
 export const UnsavedAddress: Story = {

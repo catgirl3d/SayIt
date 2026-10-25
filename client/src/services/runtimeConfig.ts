@@ -139,9 +139,10 @@ export async function getStoredBackendBaseUrl(): Promise<string> {
 /**
  * Drop the active backend URL for this session without changing the store.
  *
- * Only the startup migration uses this, when deleting the legacy address failed: the
- * session must not keep talking to that address, while the stored value stays intact so
- * the next launch can retry the deletion.
+ * The startup migration uses this when deleting the legacy address failed: the session
+ * must not keep talking to that address, while the stored value stays intact so the next
+ * launch can retry the deletion. The Storybook harness also calls it between stories to
+ * clear the module-level address that would otherwise leak into the next story.
  */
 export async function discardBackendBaseUrlForSession(): Promise<void> {
   return enqueue(async () => {

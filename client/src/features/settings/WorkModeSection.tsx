@@ -49,9 +49,10 @@ const statusConfig = {
 interface Props {
   value: WorkMode
   onChange: (mode: WorkMode) => void
+  disabled?: boolean
 }
 
-export default function WorkModeSection({ value, onChange }: Props) {
+export default function WorkModeSection({ value, onChange, disabled = false }: Props) {
   const t = useT()
   const wsStatus = useConnectionStatus()
   const { ready, blockedReason } = useSyncExternalStore(subscribeModeStatus, getModeStatus)
@@ -128,10 +129,11 @@ export default function WorkModeSection({ value, onChange }: Props) {
                 type="button"
                 role="radio"
                 aria-checked={isActive}
+                disabled={disabled}
                 onClick={() => onChange(m.value)}
-                className={`relative rounded-lg border p-4 text-left transition-colors ${isActive
+                className={`relative rounded-lg border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${isActive
                   ? 'border-primary bg-primary/5'
-                  : 'border-border hover:bg-accent'
+                  : 'border-border hover:bg-accent disabled:hover:bg-transparent'
                   }`}
               >
                 <Icon

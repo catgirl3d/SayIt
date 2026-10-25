@@ -132,7 +132,9 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
   const [workMode, setWorkMode] = useState<WorkMode>(getWorkMode)
   const [speechLanguage, setSpeechLanguage] = useState<SpeechInputLanguage>('auto')
   const [serverOk, setServerOk] = useState<boolean | null>(null)
+  const [serverAsrNotReady, setServerAsrNotReady] = useState(false)
   const [modeError, setModeError] = useState('')
+  const [modeApplying, setModeApplying] = useState(false)
   const [modeStepMounted, setModeStepMounted] = useState(false)
   const [testText, setTestText] = useState('')
   const [listeningKey, setListeningKey] = useState(false)
@@ -276,19 +278,32 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
     if (workMode !== 'server') return
     let cancelled = false
     setServerOk(null)
+    setServerAsrNotReady(false)
     healthCheck()
-      .then(() => { if (!cancelled) setServerOk(true) })
-      .catch(() => { if (!cancelled) setServerOk(false) })
+      .then((health) => {
+        if (cancelled) return
+        setServerOk(health.asr === true)
+        setServerAsrNotReady(health.asr !== true)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setServerOk(false)
+          setServerAsrNotReady(false)
+        }
+      })
     return () => { cancelled = true }
   }, [step, workMode])
 
   const handleModeChange = async (mode: WorkMode) => {
     setModeError('')
+    setModeApplying(true)
     try {
       await applyWorkMode(mode)
     } catch (error) {
       setModeError(error instanceof Error ? error.message : String(error))
       return
+    } finally {
+      setModeApplying(false)
     }
     setWorkMode(mode)
   }
@@ -306,7 +321,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
       <h2 className="mb-2 text-center text-xl font-bold">{t('welcome.modeTitle')}</h2>
       <p className="mb-5 text-center text-sm text-muted-foreground">{t('welcome.modeSubtitle')}</p>
       <div className="space-y-6">
-        <WorkModeSection value={workMode} onChange={(mode) => void handleModeChange(mode)} />
+        <WorkModeSection value={workMode} onChange={(mode) => void handleModeChange(mode)} disabled={modeApplying} />
         {modeError && <p role="alert" className="text-sm leading-6 text-destructive">{modeError}</p>}
         <div id={step === 3 ? 'engine-config' : undefined} className="space-y-6">
           {workMode === 'local' && <LocalModeSection speechLanguage={speechLanguage} />}
@@ -446,6 +461,8 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
                       <span className="text-xs text-muted-foreground">{t('common.checking')}</span>
                     ) : serverOk ? (
                       <><CheckCircle2 className="h-4 w-4 text-emerald-500" /><span className="text-xs text-emerald-600">{t('welcome.connected')}</span></>
+                    ) : serverAsrNotReady ? (
+                      <><AlertCircle className="h-4 w-4 text-amber-500" /><span className="text-xs text-amber-600">{t('welcome.serverAsrNotReady')}</span></>
                     ) : (
                       <><AlertCircle className="h-4 w-4 text-destructive" /><span className="text-xs text-destructive">{t('welcome.notConnected')}</span></>
                     )

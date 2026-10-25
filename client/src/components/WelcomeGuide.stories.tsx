@@ -20,6 +20,10 @@ const serverHealthStub = fn(() => new Response(
   JSON.stringify({ status: 'ok', asr: true, llm: true }),
   { status: 200, headers: { 'Content-Type': 'application/json' } },
 ))
+const serverAsrNotReadyStub = fn(() => new Response(
+  JSON.stringify({ status: 'ok', asr: false, llm: false }),
+  { status: 200, headers: { 'Content-Type': 'application/json' } },
+))
 
 const localModelCommands = {
   list_available_models: () => availableModels,
@@ -293,6 +297,41 @@ export const ServerModeHealthy: Story = {
     await expect(serverMode.some((node) => node.closest('[hidden]') === null)).toBe(true)
     const connected = await canvas.findAllByText('Connected', { exact: true })
     await expect(connected.some((node) => node.closest('[hidden]') === null)).toBe(true)
+  },
+}
+
+export const TryStepServerAsrNotReady: Story = {
+  args: {
+    onComplete: () => undefined,
+  },
+  parameters: {
+    tauri: {
+      settings: {
+        workMode: 'server',
+        backendBaseUrl: 'https://server.example',
+      },
+    },
+    network: {
+      'https://server.example/healthz': serverAsrNotReadyStub,
+    },
+  },
+  beforeEach: async () => {
+    serverAsrNotReadyStub.mockClear()
+    if (getWorkMode() !== 'server') await switchProvider('server')
+    await initRuntimeConfig()
+  },
+  play: async ({ canvasElement }) => {
+    await goToStep(canvasElement, 4)
+    await waitFor(() => expect(serverAsrNotReadyStub).toHaveBeenCalledTimes(1))
+
+    const canvas = within(canvasElement)
+    const message = await canvas.findAllByText("Server ASR isn't ready")
+    await expect(message.some((node) => node.closest('[hidden]') === null)).toBe(true)
+    const connected = canvas.queryAllByText('Connected', { exact: true })
+    await expect(connected.some((node) => node.closest('[hidden]') === null)).toBe(false)
+    const notConnected = canvas.queryAllByText('Not connected', { exact: true })
+    await expect(notConnected.some((node) => node.closest('[hidden]') === null)).toBe(false)
+    await expect(canvas.getByRole('textbox')).toHaveAttribute('readonly')
   },
 }
 
