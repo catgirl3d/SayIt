@@ -6,6 +6,7 @@ import App from './App'
 import './index.css'
 import './app-scrollbar.css'
 import { addRuntimeEvent } from './services/debugLog'
+import { resolveDefaultServerMigration } from './services/defaultServerMigration'
 import { initRuntimeConfig } from './services/runtimeConfig'
 import { initProviderFromStore } from './services/transcription'
 import { initLanguage, initLocaleDefaults } from './stores/language'
@@ -27,6 +28,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 async function bootstrap() {
   let runtimeConfigReady = false
+  let needsWorkModeChoice = false
   try {
     await initRuntimeConfig()
     runtimeConfigReady = true
@@ -46,6 +48,11 @@ async function bootstrap() {
   }
   if (runtimeConfigReady) {
     try {
+      needsWorkModeChoice = (await resolveDefaultServerMigration()) === 'choose'
+    } catch (e) {
+      console.error('[bootstrap] resolveDefaultServerMigration error:', e)
+    }
+    try {
       await initProviderFromStore()
     } catch (e) {
       console.error('[bootstrap] initProviderFromStore error:', e)
@@ -63,7 +70,7 @@ async function bootstrap() {
   if (rootEl) {
     ReactDOM.createRoot(rootEl).render(
       <HashRouter>
-        <App runtimeConfigReady={runtimeConfigReady} />
+        <App runtimeConfigReady={runtimeConfigReady} needsWorkModeChoice={needsWorkModeChoice} />
       </HashRouter>,
     )
   }

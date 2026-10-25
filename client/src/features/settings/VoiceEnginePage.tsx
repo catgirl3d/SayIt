@@ -3,15 +3,15 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { getDefault } from '@/services/defaults'
-import { getSetting, setSetting } from '@/services/store'
-import { switchProvider, getWorkMode, type WorkMode } from '@/services/transcription'
-import { refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
+import { getSetting } from '@/services/store'
+import { getWorkMode, type WorkMode } from '@/services/transcription'
+import { applyWorkMode } from '@/services/transcription/applyWorkMode'
+import { setSpeechLanguageCache } from '@/services/recorder'
 import {
   getSpeechInputLanguage,
   setSpeechInputLanguage,
   type SpeechInputLanguage,
 } from '@/services/speechInputLanguage'
-import { refreshModeStatus } from '@/stores/modeStatus'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
 import WorkModeSection from './WorkModeSection'
 import CloudAPISection from './CloudAPISection'
@@ -22,7 +22,6 @@ import { PageHelp } from './PageHelp'
 import { VoiceEngineHelpContent } from './HelpContents'
 import { useT } from '@/i18n/useT'
 import SpeechLanguageSection from './SpeechLanguageSection'
-import { systemAudioSession } from '@/services/systemAudio'
 
 export default function VoiceEnginePage() {
   const t = useT()
@@ -43,21 +42,16 @@ export default function VoiceEnginePage() {
 
   const handleWorkModeChange = async (mode: WorkMode) => {
     setWorkModeError('')
-    await systemAudioSession.stop()
-    const snapshot = systemAudioSession.getSnapshot()
-    if (snapshot.state !== 'idle') {
-      setWorkModeError(snapshot.error || t('systemAudio.cleanupFailed'))
+    try {
+      await applyWorkMode(mode)
+    } catch (error) {
+      setWorkModeError(error instanceof Error ? error.message : String(error))
       return
     }
     // Switching modes replaces the configuration cards below, so unsaved input from the previous mode disappears.
     // Clear the dirty flag with it; otherwise the recognition test keeps reporting stale unsaved changes.
     setEngineDraftDirty(false)
     setWorkMode(mode)
-    await setSetting('workMode', mode)
-    await switchProvider(mode)
-    await refreshRecorderSettings()
-    reconnectProvider()
-    void refreshModeStatus() // Synchronize the lower-left engine indicator and upper-right ready badge.
   }
 
   return (

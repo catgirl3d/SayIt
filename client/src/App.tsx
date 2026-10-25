@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
 import WelcomeGuide from './components/WelcomeGuide'
+import WorkModeMigrationDialog from './components/WorkModeMigrationDialog'
 import Home from './pages/Home'
 import FileTranscription from './pages/FileTranscription'
 import SystemAudio from './pages/SystemAudio'
@@ -30,13 +31,16 @@ import UpdateDialog from './features/update/UpdateDialog'
 import * as bridge from './services/bridge'
 import { systemAudioSession } from './services/systemAudio'
 import { fileTranscriptionService } from './services/fileTranscription'
+import { applyWorkMode } from './services/transcription/applyWorkMode'
 
 interface AppProps {
   runtimeConfigReady: boolean
+  needsWorkModeChoice: boolean
 }
 
-export default function App({ runtimeConfigReady }: AppProps) {
+export default function App({ runtimeConfigReady, needsWorkModeChoice }: AppProps) {
   const [showWelcome, setShowWelcome] = useState(false)
+  const [workModeChoicePending, setWorkModeChoicePending] = useState(needsWorkModeChoice)
   // 首次挂载时先不渲染主界面，等 onboarding 检查完成再决定，避免"闪一下主页再进向导"
   const [onboardingChecked, setOnboardingChecked] = useState(false)
   const navigate = useNavigate()
@@ -134,6 +138,15 @@ export default function App({ runtimeConfigReady }: AppProps) {
         </main>
       </div>
       {showWelcome && <WelcomeGuide onComplete={handleWelcomeComplete} />}
+      {workModeChoicePending && !showWelcome && (
+        <WorkModeMigrationDialog
+          onChoose={async (mode) => {
+            await applyWorkMode(mode)
+            setWorkModeChoicePending(false)
+            navigate('/voice-engine')
+          }}
+        />
+      )}
       <UpdateDialog />
     </div>
   )

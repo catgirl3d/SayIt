@@ -78,7 +78,7 @@ import App from './App'
 function renderApp(runtimeConfigReady: boolean) {
   return render(
     <MemoryRouter>
-      <App runtimeConfigReady={runtimeConfigReady} />
+      <App runtimeConfigReady={runtimeConfigReady} needsWorkModeChoice={false} />
     </MemoryRouter>,
   )
 }
