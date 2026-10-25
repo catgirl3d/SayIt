@@ -70,6 +70,14 @@ interface ReprocessResult {
   asrWarning?: AsrWarningCode
 }
 
+function readAudioErrorCode(error: unknown): string {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (raw.startsWith('sayit_error:')) {
+    return raw.slice('sayit_error:'.length).split(':', 1)[0]
+  }
+  return raw
+}
+
 /** Server-mode re-recognition: uses a separate WebSocket connection so it does not interfere with the global connection */
 export async function reprocessViaServer(
   chunk: ArrayBuffer,
@@ -551,35 +559,24 @@ export default function History() {
     const warningGeneration = ++reprocessWarningGeneration.current
     setReprocessWarning(null)
 
-    const base64 = await bridge.readAudioFile(record.audioFilePath)
-    if (!base64) throw audioMissingError()
-
-    // Decode base64 WAV → PCM
-    const binaryStr = atob(base64)
-    const bytes = new Uint8Array(binaryStr.length)
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i)
+    let chunk: ArrayBuffer
+    try {
+      chunk = await bridge.readAudioPcm(record.audioFilePath)
+    } catch (error) {
+      switch (readAudioErrorCode(error)) {
+        case 'missing':
+          throw new Error(t('record.audioMissing'), { cause: error })
+        case 'malformed_wav':
+          throw new Error(t('record.audioMalformed'), { cause: error })
+        case 'unsupported_format':
+          throw new Error(t('record.audioUnsupported'), { cause: error })
+        case 'empty_audio':
+          throw new Error(t('record.audioEmpty'), { cause: error })
+        case 'unreadable':
+        default:
+          throw new Error(t('record.audioUnreadable'), { cause: error })
+      }
     }
-    const pcmData = bytes.slice(44)
-    const chunk = pcmData.buffer.slice(pcmData.byteOffset, pcmData.byteOffset + pcmData.byteLength)
-
-    // Diagnostic: compute peak amplitude of the PCM data being sent
-    const pcmInt16 = new Int16Array(chunk)
-    let reprocessPeak = 0
-    for (let i = 0; i < pcmInt16.length; i++) {
-      const v = Math.abs(pcmInt16[i])
-      if (v > reprocessPeak) reprocessPeak = v
-    }
-    const reprocessPeakNorm = reprocessPeak / 32768
-    const reprocessDurSec = pcmInt16.length / 16000
-    console.log('[reprocess-diag] PCM stats', {
-      byteLength: chunk.byteLength,
-      samples: pcmInt16.length,
-      durationSec: reprocessDurSec.toFixed(2),
-      peakInt16: reprocessPeak,
-      peakNormalized: reprocessPeakNorm.toFixed(4),
-      wouldBeSilent: reprocessPeakNorm < 0.01,
-    })
 
     const preset = await getActivePreset()
     const aiEnabled = await getSetting('aiEnabled', false)

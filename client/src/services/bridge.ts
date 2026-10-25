@@ -415,6 +415,14 @@ export function readAudioFile(filePath: string) {
   return invoke<string | null>('read_audio_file', { filePath })
 }
 
+export async function readAudioPcm(filePath: string): Promise<ArrayBuffer> {
+  const result = await invoke<ArrayBuffer>('read_audio_pcm', { filePath })
+  if (!(result instanceof ArrayBuffer)) {
+    throw new Error('read_audio_pcm returned a non-ArrayBuffer response')
+  }
+  return result
+}
+
 /**
  * 录音文件是否还在。
  *
