@@ -625,6 +625,36 @@ mod tests {
     }
 
     #[test]
+    fn certificate_exception_matrix_without_protected_host_is_strict_for_custom_host() {
+        let cases = [
+            (
+                Some("https://custom.example"),
+                "https://custom.example/healthz",
+                true,
+            ),
+            (
+                Some("https://custom.example"),
+                "https://other.example/healthz",
+                false,
+            ),
+            (
+                Some("http://custom.example"),
+                "https://custom.example/healthz",
+                false,
+            ),
+            (None, "https://custom.example/healthz", false),
+        ];
+
+        for (saved, request, expected) in cases {
+            assert_eq!(
+                cert_error_allowed(saved, None, request),
+                expected,
+                "saved={saved:?}, request={request}"
+            );
+        }
+    }
+
+    #[test]
     fn compiled_builtin_default_server_never_gets_a_certificate_exception() {
         if BUILTIN_DEFAULT_SERVER_URL.is_empty() {
             assert_eq!(builtin_default_host(), None);

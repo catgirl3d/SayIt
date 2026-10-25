@@ -162,6 +162,45 @@ fn cleanup_expired_logs(storage: &Storage) {
     }
 }
 
+/// Predict whether the frontend will be in local mode once its startup migration has run.
+///
+/// Mirrors `DEFAULTS.workMode` in `services/defaults.ts`, `initProviderFromStore` in
+/// `services/transcription/index.ts`, and the branches of `resolveDefaultServerMigration` in
+/// `services/defaultServerMigration.ts`.
+///
+/// Rust starts before that migration, so an absent mode is not necessarily local. It is local
+/// once the migration has completed or when onboarding never finished. An onboarded user
+/// without a mode is a former default-server user: the migration moves them to server mode
+/// (an address is present) or asks them to choose (no address). Both outcomes are non-local,
+/// so the address does not matter here.
+///
+/// A stored mode other than `"server"` or `"cloud_api"` (`"local"`, but also any invalid
+/// value) ends in local mode: the migration leaves it alone and `initProviderFromStore`
+/// falls back to `DEFAULTS.workMode`.
+fn should_preload_local_model(
+    work_mode: &serde_json::Value,
+    migration_done: &serde_json::Value,
+    onboarding_version: &serde_json::Value,
+) -> bool {
+    if !work_mode.is_null() {
+        return !matches!(work_mode.as_str(), Some("server" | "cloud_api"));
+    }
+    migration_done.as_bool() == Some(true) || !js_truthy(onboarding_version)
+}
+
+/// JavaScript truthiness for the values `onboardingVersion` can hold. The migration uses a
+/// plain `if (!onboardingVersion)`, so false, 0, an empty string, null, and missing all mean
+/// "not onboarded"; arrays and objects are truthy even when empty.
+fn js_truthy(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        serde_json::Value::String(value) => !value.is_empty(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => true,
+    }
+}
+
 fn main() {
     // Mirror the Rust log facade to sayit.log as well as stderr. This is essential on
     // Windows release builds (`windows_subsystem = "windows"`), where stderr is invisible.
@@ -326,12 +365,17 @@ fn main() {
 
     // Local mode: warm the model in the background at startup instead of making the
     // first hotkey press wait hundreds of milliseconds to a few seconds.
-    // Other modes do not load it, to avoid keeping hundreds of MB of memory idle.
     //
-    // Fallback mirrors DEFAULTS.workMode in services/defaults.ts: an absent or null
-    // workMode means local. Keep the two sides in sync when the default changes.
+    // This predicate mirrors DEFAULTS.workMode in services/defaults.ts and the branches in
+    // resolveDefaultServerMigration (services/defaultServerMigration.ts). Rust runs before
+    // that migration, so an absent workMode is not necessarily local. A surplus preload is
+    // not released later: the frontend unloads the model only when it leaves local mode.
+    // Keep this predicate, the frontend default, and the migration branches in sync.
     let work_mode = storage.get("workMode", None);
-    let preload_local = work_mode.is_null() || work_mode.as_str() == Some("local");
+    let migration_done = storage.get("migration.builtinServerRemoved", None);
+    let onboarding_version = storage.get("onboardingVersion", None);
+    let preload_local =
+        should_preload_local_model(&work_mode, &migration_done, &onboarding_version);
     if preload_local {
         // Fallback mirrors the JS-side default (DEFAULTS['localAsr.modelId'] in
         // services/defaults.ts): an absent or blank stored value means "the default
@@ -976,5 +1020,64 @@ mod config_tests {
             offenders.is_empty(),
             "WebView2 args must be global; per-window overrides found on: {offenders:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod local_preload_tests {
+    use super::should_preload_local_model;
+    use serde_json::{Value, json};
+
+    fn preload(work_mode: &Value, migration_done: &Value, onboarding_version: &Value) -> bool {
+        should_preload_local_model(work_mode, migration_done, onboarding_version)
+    }
+
+    #[test]
+    fn explicit_local_mode_preloads() {
+        assert!(preload(&json!("local"), &json!(false), &json!(null)));
+        assert!(preload(&json!("local"), &json!(true), &json!("1.0.0")));
+    }
+
+    #[test]
+    fn server_and_cloud_modes_do_not_preload() {
+        for mode in [json!("server"), json!("cloud_api")] {
+            for migration_done in [json!(null), json!(false), json!(true)] {
+                for onboarding in [json!(null), json!(false), json!("1.0.0")] {
+                    assert!(!preload(&mode, &migration_done, &onboarding));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_stored_modes_fall_back_to_local() {
+        for mode in [json!(""), json!("senior"), json!(false), json!(0)] {
+            assert!(preload(&mode, &json!(false), &json!("1.0.0")));
+        }
+    }
+
+    #[test]
+    fn completed_migration_defaults_to_local() {
+        assert!(preload(&json!(null), &json!(true), &json!(false)));
+        assert!(preload(&json!(null), &json!(true), &json!("1.0.0")));
+    }
+
+    #[test]
+    fn not_onboarded_defaults_to_local() {
+        for onboarding in [json!(null), json!(false), json!(0), json!("")] {
+            assert!(preload(&json!(null), &json!(false), &onboarding));
+        }
+    }
+
+    #[test]
+    fn onboarded_user_without_a_mode_waits_for_the_migration() {
+        for onboarding in [json!("1.0.0"), json!(1)] {
+            assert!(!preload(&json!(null), &json!(false), &onboarding));
+        }
+    }
+
+    #[test]
+    fn migration_flag_must_be_json_true() {
+        assert!(!preload(&json!(null), &json!("true"), &json!("1.0.0")));
     }
 }
