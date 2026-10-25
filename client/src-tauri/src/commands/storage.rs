@@ -1,6 +1,7 @@
+use crate::net_policy::{BACKEND_BASE_URL_KEY, TlsPolicyState};
 use crate::storage::{Storage, UsageEventInput, UsageSummary};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub fn store_get(key: String, storage: State<Storage>) -> Result<Value, String> {
@@ -8,23 +9,85 @@ pub fn store_get(key: String, storage: State<Storage>) -> Result<Value, String> 
 }
 
 #[tauri::command]
-pub fn store_set(key: String, value: Value, storage: State<Storage>) -> Result<(), String> {
+pub async fn store_set(
+    key: String,
+    value: Value,
+    storage: State<'_, Storage>,
+    app: AppHandle,
+    tls_policy: State<'_, TlsPolicyState>,
+) -> Result<(), String> {
+    if key == BACKEND_BASE_URL_KEY {
+        let policy = (*tls_policy).clone();
+        let clear_app = app.clone();
+        let saved_backend_url = value.as_str().map(str::to_owned);
+        return policy
+            .apply_backend_change(
+                saved_backend_url,
+                move || TlsPolicyState::clear_cached_actions(clear_app),
+                move || storage.set(&key, &value).map_err(|error| error.to_string()),
+            )
+            .await;
+    }
     storage.set(&key, &value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn store_set_app_settings(
+pub async fn store_set_app_settings(
     settings: serde_json::Map<String, Value>,
-    storage: State<Storage>,
+    storage: State<'_, Storage>,
+    app: AppHandle,
+    tls_policy: State<'_, TlsPolicyState>,
 ) -> Result<(), String> {
+    if settings.contains_key(BACKEND_BASE_URL_KEY) {
+        let policy = (*tls_policy).clone();
+        let clear_app = app.clone();
+        let saved_backend_url = settings
+            .get(BACKEND_BASE_URL_KEY)
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        return policy
+            .apply_backend_change(
+                saved_backend_url,
+                move || TlsPolicyState::clear_cached_actions(clear_app),
+                move || {
+                    storage
+                        .set_app_settings(&settings)
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .await;
+    }
     storage
         .set_app_settings(&settings)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn store_delete(key: String, storage: State<Storage>) -> Result<(), String> {
+pub async fn store_delete(
+    key: String,
+    storage: State<'_, Storage>,
+    app: AppHandle,
+    tls_policy: State<'_, TlsPolicyState>,
+) -> Result<(), String> {
+    if key == BACKEND_BASE_URL_KEY {
+        let policy = (*tls_policy).clone();
+        let clear_app = app.clone();
+        return policy
+            .apply_backend_change(
+                None,
+                move || TlsPolicyState::clear_cached_actions(clear_app),
+                move || storage.delete(&key).map_err(|error| error.to_string()),
+            )
+            .await;
+    }
     storage.delete(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn wait_for_backend_tls_ready(
+    tls_policy: State<'_, TlsPolicyState>,
+) -> Result<(), String> {
+    tls_policy.wait_ready().await
 }
 
 /// Records one completed dictation in the usage log. The timestamp is taken
