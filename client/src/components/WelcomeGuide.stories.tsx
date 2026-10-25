@@ -1,5 +1,6 @@
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { emit } from '@tauri-apps/api/event'
 import { getSetting } from '@/services/store'
 import { getWorkMode, switchProvider, type WorkMode } from '@/services/transcription'
 import { initRuntimeConfig, resetBackendBaseUrl } from '@/services/runtimeConfig'
@@ -12,6 +13,9 @@ import {
 import WelcomeGuide from './WelcomeGuide'
 
 let previousWelcomeGuideMode: WorkMode | undefined
+let downloadedForStory: typeof downloadedModels = []
+let downloadStarted = false
+let finishDownload: (() => void) | undefined
 const serverHealthStub = fn(() => new Response(
   JSON.stringify({ status: 'ok', asr: true, llm: true }),
   { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -147,6 +151,36 @@ export const ModeStepCloudApi: Story = {
   },
 }
 
+export const ModeStepCloudApiEditor: Story = {
+  args: {
+    onComplete: () => undefined,
+  },
+  parameters: {
+    tauri: {
+      settings: {
+        workMode: 'cloud_api',
+        'cloudAsr.profiles': [],
+        'cloudAsr.activeProfileId': '',
+      },
+    },
+  },
+  beforeEach: async () => {
+    if (getWorkMode() !== 'cloud_api') await switchProvider('cloud_api')
+  },
+  play: async ({ canvasElement }) => {
+    await goToStep(canvasElement, 3)
+    const canvas = within(canvasElement)
+    await userEvent.click(await canvas.findByRole('button', { name: 'New' }))
+
+    const body = within(canvasElement.ownerDocument.body)
+    const dialog = await body.findByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await waitFor(() => {
+      expect(document.activeElement).toBe(document.getElementById('asr-api-key'))
+    })
+  },
+}
+
 export const ModeStepServerEmpty: Story = {
   args: {
     onComplete: () => undefined,
@@ -223,7 +257,8 @@ export const TryStepNotReady: Story = {
     await goToStep(canvasElement, 4)
     const canvas = within(canvasElement)
     await expect(await canvas.findByText('Voice test', { exact: true })).toBeVisible()
-    await expect(await canvas.findByText('Setup needed')).toBeVisible()
+    const setup = await canvas.findAllByText('Setup needed')
+    await expect(setup.some((node) => node.closest('[hidden]') === null)).toBe(true)
     const textarea = await canvas.findByPlaceholderText('Finish setting up the selected mode on the previous step to test dictation here. You can also do it later in Settings → Voice engine.')
     expect(textarea).toHaveAttribute('readonly')
   },
@@ -254,7 +289,74 @@ export const ServerModeHealthy: Story = {
     await waitFor(() => expect(serverHealthStub).toHaveBeenCalledTimes(1))
 
     const canvas = within(canvasElement)
-    await expect(await canvas.findByText('Server mode', { exact: true })).toBeVisible()
-    await expect(await canvas.findByText('Connected', { exact: true })).toBeVisible()
+    const serverMode = await canvas.findAllByText('Server mode', { exact: true })
+    await expect(serverMode.some((node) => node.closest('[hidden]') === null)).toBe(true)
+    const connected = await canvas.findAllByText('Connected', { exact: true })
+    await expect(connected.some((node) => node.closest('[hidden]') === null)).toBe(true)
+  },
+}
+
+export const DownloadContinuesAcrossSteps: Story = {
+  args: {
+    onComplete: () => undefined,
+  },
+  parameters: {
+    tauri: {
+      commands: {
+        list_downloaded_models: () => downloadedForStory,
+        download_model: () => {
+          downloadStarted = true
+          return new Promise<void>((resolve) => { finishDownload = resolve })
+        },
+        preload_local_model: () => undefined,
+      },
+      settings: {
+        workMode: 'local',
+        'localAsr.modelId': '',
+        'localAsr.downloadSource': 'HuggingFace',
+      },
+    },
+  },
+  beforeEach: () => {
+    downloadedForStory = []
+    downloadStarted = false
+    finishDownload = undefined
+  },
+  play: async ({ canvasElement }) => {
+    await goToStep(canvasElement, 3)
+    const canvas = within(canvasElement)
+    const downloadButton = await canvas.findByRole('button', { name: 'Download' })
+
+    await userEvent.click(downloadButton)
+    await waitFor(() => expect(downloadStarted).toBe(true))
+
+    await userEvent.click(await canvas.findByRole('button', { name: 'Next' }))
+    await expect(await canvas.findByText('Voice test', { exact: true })).toBeVisible()
+    expect(downloadButton.isConnected).toBe(true)
+    await expect(canvas.getByRole('textbox')).toHaveAttribute('readonly')
+    expect(await getSetting<string>('localAsr.modelId', '')).not.toBe(primaryModelId)
+
+    downloadedForStory = downloadedModels
+    await emit('model-download-progress', {
+      model_id: primaryModelId,
+      file_name: 'nemotron-asr-streaming-0.6b-Q4_K_M.gguf',
+      downloaded_bytes: 520 * 1024 * 1024,
+      total_bytes: 520 * 1024 * 1024,
+      percent: 100,
+      status: 'completed',
+    })
+    finishDownload?.()
+
+    await waitFor(() => {
+      expect(canvas.getByRole('textbox')).not.toHaveAttribute('readonly')
+    })
+    await waitFor(async () => {
+      const stored = await getSetting<string>('localAsr.modelId', '')
+      if (stored !== primaryModelId) throw new Error(`model was not activated: ${stored}`)
+    })
+    await waitFor(() => {
+      const ready = canvas.getAllByText('Ready', { exact: true })
+      expect(ready.some((node) => node.closest('[hidden]') === null)).toBe(true)
+    })
   },
 }

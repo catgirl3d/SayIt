@@ -133,6 +133,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
   const [speechLanguage, setSpeechLanguage] = useState<SpeechInputLanguage>('auto')
   const [serverOk, setServerOk] = useState<boolean | null>(null)
   const [modeError, setModeError] = useState('')
+  const [modeStepMounted, setModeStepMounted] = useState(false)
   const [testText, setTestText] = useState('')
   const [listeningKey, setListeningKey] = useState(false)
   // 热键确认步骤的状态
@@ -152,6 +153,13 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
     setWorkMode(getWorkMode())
     void getSpeechInputLanguage().then(setSpeechLanguage)
   }, [])
+
+  // Mount the mode step on first visit and keep it mounted afterwards. A local model
+  // download keeps running from this subtree; unmounting it would drop the progress
+  // listener before the download can select and activate the finished model.
+  useEffect(() => {
+    if (step === 3) setModeStepMounted(true)
+  }, [step])
 
   // 热键确认步骤：监听按键按下和松开，同时抑制录音系统响应热键
   // 只依赖 step，避免 hfKey 变化导致 effect 反复运行和钩子反复重启
@@ -293,6 +301,22 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
   const totalSteps = 6
   const isLast = step === totalSteps - 1
 
+  const renderModeStep = () => (
+    <div>
+      <h2 className="mb-2 text-center text-xl font-bold">{t('welcome.modeTitle')}</h2>
+      <p className="mb-5 text-center text-sm text-muted-foreground">{t('welcome.modeSubtitle')}</p>
+      <div className="space-y-6">
+        <WorkModeSection value={workMode} onChange={(mode) => void handleModeChange(mode)} />
+        {modeError && <p role="alert" className="text-sm leading-6 text-destructive">{modeError}</p>}
+        <div id={step === 3 ? 'engine-config' : undefined} className="space-y-6">
+          {workMode === 'local' && <LocalModeSection speechLanguage={speechLanguage} />}
+          {workMode === 'cloud_api' && <CloudAPISection speechLanguage={speechLanguage} />}
+          {workMode === 'server' && <ServerSection speechLanguage={speechLanguage} />}
+        </div>
+      </div>
+    </div>
+  )
+
   const renderStep = () => {
     switch (step) {
       // Step 0: 欢迎
@@ -378,22 +402,6 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
                 {t('welcome.changeHint')}
               </p>
             )}
-          </div>
-        )
-
-      // Step 3: work mode and its setup
-      case 3:
-        return (
-          <div>
-            <h2 className="mb-2 text-center text-xl font-bold">{t('welcome.modeTitle')}</h2>
-            <p className="mb-5 text-center text-sm text-muted-foreground">{t('welcome.modeSubtitle')}</p>
-            <div className="space-y-6">
-              <WorkModeSection value={workMode} onChange={(mode) => void handleModeChange(mode)} />
-              {modeError && <p role="alert" className="text-sm leading-6 text-destructive">{modeError}</p>}
-              {workMode === 'local' && <LocalModeSection speechLanguage={speechLanguage} />}
-              {workMode === 'cloud_api' && <CloudAPISection speechLanguage={speechLanguage} />}
-              {workMode === 'server' && <ServerSection speechLanguage={speechLanguage} />}
-            </div>
           </div>
         )
 
@@ -517,9 +525,12 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/95 backdrop-blur-sm">
       <div className={cn('w-full max-h-[90vh] overflow-y-auto px-6 py-8', step === 3 ? 'max-w-2xl' : 'max-w-lg')}>
-        {renderStep()}
+        {(step === 3 || modeStepMounted) && (
+          <div hidden={step !== 3}>{renderModeStep()}</div>
+        )}
+        {step !== 3 && renderStep()}
 
         {/* 底部导航 */}
         <div className="mt-8 flex items-center justify-between">
