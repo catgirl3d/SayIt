@@ -37,6 +37,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select } from '@/components/ui/select'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { getDefault } from '@/services/defaults'
 import { getSetting, setSetting } from '@/services/store'
 import {
   SERVER_AI_SOURCE_KEY,
@@ -357,8 +358,9 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
       setLoaded(true)
     })()
 
+    const fallbackWorkMode = getDefault<string>('workMode')
     void Promise.all([
-      getSetting('workMode', 'server').catch(() => 'server'),
+      getSetting('workMode', fallbackWorkMode).catch(() => fallbackWorkMode),
       getSetting(SERVER_AI_SOURCE_KEY, 'managed').catch(() => 'managed'),
     ]).then(([mode, value]) => {
       if (cancelled) return

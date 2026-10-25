@@ -9,6 +9,7 @@
 // 跑完才准，而侧边栏可能先挂载；读存储永远是真值，也避免了循环依赖。
 
 import { invoke } from '@tauri-apps/api/core'
+import { getDefault } from '../services/defaults'
 import { getSetting } from '../services/store'
 import { checkLocalModelInstalled, getSelectedLocalModelId, resolveLocalModelName } from '../services/localModelStatus'
 import { loadAsrProfiles } from '../features/settings/asrProfileStore'
@@ -82,9 +83,10 @@ function cloudProviderShort(provider: string): string {
 
 /** 重新从设置里读一遍模式/模型并广播。相关设置变更后调用。 */
 export async function refreshModeStatus(): Promise<void> {
-  const stored = await getSetting('workMode', 'server') as string
+  const fallbackMode = getDefault<ModeStatusMode>('workMode')
+  const stored = await getSetting('workMode', fallbackMode) as ModeStatusMode
   const mode: ModeStatusMode =
-    stored === 'local' || stored === 'cloud_api' ? stored : 'server'
+    stored === 'server' || stored === 'local' || stored === 'cloud_api' ? stored : fallbackMode
 
   let detail = ''
   let ready: boolean | null = null

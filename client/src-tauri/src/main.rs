@@ -324,9 +324,15 @@ fn main() {
     // 放后台线程，不让删除卡住启动。
     models::local_asr::spawn_legacy_reclaim();
 
-    // 本地模式：启动就在后台把模型加载起来，别等用户第一次按热键才等几百毫秒~几秒。
-    // 非本地模式不加载，避免白占几百 MB 内存。
-    if storage.get("workMode", None).as_str() == Some("local") {
+    // Local mode: warm the model in the background at startup instead of making the
+    // first hotkey press wait hundreds of milliseconds to a few seconds.
+    // Other modes do not load it, to avoid keeping hundreds of MB of memory idle.
+    //
+    // Fallback mirrors DEFAULTS.workMode in services/defaults.ts: an absent or null
+    // workMode means local. Keep the two sides in sync when the default changes.
+    let work_mode = storage.get("workMode", None);
+    let preload_local = work_mode.is_null() || work_mode.as_str() == Some("local");
+    if preload_local {
         // Fallback mirrors the JS-side default (DEFAULTS['localAsr.modelId'] in
         // services/defaults.ts): an absent or blank stored value means "the default
         // model", exactly like getSelectedLocalModelId() on the JS side. Keep the

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { getDefault } from '@/services/defaults'
 import { getSetting, setSetting } from '@/services/store'
 import { switchProvider, getWorkMode, type WorkMode } from '@/services/transcription'
 import { refreshRecorderSettings, reconnectProvider, setSpeechLanguageCache } from '@/services/recorder'
@@ -34,7 +35,7 @@ export default function VoiceEnginePage() {
 
   useEffect(() => {
     void getSpeechInputLanguage().then(setSpeechLanguage)
-    getSetting('workMode', 'server').then((value) => {
+    getSetting('workMode', getDefault<WorkMode>('workMode')).then((value) => {
       const v = value as WorkMode
       if (v === 'server' || v === 'cloud_api' || v === 'local') setWorkMode(v)
     })

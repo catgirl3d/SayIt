@@ -1,6 +1,7 @@
 // Provider 管理器 — 根据 workMode 返回对应的 TranscriptionProvider
 
 import { invoke } from '@tauri-apps/api/core'
+import { getDefault } from '../defaults'
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
 import { ServerProvider } from './ServerProvider'
@@ -22,7 +23,7 @@ export type {
 } from './types'
 
 let currentProvider: TranscriptionProvider | null = null
-let currentMode: WorkMode = 'server'
+let currentMode: WorkMode = getDefault<WorkMode>('workMode')
 
 function createProvider(mode: WorkMode): TranscriptionProvider {
   switch (mode) {
@@ -32,9 +33,11 @@ function createProvider(mode: WorkMode): TranscriptionProvider {
       return new CloudAPIProvider()
     case 'local':
       return new LocalProvider()
-    default:
-      addRuntimeEvent('warn', 'transcription', `Unknown processing mode "${mode}"; falling back to server mode`)
-      return new ServerProvider()
+    default: {
+      const fallbackMode = getDefault<WorkMode>('workMode')
+      addRuntimeEvent('warn', 'transcription', `Unknown processing mode "${mode}"; falling back to ${fallbackMode} mode`)
+      return createProvider(fallbackMode)
+    }
   }
 }
 
@@ -89,9 +92,10 @@ export async function switchProvider(mode: WorkMode): Promise<TranscriptionProvi
 
 /** 从 store 读取保存的 workMode 并初始化 */
 export async function initProviderFromStore(): Promise<void> {
-  const stored = await getSetting('workMode', 'server')
-  const mode = (stored === 'server' || stored === 'cloud_api' || stored === 'local') ? stored : 'server'
-  currentMode = mode as WorkMode
+  const fallbackMode = getDefault<WorkMode>('workMode')
+  const stored = await getSetting('workMode', fallbackMode)
+  const mode = (stored === 'server' || stored === 'cloud_api' || stored === 'local') ? stored : fallbackMode
+  currentMode = mode
   currentProvider = createProvider(currentMode)
   addRuntimeEvent('info', 'transcription', 'Provider initialized', { mode: currentMode })
 }

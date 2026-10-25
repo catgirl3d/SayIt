@@ -122,6 +122,7 @@ const providerSwitchCommands = {
   qwen_stream_close: () => undefined,
   qwen_audio_stream_close: () => undefined,
   deepgram_stream_close: () => undefined,
+  unload_local_model: () => undefined,
 }
 
 let modeBeforeStory: ReturnType<typeof getWorkMode> | null = null
