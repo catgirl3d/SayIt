@@ -197,6 +197,7 @@ describe('default server migration', () => {
     getStoredBackendBaseUrl.mockReset().mockResolvedValue('')
     resetBackendBaseUrl.mockReset().mockImplementation(async () => {
       getBackendBaseUrl.mockReturnValue('')
+      getStoredBackendBaseUrl.mockResolvedValue('')
       return ''
     })
     discardBackendBaseUrlForSession.mockReset().mockImplementation(async () => {
@@ -253,6 +254,35 @@ describe('default server migration', () => {
   it('completeDefaultServerMigration writes the flag', async () => {
     await completeDefaultServerMigration()
 
+    expect(setSetting).toHaveBeenCalledExactlyOnceWith(FLAG_KEY, true)
+  })
+
+  it('completeDefaultServerMigration removes a remaining legacy address before writing the flag', async () => {
+    getStoredBackendBaseUrl.mockResolvedValue(LEGACY_URL)
+
+    await completeDefaultServerMigration()
+
+    expect(resetBackendBaseUrl).toHaveBeenCalledTimes(1)
+    expect(setSetting).toHaveBeenCalledExactlyOnceWith(FLAG_KEY, true)
+    expect(resetBackendBaseUrl.mock.invocationCallOrder[0]).toBeLessThan(setSetting.mock.invocationCallOrder[0])
+  })
+
+  it('completeDefaultServerMigration keeps the flag unwritten when removing the legacy address fails', async () => {
+    getStoredBackendBaseUrl.mockResolvedValue(LEGACY_URL)
+    const failure = new Error('database delete failed')
+    resetBackendBaseUrl.mockRejectedValueOnce(failure)
+
+    await expect(completeDefaultServerMigration()).rejects.toBe(failure)
+
+    expect(settingWrites(FLAG_KEY)).toEqual([])
+  })
+
+  it('completeDefaultServerMigration leaves a non-legacy address alone and writes the flag', async () => {
+    getStoredBackendBaseUrl.mockResolvedValue('https://server.example')
+
+    await completeDefaultServerMigration()
+
+    expect(resetBackendBaseUrl).not.toHaveBeenCalled()
     expect(setSetting).toHaveBeenCalledExactlyOnceWith(FLAG_KEY, true)
   })
 

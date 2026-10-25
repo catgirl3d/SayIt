@@ -28,8 +28,16 @@ function isLegacyTrialServerUrl(url: string): boolean {
   }
 }
 
-/** Record that the one-time default-server migration has run. */
+/**
+ * Record that the one-time default-server migration has run. The choice dialog is shown
+ * when an earlier attempt to delete the legacy address failed, so the address may still be
+ * stored: retry the removal first and let a failure propagate, leaving the flag unwritten
+ * so the next launch runs the migration again.
+ */
 export async function completeDefaultServerMigration(): Promise<void> {
+  if (isLegacyTrialServerUrl(await getStoredBackendBaseUrl())) {
+    await resetBackendBaseUrl()
+  }
   await setSetting(MIGRATION_DONE_KEY, true)
 }
 
