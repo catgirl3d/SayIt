@@ -12,6 +12,7 @@ Sections are ordered by version, newest first.
 
 ### Fixed
 #### Desktop Client
+- Saving a long recording no longer freezes the window for about a second. The audio-to-base64 step now converts each block in one operation instead of one character at a time; a 2.5-minute recording takes about 65 ms instead of 900 ms and uses roughly 100 MB less transient memory. The encoded data is byte-for-byte identical.
 - An interrupted update download can now be retried without starting over. The partial package is kept for the current session and the next attempt resumes it with an HTTP Range request; a package that fails its SHA-512 check is discarded.
 - Inserted text no longer shows up in Ditto's clipboard history. The clipboard write now also carries the "Clipboard Viewer Ignore" format that Ditto honors, alongside the existing Microsoft markers, and restoring the previous clipboard after a paste gets the same treatment.
 - Dictation hotkeys no longer stop responding until restart when setting up a recording fails. The recorder shows "Recording couldn't start", returns to idle and releases its start lock, so the next press begins a new recording. The keyboard hook also recovers its internal locks after a panic instead of failing every later shortcut.

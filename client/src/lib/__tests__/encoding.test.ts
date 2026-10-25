@@ -1,35 +1,64 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { uint8ArrayToBase64 } from '../encoding'
 
+interface NodeBuffer {
+  toString(encoding: 'base64'): string
+  equals(other: NodeBuffer): boolean
+}
+
+interface NodeBufferConstructor {
+  from(input: Uint8Array | string, encoding?: 'base64'): NodeBuffer
+}
+
+declare const Buffer: NodeBufferConstructor
+
+function createDeterministicBytes(length: number, seed: number): Uint8Array {
+  const bytes = new Uint8Array(length)
+  let state = seed >>> 0
+
+  for (let i = 0; i < bytes.length; i++) {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0
+    bytes[i] = state >>> 24
+  }
+
+  return bytes
+}
+
+function expectBase64Encoding(bytes: Uint8Array): void {
+  const result = uint8ArrayToBase64(bytes)
+
+  expect(result).toBe(Buffer.from(bytes).toString('base64'))
+  expect(Buffer.from(result, 'base64').equals(Buffer.from(bytes))).toBe(true)
+}
+
 describe('uint8ArrayToBase64', () => {
-  it('空数组返回空字符串', () => {
-    expect(uint8ArrayToBase64(new Uint8Array(0))).toBe('')
+  it('encodes an empty array', () => {
+    expectBase64Encoding(new Uint8Array(0))
   })
 
-  it('小数据正确编码', () => {
-    const data = new Uint8Array([72, 101, 108, 108, 111]) // "Hello"
-    expect(uint8ArrayToBase64(data)).toBe(btoa('Hello'))
+  it('encodes one byte', () => {
+    expectBase64Encoding(new Uint8Array([0]))
   })
 
-  it('大数据（超过 chunk 大小）正确编码', () => {
-    // 创建 20KB 的数据，超过 8192 的 chunk 大小
-    const size = 20000
-    const data = new Uint8Array(size)
-    for (let i = 0; i < size; i++) {
-      data[i] = i % 256
-    }
-    // 用原始方法验证结果一致
-    let expected = ''
-    for (let i = 0; i < data.length; i++) {
-      expected += String.fromCharCode(data[i])
-    }
-    expected = btoa(expected)
-
-    expect(uint8ArrayToBase64(data)).toBe(expected)
+  it('encodes two bytes', () => {
+    expectBase64Encoding(new Uint8Array([0, 255]))
   })
 
-  it('单字节数据', () => {
-    const data = new Uint8Array([65]) // "A"
-    expect(uint8ArrayToBase64(data)).toBe('QQ==')
+  it('encodes three bytes', () => {
+    expectBase64Encoding(new Uint8Array([0, 127, 255]))
+  })
+
+  it.each([8191, 8192, 8193, 16383, 16384, 16385])(
+    'matches Node Buffer for %i bytes around chunk boundaries',
+    (length) => {
+      expectBase64Encoding(createDeterministicBytes(length, length))
+    },
+  )
+
+  it.each([
+    { length: 20_000, seed: 0x1234_5678 },
+    { length: 1_000_000, seed: 0x8765_4321 },
+  ])('encodes deterministic pseudo-random data of $length bytes', ({ length, seed }) => {
+    expectBase64Encoding(createDeterministicBytes(length, seed))
   })
 })
