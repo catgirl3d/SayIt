@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   countHistory: vi.fn(),
   exportHistory: vi.fn(),
   listen: vi.fn(),
+  getActivePreset: vi.fn(),
+  updateHistoryRecord: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => mocks.invoke(...args) }))
@@ -25,8 +27,8 @@ vi.mock('@/services/store', () => ({
   deleteHistory: vi.fn(),
   listHistory: (...args: unknown[]) => mocks.listHistory(...args),
   setHistoryFavorite: vi.fn(),
-  updateHistoryRecord: vi.fn(),
-  getActivePreset: vi.fn(),
+  updateHistoryRecord: (...args: unknown[]) => mocks.updateHistoryRecord(...args),
+  getActivePreset: (...args: unknown[]) => mocks.getActivePreset(...args),
   getSetting: (...args: unknown[]) => mocks.getSetting(...args),
 }))
 vi.mock('@/services/exports', () => ({
@@ -39,11 +41,13 @@ vi.mock('@/services/bridge', () => ({
   getClientRuntimeInfo: vi.fn().mockResolvedValue(null),
   listen: (...args: unknown[]) => mocks.listen(...args),
   readAudioFile: vi.fn(),
+  readAudioPcm: vi.fn(),
 }))
 
 import History, { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
 import * as bridge from '@/services/bridge'
 import type { HistoryRecord } from '@/services/store'
+import { switchProvider } from '@/services/transcription'
 import { getRuntimeServerAiSource, setRuntimeServerAiSource } from '@/services/transcription/serverAiSource'
 
 function mockCloudProfile(provider = 'openai_transcribe') {
@@ -1259,15 +1263,21 @@ describe('history rerun failure feedback', () => {
   }
 
   beforeEach(() => {
+    mocks.invoke.mockReset()
+    mocks.invoke.mockResolvedValue({ text: 'recognized again', elapsed_ms: 18 })
+    mocks.getSetting.mockReset()
+    mocks.getActivePreset.mockReset().mockResolvedValue({ systemPrompt: '' })
+    mocks.updateHistoryRecord.mockReset()
     mocks.listHistory.mockReset().mockResolvedValue([missingAudioRecord])
     mocks.countHistory.mockReset().mockResolvedValue(1)
     mocks.listen.mockReset().mockResolvedValue(() => undefined)
     mocks.exportHistory.mockReset().mockResolvedValue({ canceled: true, filePath: null })
-    vi.mocked(bridge.readAudioFile).mockReset().mockResolvedValue(null)
+    vi.mocked(bridge.readAudioPcm).mockReset()
     clearRuntimeEvents()
   })
 
   it('tells the user the recording is gone instead of silently stopping', async () => {
+    vi.mocked(bridge.readAudioPcm).mockRejectedValue('missing')
     render(createElement(History))
 
     fireEvent.click(await screen.findByRole('button', { name: t('record.details') }))
@@ -1277,6 +1287,102 @@ describe('history rerun failure feedback', () => {
     expect(alert.textContent).toBe(
       t('record.reprocessFailed', { reason: t('record.audioMissing') }),
     )
-    expect(bridge.readAudioFile).toHaveBeenCalledWith(missingAudioRecord.audioFilePath)
+    expect(bridge.readAudioPcm).toHaveBeenCalledWith(missingAudioRecord.audioFilePath)
+    expect(invokedCommands()).not.toContain('cloud_transcribe')
+    expect(mocks.updateHistoryRecord).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: t('record.reprocess') })).toHaveProperty('disabled', false)
+  })
+
+  it('sends the exact PCM bytes to the selected ASR command', async () => {
+    await switchProvider('cloud_api')
+    mockCloudProfile()
+    mockSettings({ aiEnabled: false })
+    const pcm = new Uint8Array([0x00, 0x80, 0x34, 0x12]).buffer
+    vi.mocked(bridge.readAudioPcm).mockResolvedValue(pcm)
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'cloud_transcribe'
+        ? { text: 'recognized from PCM', elapsed_ms: 18 }
+        : undefined
+    ))
+
+    render(createElement(History))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.details') }))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.reprocess') }))
+
+    await waitFor(() => expect(mocks.updateHistoryRecord).toHaveBeenCalled())
+    expect(mocks.invoke).toHaveBeenCalledWith('cloud_transcribe', {
+      request: expect.objectContaining({ audio_b64: 'AIA0Eg==', sample_rate: 16000 }),
+    })
+    expect(mocks.updateHistoryRecord).toHaveBeenCalledWith(
+      missingAudioRecord.id,
+      expect.objectContaining({ asrText: 'recognized from PCM' }),
+    )
+  })
+
+  it('still base64-encodes the PCM bytes for the local ASR command', async () => {
+    mockSettings({
+      aiEnabled: false,
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    const pcm = new Uint8Array([0x00, 0x80, 0x34, 0x12]).buffer
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'local_transcribe'
+        ? { text: 'recognized locally', elapsed_ms: 18 }
+        : undefined
+    ))
+
+    const result = await reprocessViaLocal(pcm, [], false, undefined, 'en')
+
+    expect(mocks.invoke).toHaveBeenCalledWith('local_transcribe', {
+      audioB64: 'AIA0Eg==',
+      modelId: 'local-model',
+      language: 'en',
+      accelerator: 'auto',
+    })
+    expect(result.asrText).toBe('recognized locally')
+  })
+
+  it.each([
+    ['malformed_wav', 'record.audioMalformed'],
+    ['unsupported_format', 'record.audioUnsupported'],
+    ['unreadable', 'record.audioUnreadable'],
+    ['empty_audio', 'record.audioEmpty'],
+  ] as const)('shows an actionable %s error without starting ASR or changing the record', async (code, key) => {
+    await switchProvider('cloud_api')
+    mockCloudProfile()
+    mockSettings({ aiEnabled: false })
+    vi.mocked(bridge.readAudioPcm).mockRejectedValue(code)
+    const originalText = missingAudioRecord.llmText
+
+    render(createElement(History))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.details') }))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.reprocess') }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(t('record.reprocessFailed', { reason: t(key) }))
+    expect(invokedCommands()).not.toContain('cloud_transcribe')
+    expect(mocks.updateHistoryRecord).not.toHaveBeenCalled()
+    expect(screen.getAllByText(originalText).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: t('record.reprocess') })).toHaveProperty('disabled', false)
+  })
+
+  it('shows an unknown read failure as is without starting ASR or changing the record', async () => {
+    await switchProvider('cloud_api')
+    mockCloudProfile()
+    mockSettings({ aiEnabled: false })
+    vi.mocked(bridge.readAudioPcm).mockRejectedValue(new Error('read_audio_pcm returned a non-ArrayBuffer response'))
+
+    render(createElement(History))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.details') }))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.reprocess') }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(
+      t('record.reprocessFailed', { reason: 'read_audio_pcm returned a non-ArrayBuffer response' }),
+    )
+    expect(invokedCommands()).not.toContain('cloud_transcribe')
+    expect(mocks.updateHistoryRecord).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: t('record.reprocess') })).toHaveProperty('disabled', false)
   })
 })

@@ -816,6 +816,7 @@ fn main() {
             // Audio
             commands::audio::save_pcm_as_wav,
             commands::audio::read_audio_file,
+            commands::audio::read_audio_pcm,
             commands::audio::audio_file_exists,
             commands::audio::delete_audio_file,
             // Audio output mute (录音期间静音系统输出，防回采)
