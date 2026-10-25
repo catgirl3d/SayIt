@@ -6,7 +6,7 @@ import App from './App'
 import './index.css'
 import './app-scrollbar.css'
 import { addRuntimeEvent } from './services/debugLog'
-import { resolveDefaultServerMigration } from './services/defaultServerMigration'
+import { needsWorkModeChoiceAtStartup } from './services/defaultServerMigration'
 import { initRuntimeConfig } from './services/runtimeConfig'
 import { initProviderFromStore } from './services/transcription'
 import { initLanguage, initLocaleDefaults } from './stores/language'
@@ -47,11 +47,7 @@ async function bootstrap() {
     console.error('[bootstrap] initSpeechInputLanguageMigration error:', e)
   }
   if (runtimeConfigReady) {
-    try {
-      needsWorkModeChoice = (await resolveDefaultServerMigration()) === 'choose'
-    } catch (e) {
-      console.error('[bootstrap] resolveDefaultServerMigration error:', e)
-    }
+    needsWorkModeChoice = await needsWorkModeChoiceAtStartup()
     try {
       await initProviderFromStore()
     } catch (e) {

@@ -1,14 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const bridge = vi.hoisted(() => ({ storeGet: vi.fn() }))
 const setSetting = vi.hoisted(() => vi.fn())
 const getBackendBaseUrl = vi.hoisted(() => vi.fn())
 const getStoredBackendBaseUrl = vi.hoisted(() => vi.fn())
 const resetBackendBaseUrl = vi.hoisted(() => vi.fn())
+const discardBackendBaseUrlForSession = vi.hoisted(() => vi.fn())
 
 vi.mock('@/services/bridge', () => bridge)
 vi.mock('@/services/store', () => ({ setSetting }))
 vi.mock('@/services/runtimeConfig', () => ({
+  discardBackendBaseUrlForSession,
   getBackendBaseUrl,
   getStoredBackendBaseUrl,
   resetBackendBaseUrl,
@@ -16,6 +18,7 @@ vi.mock('@/services/runtimeConfig', () => ({
 
 import {
   completeDefaultServerMigration,
+  needsWorkModeChoiceAtStartup,
   resolveDefaultServerMigration,
 } from '../defaultServerMigration'
 
@@ -196,6 +199,13 @@ describe('default server migration', () => {
       getBackendBaseUrl.mockReturnValue('')
       return ''
     })
+    discardBackendBaseUrlForSession.mockReset().mockImplementation(async () => {
+      getBackendBaseUrl.mockReturnValue('')
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it.each(cases)('$name', async ({ values, url, storedUrl, expected, resets, writesServer, writesFlag }) => {
@@ -244,5 +254,44 @@ describe('default server migration', () => {
     await completeDefaultServerMigration()
 
     expect(setSetting).toHaveBeenCalledExactlyOnceWith(FLAG_KEY, true)
+  })
+
+  it('drops the legacy address for this session when deleting it fails', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: null })
+    getStoredBackendBaseUrl.mockResolvedValue(LEGACY_URL)
+    getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+    const failure = new Error('database delete failed')
+    resetBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(resolveDefaultServerMigration()).resolves.toBe('choose')
+
+    expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+    expect(getBackendBaseUrl()).toBe('')
+    expect(settingWrites(FLAG_KEY)).toEqual([])
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to remove the legacy server address:', failure)
+  })
+
+  it('asks for a work mode when migration resolution fails', async () => {
+    const failure = new Error('store unavailable')
+    getStoredBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(needsWorkModeChoiceAtStartup()).resolves.toBe(true)
+
+    expect(log).toHaveBeenCalledWith('[bootstrap] resolveDefaultServerMigration error:', failure)
+  })
+
+  it('asks for a work mode at startup when migration chooses', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: null })
+    getBackendBaseUrl.mockReturnValue('')
+
+    await expect(needsWorkModeChoiceAtStartup()).resolves.toBe(true)
+  })
+
+  it('skips the work mode choice at startup when migration finishes', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: 'local' })
+
+    await expect(needsWorkModeChoiceAtStartup()).resolves.toBe(false)
   })
 })

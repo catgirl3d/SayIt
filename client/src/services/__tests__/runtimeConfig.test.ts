@@ -269,6 +269,16 @@ describe('runtime backend configuration', () => {
     expect(runtimeConfig.getBackendBaseUrl()).toBe('https://kept.example')
   })
 
+  it('drops the active URL for the session without deleting the stored one', async () => {
+    const runtimeConfig = await loadRuntimeConfig()
+    await expect(runtimeConfig.setBackendBaseUrl('https://kept.example')).resolves.toBe('https://kept.example')
+
+    await runtimeConfig.discardBackendBaseUrlForSession()
+
+    expect(runtimeConfig.getBackendBaseUrl()).toBe(runtimeConfig.getDefaultBackendBaseUrl())
+    expect(bridge.storeDeleteBackendUrl).not.toHaveBeenCalled()
+  })
+
   it('queues persisted reads behind a pending save', async () => {
     const runtimeConfig = await loadRuntimeConfig()
     const savedWrite = deferred<void>()

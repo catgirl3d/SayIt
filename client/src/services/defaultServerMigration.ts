@@ -1,5 +1,6 @@
 import { storeGet } from '@/services/bridge'
 import {
+  discardBackendBaseUrlForSession,
   getBackendBaseUrl,
   getStoredBackendBaseUrl,
   resetBackendBaseUrl,
@@ -44,17 +45,40 @@ export async function completeDefaultServerMigration(): Promise<void> {
  * the saved or built-in server address is still present: keep them on server mode
  * silently. If neither a mode nor an address is available, ask them to choose one. The
  * flag is written only after the migration finishes without a pending choice; if the
- * choice dialog is still due, it appears again on the next launch.
+ * choice dialog is still due, it appears again on the next launch. If deleting the saved
+ * legacy address fails, the active address is dropped for this session and the dialog is
+ * shown without writing the flag, so the next launch retries the deletion.
  */
 export async function resolveDefaultServerMigration(): Promise<DefaultServerMigration> {
   if ((await storeGet(MIGRATION_DONE_KEY)) === true) return 'none'
 
   const storedUrl = await getStoredBackendBaseUrl()
-  if (isLegacyTrialServerUrl(storedUrl)) await resetBackendBaseUrl()
+  if (isLegacyTrialServerUrl(storedUrl)) {
+    try {
+      await resetBackendBaseUrl()
+    } catch (error) {
+      console.error('[defaultServerMigration] Failed to remove the legacy server address:', error)
+      await discardBackendBaseUrlForSession()
+      return 'choose'
+    }
+  }
 
   const result = await resolveLegacyDefaultServerMigration()
   if (result === 'none') await completeDefaultServerMigration()
   return result
+}
+
+/**
+ * Startup wrapper: any migration failure must fail closed by showing the mode dialog,
+ * because an active legacy address may still be in use for this session.
+ */
+export async function needsWorkModeChoiceAtStartup(): Promise<boolean> {
+  try {
+    return (await resolveDefaultServerMigration()) === 'choose'
+  } catch (error) {
+    console.error('[bootstrap] resolveDefaultServerMigration error:', error)
+    return true
+  }
 }
 
 async function resolveLegacyDefaultServerMigration(): Promise<DefaultServerMigration> {

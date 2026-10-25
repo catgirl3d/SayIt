@@ -58,7 +58,7 @@ export default function App({ runtimeConfigReady, needsWorkModeChoice }: AppProp
       } catch (error) {
         console.error('[App] File transcription restore error:', error)
       }
-      if (runtimeConfigReady) {
+      if (runtimeConfigReady && !needsWorkModeChoice) {
         try {
           await initRecorder()
         } catch (error) {
@@ -144,6 +144,7 @@ export default function App({ runtimeConfigReady, needsWorkModeChoice }: AppProp
           onChoose={async (mode) => {
             await applyWorkMode(mode)
             await completeDefaultServerMigration()
+            await initRecorder()
             setWorkModeChoicePending(false)
             navigate('/voice-engine')
           }}

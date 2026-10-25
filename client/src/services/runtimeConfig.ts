@@ -93,6 +93,14 @@ export function serverNotConfiguredMessage(): string {
   return t('runtimeConfig.serverNotConfigured', { section: t('nav.voiceEngine') })
 }
 
+/** Connect failure for server mode without an address; callers must not retry it. */
+export class ServerNotConfiguredError extends Error {
+  constructor() {
+    super(serverNotConfiguredMessage())
+    this.name = 'ServerNotConfiguredError'
+  }
+}
+
 // Update checking no longer has any relationship with the speech backend: the update
 // source is the pinned fork release manifest (see services/projectLinks.ts and
 // features/update/updateChecker.ts). A user-configurable backend URL must never
@@ -125,6 +133,19 @@ export async function getStoredBackendBaseUrl(): Promise<string> {
   return enqueue(async () => {
     const stored = await bridge.storeGet(BACKEND_BASE_URL_STORE_KEY)
     return normalizeUrl(typeof stored === 'string' ? stored : '')
+  })
+}
+
+/**
+ * Drop the active backend URL for this session without changing the store.
+ *
+ * Only the startup migration uses this, when deleting the legacy address failed: the
+ * session must not keep talking to that address, while the stored value stays intact so
+ * the next launch can retry the deletion.
+ */
+export async function discardBackendBaseUrlForSession(): Promise<void> {
+  return enqueue(async () => {
+    backendBaseUrl = resolveBuiltinDefaultBaseUrl()
   })
 }
 
