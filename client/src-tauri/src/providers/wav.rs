@@ -100,7 +100,7 @@ pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
     let riff_end = 8usize
         .checked_add(usize::try_from(riff_size).map_err(|_| WavPcmError::MalformedWav)?)
         .ok_or(WavPcmError::MalformedWav)?;
-    if riff_end != bytes.len() || riff_end < 12 {
+    if riff_end != bytes.len() {
         return Err(WavPcmError::MalformedWav);
     }
 
@@ -128,13 +128,13 @@ pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
             return Err(WavPcmError::MalformedWav);
         }
 
+        // RIFF assigns no meaning to the pad byte: it must lie inside the container, but its value is ignored.
         let padded_end = payload_end
             .checked_add(chunk_size % 2)
             .ok_or(WavPcmError::MalformedWav)?;
         if padded_end > riff_end {
             return Err(WavPcmError::MalformedWav);
         }
-        // RIFF does not assign meaning to the pad byte; bounds-check it and skip it.
 
         let payload = bytes
             .get(payload_start..payload_end)
@@ -150,10 +150,6 @@ pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
         }
 
         offset = padded_end;
-    }
-
-    if offset != riff_end {
-        return Err(WavPcmError::MalformedWav);
     }
 
     validate_pcm_format(fmt_chunk.ok_or(WavPcmError::MalformedWav)?)?;

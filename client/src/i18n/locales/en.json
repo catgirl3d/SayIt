@@ -576,7 +576,7 @@
   "record.pause": "Pause",
   "record.downloadAudio": "Download audio",
   "record.audioMissing": "Audio file is missing",
-  "record.audioUnreadable": "The recording file could not be read. Check that it still exists and try again.",
+  "record.audioUnreadable": "The recording file could not be read. Check its permissions or whether another program is using it, then try again.",
   "record.audioMalformed": "The recording file is damaged or has an invalid WAV layout. Try recording it again.",
   "record.audioUnsupported": "This recording uses an unsupported audio format. History reprocessing accepts mono 16 kHz 16-bit PCM WAV files only.",
   "record.audioEmpty": "The recording contains no audio samples. Record it again and try once more.",

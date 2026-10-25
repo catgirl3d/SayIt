@@ -70,12 +70,22 @@ interface ReprocessResult {
   asrWarning?: AsrWarningCode
 }
 
-function readAudioErrorCode(error: unknown): string {
-  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
-  if (raw.startsWith('sayit_error:')) {
-    return raw.slice('sayit_error:'.length).split(':', 1)[0]
+/** Localized text for the stable error codes of the `read_audio_pcm` command; null for any other failure. */
+function readAudioErrorMessage(error: unknown, t: ReturnType<typeof useT>): string | null {
+  switch (error) {
+    case 'missing':
+      return t('record.audioMissing')
+    case 'malformed_wav':
+      return t('record.audioMalformed')
+    case 'unsupported_format':
+      return t('record.audioUnsupported')
+    case 'empty_audio':
+      return t('record.audioEmpty')
+    case 'unreadable':
+      return t('record.audioUnreadable')
+    default:
+      return null
   }
-  return raw
 }
 
 /** Server-mode re-recognition: uses a separate WebSocket connection so it does not interfere with the global connection */
@@ -563,19 +573,9 @@ export default function History() {
     try {
       chunk = await bridge.readAudioPcm(record.audioFilePath)
     } catch (error) {
-      switch (readAudioErrorCode(error)) {
-        case 'missing':
-          throw new Error(t('record.audioMissing'), { cause: error })
-        case 'malformed_wav':
-          throw new Error(t('record.audioMalformed'), { cause: error })
-        case 'unsupported_format':
-          throw new Error(t('record.audioUnsupported'), { cause: error })
-        case 'empty_audio':
-          throw new Error(t('record.audioEmpty'), { cause: error })
-        case 'unreadable':
-        default:
-          throw new Error(t('record.audioUnreadable'), { cause: error })
-      }
+      const message = readAudioErrorMessage(error, t)
+      if (message === null) throw error
+      throw new Error(message, { cause: error })
     }
 
     const preset = await getActivePreset()

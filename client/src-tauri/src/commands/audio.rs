@@ -113,6 +113,14 @@ pub fn read_audio_file(file_path: String) -> Result<Option<String>, String> {
     read_audio_file_from(&audio_dir(), &file_path)
 }
 
+fn audio_read_error_from_io(error: &std::io::Error) -> AudioReadError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        AudioReadError::Missing
+    } else {
+        AudioReadError::Unreadable
+    }
+}
+
 fn read_audio_pcm_from(
     dir: &Path,
     file_path: &str,
@@ -120,13 +128,7 @@ fn read_audio_pcm_from(
     let Some(path) = audio_file_in_dir(dir, file_path) else {
         return Err(AudioReadError::Missing);
     };
-    let bytes = fs::read(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            AudioReadError::Missing
-        } else {
-            AudioReadError::Unreadable
-        }
-    })?;
+    let bytes = fs::read(&path).map_err(|error| audio_read_error_from_io(&error))?;
     let pcm = parse_wav_pcm(&bytes).map_err(AudioReadError::from)?;
     Ok(tauri::ipc::Response::new(pcm))
 }
@@ -154,7 +156,6 @@ pub fn delete_audio_file(file_path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::wav::pcm_to_wav;
     use tauri::ipc::{InvokeResponseBody, IpcResponse};
 
     fn temp_root() -> PathBuf {
@@ -363,8 +364,7 @@ mod tests {
         );
 
         let unsupported_path = audio.join("unsupported.wav");
-        let mut unsupported = pcm_to_wav(&[0, 0], 48_000);
-        fs::write(&unsupported_path, &unsupported).unwrap();
+        fs::write(&unsupported_path, pcm_to_wav(&[0, 0], 48_000)).unwrap();
         assert_eq!(
             read_audio_pcm_from(&audio, &unsupported_path.to_string_lossy())
                 .err()
@@ -372,9 +372,8 @@ mod tests {
             AudioReadError::UnsupportedFormat
         );
 
-        unsupported.clear();
         let empty_path = audio.join("empty.wav");
-        fs::write(&empty_path, pcm_to_wav(&unsupported, 16_000)).unwrap();
+        fs::write(&empty_path, pcm_to_wav(&[], 16_000)).unwrap();
         assert_eq!(
             read_audio_pcm_from(&audio, &empty_path.to_string_lossy())
                 .err()
@@ -396,5 +395,23 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_pcm_maps_io_errors_to_missing_or_unreadable() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::NotFound, AudioReadError::Missing),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                AudioReadError::Unreadable,
+            ),
+            (std::io::ErrorKind::InvalidData, AudioReadError::Unreadable),
+        ] {
+            assert_eq!(
+                audio_read_error_from_io(&std::io::Error::from(kind)),
+                expected,
+                "kind={kind:?}"
+            );
+        }
     }
 }

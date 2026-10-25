@@ -1319,6 +1319,30 @@ describe('history rerun failure feedback', () => {
     )
   })
 
+  it('still base64-encodes the PCM bytes for the local ASR command', async () => {
+    mockSettings({
+      aiEnabled: false,
+      'localAsr.modelId': 'local-model',
+      'localAsr.accelerator': 'auto',
+    })
+    const pcm = new Uint8Array([0x00, 0x80, 0x34, 0x12]).buffer
+    mocks.invoke.mockImplementation(async (command: string) => (
+      command === 'local_transcribe'
+        ? { text: 'recognized locally', elapsed_ms: 18 }
+        : undefined
+    ))
+
+    const result = await reprocessViaLocal(pcm, [], false, undefined, 'en')
+
+    expect(mocks.invoke).toHaveBeenCalledWith('local_transcribe', {
+      audioB64: 'AIA0Eg==',
+      modelId: 'local-model',
+      language: 'en',
+      accelerator: 'auto',
+    })
+    expect(result.asrText).toBe('recognized locally')
+  })
+
   it.each([
     ['malformed_wav', 'record.audioMalformed'],
     ['unsupported_format', 'record.audioUnsupported'],
@@ -1340,6 +1364,25 @@ describe('history rerun failure feedback', () => {
     expect(invokedCommands()).not.toContain('cloud_transcribe')
     expect(mocks.updateHistoryRecord).not.toHaveBeenCalled()
     expect(screen.getAllByText(originalText).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: t('record.reprocess') })).toHaveProperty('disabled', false)
+  })
+
+  it('shows an unknown read failure as is without starting ASR or changing the record', async () => {
+    await switchProvider('cloud_api')
+    mockCloudProfile()
+    mockSettings({ aiEnabled: false })
+    vi.mocked(bridge.readAudioPcm).mockRejectedValue(new Error('read_audio_pcm returned a non-ArrayBuffer response'))
+
+    render(createElement(History))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.details') }))
+    fireEvent.click(await screen.findByRole('button', { name: t('record.reprocess') }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(
+      t('record.reprocessFailed', { reason: 'read_audio_pcm returned a non-ArrayBuffer response' }),
+    )
+    expect(invokedCommands()).not.toContain('cloud_transcribe')
+    expect(mocks.updateHistoryRecord).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: t('record.reprocess') })).toHaveProperty('disabled', false)
   })
 })
