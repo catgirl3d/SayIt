@@ -142,11 +142,6 @@ export interface AppAPI {
   saveTextExport: (payload: {
     defaultPath: string
     content: string
-    filters?: Array<{ name: string; extensions: string[] }>
-  }) => Promise<string | null>
-  saveExportBundle: (payload: {
-    defaultPath: string
-    files: Array<{ name: string; content: string }>
   }) => Promise<string | null>
   notifyShortcutsChanged: () => void
   testShortcut: (accelerator: string) => Promise<{ valid: boolean }>

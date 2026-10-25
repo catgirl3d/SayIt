@@ -257,13 +257,8 @@ export function historyClear() {
 export function saveTextExport(payload: {
   defaultPath: string
   content: string
-  filters?: Array<{ name: string; extensions: string[] }>
 }) {
   return invoke<string | null>('save_text_export', { payload })
-}
-
-export function saveExportBundle(payload: { defaultPath: string; files: Array<{ name: string; content: string }> }) {
-  return invoke<string | null>('save_export_bundle', { payload })
 }
 
 // ─── Subtitle transcript journal ───
