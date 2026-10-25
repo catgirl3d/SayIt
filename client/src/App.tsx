@@ -32,6 +32,7 @@ import * as bridge from './services/bridge'
 import { systemAudioSession } from './services/systemAudio'
 import { fileTranscriptionService } from './services/fileTranscription'
 import { applyWorkMode } from './services/transcription/applyWorkMode'
+import { completeDefaultServerMigration } from './services/defaultServerMigration'
 
 interface AppProps {
   runtimeConfigReady: boolean
@@ -142,6 +143,7 @@ export default function App({ runtimeConfigReady, needsWorkModeChoice }: AppProp
         <WorkModeMigrationDialog
           onChoose={async (mode) => {
             await applyWorkMode(mode)
+            await completeDefaultServerMigration()
             setWorkModeChoicePending(false)
             navigate('/voice-engine')
           }}
