@@ -7,7 +7,7 @@ Sections are ordered by version, newest first.
 
 ### Changed
 #### Desktop Client
-- Settings now say when an AI-dependent option has no effect. With AI processing off, hotword injection and context awareness keep their saved choice but are shown as disabled with the reason; the AI providers page explains that saved services are not used for automatic processing while keeping them editable and testable. In Server mode, the note makes clear that a service chosen for selected-text editing can still be used.
+- Settings now dim AI-dependent controls when AI processing is off and explain why. Hotword injection and context awareness keep their saved choice but are disabled; presets and per-app rules stay editable; the AI providers page explains that saved services are not used for automatic processing while keeping them editable and testable. In Server mode, the note makes clear that a service chosen for selected-text editing can still be used.
 
 ### Fixed
 #### Desktop Client

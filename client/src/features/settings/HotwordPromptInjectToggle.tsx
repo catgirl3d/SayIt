@@ -44,17 +44,12 @@ export default function HotwordPromptInjectToggle() {
   return (
     <Card>
       <CardContent className="p-6">
-        <div className="flex items-center justify-between">
+        <div className={`flex items-center justify-between ${aiInactive ? 'opacity-60' : ''}`}>
           <div className="pr-4">
-            <h2 id="hotword-inject-heading" className={`text-lg font-semibold ${aiInactive ? 'text-muted-foreground' : ''}`}>{t('hotwordInject.title')}</h2>
+            <h2 id="hotword-inject-heading" className="text-lg font-semibold">{t('hotwordInject.title')}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {t('hotwordInject.desc')}
             </p>
-            {aiInactive && (
-              <p className="mt-1 text-xs text-muted-foreground/80">
-                {t('hotwordInject.disabledReason')}
-              </p>
-            )}
           </div>
           {/* Keep the saved choice visible; only applying it is blocked. AI off must not
               look like the user turned this off, and turning AI back on restores the choice. */}
@@ -67,6 +62,11 @@ export default function HotwordPromptInjectToggle() {
             hidden={!ready}
           />
         </div>
+        {aiInactive && (
+          <p className="mt-3 text-xs text-foreground">
+            {t('hotwordInject.disabledReason')}
+          </p>
+        )}
       </CardContent>
     </Card>
   )

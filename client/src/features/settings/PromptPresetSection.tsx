@@ -11,6 +11,7 @@ import {
 } from '@/services/store'
 import { ComboShortcutInput, type ShortcutValidate } from './ShortcutInputs'
 import { displayAccelerator } from './utils'
+import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { useT } from '@/i18n/useT'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
 
@@ -62,6 +63,10 @@ export default function PromptPresetSection({
   validateShortcut?: ShortcutValidate
 }) {
   const t = useT()
+  const aiEnabled = useAiEnabled()
+  const aiReady = useAiEnabledReady()
+  const aiInactive = aiReady && !aiEnabled
+  const inactiveClass = aiInactive ? 'opacity-60 hover:opacity-100 focus-within:opacity-100' : ''
   const presetSortable = useSortable({ onMove: onMovePreset })
   const nameInputRef = useRef<HTMLInputElement>(null)
   const [templateId, setTemplateId] = useState('')
@@ -96,7 +101,7 @@ export default function PromptPresetSection({
   return (
     <Card>
       <CardContent className="p-6">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className={`mb-4 flex flex-wrap items-start justify-between gap-3 ${inactiveClass}`}>
           <div className="min-w-0 grow basis-[18rem]">
             <h2 className="text-lg font-semibold">{t('promptPreset.title')}</h2>
             <p className="text-xs text-muted-foreground">{t('promptPreset.desc')}</p>
@@ -123,6 +128,11 @@ export default function PromptPresetSection({
           </div>
         </div>
 
+        {aiInactive && (
+          <p className="mb-4 text-xs text-foreground">{t('promptPreset.inactiveAi')}</p>
+        )}
+
+        <div className={inactiveClass}>
         {/* 编辑/新建表单放在列表**上方**：以前在整个列表下面，列表一长就在屏幕外，
             点了「新建」看着像没反应。 */}
         {editingPreset && (
@@ -313,6 +323,7 @@ export default function PromptPresetSection({
               </div>
             )
           })}
+        </div>
         </div>
       </CardContent>
     </Card>

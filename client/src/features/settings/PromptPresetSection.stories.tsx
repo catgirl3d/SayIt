@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, within } from 'storybook/test'
+import { setAiEnabled } from '@/stores/aiEnabled'
 import { getBuiltinPromptPresets, type PromptPreset } from '@/services/store'
 import PromptPresetSection from './PromptPresetSection'
 
@@ -29,9 +31,15 @@ const callbacks = {
   onMovePreset: () => undefined,
 }
 
+const aiCleanup = (enabled: boolean) => async () => {
+  await setAiEnabled(enabled)
+}
+
 const meta = {
   title: 'settings/PromptPresetSection',
   component: PromptPresetSection,
+  parameters: { tauri: { commands: { set_tray_ai_enabled: () => null } } },
+  beforeEach: aiCleanup(true),
 } satisfies Meta<typeof PromptPresetSection>
 
 export default meta
@@ -75,5 +83,22 @@ export const EditingModifiedBuiltin: Story = {
     editingShortcut: 'Alt+2',
     promptLanguage: 'en',
     ...callbacks,
+  },
+}
+
+export const AiCleanupOff: Story = {
+  args: {
+    presets,
+    activePresetId: 'storybook-meeting-notes',
+    editingPreset: null,
+    presetShortcuts,
+    editingShortcut: '',
+    promptLanguage: 'en',
+    ...callbacks,
+  },
+  beforeEach: aiCleanup(false),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(await canvas.findByText(/presets aren't applied/i)).toBeVisible()
   },
 }

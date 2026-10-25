@@ -274,6 +274,7 @@ describe('AIProviderSection usage status', () => {
 
     expect(await screen.findByText(t('ai.inactiveAiOff'))).toBeTruthy()
     expect((screen.getByRole('radio') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('radio').closest('.group')?.className).toContain('opacity-60')
     expect((screen.getByRole('button', { name: /^new$/i }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -293,6 +294,7 @@ describe('AIProviderSection usage status', () => {
     // otherwise the negative assertion below would pass while the source is still unknown.
     const sourceSwitch = await screen.findByRole('switch', { name: t('ai.serverSource.title') })
     expect(sourceSwitch.getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio').closest('.group')?.className).not.toContain('opacity-60')
     await waitFor(() => expect(screen.queryByText(t('ai.inactiveServerManaged'))).toBeNull())
     expect(screen.queryByText(t('ai.inactiveAiOff'))).toBeNull()
   })

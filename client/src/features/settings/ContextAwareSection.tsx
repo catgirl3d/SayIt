@@ -89,8 +89,8 @@ export default function ContextAwareSection() {
     <>
       <Card>
         <CardContent className="space-y-4 p-6">
-          <div className="flex items-center gap-1.5">
-            <h2 id="context-aware-heading" className={`text-lg font-semibold ${aiInactive ? 'text-muted-foreground' : ''}`}>{t('settings.contextAware.title')}</h2>
+          <div className={`flex items-center gap-1.5 ${aiInactive ? 'opacity-60' : ''}`}>
+            <h2 id="context-aware-heading" className="text-lg font-semibold">{t('settings.contextAware.title')}</h2>
             <Tooltip
               variant="light"
               content={(
@@ -109,15 +109,20 @@ export default function ContextAwareSection() {
           </div>
           <div className="flex items-center justify-between">
             <div>
-              <p id="context-aware-label" className="text-sm font-medium">{t('settings.contextAware.enable')}</p>
-              <p className="text-xs text-muted-foreground">
-                {aiInactive ? t('settings.contextAware.needsAi') : t('settings.contextAware.descContinue')}
+              <p id="context-aware-label" className={`text-sm font-medium ${aiInactive ? 'opacity-60' : ''}`}>{t('settings.contextAware.enable')}</p>
+              <p className={`text-xs text-muted-foreground ${aiInactive ? 'opacity-60' : ''}`}>
+                {t('settings.contextAware.descContinue')}
               </p>
+              {aiInactive && (
+                <p className="mt-0.5 text-xs text-foreground">
+                  {t('settings.contextAware.needsAi')}
+                </p>
+              )}
             </div>
-            <Switch labelledBy="context-aware-label" checked={contextAwareWriting} onChange={() => void toggleContextAwareWriting()} disabled={aiInactive} noAnimation={!animate} hidden={!ready} />
+            <Switch labelledBy="context-aware-label" checked={contextAwareWriting} onChange={() => void toggleContextAwareWriting()} disabled={aiInactive} className={aiInactive ? 'opacity-60' : ''} noAnimation={!animate} hidden={!ready} />
           </div>
 
-          <div className="flex items-center justify-between border-t border-border pt-4">
+          <div className={`flex items-center justify-between border-t border-border pt-4 ${aiInactive ? 'opacity-60' : ''}`}>
             <div>
               <p className="text-sm font-medium">{t('settings.contextAware.promptTitle')}</p>
               <p className="text-xs text-muted-foreground">{t('settings.contextAware.promptDesc')}</p>
@@ -131,7 +136,9 @@ export default function ContextAwareSection() {
               {t('settings.contextAware.editPrompt')}
             </button>
           </div>
-          <ContextSelectionModelSetting />
+          <div className={aiInactive ? 'opacity-60' : ''}>
+            <ContextSelectionModelSetting />
+          </div>
         </CardContent>
       </Card>
 

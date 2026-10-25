@@ -146,6 +146,8 @@ export const AiCleanupOff: Story = {
     await expect(await canvas.findByText(/ai processing is off/i)).toBeVisible()
     // The hint must not make the editable and testable cards look unavailable.
     await expect(canvas.getByRole('button', { name: /^new$/i })).toBeEnabled()
+    const cards = await canvas.findAllByRole('radio')
+    await expect(cards[0]).toBeEnabled()
   },
 }
 

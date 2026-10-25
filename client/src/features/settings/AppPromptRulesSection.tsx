@@ -7,6 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useSortable, DragHandle } from '@/components/ui/sortable'
 import { cn } from '@/lib/utils'
+import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import type { PromptPreset } from '@/services/store'
 import type { AppPromptRule } from '@/services/personalization/types'
 import { useT } from '@/i18n/useT'
@@ -73,6 +74,10 @@ export default function AppPromptRulesSection({
   onDeleteRule: (ruleId: string) => Promise<void> | void
 }) {
   const t = useT()
+  const aiEnabled = useAiEnabled()
+  const aiReady = useAiEnabledReady()
+  const aiInactive = aiReady && !aiEnabled
+  const inactiveClass = aiInactive ? 'opacity-60 hover:opacity-100 focus-within:opacity-100' : ''
   const [drafts, setDrafts] = useState<Record<string, AppPromptRule>>({})
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set())
   const [savingId, setSavingId] = useState<string | null>(null)
@@ -225,7 +230,7 @@ export default function AppPromptRulesSection({
   return (
     <Card>
       <CardContent className="space-y-4 p-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className={`flex items-start justify-between gap-4 ${inactiveClass}`}>
           <div>
             <h2 className="text-lg font-semibold">{t('appPrompt.title')}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -250,6 +255,11 @@ export default function AppPromptRulesSection({
           )}
         </div>
 
+        {aiInactive && (
+          <p className="text-xs text-foreground">{t('appPrompt.inactiveAi')}</p>
+        )}
+
+        <div className={`space-y-4 ${inactiveClass}`}>
         {/* 新建规则表单 */}
         {newRule && (
           <div className="rounded-lg border border-dashed p-4">
@@ -473,6 +483,7 @@ export default function AppPromptRulesSection({
               </div>
             )
           })}
+        </div>
         </div>
       </CardContent>
     </Card>

@@ -47,6 +47,8 @@ interface ProfileCardProps {
   edit: ProfileCardAction
   delete: ProfileCardAction
   children?: ReactNode
+  /** Extra classes on the card shell, e.g. a temporary dimmed state. */
+  className?: string
 }
 
 export function ProfileCard({
@@ -63,6 +65,7 @@ export function ProfileCard({
   edit,
   delete: deleteAction,
   children,
+  className,
 }: ProfileCardProps) {
   const t = useT()
   return (
@@ -70,6 +73,7 @@ export function ProfileCard({
       className={cn(
         'group relative rounded-lg border p-2.5 transition-colors',
         active ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent/50',
+        className,
       )}
     >
       {/* Full-card radio button. Cannot be a plain <button> wrapper: the card
