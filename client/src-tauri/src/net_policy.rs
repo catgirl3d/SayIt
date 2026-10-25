@@ -5,9 +5,17 @@ use std::time::Duration;
 use reqwest::Url;
 use tokio::sync::{oneshot, watch};
 
-/// All WebViews sharing com.sayit.app/EBWebView must use identical environment options.
-/// Keep these flags global: per-window additionalBrowserArgs can make the next
-/// WebView fail with ERROR_INVALID_STATE because its options no longer match.
+/// Environment-level WebView2 flags must be identical for every webview that shares
+/// com.sayit.app/EBWebView. Keep them global; never copy them into a single window's
+/// `additionalBrowserArgs` in tauri.conf.json (WebView2 rejects the second environment
+/// with ERROR_INVALID_STATE when the option sets differ).
+///
+/// Do not add `--auto-accept-camera-and-microphone-capture` back. It handles permission
+/// requests before WebView2 raises PermissionRequested, so the permission stays in the
+/// "prompt" state and newer WebView2 builds hide device names and deviceIds from
+/// enumerateDevices. Microphone access is granted by the PermissionRequested handler in
+/// main.rs instead (an explicit Allow becomes a persistent grant and restores device
+/// enumeration).
 pub const DEFAULT_WEBVIEW2_BROWSER_ARGS: &str = "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
 pub const BACKEND_BASE_URL_KEY: &str = "backendBaseUrl";
 

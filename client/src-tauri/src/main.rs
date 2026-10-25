@@ -465,11 +465,14 @@ fn main() {
                                 }
                             };
 
-                            // Do not use WebView2's auto-accept capture switch: it preempts
-                            // PermissionRequested, leaves the permission in prompt state, and
-                            // hides device names and IDs from enumerateDevices. Explicitly allow
-                            // capture here so the permission becomes persistent and enumeration
-                            // remains complete. This is separate from TLS readiness.
+                            // Microphone/camera permission: --auto-accept-camera-and-microphone-capture
+                            // only lets capture through; it never makes the permission a persistent
+                            // grant, so newer WebView2 builds hide device names and deviceIds from
+                            // enumerateDevices (the microphone list in Settings collapses to a single
+                            // generic entry). Explicitly allow PermissionRequested so the permission
+                            // becomes granted and full device enumeration and selection are restored.
+                            // A failure here is only logged and does not affect other features; it is
+                            // independent of TLS readiness.
                             let permission_handler = PermissionRequestedEventHandler::create(
                                 Box::new(|_sender, args| {
                                     if let Some(args) = args {

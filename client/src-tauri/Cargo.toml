@@ -83,8 +83,13 @@ windows = { version = "0.58", features = [
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
 ] }
-# 与 tauri/wry 内部同版本，用于挂 WebView2 的 PermissionRequested 处理器（把麦克风置为持久授权）
+# Same version tauri/wry use internally. Used to attach WebView2 handlers:
+# PermissionRequested (makes the microphone grant persistent) and
+# ServerCertificateErrorDetected (the custom-server TLS exception in net_policy.rs).
 webview2-com = "0.38"
+# Must match the windows-core that webview2-com 0.38 is built on (0.61), so its COM
+# interfaces work with our `Interface::cast` and `PWSTR`. Separate from `windows 0.58`;
+# bump it together with webview2-com, never alone.
 windows-core = "0.61"
 
 # Release 体积/性能优化。panic 保持 unwind：Tauri 与 catch_unwind 依赖它，
