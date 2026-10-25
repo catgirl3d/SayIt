@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Mic, Sparkles, Globe, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Keyboard } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 import { getSetting, setSetting } from '@/services/store'
-import { getWorkMode } from '@/services/transcription'
+import { getWorkMode, type WorkMode } from '@/services/transcription'
+import { applyWorkMode } from '@/services/transcription/applyWorkMode'
+import { getModeStatus, refreshModeStatus, subscribeModeStatus } from '@/stores/modeStatus'
+import { getSpeechInputLanguage, type SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { healthCheck } from '@/services/api'
 import { setPttSuppressed } from '@/services/recorder'
 import * as bridge from '@/services/bridge'
@@ -17,6 +21,10 @@ import appIconOnDark from '@/assets/icon-128.png'
 import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { t, type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import WorkModeSection from '@/features/settings/WorkModeSection'
+import LocalModeSection from '@/features/settings/LocalModeSection'
+import CloudAPISection from '@/features/settings/CloudAPISection'
+import ServerSection from '@/features/settings/ServerSection'
 
 /** 简化键盘布局，高亮当前快捷键 */
 function KeyboardHint({ activeKey, pressed }: { activeKey: string; pressed?: boolean }) {
@@ -121,8 +129,10 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
   const hfDisplay = hfLabel || t('shortcut.notSet')
   const dictation = resolveDictationTrigger(hfKey, pttKey)
   const dictationKeyLabel = dictation.keyLabels.join(' + ')
-  const [workMode, setWorkMode] = useState('')
+  const [workMode, setWorkMode] = useState<WorkMode>(getWorkMode)
+  const [speechLanguage, setSpeechLanguage] = useState<SpeechInputLanguage>('auto')
   const [serverOk, setServerOk] = useState<boolean | null>(null)
+  const [modeError, setModeError] = useState('')
   const [testText, setTestText] = useState('')
   const [listeningKey, setListeningKey] = useState(false)
   // 热键确认步骤的状态
@@ -139,11 +149,8 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
       hfKeyRef.current = key
     })
     getSetting('shortcutPTT', 'ControlRight').then((value) => setPttKey(value as string))
-    const mode = getWorkMode()
-    setWorkMode(mode)
-    if (mode === 'server') {
-      healthCheck().then(() => setServerOk(true)).catch(() => setServerOk(false))
-    }
+    setWorkMode(getWorkMode())
+    void getSpeechInputLanguage().then(setSpeechLanguage)
   }, [])
 
   // 热键确认步骤：监听按键按下和松开，同时抑制录音系统响应热键
@@ -251,8 +258,39 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
     return () => window.removeEventListener('keydown', handler)
   }, [listeningKey])
 
-  const canTest = workMode === 'server' && serverOk === true
-  const totalSteps = 5
+  const modeStatus = useSyncExternalStore(subscribeModeStatus, getModeStatus)
+
+  // Readiness is checked when the test step opens: it picks up a mode chosen on the
+  // previous step and any setup done there (model download, API key, server address).
+  useEffect(() => {
+    if (step !== 4) return
+    void refreshModeStatus()
+    if (workMode !== 'server') return
+    let cancelled = false
+    setServerOk(null)
+    healthCheck()
+      .then(() => { if (!cancelled) setServerOk(true) })
+      .catch(() => { if (!cancelled) setServerOk(false) })
+    return () => { cancelled = true }
+  }, [step, workMode])
+
+  const handleModeChange = async (mode: WorkMode) => {
+    setModeError('')
+    try {
+      await applyWorkMode(mode)
+    } catch (error) {
+      setModeError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    setWorkMode(mode)
+  }
+
+  // Server readiness comes from the live health check; local and cloud readiness come
+  // from modeStatus, which knows whether the model is downloaded or the API key is set.
+  const canTest = workMode === 'server'
+    ? serverOk === true
+    : modeStatus.mode === workMode && modeStatus.ready === true
+  const totalSteps = 6
   const isLast = step === totalSteps - 1
 
   const renderStep = () => {
@@ -343,8 +381,24 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
           </div>
         )
 
-      // Step 3: 试一试
+      // Step 3: work mode and its setup
       case 3:
+        return (
+          <div>
+            <h2 className="mb-2 text-center text-xl font-bold">{t('welcome.modeTitle')}</h2>
+            <p className="mb-5 text-center text-sm text-muted-foreground">{t('welcome.modeSubtitle')}</p>
+            <div className="space-y-6">
+              <WorkModeSection value={workMode} onChange={(mode) => void handleModeChange(mode)} />
+              {modeError && <p role="alert" className="text-sm leading-6 text-destructive">{modeError}</p>}
+              {workMode === 'local' && <LocalModeSection speechLanguage={speechLanguage} />}
+              {workMode === 'cloud_api' && <CloudAPISection speechLanguage={speechLanguage} />}
+              {workMode === 'server' && <ServerSection speechLanguage={speechLanguage} />}
+            </div>
+          </div>
+        )
+
+      // Step 4: try it
+      case 4:
         return (
           <div>
             <h2 className="mb-5 text-center text-xl font-bold">{t('welcome.tryTitle')}</h2>
@@ -378,20 +432,23 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
                   <p className="text-sm font-medium">{t('welcome.currentMode')}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{MODE_LABEL_KEYS[workMode] ? t(MODE_LABEL_KEYS[workMode]) : workMode}</p>
                 </div>
-                {workMode === 'server' && (
-                  <div className="flex items-center gap-1.5">
-                    {serverOk === null ? (
+                <div className="flex items-center gap-1.5">
+                  {workMode === 'server' ? (
+                    serverOk === null ? (
                       <span className="text-xs text-muted-foreground">{t('common.checking')}</span>
                     ) : serverOk ? (
                       <><CheckCircle2 className="h-4 w-4 text-emerald-500" /><span className="text-xs text-emerald-600">{t('welcome.connected')}</span></>
                     ) : (
                       <><AlertCircle className="h-4 w-4 text-destructive" /><span className="text-xs text-destructive">{t('welcome.notConnected')}</span></>
-                    )}
-                  </div>
-                )}
-                {workMode !== 'server' && (
-                  <span className="text-xs text-muted-foreground">{t('welcome.needsSetup')}</span>
-                )}
+                    )
+                  ) : modeStatus.mode !== workMode || modeStatus.ready === null ? (
+                    <span className="text-xs text-muted-foreground">{t('common.checking')}</span>
+                  ) : modeStatus.ready ? (
+                    <><CheckCircle2 className="h-4 w-4 text-emerald-500" /><span className="text-xs text-emerald-600">{t('welcome.modeReady')}</span></>
+                  ) : (
+                    <><AlertCircle className="h-4 w-4 text-destructive" /><span className="text-xs text-destructive">{t('welcome.modeNotReady')}</span></>
+                  )}
+                </div>
               </CardContent>
             </Card>
 
@@ -412,7 +469,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
                     ? dictation.mode === 'handsFree'
                       ? t('welcome.testPlaceholder', { key: dictationKeyLabel })
                       : t('home.subtitleHold', { key: dictationKeyLabel })
-                    : t('welcome.testUnavailable')}
+                    : t('welcome.testUnavailable', { section: t('nav.voiceEngine') })}
                   className="w-full resize-none rounded-lg border border-input-border bg-input-bg p-3 text-sm leading-relaxed placeholder:text-muted-foreground/40 focus:border-input-focus-border focus:outline-none"
                   rows={4}
                   readOnly={!canTest}
@@ -427,8 +484,8 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
           </div>
         )
 
-      // Step 4: 完成
-      case 4:
+      // Step 5: done
+      case 5:
         return (
           <div className="flex flex-col items-center text-center">
             <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10">
@@ -461,7 +518,7 @@ export default function WelcomeGuide({ onComplete }: WelcomeGuideProps) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm">
-      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto px-6 py-8">
+      <div className={cn('w-full max-h-[90vh] overflow-y-auto px-6 py-8', step === 3 ? 'max-w-2xl' : 'max-w-lg')}>
         {renderStep()}
 
         {/* 底部导航 */}
