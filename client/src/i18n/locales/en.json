@@ -316,7 +316,6 @@
   "welcome.currentMode": "Current mode",
   "welcome.connected": "Connected",
   "welcome.notConnected": "Not connected",
-  "welcome.needsSetup": "Set this up in Settings",
   "welcome.voiceTestReady": "Try dictating",
   "welcome.voiceTest": "Voice test",
   "welcome.testHint": "Press {key} to start talking, press again to insert the text",

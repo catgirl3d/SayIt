@@ -316,7 +316,6 @@
   "welcome.currentMode": "Поточний режим",
   "welcome.connected": "Підключено",
   "welcome.notConnected": "Не підключено",
-  "welcome.needsSetup": "Налаштуйте це в розділі «Налаштування»",
   "welcome.voiceTestReady": "Спробуйте продиктувати",
   "welcome.voiceTest": "Перевірка голосу",
   "welcome.testHint": "Натисніть {key}, щоб почати говорити, натисніть ще раз, щоб вставити текст",

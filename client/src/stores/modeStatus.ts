@@ -41,7 +41,7 @@ export interface ModeStatus {
 
 type Listener = () => void
 
-let currentStatus: ModeStatus = { mode: 'server', detail: '', ready: null, blockedReason: '' }
+let currentStatus: ModeStatus = { mode: getDefault<ModeStatusMode>('workMode'), detail: '', ready: null, blockedReason: '' }
 const listeners = new Set<Listener>()
 
 function emitChange() {
