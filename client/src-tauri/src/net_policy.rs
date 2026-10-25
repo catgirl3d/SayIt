@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use reqwest::Url;
@@ -20,7 +20,12 @@ pub const DEFAULT_WEBVIEW2_BROWSER_ARGS: &str = "--disable-backgrounding-occlude
 pub const BACKEND_BASE_URL_KEY: &str = "backendBaseUrl";
 
 const CERTIFICATE_CACHE_TIMEOUT: Duration = Duration::from_secs(15);
-const OFFICIAL_HOST: &str = "sayitapp.site";
+
+/// The built-in default server URL, baked in by `build.rs` from the `SAYIT_DEFAULT_SERVER_URL`
+/// environment variable, falling back to `default-server-url.txt`. `vite.config.ts` resolves the
+/// frontend's `__SAYIT_DEFAULT_SERVER_URL__` from the same two sources, so both sides of the app
+/// agree on which host is the built-in default.
+const BUILTIN_DEFAULT_SERVER_URL: &str = env!("SAYIT_BUILTIN_DEFAULT_SERVER_URL");
 
 pub fn browser_args_from_environment() -> Result<(&'static str, String), String> {
     match std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
@@ -122,7 +127,10 @@ pub struct PolicySnapshot {
 }
 
 impl PolicySnapshot {
-    fn from_saved_backend_url(saved_backend_url: Option<&str>) -> Self {
+    fn from_saved_backend_url(
+        saved_backend_url: Option<&str>,
+        protected_host: Option<&str>,
+    ) -> Self {
         let Some(saved_backend_url) = saved_backend_url else {
             return Self::default();
         };
@@ -135,7 +143,7 @@ impl PolicySnapshot {
         let Some(host) = canonical_host(&url) else {
             return Self::default();
         };
-        if is_official_host(&host) {
+        if protected_host.is_some_and(|protected_host| is_protected_host(&host, protected_host)) {
             return Self::default();
         }
         Self {
@@ -156,17 +164,21 @@ impl PolicySnapshot {
         let Some(host) = canonical_host(&url) else {
             return false;
         };
-        if is_official_host(&host) {
-            return false;
-        }
+        // No protected-host check here: the request host must equal the saved host, and
+        // `from_saved_backend_url` never stores a protected one.
         self.saved_custom_host
             .as_deref()
             .is_some_and(|saved_host| saved_host == host)
     }
 }
 
-pub fn cert_error_allowed(saved_backend_url: Option<&str>, request_uri: &str) -> bool {
-    PolicySnapshot::from_saved_backend_url(saved_backend_url).allows_request(request_uri)
+pub fn cert_error_allowed(
+    saved_backend_url: Option<&str>,
+    protected_host: Option<&str>,
+    request_uri: &str,
+) -> bool {
+    PolicySnapshot::from_saved_backend_url(saved_backend_url, protected_host)
+        .allows_request(request_uri)
 }
 
 fn parse_strict_url(value: &str) -> Option<Url> {
@@ -205,8 +217,30 @@ fn canonical_host(url: &Url) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-fn is_official_host(host: &str) -> bool {
-    host == OFFICIAL_HOST || host.ends_with(".sayitapp.site")
+/// Canonical host of the built-in default server, which never gets a certificate exception,
+/// even when the user saves it as a custom address (Settings "Save and test" does exactly that
+/// with the prefilled default). `None` only if the compiled URL has no usable host, which the
+/// `build.rs` validation is meant to make unreachable; then no host is protected.
+fn builtin_default_host() -> Option<&'static str> {
+    static HOST: OnceLock<Option<String>> = OnceLock::new();
+    HOST.get_or_init(|| {
+        let host =
+            parse_strict_url(BUILTIN_DEFAULT_SERVER_URL).and_then(|url| canonical_host(&url));
+        if host.is_none() {
+            log::error!(
+                "Built-in default server URL '{BUILTIN_DEFAULT_SERVER_URL}' has no usable host; no host is protected from certificate exceptions"
+            );
+        }
+        host
+    })
+    .as_deref()
+}
+
+fn is_protected_host(host: &str, protected_host: &str) -> bool {
+    host == protected_host
+        || host
+            .strip_suffix(protected_host)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 #[derive(Clone)]
@@ -221,7 +255,8 @@ struct TlsPolicyInner {
 
 impl TlsPolicyState {
     pub fn new(saved_backend_url: Option<&str>) -> Self {
-        let initial_snapshot = PolicySnapshot::from_saved_backend_url(saved_backend_url);
+        let initial_snapshot =
+            PolicySnapshot::from_saved_backend_url(saved_backend_url, builtin_default_host());
         let (readiness, _) = watch::channel(None);
         let state = Self(Arc::new(TlsPolicyInner {
             initial_snapshot: initial_snapshot.clone(),
@@ -307,8 +342,10 @@ impl TlsPolicyState {
         }
         let _mutation = self.0.mutation.lock().await;
         let previous_snapshot = self.current_snapshot()?;
-        let next_snapshot =
-            PolicySnapshot::from_saved_backend_url(new_saved_backend_url.as_deref());
+        let next_snapshot = PolicySnapshot::from_saved_backend_url(
+            new_saved_backend_url.as_deref(),
+            builtin_default_host(),
+        );
 
         self.set_snapshot(PolicySnapshot::default())?;
         clear().await?;
@@ -476,7 +513,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    fn certificate_exception_matrix_is_strict_official_and_saved_custom_host_wide() {
+    fn certificate_exception_matrix_is_strict_for_builtin_host_and_custom_host_wide() {
+        let protected_host = Some("builtin.example");
         let cases = [
             (
                 Some("https://custom.example:8443"),
@@ -510,18 +548,18 @@ mod tests {
             ),
             (None, "https://custom.example:8443/healthz", false),
             (
-                Some("https://sayitapp.site:8443"),
-                "https://sayitapp.site:9443/healthz",
+                Some("https://builtin.example:8443"),
+                "https://builtin.example:9443/healthz",
                 false,
             ),
             (
-                Some("https://sayitapp.site:8443"),
-                "https://api.sayitapp.site/healthz",
+                Some("https://builtin.example:8443"),
+                "https://api.builtin.example/healthz",
                 false,
             ),
             (
-                Some("https://sayitapp.site.evil:8443"),
-                "https://sayitapp.site.evil:9443/healthz",
+                Some("https://builtin.example.evil:8443"),
+                "https://builtin.example.evil:9443/healthz",
                 true,
             ),
             (
@@ -530,8 +568,8 @@ mod tests {
                 true,
             ),
             (
-                Some("https://sayitapp.site"),
-                "https://sayitapp.site./healthz",
+                Some("https://builtin.example"),
+                "https://builtin.example./healthz",
                 false,
             ),
             (
@@ -565,8 +603,8 @@ mod tests {
                 false,
             ),
             (
-                Some("https://say\u{0456}tapp.site"),
-                "https://say\u{0456}tapp.site/healthz",
+                Some("https://bu\u{0456}ltin.example"),
+                "https://bu\u{0456}ltin.example/healthz",
                 true,
             ),
             (Some("https://custom.example"), "not a URL", false),
@@ -574,11 +612,25 @@ mod tests {
 
         for (saved, request, expected) in cases {
             assert_eq!(
-                cert_error_allowed(saved, request),
+                cert_error_allowed(saved, protected_host, request),
                 expected,
                 "saved={saved:?}, request={request}"
             );
         }
+    }
+
+    #[test]
+    fn compiled_builtin_default_server_never_gets_a_certificate_exception() {
+        let host = builtin_default_host()
+            .expect("the compiled built-in default server URL must yield a host");
+        let state = TlsPolicyState::new(Some(BUILTIN_DEFAULT_SERVER_URL));
+        state
+            .complete_startup_success(state.initial_snapshot())
+            .unwrap();
+
+        assert!(!state.allows_request(&format!("https://{host}/healthz")));
+        assert!(!state.allows_request(&format!("wss://{host}:9443/socket")));
+        assert!(!state.allows_request(&format!("https://api.{host}/healthz")));
     }
 
     #[test]

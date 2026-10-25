@@ -5,7 +5,10 @@ import path from 'path'
 import fs from 'fs'
 
 const host = process.env.TAURI_DEV_HOST
-const defaultServerUrl = process.env.SAYIT_DEFAULT_SERVER_URL || 'https://sayitapp.site'
+// client/src-tauri/build.rs reads the same file and env var so the Rust TLS policy protects the same host.
+const defaultServerUrl =
+  process.env.SAYIT_DEFAULT_SERVER_URL?.trim() ||
+  fs.readFileSync(path.resolve(__dirname, 'src-tauri/default-server-url.txt'), 'utf-8').trim()
 
 // Read the version from tauri.conf.json
 const tauriConf = JSON.parse(
