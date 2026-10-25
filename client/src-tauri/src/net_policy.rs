@@ -86,9 +86,11 @@ pub fn validate_inherited_browser_args(value: &str) -> Result<String, String> {
 #[cfg(windows)]
 fn forbidden_browser_switch(argument: &str) -> Option<String> {
     let argument = argument.trim();
+    // Chromium on Windows also accepts "/" as a switch prefix (kSwitchPrefixes in base/command_line.cc).
     let switch = argument
         .strip_prefix("--")
-        .or_else(|| argument.strip_prefix('-'))?;
+        .or_else(|| argument.strip_prefix('-'))
+        .or_else(|| argument.strip_prefix('/'))?;
     let switch_name = switch
         .split_once('=')
         .map_or(switch, |(name, _)| name)
@@ -813,6 +815,9 @@ mod tests {
             "--ignore-certificate-errors-spki-list=sha256/abc",
             "--allow-insecure-localhost",
             "--edge-webview-switches=\"--ignore-certificate-errors\"",
+            "/ignore-certificate-errors",
+            "/allow-insecure-localhost",
+            "/IGNORE-CERTIFICATE-ERRORS=true",
         ] {
             assert!(
                 validate_inherited_browser_args(unsafe_args).is_err(),

@@ -33,6 +33,34 @@ fn browser_args_fingerprint(value: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// Shows a blocking error box before the app exits. SayIt is a GUI app without a console,
+/// so a silent `return` would leave the user with no explanation for why it did not start.
+#[cfg(windows)]
+fn show_unsafe_browser_args_dialog(error: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    use windows::core::HSTRING;
+
+    let message = match locale::system_ui_lang() {
+        locale::Lang::Uk => format!(
+            "SayIt не може запуститися: змінна середовища WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS небезпечна або не читається:\n\n{error}\n\nВона може вимикати перевірку HTTPS-сертифікатів. Приберіть цю змінну або зайвий параметр і запустіть SayIt знову."
+        ),
+        locale::Lang::En => format!(
+            "SayIt cannot start because the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable is unsafe or cannot be read:\n\n{error}\n\nIt may turn off HTTPS certificate checks. Remove the variable or the offending switch and start SayIt again."
+        ),
+    };
+    let _ = unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(message),
+            &HSTRING::from("SayIt"),
+            MB_OK | MB_ICONERROR,
+        )
+    };
+}
+
+#[cfg(not(windows))]
+fn show_unsafe_browser_args_dialog(_error: &str) {}
+
 /// Clean up expired audio files based on retention setting.
 fn cleanup_expired_audio(storage: &Storage) {
     // 默认必须和前端 defaults.ts 的 audioRetentionDays 一致（-1 = 永久保留）。
@@ -213,6 +241,7 @@ fn main() {
         Ok(args) => args,
         Err(error) => {
             log::error!("Unsafe WebView2 browser arguments rejected: {error}");
+            show_unsafe_browser_args_dialog(&error);
             return;
         }
     };
