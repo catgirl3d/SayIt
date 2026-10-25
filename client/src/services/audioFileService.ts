@@ -7,7 +7,7 @@ import { uint8ArrayToBase64 } from '@/lib/encoding'
 
 /**
  * Save PCM chunks (Int16 LE) as WAV file.
- * WAV header 编码在 Rust 侧完成，前端只需传 PCM 原始数据。
+ * Rust builds the WAV header; the frontend sends base64-encoded PCM.
  * Returns the saved file path.
  */
 export async function saveRecordingAudio(

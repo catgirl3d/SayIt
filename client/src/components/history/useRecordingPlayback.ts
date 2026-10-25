@@ -63,7 +63,7 @@ export function useRecordingPlayback(audioFilePath?: string, initialDurationSec 
   const audioUrlRef = useRef<string>('')
   const rafRef = useRef<number>(0)
 
-  // 卸载时收摊：不 revoke 会攒一堆 blob URL
+  // This is a data URL: clearing the ref on unmount releases the string reference; no blob URL is created here.
   useEffect(() => {
     return () => {
       cancelAnimationFrame(rafRef.current)
@@ -73,7 +73,6 @@ export function useRecordingPlayback(audioFilePath?: string, initialDurationSec 
         audioRef.current = null
       }
       if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current)
         audioUrlRef.current = ''
       }
     }
