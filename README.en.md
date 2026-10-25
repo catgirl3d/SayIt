@@ -103,7 +103,7 @@ The current local catalog contains 15 downloadable GGUF model variants, with GPU
 2. Open SayIt and choose a voice engine — Local (download a model), Cloud API (your own key), or your own server. The first-run guide helps you set it up.
 3. Press the configured shortcut in any app and speak. By default you press once to start and again to finish; hold-to-talk is available too, under a separate shortcut.
 
-For regular use, choose Local mode or add your own cloud provider keys from the in-app settings. The provider console links are available beside each key field.
+Cloud provider keys go into the in-app settings, with a link to each provider's console beside its key field.
 
 ## Self-hosting
 
