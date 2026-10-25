@@ -1,7 +1,27 @@
-use crate::providers::wav::pcm_to_wav;
+use crate::providers::wav::{WavPcmError, parse_wav_pcm, pcm_to_wav};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioReadError {
+    Missing,
+    Unreadable,
+    MalformedWav,
+    UnsupportedFormat,
+    EmptyAudio,
+}
+
+impl From<WavPcmError> for AudioReadError {
+    fn from(error: WavPcmError) -> Self {
+        match error {
+            WavPcmError::MalformedWav => Self::MalformedWav,
+            WavPcmError::UnsupportedFormat => Self::UnsupportedFormat,
+            WavPcmError::EmptyAudio => Self::EmptyAudio,
+        }
+    }
+}
 
 fn audio_dir() -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -93,6 +113,29 @@ pub fn read_audio_file(file_path: String) -> Result<Option<String>, String> {
     read_audio_file_from(&audio_dir(), &file_path)
 }
 
+fn read_audio_pcm_from(
+    dir: &Path,
+    file_path: &str,
+) -> Result<tauri::ipc::Response, AudioReadError> {
+    let Some(path) = audio_file_in_dir(dir, file_path) else {
+        return Err(AudioReadError::Missing);
+    };
+    let bytes = fs::read(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AudioReadError::Missing
+        } else {
+            AudioReadError::Unreadable
+        }
+    })?;
+    let pcm = parse_wav_pcm(&bytes).map_err(AudioReadError::from)?;
+    Ok(tauri::ipc::Response::new(pcm))
+}
+
+#[tauri::command]
+pub fn read_audio_pcm(file_path: String) -> Result<tauri::ipc::Response, AudioReadError> {
+    read_audio_pcm_from(&audio_dir(), &file_path)
+}
+
 /// A path outside the audio directory is silently ignored: deleting is a
 /// cleanup action, and failing to delete someone else's file is the correct
 /// result.
@@ -111,6 +154,8 @@ pub fn delete_audio_file(file_path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::wav::pcm_to_wav;
+    use tauri::ipc::{InvokeResponseBody, IpcResponse};
 
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!("sayit-audio-{}", uuid::Uuid::new_v4()))
@@ -248,6 +293,107 @@ mod tests {
         let bytes = fs::read(&saved).unwrap();
         assert_eq!(&bytes[0..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WAVE");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_pcm_returns_the_exact_payload_as_a_raw_ipc_response() {
+        let root = temp_root();
+        let audio = root.join("audio");
+        fs::create_dir_all(&audio).unwrap();
+        let pcm = vec![0x00, 0x80, 0x34, 0x12];
+        let path = audio.join("valid.wav");
+        fs::write(&path, pcm_to_wav(&pcm, 16_000)).unwrap();
+
+        let response = read_audio_pcm_from(&audio, &path.to_string_lossy()).unwrap();
+        match IpcResponse::body(response).unwrap() {
+            InvokeResponseBody::Raw(bytes) => assert_eq!(bytes, pcm),
+            InvokeResponseBody::Json(body) => panic!("expected raw IPC body, got JSON: {body}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_pcm_reports_missing_for_missing_outside_nested_and_non_wav_paths() {
+        let root = temp_root();
+        let audio = root.join("audio");
+        let nested = audio.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let inside = audio.join("inside.wav");
+        let outside = root.join("outside.wav");
+        let nested_file = nested.join("nested.wav");
+        let non_wav = audio.join("notes.txt");
+        let valid = pcm_to_wav(&[0, 0], 16_000);
+        fs::write(&inside, &valid).unwrap();
+        fs::write(&outside, &valid).unwrap();
+        fs::write(&nested_file, &valid).unwrap();
+        fs::write(&non_wav, &valid).unwrap();
+
+        for path in [
+            audio.join("missing.wav"),
+            outside,
+            audio.join("..").join("outside.wav"),
+            nested_file,
+            non_wav,
+        ] {
+            let error = read_audio_pcm_from(&audio, &path.to_string_lossy())
+                .err()
+                .unwrap();
+            assert_eq!(error, AudioReadError::Missing, "path={path:?}");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_pcm_maps_wav_parser_errors_to_stable_command_codes() {
+        let root = temp_root();
+        let audio = root.join("audio");
+        fs::create_dir_all(&audio).unwrap();
+
+        let malformed_path = audio.join("malformed.wav");
+        fs::write(&malformed_path, b"not a wav").unwrap();
+        assert_eq!(
+            read_audio_pcm_from(&audio, &malformed_path.to_string_lossy())
+                .err()
+                .unwrap(),
+            AudioReadError::MalformedWav
+        );
+
+        let unsupported_path = audio.join("unsupported.wav");
+        let mut unsupported = pcm_to_wav(&[0, 0], 48_000);
+        fs::write(&unsupported_path, &unsupported).unwrap();
+        assert_eq!(
+            read_audio_pcm_from(&audio, &unsupported_path.to_string_lossy())
+                .err()
+                .unwrap(),
+            AudioReadError::UnsupportedFormat
+        );
+
+        unsupported.clear();
+        let empty_path = audio.join("empty.wav");
+        fs::write(&empty_path, pcm_to_wav(&unsupported, 16_000)).unwrap();
+        assert_eq!(
+            read_audio_pcm_from(&audio, &empty_path.to_string_lossy())
+                .err()
+                .unwrap(),
+            AudioReadError::EmptyAudio
+        );
+
+        for (error, code) in [
+            (AudioReadError::Missing, "missing"),
+            (AudioReadError::Unreadable, "unreadable"),
+            (AudioReadError::MalformedWav, "malformed_wav"),
+            (AudioReadError::UnsupportedFormat, "unsupported_format"),
+            (AudioReadError::EmptyAudio, "empty_audio"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&error).unwrap(),
+                format!("\"{code}\"")
+            );
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
