@@ -7,10 +7,12 @@ Sections are ordered by version, newest first.
 
 ### Changed
 #### Desktop Client
+- The Nunito font used by the title bar, the welcome guide and the About page is now bundled with the app instead of being fetched from Google Fonts. The interface keeps its font offline, and starting the main window no longer sends a request to Google. The Content Security Policy no longer lists Google Fonts origins either.
 - Settings now dim AI-dependent controls when AI processing is off and explain why. Hotword injection and context awareness keep their saved choice but are disabled; presets and per-app rules stay editable; the AI providers page explains that saved services are not used for automatic processing while keeping them editable and testable. In Server mode, the note makes clear that a service chosen for selected-text editing can still be used.
 
 ### Fixed
 #### Desktop Client
+- An interrupted update download can now be retried without starting over. The partial package is kept for the current session and the next attempt resumes it with an HTTP Range request; a package that fails its SHA-512 check is discarded.
 - Inserted text no longer shows up in Ditto's clipboard history. The clipboard write now also carries the "Clipboard Viewer Ignore" format that Ditto honors, alongside the existing Microsoft markers, and restoring the previous clipboard after a paste gets the same treatment.
 - Dictation hotkeys no longer stop responding until restart when setting up a recording fails. The recorder shows "Recording couldn't start", returns to idle and releases its start lock, so the next press begins a new recording. The keyboard hook also recovers its internal locks after a panic instead of failing every later shortcut.
 - History and Favorites now list day groups newest first by the real date. The groups used to be sorted by their translated labels, so after a month change an older day could sit above the newest one, English months followed alphabetical order, and days within a month could be out of order ("October 9" above "October 13").

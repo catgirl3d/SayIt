@@ -23,10 +23,11 @@ otherwise the browser blocks the desktop client's fetch and the user only sees a
 from __future__ import annotations
 
 import asyncio
-import gc
 import json
 import logging
 from dataclasses import dataclass
+
+from starlette.requests import ClientDisconnect
 
 logger = logging.getLogger("sayit.bodylimit")
 
@@ -134,22 +135,13 @@ class BodyLimitMiddleware:
 
         try:
             await self.app(scope, guarded_receive, guarded_send)
-        except Exception:
-            # Swallow only the abort we triggered (ClientDisconnect or the parse failure it causes);
-            # any other exception is re-raised unchanged
+        except ClientDisconnect:
+            # Swallow only the disconnect we fabricated after the rejection; a real client disconnect and
+            # every other exception are re-raised unchanged. Spooled temp files of an aborted multipart
+            # parse are closed by Starlette itself (>= 1.6.0, pinned in requirements.txt), and
+            # MultipartTempFileTests fails if that ever regresses.
             if not rejected:
                 raise
-        finally:
-            if rejected:
-                # When multipart parsing is aborted midway, Starlette does not close the temp files it
-                # already created (it only closes them on MultiPartException). The file objects are held
-                # in a reference cycle between the exception and the stack frames, so they are freed only
-                # by the cyclic garbage collector. On Linux they are anonymous unlinked files that do not
-                # show up in /tmp, yet they keep occupying disk space, and repeated oversize requests
-                # could pile them up. A local measurement showed one still alive after the request ended.
-                # This runs once on the reject path only; the volume is bounded by the rate limiter, so
-                # the cost is acceptable.
-                gc.collect()
 
     @staticmethod
     async def _reject(receive, send, rule: BodyLimitRule, *, received: int, more_body: bool) -> int:
@@ -199,7 +191,7 @@ class BodyLimitMiddleware:
     @staticmethod
     def _log(scope, path: str, rule: BodyLimitRule, *, declared: int | None, received: int, drained: int) -> None:
         logger.warning(
-            "body limit exceeded path=%s method=%s limit=%d declared=%s received=%d drained=%d client=%s",
+            "body limit exceeded path=%r method=%s limit=%d declared=%s received=%d drained=%d client=%s",
             path,
             scope.get("method", "-"),
             rule.limit,
