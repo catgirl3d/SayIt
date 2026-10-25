@@ -33,24 +33,8 @@ fn audio_file_in_dir(dir: &Path, file_path: &str) -> Option<PathBuf> {
     crate::path_guard::has_extension(&target, &["wav"]).then_some(target)
 }
 
-fn save_audio_file_in(dir: &Path, id: &str, wav_base64: &str) -> Result<String, String> {
-    check_record_id(id)?;
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-
-    let bytes = STANDARD.decode(wav_base64).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}.wav", id));
-    fs::write(&path, bytes).map_err(|e| e.to_string())?;
-
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn save_audio_file(id: String, wav_base64: String) -> Result<String, String> {
-    save_audio_file_in(&audio_dir(), &id, &wav_base64)
-}
-
-/// Receives raw PCM Int16 LE data (base64), builds the WAV header on the Rust
-/// side and writes the file, sparing the frontend the WAV plus base64 assembly.
+/// The frontend base64-encodes PCM Int16 LE data; Rust decodes it, adds the WAV
+/// header, and writes the file.
 fn save_pcm_as_wav_in(
     dir: &Path,
     id: &str,
@@ -143,7 +127,7 @@ mod tests {
 
         for id in ["", "../outside", "..\\outside", "a/b", "a.b", "C:\\outside"] {
             assert!(
-                save_audio_file_in(&audio, id, &payload).is_err(),
+                save_pcm_as_wav_in(&audio, id, &payload, Some(16_000)).is_err(),
                 "id {id:?} must be rejected"
             );
         }
@@ -159,10 +143,12 @@ mod tests {
     fn normal_save_read_delete_round_trip() {
         let root = temp_root();
         let audio = root.join("audio");
+        fs::create_dir_all(&audio).unwrap();
+        let path = audio.join("abc123.wav");
+        fs::write(&path, b"wave-bytes").unwrap();
+        let saved = path.to_string_lossy().to_string();
         let payload = STANDARD.encode(b"wave-bytes");
 
-        let saved = save_audio_file_in(&audio, "abc123", &payload).unwrap();
-        let path = PathBuf::from(&saved);
         assert_eq!(path.parent(), Some(audio.as_path()));
         assert!(audio_file_exists_in(&audio, &saved));
         assert_eq!(

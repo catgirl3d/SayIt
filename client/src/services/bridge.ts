@@ -412,10 +412,6 @@ export function setPTTLabConfig(data: unknown) {
 
 // ─── Audio Files ───
 
-export function saveAudioFile(id: string, wavBase64: string) {
-  return invoke<string>('save_audio_file', { id, wavBase64 })
-}
-
 export function savePcmAsWav(id: string, pcmBase64: string, sampleRate?: number) {
   return invoke<string>('save_pcm_as_wav', { id, pcmBase64, sampleRate: sampleRate ?? null })
 }

@@ -162,7 +162,6 @@ export interface AppAPI {
     environment: PublicDiagnosticsEnvironment
   }) => Promise<string>
   readLogFile: (logType: 'frontend' | 'ptt') => Promise<string | null>
-  saveAudioFile: (id: string, wavBase64: string) => Promise<string>
   readAudioFile: (filePath: string) => Promise<string | null>
   deleteAudioFile: (filePath: string) => Promise<boolean>
   onOverlayState: (cb: (data: unknown) => void) => void

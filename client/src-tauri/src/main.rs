@@ -659,7 +659,6 @@ fn main() {
             commands::tray::hide_tray_menu,
             commands::tray::quit_from_tray,
             // Audio
-            commands::audio::save_audio_file,
             commands::audio::save_pcm_as_wav,
             commands::audio::read_audio_file,
             commands::audio::audio_file_exists,
