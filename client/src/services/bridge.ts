@@ -210,6 +210,19 @@ export function storeDelete(key: string) {
   return invoke('store_delete', { key })
 }
 
+export function waitForBackendTlsReady() {
+  return invoke<void>('wait_for_backend_tls_ready')
+}
+
+/** The generic store commands reject `backendBaseUrl`; only these two may change it. */
+export function storeSetBackendUrl(url: string) {
+  return invoke<void>('store_set_backend_url', { url })
+}
+
+export function storeDeleteBackendUrl() {
+  return invoke<void>('store_delete_backend_url')
+}
+
 export function usageRecord(event: UsageEventInput) {
   return invoke<void>('usage_record', { event })
 }

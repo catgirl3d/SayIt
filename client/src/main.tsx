@@ -26,8 +26,10 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 async function bootstrap() {
+  let runtimeConfigReady = false
   try {
     await initRuntimeConfig()
+    runtimeConfigReady = true
   } catch (e) {
     console.error('[bootstrap] initRuntimeConfig error:', e)
   }
@@ -42,10 +44,14 @@ async function bootstrap() {
   } catch (e) {
     console.error('[bootstrap] initSpeechInputLanguageMigration error:', e)
   }
-  try {
-    await initProviderFromStore()
-  } catch (e) {
-    console.error('[bootstrap] initProviderFromStore error:', e)
+  if (runtimeConfigReady) {
+    try {
+      await initProviderFromStore()
+    } catch (e) {
+      console.error('[bootstrap] initProviderFromStore error:', e)
+    }
+  } else {
+    console.error('[bootstrap] initProviderFromStore skipped: runtime config is not ready')
   }
   try {
     void startWebviewKeyboardFallback()
@@ -57,7 +63,7 @@ async function bootstrap() {
   if (rootEl) {
     ReactDOM.createRoot(rootEl).render(
       <HashRouter>
-        <App />
+        <App runtimeConfigReady={runtimeConfigReady} />
       </HashRouter>,
     )
   }

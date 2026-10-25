@@ -217,4 +217,42 @@ describe('Tauri story harness', () => {
 
     cleanup()
   })
+
+  it('saves and removes the backend address only through the dedicated commands', async () => {
+    const cleanup = await tauriBeforeEach({ id: 'storybook-backend-url', parameters: { tauri: {} } })
+
+    await invoke('store_set_backend_url', { url: 'https://custom.example' })
+    expect(await invoke('store_get', { key: 'backendBaseUrl' })).toBe('https://custom.example')
+
+    await invoke('store_delete_backend_url')
+    expect(await invoke('store_get', { key: 'backendBaseUrl' })).toBe(null)
+
+    await expect(invoke('store_set_backend_url', { url: 42 })).rejects.toThrow(
+      'Tauri command "store_set_backend_url" expected string field "url"',
+    )
+
+    cleanup()
+  })
+
+  it('rejects the backend address through the generic store commands', async () => {
+    const cleanup = await tauriBeforeEach({
+      id: 'storybook-backend-url-guard',
+      parameters: { tauri: { settings: { backendBaseUrl: 'https://seeded.example' } } },
+    })
+
+    await expect(invoke('store_set', { key: 'backendBaseUrl', value: 'https://other.example' })).rejects.toThrow(
+      "'backendBaseUrl' cannot be changed through store_set; use store_set_backend_url or store_delete_backend_url",
+    )
+    await expect(invoke('store_delete', { key: 'backendBaseUrl' })).rejects.toThrow(
+      "'backendBaseUrl' cannot be changed through store_delete",
+    )
+    await expect(
+      invoke('store_set_app_settings', { settings: { 'other.key': 1, backendBaseUrl: 'https://other.example' } }),
+    ).rejects.toThrow("'backendBaseUrl' cannot be changed through store_set_app_settings")
+
+    expect(await invoke('store_get', { key: 'backendBaseUrl' })).toBe('https://seeded.example')
+    expect(await invoke('store_get', { key: 'other.key' })).toBe(null)
+
+    cleanup()
+  })
 })

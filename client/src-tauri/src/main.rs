@@ -8,6 +8,7 @@ mod inject;
 mod keyboard;
 mod locale;
 mod models;
+mod net_policy;
 mod path_guard;
 mod providers;
 mod storage;
@@ -21,18 +22,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager};
 use window::WindowState;
 
-/// Environment-level WebView2 flags must be identical for every webview that shares
-/// com.sayit.app/EBWebView. Keep them global; never copy them into a single window's
-/// `additionalBrowserArgs` in tauri.conf.json (WebView2 rejects the second environment
-/// with ERROR_INVALID_STATE when the option sets differ).
-// 注意：不要再加回 --auto-accept-camera-and-microphone-capture。
-// 该参数会抢先自动处理权限请求，使 PermissionRequested 事件不触发，权限停留在 "prompt"，
-// 导致新版 WebView2 隐藏 enumerateDevices 的设备名/deviceId。麦克风授权改由下面的
-// PermissionRequested 处理器负责（显式 Allow → 变为持久 granted → 恢复设备枚举）。
-const WEBVIEW2_BROWSER_ARGS: &str = "--ignore-certificate-errors \
-     --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
-     --disable-background-timer-throttling";
-
 fn browser_args_fingerprint(value: &str) -> String {
     // Stable FNV-1a fingerprint: enough to compare field reports without logging a
     // potentially sensitive inherited proxy argument verbatim.
@@ -43,6 +32,34 @@ fn browser_args_fingerprint(value: &str) -> String {
     }
     format!("{hash:016x}")
 }
+
+/// Shows a blocking error box before the app exits. SayIt is a GUI app without a console,
+/// so a silent `return` would leave the user with no explanation for why it did not start.
+#[cfg(windows)]
+fn show_unsafe_browser_args_dialog(error: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    use windows::core::HSTRING;
+
+    let message = match locale::system_ui_lang() {
+        locale::Lang::Uk => format!(
+            "SayIt не може запуститися: змінна середовища WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS небезпечна або не читається:\n\n{error}\n\nВона може вимикати перевірку HTTPS-сертифікатів. Приберіть цю змінну або зайвий параметр і запустіть SayIt знову."
+        ),
+        locale::Lang::En => format!(
+            "SayIt cannot start because the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable is unsafe or cannot be read:\n\n{error}\n\nIt may turn off HTTPS certificate checks. Remove the variable or the offending switch and start SayIt again."
+        ),
+    };
+    let _ = unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(message),
+            &HSTRING::from("SayIt"),
+            MB_OK | MB_ICONERROR,
+        )
+    };
+}
+
+#[cfg(not(windows))]
+fn show_unsafe_browser_args_dialog(_error: &str) {}
 
 /// Clean up expired audio files based on retention setting.
 fn cleanup_expired_audio(storage: &Storage) {
@@ -214,24 +231,21 @@ fn main() {
             .join("sayit.log")
     );
 
-    // Allow self-signed certificates and auto-grant microphone for backend connection (WebView2)
-    // This must be set before any WebView2 instance is created.
+    // Validate inherited WebView2 arguments before any WebView2 instance is created.
     // Also disable Chromium's background tab/window throttling: SayIt keeps a long-lived
     // WebSocket connection alive via a 30s JS heartbeat even when the window is minimized
     // or not focused. Without these flags, WebView2 throttles setInterval timers in the
     // background, delaying the heartbeat well past the server's idle timeout and causing
     // spurious "idle timeout" disconnects while the app is just sitting idle in the tray.
-    let (browser_args_source, browser_args) =
-        match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
-            Ok(value) => ("inherited", value),
-            Err(_) => {
-                std::env::set_var(
-                    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                    WEBVIEW2_BROWSER_ARGS,
-                );
-                ("app-default", WEBVIEW2_BROWSER_ARGS.to_string())
-            }
-        };
+    let (browser_args_source, browser_args) = match net_policy::browser_args_from_environment() {
+        Ok(args) => args,
+        Err(error) => {
+            log::error!("Unsafe WebView2 browser arguments rejected: {error}");
+            show_unsafe_browser_args_dialog(&error);
+            return;
+        }
+    };
+    std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", &browser_args);
     log::info!(
         "WebView2 environment userDataDir={:?} argsSource={} argsLen={} argsFingerprint={}",
         dirs::data_local_dir()
@@ -263,6 +277,10 @@ fn main() {
 
     // Remove temp directories left by a file transcription that crashed before cleanup
     commands::file_transcription::cleanup_stale_temp_directories();
+
+    // Only the explicitly saved backend URL can activate the native TLS exception.
+    let backend_url_setting = storage.get("backendBaseUrl", None);
+    let tls_policy = net_policy::TlsPolicyState::new(backend_url_setting.as_str());
 
     // Read PTT setting before moving storage into managed state
     let ptt_setting_val = storage.get("shortcutPTT", None);
@@ -360,6 +378,7 @@ fn main() {
             }
         }))
         .manage(storage)
+        .manage(tls_policy.clone())
         .manage(window_state)
         .manage(keyboard_hook)
         .manage(context_detector)
@@ -413,52 +432,182 @@ fn main() {
                     let _ = main_window.set_icon(icon);
                 }
 
-                // 麦克风/摄像头权限：--auto-accept-camera-and-microphone-capture 只放行采集，
-                // 不会把权限置为持久 granted，导致新版 WebView2 隐藏 enumerateDevices 的设备名与
-                // deviceId（设置里麦克风列表只剩一个通用项）。挂 PermissionRequested 显式 Allow，
-                // 使权限变为 granted，恢复完整设备枚举与选择。失败仅记录日志、不影响其余功能。
                 #[cfg(target_os = "windows")]
                 {
-                    let _ = main_window.with_webview(|webview| {
+                    let tls_policy = tls_policy.clone();
+                    let dispatch_failure_policy = tls_policy.clone();
+                    let initial_snapshot = tls_policy.initial_snapshot();
+                    let with_webview_result = main_window.with_webview(move |webview| {
                         use webview2_com::Microsoft::Web::WebView2::Win32::{
                             COREWEBVIEW2_PERMISSION_KIND_CAMERA,
                             COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
                             COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+                            COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+                            COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL,
+                            ICoreWebView2_14,
                         };
-                        use webview2_com::PermissionRequestedEventHandler;
+                        use webview2_com::{
+                            PermissionRequestedEventHandler,
+                            ServerCertificateErrorDetectedEventHandler,
+                        };
+                        use windows_core::{Interface, PWSTR};
+
                         unsafe {
                             let controller = webview.controller();
-                            if let Ok(core) = controller.CoreWebView2() {
-                                let handler = PermissionRequestedEventHandler::create(Box::new(
-                                    |_sender, args| {
-                                        if let Some(args) = args {
-                                            let mut kind = Default::default();
-                                            args.PermissionKind(&mut kind)?;
-                                            if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
-                                                || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
-                                            {
-                                                args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
-                                                log::info!(
-                                                    "WebView2 permission allowed: kind={:?}",
-                                                    kind
+                            let core = match controller.CoreWebView2() {
+                                Ok(core) => core,
+                                Err(error) => {
+                                    let message =
+                                        format!("failed to retrieve WebView2 core interface: {error:?}");
+                                    log::error!("{message}");
+                                    tls_policy.fail_startup(message);
+                                    return;
+                                }
+                            };
+
+                            // Microphone/camera permission: --auto-accept-camera-and-microphone-capture
+                            // only lets capture through; it never makes the permission a persistent
+                            // grant, so newer WebView2 builds hide device names and deviceIds from
+                            // enumerateDevices (the microphone list in Settings collapses to a single
+                            // generic entry). Explicitly allow PermissionRequested so the permission
+                            // becomes granted and full device enumeration and selection are restored.
+                            // A failure here is only logged and does not affect other features; it is
+                            // independent of TLS readiness.
+                            let permission_handler = PermissionRequestedEventHandler::create(
+                                Box::new(|_sender, args| {
+                                    if let Some(args) = args {
+                                        let mut kind = Default::default();
+                                        args.PermissionKind(&mut kind)?;
+                                        if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
+                                            || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
+                                        {
+                                            args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                                            log::info!(
+                                                "WebView2 permission allowed: kind={:?}",
+                                                kind
+                                            );
+                                        }
+                                    }
+                                    Ok(())
+                                }),
+                            );
+                            let mut permission_token = Default::default();
+                            match core.add_PermissionRequested(
+                                &permission_handler,
+                                &mut permission_token,
+                            ) {
+                                Ok(_) => {
+                                    log::info!("WebView2 PermissionRequested handler attached")
+                                }
+                                Err(error) => log::error!(
+                                    "failed to attach PermissionRequested handler: {error:?}"
+                                ),
+                            }
+
+                            let core14 = match core.cast::<ICoreWebView2_14>() {
+                                Ok(core14) => core14,
+                                Err(error) => {
+                                    let message = format!(
+                                        "failed to cast WebView2 core to ICoreWebView2_14: {error:?}"
+                                    );
+                                    log::error!("{message}");
+                                    tls_policy.fail_startup(message);
+                                    return;
+                                }
+                            };
+
+                            let callback_policy = tls_policy.clone();
+                            let certificate_handler =
+                                ServerCertificateErrorDetectedEventHandler::create(Box::new(
+                                    move |_sender, args| {
+                                        let Some(args) = args else {
+                                            log::error!(
+                                                "WebView2 certificate callback received no event args"
+                                            );
+                                            return Ok(());
+                                        };
+
+                                        // Cancel before every fallible operation. An affirmative
+                                        // policy decision is the only path that promotes it.
+                                        args.SetAction(
+                                            COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL,
+                                        )?;
+                                        let mut request_uri = PWSTR::null();
+                                        let request_result = args.RequestUri(&mut request_uri);
+                                        let request_uri = webview2_com::take_pwstr(request_uri);
+                                        let request_uri = match request_result {
+                                            Ok(()) => request_uri,
+                                            Err(error) => {
+                                                log::error!(
+                                                    "failed to read WebView2 certificate request URI: {error:?}"
                                                 );
+                                                return Err(error);
+                                            }
+                                        };
+                                        match callback_policy.with_request_decision(
+                                            &request_uri,
+                                            |allowed| {
+                                                if allowed {
+                                                    args.SetAction(
+                                                        COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+                                                    )
+                                                } else {
+                                                    Ok(())
+                                                }
+                                            },
+                                        ) {
+                                            Some(result) => result,
+                                            None => {
+                                                log::error!(
+                                                    "TLS policy snapshot is unavailable; certificate request denied"
+                                                );
+                                                Ok(())
                                             }
                                         }
-                                        Ok(())
                                     },
                                 ));
-                                let mut token = Default::default();
-                                match core.add_PermissionRequested(&handler, &mut token) {
-                                    Ok(_) => {
-                                        log::info!("WebView2 PermissionRequested handler attached")
+                            let mut certificate_token = Default::default();
+                            if let Err(error) = core14.add_ServerCertificateErrorDetected(
+                                &certificate_handler,
+                                &mut certificate_token,
+                            ) {
+                                let message = format!(
+                                    "failed to attach WebView2 certificate handler: {error:?}"
+                                );
+                                log::error!("{message}");
+                                tls_policy.fail_startup(message);
+                                return;
+                            }
+
+                            let startup_policy = tls_policy.clone();
+                            if let Err(error) = net_policy::begin_clear_server_certificate_error_actions(
+                                core14,
+                                move |result| match result {
+                                    Ok(()) => {
+                                        if let Err(error) = startup_policy
+                                            .complete_startup_success(initial_snapshot)
+                                        {
+                                            log::error!(
+                                                "failed to activate saved WebView2 TLS policy: {error}"
+                                            );
+                                        }
                                     }
-                                    Err(e) => log::error!(
-                                        "failed to attach PermissionRequested handler: {e:?}"
-                                    ),
-                                }
+                                    Err(error) => {
+                                        log::error!("{error}");
+                                        startup_policy.fail_startup(error);
+                                    }
+                                },
+                            ) {
+                                log::error!("{error}");
+                                tls_policy.fail_startup(error);
                             }
                         }
                     });
+                    if let Err(error) = with_webview_result {
+                        let message = format!("failed to dispatch WebView2 TLS setup: {error}");
+                        log::error!("{message}");
+                        dispatch_failure_policy.fail_startup(message);
+                    }
                 }
 
                 if !launched_minimized {
@@ -479,6 +628,9 @@ fn main() {
                 if launched_open_about {
                     let _ = main_window.emit("open-about", ());
                 }
+            } else {
+                #[cfg(target_os = "windows")]
+                tls_policy.fail_startup("main WebView window is unavailable".to_owned());
             }
 
             // 系统托盘图标
@@ -612,6 +764,9 @@ fn main() {
             commands::storage::store_set,
             commands::storage::store_set_app_settings,
             commands::storage::store_delete,
+            commands::storage::store_set_backend_url,
+            commands::storage::store_delete_backend_url,
+            commands::storage::wait_for_backend_tls_ready,
             commands::storage::usage_record,
             commands::storage::usage_summary,
             commands::storage::usage_clear,
