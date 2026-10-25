@@ -54,7 +54,15 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
 
 export async function initRuntimeConfig(): Promise<void> {
   return enqueue(async () => {
-    await bridge.waitForBackendTlsReady()
+    try {
+      await bridge.waitForBackendTlsReady()
+    } catch (error) {
+      // Continuing is safe: certificates are still validated strictly, only the custom-server exception is off.
+      console.error(
+        '[runtimeConfig] Native TLS policy is unavailable; the custom-server certificate exception is disabled:',
+        error,
+      )
+    }
 
     // A user-saved address takes precedence over the environment variable
     const stored = await bridge.storeGet(BACKEND_BASE_URL_STORE_KEY)

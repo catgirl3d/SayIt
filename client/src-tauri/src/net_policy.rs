@@ -283,7 +283,18 @@ impl TlsPolicyState {
         CFut: Future<Output = Result<(), String>>,
         P: FnOnce() -> Result<(), String>,
     {
-        self.wait_ready().await?;
+        if let Err(readiness_error) = self.wait_ready().await {
+            // Startup failure is terminal: the snapshot stays at its default and denies every
+            // certificate error, so the app is already fail-closed and saving the address must
+            // not be blocked. The cache clear is skipped on purpose: the snapshot never allowed
+            // a custom host, so WebView2 holds no ALWAYS_ALLOW decision to revoke, and the same
+            // WebView2 interface failure would only repeat and fail the save.
+            let _mutation = self.0.mutation.lock().await;
+            log::warn!(
+                "Custom-server certificate exception is unavailable; saving the backend address without it: {readiness_error}"
+            );
+            return persist();
+        }
         let _mutation = self.0.mutation.lock().await;
         let previous_snapshot = self.current_snapshot()?;
         let next_snapshot =
@@ -734,6 +745,62 @@ mod tests {
             Err("certificate handler registration failed".to_owned())
         );
         assert!(!state.allows_request("https://custom.example:9443/healthz"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn backend_change_after_startup_failure_persists_without_clearing_and_keeps_denying() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let storage = Storage::new(PathBuf::from(":memory:")).unwrap();
+        storage
+            .set("backendBaseUrl", &json!("https://old.example:8443"))
+            .unwrap();
+        let state = TlsPolicyState::new(Some("https://old.example:8443"));
+        state.fail_startup("certificate handler registration failed".to_owned());
+        let clear_called = Arc::new(AtomicBool::new(false));
+
+        let clear_flag = Arc::clone(&clear_called);
+        let result = tauri::async_runtime::block_on(state.apply_backend_change(
+            Some("https://new.example:9443".to_owned()),
+            move || {
+                clear_flag.store(true, Ordering::SeqCst);
+                async { Ok(()) }
+            },
+            || {
+                storage
+                    .set("backendBaseUrl", &json!("https://new.example:9443"))
+                    .map_err(|error| error.to_string())
+            },
+        ));
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            storage.get("backendBaseUrl", None),
+            json!("https://new.example:9443")
+        );
+        assert!(!clear_called.load(Ordering::SeqCst));
+        assert!(!state.allows_request("https://old.example:8443/healthz"));
+        assert!(!state.allows_request("https://new.example:9443/healthz"));
+
+        let clear_flag = Arc::clone(&clear_called);
+        let result = tauri::async_runtime::block_on(state.apply_backend_change(
+            None,
+            move || {
+                clear_flag.store(true, Ordering::SeqCst);
+                async { Ok(()) }
+            },
+            || {
+                storage
+                    .delete("backendBaseUrl")
+                    .map_err(|error| error.to_string())
+            },
+        ));
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(storage.get("backendBaseUrl", None), serde_json::Value::Null);
+        assert!(!clear_called.load(Ordering::SeqCst));
+        assert!(!state.allows_request("https://new.example:9443/healthz"));
     }
 
     #[cfg(windows)]

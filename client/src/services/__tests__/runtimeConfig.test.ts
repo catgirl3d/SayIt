@@ -86,15 +86,31 @@ describe('runtime backend configuration', () => {
     expect(runtimeConfig.getBackendBaseUrl()).toBe('https://saved.example')
   })
 
-  it('does not read or fall back to a network URL when native readiness fails', async () => {
+  it('still reads and publishes the saved URL when native readiness fails', async () => {
     const runtimeConfig = await loadRuntimeConfig()
     const failure = new Error('TLS policy initialization failed')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     bridge.waitForBackendTlsReady.mockRejectedValueOnce(failure)
+    bridge.storeGet.mockResolvedValueOnce('https://saved.example')
+
+    await expect(runtimeConfig.initRuntimeConfig()).resolves.toBeUndefined()
+
+    expect(bridge.storeGet).toHaveBeenCalledExactlyOnceWith('backendBaseUrl')
+    expect(runtimeConfig.getBackendBaseUrl()).toBe('https://saved.example')
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+      '[runtimeConfig] Native TLS policy is unavailable; the custom-server certificate exception is disabled:',
+      failure,
+    )
+  })
+
+  it('rejects initialization and keeps the URL when the saved URL cannot be read', async () => {
+    const runtimeConfig = await loadRuntimeConfig()
+    const failure = new Error('database read failed')
     const initialUrl = runtimeConfig.getBackendBaseUrl()
+    bridge.storeGet.mockRejectedValueOnce(failure)
 
     await expect(runtimeConfig.initRuntimeConfig()).rejects.toBe(failure)
 
-    expect(bridge.storeGet).not.toHaveBeenCalled()
     expect(runtimeConfig.getBackendBaseUrl()).toBe(initialUrl)
   })
 
@@ -309,7 +325,7 @@ describe('runtime backend configuration', () => {
     expect(runtimeConfig.getWSUrl()).toBe(expectedWebSocket)
   })
 
-  it('renders the app but skips provider initialization after runtime readiness fails', async () => {
+  it('renders the app but skips provider initialization after runtime config initialization fails', async () => {
     vi.resetModules()
     const rootElement = {}
     const render = vi.fn()
