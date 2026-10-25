@@ -118,7 +118,7 @@ function withinTimeWindow(notice: RemoteNotice, now = Date.now()): boolean {
 
 async function loadRaw(): Promise<unknown> {
   // 开发预览：dev 环境下可在控制台执行
-  //   localStorage.setItem('__devNotice', JSON.stringify({ id:'t1', level:'warning', title:'测试公告', body:'内容…', linkUrl:'https://sayitapp.site', linkLabel:'前往官网' }))
+  //   localStorage.setItem('__devNotice', JSON.stringify({ id:'t1', level:'warning', title:'Test notice', body:'Content…', linkUrl:'https://server.example', linkLabel:'Open website' }))
   // 刷新即可看到 banner 效果，无需后端。清除：localStorage.removeItem('__devNotice')
   if (import.meta.env.DEV) {
     try {
