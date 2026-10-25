@@ -12,6 +12,7 @@ Sections are ordered by version, newest first.
 
 ### Fixed
 #### Desktop Client
+- History reprocessing now validates recordings in Rust and sends only raw mono 16 kHz 16-bit PCM from a WAV file to the selected speech engine, reporting malformed or unsupported audio before any transcription request.
 - Downloading a recording from History now accepts only a plain `.wav` file name. A name with a folder path, `..`, a drive, a UNC/device path, or an alternate data stream is rejected, so the command can write only inside Downloads. The generated `sayit_<date>.wav` names keep working.
 - Saving a support bundle now copies only a `.zip` that exists directly in the app's diagnostics folder and only to a `.zip` destination. The command no longer accepts an arbitrary source file, so it cannot be used to copy and then delete an unrelated file, and it cannot write the archive under an executable extension.
 - Export commands now accept only the formats they actually produce: `json`/`csv` for text exports and `zip` for archive exports. An unsupported extension is rejected before any folder or file is created, so an export cannot be used to place a `.bat`, `.exe`, or other executable file.
