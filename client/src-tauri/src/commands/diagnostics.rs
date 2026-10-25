@@ -131,10 +131,10 @@ fn occurrence_cutoff(occurrence: &str) -> Option<chrono::DateTime<chrono::Local>
         "today" => now
             .date_naive()
             .and_hms_opt(0, 0, 0)
-            .and_then(|v| v.and_local_timezone(chrono::Local).single()),
+            .and_then(|v| v.and_local_timezone(chrono::Local).earliest()),
         "yesterday" => (now.date_naive() - chrono::Duration::days(1))
             .and_hms_opt(0, 0, 0)
-            .and_then(|v| v.and_local_timezone(chrono::Local).single()),
+            .and_then(|v| v.and_local_timezone(chrono::Local).earliest()),
         _ => None,
     }
 }
@@ -146,9 +146,8 @@ fn filter_entries_by_occurrence(entries: &[TimelineEntry], occurrence: &str) -> 
     entries
         .iter()
         .filter(|entry| {
-            parse_timestamp(&entry.ts)
-                .map(|ts| ts >= cutoff)
-                .unwrap_or(false)
+            parse_timestamp_candidates(&entry.ts)
+                .is_some_and(|candidates| candidates.any_at_or_after(cutoff))
         })
         .cloned()
         .collect()
@@ -326,12 +325,52 @@ fn normalize_environment(input: &PublicEnvironmentInput) -> PublicEnvironment {
     }
 }
 
-fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Local>> {
+/// Instants an offset-less local timestamp can denote. During the repeated hour
+/// when daylight saving time ends the same local time exists twice, so a
+/// caller that filters by time must consider both occurrences.
+#[derive(Clone, Copy)]
+struct TimestampCandidates {
+    first: chrono::DateTime<chrono::Local>,
+    second: Option<chrono::DateTime<chrono::Local>>,
+}
+
+impl TimestampCandidates {
+    /// Whether at least one occurrence is at or after `cutoff`. Comparing the
+    /// first occurrence alone would still drop entries from the second
+    /// occurrence of a repeated hour.
+    fn any_at_or_after(self, cutoff: chrono::DateTime<chrono::Local>) -> bool {
+        self.first >= cutoff || self.second.is_some_and(|second| second >= cutoff)
+    }
+
+    /// The occurrence closest to `now`, so an event from the second occurrence
+    /// is not reported an hour older than it is.
+    fn closest_to(self, now: chrono::DateTime<chrono::Local>) -> chrono::DateTime<chrono::Local> {
+        match self.second {
+            Some(second)
+                if now.signed_duration_since(second).num_seconds().abs()
+                    < now.signed_duration_since(self.first).num_seconds().abs() =>
+            {
+                second
+            }
+            _ => self.first,
+        }
+    }
+}
+
+fn parse_timestamp_candidates(value: &str) -> Option<TimestampCandidates> {
     for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, format) {
-            if let Some(local) = naive.and_local_timezone(chrono::Local).single() {
-                return Some(local);
-            }
+            return match naive.and_local_timezone(chrono::Local) {
+                chrono::LocalResult::Single(local) => Some(TimestampCandidates {
+                    first: local,
+                    second: None,
+                }),
+                chrono::LocalResult::Ambiguous(first, second) => Some(TimestampCandidates {
+                    first,
+                    second: Some(second),
+                }),
+                chrono::LocalResult::None => None,
+            };
         }
     }
     None
@@ -401,17 +440,16 @@ fn public_events_from_bytes(
         let Ok(line) = std::str::from_utf8(raw_line).map(|line| line.trim_end_matches('\r')) else {
             continue;
         };
-        let Some((timestamp, severity, category, message)) = parse_public_line(line) else {
+        let Some((timestamps, severity, category, message)) = parse_public_line(line) else {
             continue;
         };
-        if let Some(cutoff) = cutoff {
-            if timestamp < cutoff {
-                continue;
-            }
+        if cutoff.is_some_and(|cutoff| !timestamps.any_at_or_after(cutoff)) {
+            continue;
         }
         if events.len() >= MAX_EVENTS {
             break;
         }
+        let timestamp = timestamps.closest_to(now);
         let age_minutes = now.signed_duration_since(timestamp).num_minutes().max(0) as u64;
         events.push(PublicEvent {
             age_minutes,
@@ -426,15 +464,10 @@ fn public_events_from_bytes(
 
 fn parse_public_line(
     line: &str,
-) -> Option<(
-    chrono::DateTime<chrono::Local>,
-    &'static str,
-    &'static str,
-    &str,
-)> {
+) -> Option<(TimestampCandidates, &'static str, &'static str, &str)> {
     let start = line.strip_prefix('[')?;
     let end = start.find(']')?;
-    let timestamp = parse_timestamp(start[..end].trim_start_matches('[').trim())?;
+    let timestamp = parse_timestamp_candidates(start[..end].trim_start_matches('[').trim())?;
     let rest = start[end + 1..].trim_start();
     let rest = rest.strip_prefix('[')?;
     let level_end = rest.find(']')?;
@@ -535,13 +568,17 @@ fn create_public_bundle_at(req: &PublicBundleRequest, zip_path: &Path) -> Result
     Ok(())
 }
 
+fn diagnostics_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("com.sayit.app")
+        .join("diagnostics")
+}
+
 #[tauri::command]
 pub fn create_public_diagnostics_bundle(data: Value) -> Result<String, String> {
     let req: PublicBundleRequest = serde_json::from_value(data).map_err(|e| e.to_string())?;
-    let dir = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("com.sayit.app")
-        .join("diagnostics");
+    let dir = diagnostics_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let name = format!(
         "diagnostics-{}.zip",
@@ -554,13 +591,54 @@ pub fn create_public_diagnostics_bundle(data: Value) -> Result<String, String> {
 
 #[tauri::command]
 pub fn copy_diagnostics_zip(source: String, destination: String) -> Result<(), String> {
-    let src = PathBuf::from(&source);
-    if !src.exists() {
-        return Err("The diagnostics file does not exist".to_string());
+    copy_diagnostics_zip_in(&source, &destination, &diagnostics_dir())
+}
+
+/// The support archive is always a `.zip` created by
+/// `create_public_diagnostics_bundle` directly in the diagnostics directory.
+/// Copying and reading must not accept any other path: the source path arrives
+/// from the frontend, and the save operation deletes the source after copying.
+fn diagnostics_zip_in_dir(path: &str, dir: &Path) -> Option<PathBuf> {
+    let path = Path::new(path);
+    if !crate::path_guard::has_extension(path, &["zip"]) {
+        return None;
     }
-    std::fs::copy(&src, &destination)
+    if !source_matches_diagnostics_root(path, dir) {
+        return None;
+    }
+    crate::path_guard::existing_file_in_dir(path, dir)
+}
+
+/// Whether `path` may name an archive in `dir` without resolving an unrelated
+/// location first.
+///
+/// A local diagnostics directory only accepts local absolute paths, so a
+/// crafted UNC or device path cannot trigger a network or device lookup just by
+/// being canonicalized. When the directory itself is not local, only a path
+/// inside that same root is accepted: the archive was created by the app
+/// there, while another share would still be an arbitrary lookup.
+fn source_matches_diagnostics_root(path: &Path, dir: &Path) -> bool {
+    if crate::path_guard::is_local_absolute_path(dir) {
+        crate::path_guard::is_local_absolute_path(path)
+    } else {
+        path.starts_with(dir)
+    }
+}
+
+fn copy_diagnostics_zip_in(
+    source: &str,
+    destination: &str,
+    diagnostics_dir: &Path,
+) -> Result<(), String> {
+    if !crate::path_guard::has_extension(Path::new(destination), &["zip"]) {
+        return Err("The diagnostics file must be saved as a .zip".to_string());
+    }
+    let Some(src) = diagnostics_zip_in_dir(source, diagnostics_dir) else {
+        return Err("The diagnostics file does not exist".to_string());
+    };
+    std::fs::copy(&src, destination)
         .map_err(|e| format!("Failed to copy diagnostics file: {}", e))?;
-    let _ = std::fs::remove_file(src);
+    let _ = std::fs::remove_file(&src);
     Ok(())
 }
 
@@ -707,6 +785,79 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_local_timestamps_are_kept() {
+        // Zones without daylight saving time (for example UTC CI) have no
+        // ambiguous local time, so the check has nothing to exercise there.
+        let Some(naive) = find_ambiguous_local_time() else {
+            return;
+        };
+        let text = naive.format("%Y-%m-%d %H:%M:%S").to_string();
+        let candidates =
+            parse_timestamp_candidates(&text).expect("an ambiguous local timestamp must parse");
+        let second = candidates
+            .second
+            .expect("the ambiguous timestamp must keep its second occurrence");
+
+        assert_eq!(
+            Some(candidates.first),
+            naive.and_local_timezone(chrono::Local).earliest(),
+            "an ambiguous local timestamp must resolve to its first occurrence instead of being dropped"
+        );
+        assert_eq!(
+            Some(second),
+            naive.and_local_timezone(chrono::Local).latest(),
+            "the second occurrence of a repeated hour must be kept as well"
+        );
+        assert!(
+            candidates.any_at_or_after(second),
+            "a cutoff equal to the second occurrence must keep the entry"
+        );
+        assert_eq!(
+            candidates.closest_to(second),
+            second,
+            "an event reported at the second occurrence must use that occurrence"
+        );
+    }
+
+    #[test]
+    fn repeated_hour_occurrences_are_both_considered() {
+        // Deterministic counterpart to the timezone-dependent check above:
+        // machines and CI without daylight saving time never reach it.
+        let first = chrono::Local::now();
+        let second = first + chrono::Duration::hours(1);
+        let candidates = TimestampCandidates {
+            first,
+            second: Some(second),
+        };
+
+        assert!(
+            candidates.any_at_or_after(second),
+            "a cutoff equal to the second occurrence must keep the entry"
+        );
+        assert!(
+            !candidates.any_at_or_after(second + chrono::Duration::minutes(1)),
+            "a cutoff after both occurrences must not keep the entry"
+        );
+        assert_eq!(
+            candidates.closest_to(second),
+            second,
+            "the occurrence closest to now must be used for the reported age"
+        );
+    }
+
+    fn find_ambiguous_local_time() -> Option<chrono::NaiveDateTime> {
+        let start = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)?.and_hms_opt(0, 0, 0)?;
+        (0..(366 * 24 * 4)).find_map(|step| {
+            let naive = start + chrono::Duration::minutes(step * 15);
+            matches!(
+                naive.and_local_timezone(chrono::Local),
+                chrono::LocalResult::Ambiguous(_, _)
+            )
+            .then_some(naive)
+        })
+    }
+
+    #[test]
     fn archive_has_exactly_four_safe_entries() {
         let temp = std::env::temp_dir().join(format!(
             "sayit-diagnostics-test-{}.zip",
@@ -750,5 +901,161 @@ mod tests {
             assert!(!content.contains("http"));
         }
         let _ = std::fs::remove_file(temp);
+    }
+
+    fn copy_temp_root() -> PathBuf {
+        std::env::temp_dir().join(format!("sayit-diagnostics-copy-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn copy_diagnostics_rejects_a_source_outside_the_diagnostics_directory() {
+        let root = copy_temp_root();
+        let diagnostics = root.join("diagnostics");
+        std::fs::create_dir_all(&diagnostics).unwrap();
+        let source = diagnostics.join("..").join("secret.zip");
+        let destination = root.join("saved.zip");
+        std::fs::write(&source, b"private").unwrap();
+
+        let result = copy_diagnostics_zip_in(
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+            &diagnostics,
+        );
+        let copied = destination.exists();
+        let source_survived = source.exists();
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            result.is_err(),
+            "a source outside the diagnostics directory must be rejected"
+        );
+        assert!(!copied, "an arbitrary file was copied to the destination");
+        assert!(source_survived, "the arbitrary source file was deleted");
+    }
+
+    #[test]
+    fn copy_diagnostics_rejects_a_non_zip_destination() {
+        let root = copy_temp_root();
+        let diagnostics = root.join("diagnostics");
+        std::fs::create_dir_all(&diagnostics).unwrap();
+        let source = diagnostics.join("archive.zip");
+        let destination = root.join("saved.bat");
+        std::fs::write(&source, b"archive").unwrap();
+
+        let result = copy_diagnostics_zip_in(
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+            &diagnostics,
+        );
+        let copied = destination.exists();
+        let source_survived = source.exists();
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(result.is_err(), "a non-zip destination must be rejected");
+        assert!(
+            !copied,
+            "the diagnostics archive was written with a non-zip extension"
+        );
+        assert!(
+            source_survived,
+            "the diagnostics archive was deleted on a rejected destination"
+        );
+    }
+
+    #[test]
+    fn copy_diagnostics_saves_an_archive_created_in_the_diagnostics_directory() {
+        let root = copy_temp_root();
+        let diagnostics = root.join("diagnostics");
+        std::fs::create_dir_all(&diagnostics).unwrap();
+        let source = diagnostics.join("archive.zip");
+        let destination = root.join("saved.zip");
+        std::fs::write(&source, b"archive").unwrap();
+
+        copy_diagnostics_zip_in(
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+            &diagnostics,
+        )
+        .unwrap();
+        let copied = std::fs::read(&destination).unwrap();
+        let source_deleted = !source.exists();
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(copied, b"archive");
+        assert!(
+            source_deleted,
+            "the temporary diagnostics archive must be removed after saving"
+        );
+    }
+
+    #[test]
+    fn diagnostics_source_must_be_a_zip_directly_in_the_directory() {
+        let root = copy_temp_root();
+        let diagnostics = root.join("diagnostics");
+        let nested = diagnostics.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let nested_zip = nested.join("archive.zip");
+        std::fs::write(&nested_zip, b"archive").unwrap();
+
+        let nested_rejected =
+            diagnostics_zip_in_dir(&nested_zip.to_string_lossy(), &diagnostics).is_none();
+        let network_rejected =
+            diagnostics_zip_in_dir(r"\\server\share\archive.zip", &diagnostics).is_none();
+        let wrong_extension_rejected = diagnostics_zip_in_dir(
+            &diagnostics.join("archive.txt").to_string_lossy(),
+            &diagnostics,
+        )
+        .is_none();
+        let missing_rejected = diagnostics_zip_in_dir(
+            &diagnostics.join("missing.zip").to_string_lossy(),
+            &diagnostics,
+        )
+        .is_none();
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(nested_rejected, "a nested archive must be rejected");
+        assert!(network_rejected, "a network archive path must be rejected");
+        assert!(
+            wrong_extension_rejected,
+            "a non-zip source must be rejected"
+        );
+        assert!(missing_rejected, "a missing archive must be rejected");
+    }
+
+    #[test]
+    fn diagnostics_root_accepts_only_paths_of_its_own_class() {
+        let local_root = Path::new(r"C:\Users\alina\AppData\Local\com.sayit.app\diagnostics");
+        let local_source = local_root.join("archive.zip");
+        let redirected_root =
+            Path::new(r"\\server\profiles\alina\AppData\Local\com.sayit.app\diagnostics");
+        let redirected_source = redirected_root.join("archive.zip");
+        let fallback_root = Path::new(".").join("com.sayit.app").join("diagnostics");
+        let fallback_source = fallback_root.join("archive.zip");
+        let other_share = Path::new(r"\\elsewhere\share\archive.zip");
+
+        assert!(
+            source_matches_diagnostics_root(&local_source, local_root),
+            "a local archive in the local diagnostics root must be accepted"
+        );
+        assert!(
+            !source_matches_diagnostics_root(other_share, local_root),
+            "a network path must not be resolved when the root is local"
+        );
+        assert!(
+            source_matches_diagnostics_root(&redirected_source, redirected_root),
+            "an archive created under a redirected root must be accepted"
+        );
+        assert!(
+            !source_matches_diagnostics_root(other_share, redirected_root),
+            "an unrelated share must not be accepted under a redirected root"
+        );
+        assert!(
+            source_matches_diagnostics_root(&fallback_source, &fallback_root),
+            "the relative fallback root must keep accepting its own archive"
+        );
     }
 }

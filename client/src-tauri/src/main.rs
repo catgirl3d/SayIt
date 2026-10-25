@@ -686,7 +686,6 @@ fn main() {
             commands::shortcuts::end_shortcut_capture,
             // Export
             commands::export::save_text_export,
-            commands::export::save_export_bundle,
             commands::export::save_full_export,
             // Backup / Restore (配置与全部数据的导入导出)
             commands::backup::get_backup_directory,

@@ -8,22 +8,6 @@ pub struct TextExportPayload {
     #[serde(rename = "defaultPath")]
     pub default_path: String,
     pub content: String,
-    #[allow(dead_code)]
-    pub filters: Option<Vec<ExportFilter>>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-pub struct ExportFilter {
-    pub name: String,
-    pub extensions: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct ExportBundlePayload {
-    #[serde(rename = "defaultPath")]
-    pub default_path: String,
-    pub files: Vec<ExportFile>,
 }
 
 #[derive(Deserialize)]
@@ -32,42 +16,28 @@ pub struct ExportFile {
     pub content: String,
 }
 
+/// Export writes caller-provided content to a caller-provided path, so the
+/// extension is pinned to the formats this command actually produces. That
+/// keeps the command from becoming a way to place .bat/.exe/.ps1 files.
+fn check_export_extension(path: &std::path::Path, allowed: &[&str]) -> Result<(), String> {
+    if crate::path_guard::has_extension(path, allowed) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Export file must end with .{}",
+            allowed.join(" / .")
+        ))
+    }
+}
+
 #[tauri::command]
 pub fn save_text_export(payload: TextExportPayload) -> Result<Option<String>, String> {
     let path = std::path::PathBuf::from(&payload.default_path);
+    check_export_extension(&path, &["json", "csv"])?;
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     fs::write(&path, &payload.content).map_err(|e| e.to_string())?;
-    let abs = fs::canonicalize(&path).unwrap_or(path);
-    let abs_str = abs.to_string_lossy().to_string();
-    let clean = abs_str
-        .strip_prefix(r"\\?\")
-        .unwrap_or(&abs_str)
-        .to_string();
-    Ok(Some(clean))
-}
-
-#[tauri::command]
-pub fn save_export_bundle(payload: ExportBundlePayload) -> Result<Option<String>, String> {
-    let path = std::path::PathBuf::from(&payload.default_path);
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    let file = fs::File::create(&path).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-    for item in &payload.files {
-        zip.start_file(&item.name, options)
-            .map_err(|e| e.to_string())?;
-        zip.write_all(item.content.as_bytes())
-            .map_err(|e| e.to_string())?;
-    }
-
-    zip.finish().map_err(|e| e.to_string())?;
     let abs = fs::canonicalize(&path).unwrap_or(path);
     let abs_str = abs.to_string_lossy().to_string();
     let clean = abs_str
@@ -98,6 +68,7 @@ pub async fn save_full_export(
     payload: FullExportPayload,
 ) -> Result<Option<String>, String> {
     let out_path = std::path::PathBuf::from(&payload.default_path);
+    check_export_extension(&out_path, &["zip"])?;
     if let Some(parent) = out_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -186,4 +157,54 @@ pub async fn save_full_export(
     })
     .await
     .map_err(|e| format!("Export task failed: {}", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("sayit-export-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn text_export_rejects_an_executable_extension_before_touching_the_filesystem() {
+        let root = temp_root();
+        let path = root.join("evil.bat");
+
+        let result = save_text_export(TextExportPayload {
+            default_path: path.to_string_lossy().to_string(),
+            content: "@echo off\r\ncalc\r\n".to_string(),
+        });
+        let created = root.exists();
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            result.is_err(),
+            "an executable export extension must be rejected"
+        );
+        assert!(
+            !created,
+            "the export created directories before rejecting the extension"
+        );
+    }
+
+    #[test]
+    fn text_export_still_writes_supported_formats() {
+        let root = temp_root();
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("history.json");
+
+        let result = save_text_export(TextExportPayload {
+            default_path: path.to_string_lossy().to_string(),
+            content: "{\"ok\":true}".to_string(),
+        });
+        let content = std::fs::read_to_string(&path).unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(result.unwrap().is_some());
+        assert_eq!(content, "{\"ok\":true}");
+    }
 }

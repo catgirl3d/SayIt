@@ -87,11 +87,10 @@ function historyToCsv(records: HistoryRecord[]) {
   return [headers.join(','), ...lines].join('\n')
 }
 
-async function saveTextFile(defaultPath: string, content: string, filters: Array<{ name: string; extensions: string[] }>): Promise<SaveResult> {
+async function saveTextFile(defaultPath: string, content: string): Promise<SaveResult> {
   const filePath = await bridge.saveTextExport({
     defaultPath,
     content,
-    filters,
   })
 
   return {
@@ -186,14 +185,12 @@ export async function exportHistory(query: HistoryListQuery = {}, format: Export
     return saveTextFile(
       `sayit-history-${stamp}.csv`,
       historyToCsv(payload.records),
-      [{ name: 'CSV Files', extensions: ['csv'] }],
     )
   }
 
   return saveTextFile(
     `sayit-history-${stamp}.json`,
     JSON.stringify(payload, null, 2),
-    [{ name: 'JSON Files', extensions: ['json'] }],
   )
 }
 
@@ -205,14 +202,12 @@ export async function exportFavorites(format: ExportFormat = 'json') {
     return saveTextFile(
       `sayit-favorites-${stamp}.csv`,
       historyToCsv(payload.records),
-      [{ name: 'CSV Files', extensions: ['csv'] }],
     )
   }
 
   return saveTextFile(
     `sayit-favorites-${stamp}.json`,
     JSON.stringify(payload, null, 2),
-    [{ name: 'JSON Files', extensions: ['json'] }],
   )
 }
 
@@ -221,7 +216,6 @@ export async function exportSettings() {
   return saveTextFile(
     `sayit-settings-${slugTimestamp()}.json`,
     JSON.stringify(payload, null, 2),
-    [{ name: 'JSON Files', extensions: ['json'] }],
   )
 }
 
@@ -230,7 +224,6 @@ export async function exportHotwords() {
   return saveTextFile(
     `sayit-hotwords-${slugTimestamp()}.json`,
     JSON.stringify(payload, null, 2),
-    [{ name: 'JSON Files', extensions: ['json'] }],
   )
 }
 

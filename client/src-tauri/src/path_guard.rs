@@ -22,6 +22,39 @@ pub fn is_record_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
+/// Whether `name` is one plain `.wav` file name: no path separators, no
+/// `..`, no drive, root, stream, or reserved device syntax. Callers join it to
+/// a fixed directory, so any of those forms would let the caller choose a
+/// different location than the command promises.
+pub fn is_plain_wav_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.starts_with('.')
+        && !name.contains("..")
+        && has_extension(Path::new(name), &["wav"])
+        && !is_reserved_windows_name(name)
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Whether the file stem is a reserved MS-DOS device name. Windows resolves
+/// these names to a device even when they carry an extension and are joined to
+/// a directory, so `Downloads\NUL.wav` is not a file in Downloads.
+fn is_reserved_windows_name(name: &str) -> bool {
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|suffix| {
+                suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9')
+            })
+        })
+}
+
 /// Whether the path is absolute and local to a disk. UNC, device, verbatim,
 /// and drive-relative Windows paths are rejected before any filesystem call,
 /// so a caller-controlled path cannot trigger SMB or device access just by
@@ -100,6 +133,29 @@ mod tests {
         assert!(!is_local_absolute_path(Path::new("a.wav")));
         assert!(!is_local_absolute_path(Path::new("./a.wav")));
         assert!(!is_local_absolute_path(Path::new("../a.wav")));
+    }
+
+    #[test]
+    fn plain_wav_names() {
+        assert!(is_plain_wav_name("sayit_20261012_101010.wav"));
+        assert!(is_plain_wav_name("mshhzwhhyxxw.WAV"));
+        assert!(!is_plain_wav_name("evil.exe"));
+        assert!(!is_plain_wav_name("a.wav.exe"));
+        assert!(!is_plain_wav_name(r"..\..\Startup\x.wav"));
+        assert!(!is_plain_wav_name("../x.wav"));
+        assert!(!is_plain_wav_name(r"C:x.wav"));
+        assert!(!is_plain_wav_name(r"C:\x.wav"));
+        assert!(!is_plain_wav_name(r"\\server\share\x.wav"));
+        assert!(!is_plain_wav_name("a.wav:stream"));
+        assert!(!is_plain_wav_name(".wav"));
+        assert!(!is_plain_wav_name("a b.wav"));
+        assert!(!is_plain_wav_name(""));
+        assert!(!is_plain_wav_name("CON.wav"));
+        assert!(!is_plain_wav_name("nul.WAV"));
+        assert!(!is_plain_wav_name("COM1.wav"));
+        assert!(!is_plain_wav_name("lpt9.wav"));
+        assert!(is_plain_wav_name("console.wav"));
+        assert!(is_plain_wav_name("com10.wav"));
     }
 
     #[test]
