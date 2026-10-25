@@ -210,6 +210,10 @@ export function storeDelete(key: string) {
   return invoke('store_delete', { key })
 }
 
+export function waitForBackendTlsReady() {
+  return invoke<void>('wait_for_backend_tls_ready')
+}
+
 export function usageRecord(event: UsageEventInput) {
   return invoke<void>('usage_record', { event })
 }

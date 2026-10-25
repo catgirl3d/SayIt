@@ -31,13 +31,17 @@ import * as bridge from './services/bridge'
 import { systemAudioSession } from './services/systemAudio'
 import { fileTranscriptionService } from './services/fileTranscription'
 
-export default function App() {
+interface AppProps {
+  runtimeConfigReady: boolean
+}
+
+export default function App({ runtimeConfigReady }: AppProps) {
   const [showWelcome, setShowWelcome] = useState(false)
   // 首次挂载时先不渲染主界面，等 onboarding 检查完成再决定，避免"闪一下主页再进向导"
   const [onboardingChecked, setOnboardingChecked] = useState(false)
   const navigate = useNavigate()
 
-  // 初始化 + 清理：必须只在挂载/卸载各执行一次。
+  // Initialize and clean up only once per mount/unmount; readiness is fixed at bootstrap.
   useEffect(() => {
     void initTheme().catch((error) => console.error('[App] Theme init error:', error))
     void initAiEnabled().catch((error) => console.error('[App] AI state init error:', error))
@@ -49,10 +53,12 @@ export default function App() {
       } catch (error) {
         console.error('[App] File transcription restore error:', error)
       }
-      try {
-        await initRecorder()
-      } catch (error) {
-        console.error('[App] Recorder init error:', error)
+      if (runtimeConfigReady) {
+        try {
+          await initRecorder()
+        } catch (error) {
+          console.error('[App] Recorder init error:', error)
+        }
       }
       void startUpdateService().catch((error) => console.error('[App] Update service error:', error))
       void startWebDavBackupService().catch((error) => console.error('[App] WebDAV backup service error:', error))

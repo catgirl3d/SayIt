@@ -17,7 +17,7 @@ interface RuntimeEnv {
 }
 
 function getEnv(): RuntimeEnv {
-  return (import.meta as unknown as { env?: RuntimeEnv }).env || {}
+  return (import.meta.env as RuntimeEnv | undefined) || {}
 }
 
 function trimSlash(url: string): string {
@@ -41,21 +41,35 @@ function resolveEnvOverrideBaseUrl(): string {
 }
 
 let backendBaseUrl = resolveBuiltinDefaultBaseUrl()
+let operationQueue: Promise<void> = Promise.resolve()
+
+function enqueue<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationQueue.then(operation, operation)
+  operationQueue = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
 
 export async function initRuntimeConfig(): Promise<void> {
-  // A user-saved address takes precedence over the environment variable
-  const stored = await bridge.storeGet(BACKEND_BASE_URL_STORE_KEY)
-  const normalized = normalizeUrl(typeof stored === 'string' ? stored : '')
-  if (normalized) {
-    backendBaseUrl = normalized
-    return
-  }
-  const envOverride = resolveEnvOverrideBaseUrl()
-  if (envOverride) {
-    backendBaseUrl = envOverride
-    return
-  }
-  backendBaseUrl = resolveBuiltinDefaultBaseUrl()
+  return enqueue(async () => {
+    await bridge.waitForBackendTlsReady()
+
+    // A user-saved address takes precedence over the environment variable
+    const stored = await bridge.storeGet(BACKEND_BASE_URL_STORE_KEY)
+    const normalized = normalizeUrl(typeof stored === 'string' ? stored : '')
+    if (normalized) {
+      backendBaseUrl = normalized
+      return
+    }
+    const envOverride = resolveEnvOverrideBaseUrl()
+    if (envOverride) {
+      backendBaseUrl = envOverride
+      return
+    }
+    backendBaseUrl = resolveBuiltinDefaultBaseUrl()
+  })
 }
 
 export function getDefaultBackendBaseUrl(): string {
@@ -78,20 +92,27 @@ export async function setBackendBaseUrl(value: string): Promise<string> {
   if (!normalized) {
     throw new Error(t('runtimeConfig.emptyServerUrl'))
   }
-  backendBaseUrl = normalized
-  await bridge.storeSet(BACKEND_BASE_URL_STORE_KEY, normalized)
-  return backendBaseUrl
+  return enqueue(async () => {
+    await bridge.storeSet(BACKEND_BASE_URL_STORE_KEY, normalized)
+    backendBaseUrl = normalized
+    return normalized
+  })
 }
 
 export async function resetBackendBaseUrl(): Promise<string> {
-  backendBaseUrl = resolveBuiltinDefaultBaseUrl()
-  await bridge.storeDelete(BACKEND_BASE_URL_STORE_KEY)
-  return backendBaseUrl
+  const defaultUrl = resolveBuiltinDefaultBaseUrl()
+  return enqueue(async () => {
+    await bridge.storeDelete(BACKEND_BASE_URL_STORE_KEY)
+    backendBaseUrl = defaultUrl
+    return defaultUrl
+  })
 }
 
 export async function getStoredBackendBaseUrl(): Promise<string> {
-  const stored = await bridge.storeGet(BACKEND_BASE_URL_STORE_KEY)
-  return normalizeUrl(typeof stored === 'string' ? stored : '')
+  return enqueue(async () => {
+    const stored = await bridge.storeGet(BACKEND_BASE_URL_STORE_KEY)
+    return normalizeUrl(typeof stored === 'string' ? stored : '')
+  })
 }
 
 export function getWSUrl(): string {
