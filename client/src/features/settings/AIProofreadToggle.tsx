@@ -113,7 +113,7 @@ export default function AIProofreadToggle() {
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <p
                     id="ai-min-duration-label"
-                    className={`text-sm font-medium ${aiEnabled ? '' : 'text-muted-foreground'}`}
+                    className={`text-sm font-medium ${aiEnabled ? '' : 'text-muted-foreground opacity-60'}`}
                   >
                     {t('aiProofread.minDurationLabel')}
                   </p>
@@ -126,11 +126,14 @@ export default function AIProofreadToggle() {
                     </span>
                   )}
                 </div>
-                <p id="ai-min-duration-desc" className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                <p
+                  id="ai-min-duration-desc"
+                  className={`mt-0.5 text-xs leading-relaxed ${aiEnabled ? 'text-muted-foreground' : 'text-foreground'}`}
+                >
                   {aiEnabled ? t('aiProofread.minDurationDesc') : t('aiProofread.minDurationDisabled')}
                 </p>
               </div>
-              <label className="mr-2 flex shrink-0 items-center gap-1.5">
+              <label className={`mr-2 flex shrink-0 items-center gap-1.5 ${aiEnabled ? '' : 'opacity-60'}`}>
                 <input
                   type="number"
                   min="0"

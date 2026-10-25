@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, within } from 'storybook/test'
+import { setAiEnabled } from '@/stores/aiEnabled'
 import { getBuiltinPromptPresets, type PromptPreset } from '@/services/store'
 import { BUILTIN_APP_RULES } from '@/services/personalization/defaults'
 import type { AppPromptRule } from '@/services/personalization/types'
@@ -42,9 +44,15 @@ const callbacks = {
   onDeleteRule: () => undefined,
 }
 
+const aiCleanup = (enabled: boolean) => async () => {
+  await setAiEnabled(enabled)
+}
+
 const meta = {
   title: 'settings/AppPromptRulesSection',
   component: AppPromptRulesSection,
+  parameters: { tauri: { commands: { set_tray_ai_enabled: () => null } } },
+  beforeEach: aiCleanup(true),
 } satisfies Meta<typeof AppPromptRulesSection>
 
 export default meta
@@ -55,5 +63,18 @@ export const ConfiguredRules: Story = {
     presets,
     rules,
     ...callbacks,
+  },
+}
+
+export const AiCleanupOff: Story = {
+  args: {
+    presets,
+    rules,
+    ...callbacks,
+  },
+  beforeEach: aiCleanup(false),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(await canvas.findByText(/per-app rules aren't applied/i)).toBeVisible()
   },
 }

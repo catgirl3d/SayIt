@@ -44,6 +44,7 @@ import {
   type ServerAiSource,
 } from '@/services/transcription/serverAiSource'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
+import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { describeProviderError } from '@/lib/errorMessages'
 import {
   applyProviderSwitch,
@@ -296,6 +297,21 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
   const [serverAiSourceError, setServerAiSourceError] = useState(false)
   const [serverAiSourceLoaded, setServerAiSourceLoaded] = useState(false)
   const [isServerMode, setIsServerMode] = useState(false)
+  const aiEnabled = useAiEnabled()
+  const aiReady = useAiEnabledReady()
+  /**
+   * Whether these services take part in automatic AI processing right now. The cards stay
+   * editable and testable, so this is a status note, not a disabled state. The server-managed
+   * copy names the selected-text exception instead of guessing per card. Until the initial AI
+   * value is known, show nothing rather than claiming the toggle is off.
+   */
+  const servicesInactiveReason: 'aiOff' | 'serverManaged' | null = !aiReady
+    ? null
+    : !aiEnabled
+      ? 'aiOff'
+      : serverAiSourceLoaded && isServerMode && serverAiSource === 'managed'
+        ? 'serverManaged'
+        : null
 
   /**
    * Batch "test all" runner. Its commit callback persists the collected checks
@@ -866,6 +882,7 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
     return (
       <ProfileCard
         key={profile.id}
+        className={servicesInactiveReason ? 'opacity-60 hover:opacity-100 focus-within:opacity-100' : undefined}
         active={profile.id === activeId}
         onActivate={() => void handleActivate(profile.id)}
         activateDisabled={busy}
@@ -939,7 +956,7 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
         <CardContent className="p-6">
           {serverAiSourceLoaded && isServerMode && (
             <section className="mb-4 border-b border-border pb-4" aria-labelledby="server-ai-source-heading">
-              <div className="flex items-start justify-between gap-4">
+              <div className={`flex items-start justify-between gap-4 ${servicesInactiveReason === 'aiOff' ? 'opacity-60 hover:opacity-100 focus-within:opacity-100' : ''}`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h2 id="server-ai-source-heading" className="text-lg font-semibold">
@@ -968,6 +985,18 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
                 <Feedback className="mt-2" tone="error" message={t('ai.err.saveFailed')} />
               )}
             </section>
+          )}
+
+          {loaded && !noProfiles && servicesInactiveReason && (
+            <div
+              role="status"
+              className="mb-3 flex items-start gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5"
+            >
+              <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+              <p className="min-w-0 flex-1 text-sm leading-relaxed text-foreground">
+                {t(servicesInactiveReason === 'aiOff' ? 'ai.inactiveAiOff' : 'ai.inactiveServerManaged')}
+              </p>
+            </div>
           )}
 
           <fieldset className="min-w-0">

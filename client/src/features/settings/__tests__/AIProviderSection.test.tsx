@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
+import { setAiEnabled } from '@/stores/aiEnabled'
 import AIProviderSection from '../AIProviderSection'
 import { blankProfile, type AiProfile } from '../aiProviderCatalog'
 
@@ -241,5 +242,74 @@ describe('AIProviderSection deletion with the real profile store', () => {
     for (const key of ['activeProfileId', 'provider', 'apiUrl', 'apiKey', 'model', 'reasoningEffort', 'serviceTier']) {
       expect(settings.get(`cloudAi.${key}`)).toBe('')
     }
+  })
+})
+
+describe('AIProviderSection usage status', () => {
+  const renderWithSettings = async (mode: string, source: string) => {
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'workMode') return mode
+      if (key === 'server.aiSource') return source
+      return fallback
+    })
+    render(<AIProviderSection />)
+    await screen.findByRole('radio')
+  }
+
+  beforeEach(async () => {
+    storeMocks.getSetting.mockReset()
+    storeMocks.setSetting.mockReset()
+    profileStoreMocks.loadAiProfiles.mockReset()
+    profileStoreMocks.saveAiProfiles.mockReset()
+    profileStoreMocks.loadAiProfiles.mockResolvedValue({ profiles: [profile], activeId: '' })
+    await setAiEnabled(false)
+  })
+
+  afterEach(async () => {
+    await setAiEnabled(false)
+  })
+
+  it('explains that AI processing is off without blocking edits or tests', async () => {
+    await renderWithSettings('server', 'managed')
+
+    expect(await screen.findByText(t('ai.inactiveAiOff'))).toBeTruthy()
+    expect((screen.getByRole('radio') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('radio').closest('.group')?.className).toContain('opacity-60')
+    expect((screen.getByRole('button', { name: /^new$/i }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('explains server-managed processing with the selected-text exception', async () => {
+    await setAiEnabled(true)
+    await renderWithSettings('server', 'managed')
+
+    expect(await screen.findByText(t('ai.inactiveServerManaged'))).toBeTruthy()
+    expect(screen.queryByText(t('ai.inactiveAiOff'))).toBeNull()
+  })
+
+  it('shows no status when saved services are used for dictation', async () => {
+    await setAiEnabled(true)
+    await renderWithSettings('server', 'custom')
+
+    // The profile radio can load before the server source does. Wait for the source switch,
+    // otherwise the negative assertion below would pass while the source is still unknown.
+    const sourceSwitch = await screen.findByRole('switch', { name: t('ai.serverSource.title') })
+    expect(sourceSwitch.getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio').closest('.group')?.className).not.toContain('opacity-60')
+    await waitFor(() => expect(screen.queryByText(t('ai.inactiveServerManaged'))).toBeNull())
+    expect(screen.queryByText(t('ai.inactiveAiOff'))).toBeNull()
+  })
+
+  it('hides the status when there are no saved services left', async () => {
+    profileStoreMocks.loadAiProfiles.mockResolvedValue({ profiles: [], activeId: '' })
+    storeMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'workMode') return 'cloud_api'
+      if (key === 'server.aiSource') return 'managed'
+      return fallback
+    })
+    render(<AIProviderSection />)
+
+    expect(await screen.findByText(t('ai.empty'))).toBeTruthy()
+    expect(screen.queryByText(t('ai.inactiveAiOff'))).toBeNull()
+    expect(screen.queryByText(t('ai.inactiveServerManaged'))).toBeNull()
   })
 })

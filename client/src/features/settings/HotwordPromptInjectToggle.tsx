@@ -1,22 +1,29 @@
-// 「热词注入提示词」开关卡片
-// 开启后，AI 整理阶段会把用户热词表注入系统提示词，帮助纠正/保留专有名词。默认关闭。
+// "Inject hotwords into the prompt" toggle card
+// When enabled, the AI cleanup stage injects the user's hotword list into the system prompt to help
+// correct or preserve proper nouns. Off by default.
 
 import { useEffect, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { getSetting, setSetting } from '@/services/store'
+import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { useT } from '@/i18n/useT'
 
 export default function HotwordPromptInjectToggle() {
   const t = useT()
+  const aiEnabled = useAiEnabled()
+  const aiReady = useAiEnabledReady()
+  const aiInactive = aiReady && !aiEnabled
   const [enabled, setEnabled] = useState(false)
-  // 读到已保存值之前，开关先隐藏、且不放动画：避免先画出默认值再跳到已保存值（闪一下）。
-  // 用 finally 兜底，读取失败也让开关出现（呈默认值），不至于一直隐藏。
+  // Until the saved value is read, keep the switch hidden and animation-free: this avoids drawing
+  // the default and then jumping to the saved value (a flash). The finally block is a fallback:
+  // even a failed read reveals the switch showing the default instead of leaving it hidden forever.
   const [ready, setReady] = useState(false)
-  // animate 与 ready 分开：ready 决定何时显示，animate 决定何时允许过渡。
-  // 若在揭开/赋值的同一帧就把 transition 加回来，按 CSS 规范浏览器会认为
-  // 「有过渡且值变了」，于是把「默认值→已保存值」真的动画一遍（看起来就是闪一下）。
-  // 所以揭开那一帧仍不带过渡，隔两帧待值稳定后才开过渡。
+  // animate is separate from ready: ready controls when the switch is revealed, animate controls
+  // when transitions are allowed. If the transition is restored in the same frame as the reveal or
+  // the value assignment, CSS sees "a transition exists and the value changed" and actually
+  // animates the default-to-saved change (which looks like a flash). The reveal frame therefore
+  // stays transition-free; transitions are enabled two frames later, once the value is stable.
   const [animate, setAnimate] = useState(false)
 
   useEffect(() => {
@@ -37,15 +44,29 @@ export default function HotwordPromptInjectToggle() {
   return (
     <Card>
       <CardContent className="p-6">
-        <div className="flex items-center justify-between">
+        <div className={`flex items-center justify-between ${aiInactive ? 'opacity-60' : ''}`}>
           <div className="pr-4">
-            <h2 className="text-lg font-semibold">{t('hotwordInject.title')}</h2>
+            <h2 id="hotword-inject-heading" className="text-lg font-semibold">{t('hotwordInject.title')}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {t('hotwordInject.desc')}
             </p>
           </div>
-          <Switch checked={enabled} onChange={toggle} noAnimation={!animate} hidden={!ready} />
+          {/* Keep the saved choice visible; only applying it is blocked. AI off must not
+              look like the user turned this off, and turning AI back on restores the choice. */}
+          <Switch
+            checked={enabled}
+            onChange={toggle}
+            disabled={aiInactive}
+            labelledBy="hotword-inject-heading"
+            noAnimation={!animate}
+            hidden={!ready}
+          />
         </div>
+        {aiInactive && (
+          <p className="mt-3 text-xs text-foreground">
+            {t('hotwordInject.disabledReason')}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
