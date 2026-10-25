@@ -1,5 +1,7 @@
 // Shared WAV container encoder, RIFF parser, and PCM sample conversions.
 
+use std::ops::Range;
+
 const PCM_FORMAT_TAG: u16 = 1;
 const WAVE_FORMAT_EXTENSIBLE_TAG: u16 = 0xFFFE;
 const PCM_SUBFORMAT_GUID: [u8; 16] = [
@@ -87,11 +89,12 @@ fn validate_pcm_format(fmt: &[u8]) -> Result<(), WavPcmError> {
     Ok(())
 }
 
-/// Parse a RIFF/WAVE file and return its mono 16 kHz signed PCM payload.
+/// Validate a RIFF/WAVE file and return the byte range of its mono 16 kHz
+/// signed PCM payload inside `bytes`.
 ///
 /// The parser walks every chunk, including chunks after `data`, so malformed
 /// trailing metadata cannot be hidden behind an otherwise valid audio chunk.
-pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
+fn wav_pcm_range(bytes: &[u8]) -> Result<Range<usize>, WavPcmError> {
     if bytes.len() < 12 || bytes.get(0..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
         return Err(WavPcmError::MalformedWav);
     }
@@ -106,7 +109,7 @@ pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
 
     let mut offset = 12usize;
     let mut fmt_chunk: Option<&[u8]> = None;
-    let mut data_chunk: Option<&[u8]> = None;
+    let mut data_chunk: Option<Range<usize>> = None;
 
     while offset < riff_end {
         let header_end = offset.checked_add(8).ok_or(WavPcmError::MalformedWav)?;
@@ -144,7 +147,7 @@ pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
                 return Err(WavPcmError::MalformedWav);
             }
         } else if chunk_id == b"data" {
-            if data_chunk.replace(payload).is_some() {
+            if data_chunk.replace(payload_start..payload_end).is_some() {
                 return Err(WavPcmError::MalformedWav);
             }
         }
@@ -161,7 +164,18 @@ pub(crate) fn parse_wav_pcm(bytes: &[u8]) -> Result<Vec<u8>, WavPcmError> {
         return Err(WavPcmError::MalformedWav);
     }
 
-    Ok(data.to_vec())
+    Ok(data)
+}
+
+/// Parse a RIFF/WAVE file and return its mono 16 kHz signed PCM payload.
+///
+/// Consumes the file buffer: the payload is moved to the front of the same
+/// allocation instead of being copied into a second buffer.
+pub(crate) fn parse_wav_pcm(mut bytes: Vec<u8>) -> Result<Vec<u8>, WavPcmError> {
+    let pcm = wav_pcm_range(&bytes)?;
+    bytes.truncate(pcm.end);
+    bytes.drain(..pcm.start);
+    Ok(bytes)
 }
 
 /// Encode normalized mono samples as signed little-endian 16-bit PCM.
@@ -282,14 +296,26 @@ mod tests {
     }
 
     fn assert_wav_error(wav: &[u8], expected: WavPcmError) {
-        assert_eq!(parse_wav_pcm(wav), Err(expected));
+        assert_eq!(parse_wav_pcm(wav.to_vec()), Err(expected));
     }
 
     #[test]
     fn parses_canonical_wav_and_returns_only_pcm_payload() {
         let pcm = [0x00, 0x80, 0x34, 0x12];
 
-        assert_eq!(parse_wav_pcm(&canonical_fixture(&pcm)), Ok(pcm.to_vec()));
+        assert_eq!(parse_wav_pcm(canonical_fixture(&pcm)), Ok(pcm.to_vec()));
+    }
+
+    #[test]
+    fn parse_reuses_the_input_allocation_instead_of_copying_the_payload() {
+        let pcm = [0x00, 0x80, 0x34, 0x12];
+        let wav = canonical_fixture(&pcm);
+        let input_ptr = wav.as_ptr();
+
+        let parsed = parse_wav_pcm(wav).unwrap();
+
+        assert_eq!(parsed, pcm);
+        assert_eq!(parsed.as_ptr(), input_ptr);
     }
 
     #[test]
@@ -300,7 +326,7 @@ mod tests {
             (*b"fmt ", pcm_fmt(1, 16_000, 16), None),
         ]);
 
-        assert_eq!(parse_wav_pcm(&wav), Ok(pcm.to_vec()));
+        assert_eq!(parse_wav_pcm(wav), Ok(pcm.to_vec()));
     }
 
     #[test]
@@ -316,7 +342,7 @@ mod tests {
             (*b"LIST", b"trailing".to_vec(), None),
         ]);
 
-        assert_eq!(parse_wav_pcm(&wav), Ok(pcm.to_vec()));
+        assert_eq!(parse_wav_pcm(wav), Ok(pcm.to_vec()));
     }
 
     #[test]
@@ -327,7 +353,7 @@ mod tests {
             (*b"data", pcm.to_vec(), None),
         ]);
 
-        assert_eq!(parse_wav_pcm(&wav), Ok(pcm.to_vec()));
+        assert_eq!(parse_wav_pcm(wav), Ok(pcm.to_vec()));
     }
 
     #[test]
@@ -338,7 +364,7 @@ mod tests {
             (*b"data", vec![0, 0], None),
         ]);
 
-        assert_eq!(parse_wav_pcm(&wav), Ok(vec![0, 0]));
+        assert_eq!(parse_wav_pcm(wav), Ok(vec![0, 0]));
     }
 
     #[test]

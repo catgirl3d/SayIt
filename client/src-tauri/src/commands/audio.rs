@@ -129,7 +129,7 @@ fn read_audio_pcm_from(
         return Err(AudioReadError::Missing);
     };
     let bytes = fs::read(&path).map_err(|error| audio_read_error_from_io(&error))?;
-    let pcm = parse_wav_pcm(&bytes).map_err(AudioReadError::from)?;
+    let pcm = parse_wav_pcm(bytes).map_err(AudioReadError::from)?;
     Ok(tauri::ipc::Response::new(pcm))
 }
 
