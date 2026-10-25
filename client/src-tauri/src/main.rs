@@ -732,6 +732,8 @@ fn main() {
             commands::storage::store_set,
             commands::storage::store_set_app_settings,
             commands::storage::store_delete,
+            commands::storage::store_set_backend_url,
+            commands::storage::store_delete_backend_url,
             commands::storage::wait_for_backend_tls_ready,
             commands::storage::usage_record,
             commands::storage::usage_summary,

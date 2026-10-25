@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const bridge = vi.hoisted(() => ({
   waitForBackendTlsReady: vi.fn(),
   storeGet: vi.fn(),
-  storeSet: vi.fn(),
-  storeDelete: vi.fn(),
+  storeSetBackendUrl: vi.fn(),
+  storeDeleteBackendUrl: vi.fn(),
 }))
 const nativeInvoke = vi.hoisted(() => vi.fn())
 
@@ -41,8 +41,8 @@ describe('runtime backend configuration', () => {
     vi.clearAllMocks()
     bridge.waitForBackendTlsReady.mockResolvedValue(undefined)
     bridge.storeGet.mockResolvedValue(null)
-    bridge.storeSet.mockResolvedValue(undefined)
-    bridge.storeDelete.mockResolvedValue(undefined)
+    bridge.storeSetBackendUrl.mockResolvedValue(undefined)
+    bridge.storeDeleteBackendUrl.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -65,6 +65,24 @@ describe('runtime backend configuration', () => {
     await actual.waitForBackendTlsReady()
 
     expect(nativeInvoke).toHaveBeenCalledExactlyOnceWith('wait_for_backend_tls_ready')
+  })
+
+  it('forwards a backend URL save to the dedicated command', async () => {
+    const actual = await vi.importActual<typeof import('../bridge')>('../bridge')
+    nativeInvoke.mockResolvedValueOnce(undefined)
+
+    await actual.storeSetBackendUrl('https://custom.example')
+
+    expect(nativeInvoke).toHaveBeenCalledExactlyOnceWith('store_set_backend_url', { url: 'https://custom.example' })
+  })
+
+  it('forwards a backend URL reset to the dedicated command', async () => {
+    const actual = await vi.importActual<typeof import('../bridge')>('../bridge')
+    nativeInvoke.mockResolvedValueOnce(undefined)
+
+    await actual.storeDeleteBackendUrl()
+
+    expect(nativeInvoke).toHaveBeenCalledExactlyOnceWith('store_delete_backend_url')
   })
 
   it('waits for native TLS readiness before reading the saved backend URL', async () => {
@@ -118,12 +136,12 @@ describe('runtime backend configuration', () => {
     const runtimeConfig = await loadRuntimeConfig()
     const initialUrl = runtimeConfig.getBackendBaseUrl()
     const write = deferred<void>()
-    bridge.storeSet.mockReturnValueOnce(write.promise)
+    bridge.storeSetBackendUrl.mockReturnValueOnce(write.promise)
 
     const saving = runtimeConfig.setBackendBaseUrl(' https://custom.example/// ')
     await flushMicrotasks()
 
-    expect(bridge.storeSet).toHaveBeenCalledExactlyOnceWith('backendBaseUrl', 'https://custom.example')
+    expect(bridge.storeSetBackendUrl).toHaveBeenCalledExactlyOnceWith('https://custom.example')
     expect(runtimeConfig.getBackendBaseUrl()).toBe(initialUrl)
 
     write.resolve()
@@ -135,7 +153,7 @@ describe('runtime backend configuration', () => {
     const runtimeConfig = await loadRuntimeConfig()
     const initialUrl = runtimeConfig.getBackendBaseUrl()
     const failure = new Error('database write failed')
-    bridge.storeSet.mockRejectedValueOnce(failure).mockResolvedValueOnce(undefined)
+    bridge.storeSetBackendUrl.mockRejectedValueOnce(failure).mockResolvedValueOnce(undefined)
 
     await expect(runtimeConfig.setBackendBaseUrl('https://rejected.example')).rejects.toBe(failure)
     expect(runtimeConfig.getBackendBaseUrl()).toBe(initialUrl)
@@ -150,7 +168,7 @@ describe('runtime backend configuration', () => {
     const firstWrite = deferred<void>()
     const secondWrite = deferred<void>()
     const secondStarted = deferred<void>()
-    bridge.storeSet
+    bridge.storeSetBackendUrl
       .mockImplementationOnce(() => firstWrite.promise)
       .mockImplementationOnce(() => {
         secondStarted.resolve()
@@ -161,13 +179,13 @@ describe('runtime backend configuration', () => {
     const secondSave = runtimeConfig.setBackendBaseUrl('https://second.example')
     await flushMicrotasks()
 
-    expect(bridge.storeSet).toHaveBeenCalledExactlyOnceWith('backendBaseUrl', 'https://first.example')
+    expect(bridge.storeSetBackendUrl).toHaveBeenCalledExactlyOnceWith('https://first.example')
     expect(runtimeConfig.getBackendBaseUrl()).toBe(initialUrl)
 
     firstWrite.resolve()
     await secondStarted.promise
 
-    expect(bridge.storeSet).toHaveBeenNthCalledWith(2, 'backendBaseUrl', 'https://second.example')
+    expect(bridge.storeSetBackendUrl).toHaveBeenNthCalledWith(2, 'https://second.example')
     expect(runtimeConfig.getBackendBaseUrl()).toBe('https://first.example')
 
     secondWrite.resolve()
@@ -184,7 +202,7 @@ describe('runtime backend configuration', () => {
     const saveStarted = deferred<void>()
     bridge.waitForBackendTlsReady.mockReturnValueOnce(readiness.promise)
     bridge.storeGet.mockImplementationOnce(() => storedRead.promise)
-    bridge.storeSet.mockImplementationOnce(() => {
+    bridge.storeSetBackendUrl.mockImplementationOnce(() => {
       saveStarted.resolve()
       return saveWrite.promise
     })
@@ -198,7 +216,7 @@ describe('runtime backend configuration', () => {
     readiness.resolve()
     await flushMicrotasks()
     expect(bridge.storeGet).toHaveBeenCalledExactlyOnceWith('backendBaseUrl')
-    expect(bridge.storeSet).not.toHaveBeenCalled()
+    expect(bridge.storeSetBackendUrl).not.toHaveBeenCalled()
 
     storedRead.resolve('https://stale.example')
     await saveStarted.promise
@@ -214,9 +232,9 @@ describe('runtime backend configuration', () => {
     const runtimeConfig = await loadRuntimeConfig()
     const savedWrite = deferred<void>()
     const resetDelete = deferred<void>()
-    bridge.storeSet.mockReturnValueOnce(savedWrite.promise)
+    bridge.storeSetBackendUrl.mockReturnValueOnce(savedWrite.promise)
     const resetStarted = deferred<void>()
-    bridge.storeDelete.mockImplementationOnce(() => {
+    bridge.storeDeleteBackendUrl.mockImplementationOnce(() => {
       resetStarted.resolve()
       return resetDelete.promise
     })
@@ -225,12 +243,12 @@ describe('runtime backend configuration', () => {
     const reset = runtimeConfig.resetBackendBaseUrl()
     await flushMicrotasks()
 
-    expect(bridge.storeSet).toHaveBeenCalledExactlyOnceWith('backendBaseUrl', 'https://saved.example')
-    expect(bridge.storeDelete).not.toHaveBeenCalled()
+    expect(bridge.storeSetBackendUrl).toHaveBeenCalledExactlyOnceWith('https://saved.example')
+    expect(bridge.storeDeleteBackendUrl).not.toHaveBeenCalled()
 
     savedWrite.resolve()
     await resetStarted.promise
-    expect(bridge.storeDelete).toHaveBeenCalledExactlyOnceWith('backendBaseUrl')
+    expect(bridge.storeDeleteBackendUrl).toHaveBeenCalledOnce()
     expect(runtimeConfig.getBackendBaseUrl()).toBe('https://saved.example')
 
     resetDelete.resolve()
@@ -243,7 +261,7 @@ describe('runtime backend configuration', () => {
     const runtimeConfig = await loadRuntimeConfig()
     await expect(runtimeConfig.setBackendBaseUrl('https://kept.example')).resolves.toBe('https://kept.example')
     const failure = new Error('database delete failed')
-    bridge.storeDelete.mockRejectedValueOnce(failure)
+    bridge.storeDeleteBackendUrl.mockRejectedValueOnce(failure)
 
     await expect(runtimeConfig.resetBackendBaseUrl()).rejects.toBe(failure)
 
@@ -253,7 +271,7 @@ describe('runtime backend configuration', () => {
   it('queues persisted reads behind a pending save', async () => {
     const runtimeConfig = await loadRuntimeConfig()
     const savedWrite = deferred<void>()
-    bridge.storeSet.mockReturnValueOnce(savedWrite.promise)
+    bridge.storeSetBackendUrl.mockReturnValueOnce(savedWrite.promise)
     bridge.storeGet.mockResolvedValueOnce('https://saved.example')
 
     const saving = runtimeConfig.setBackendBaseUrl('https://saved.example')

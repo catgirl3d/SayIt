@@ -101,7 +101,7 @@ export async function setBackendBaseUrl(value: string): Promise<string> {
     throw new Error(t('runtimeConfig.emptyServerUrl'))
   }
   return enqueue(async () => {
-    await bridge.storeSet(BACKEND_BASE_URL_STORE_KEY, normalized)
+    await bridge.storeSetBackendUrl(normalized)
     backendBaseUrl = normalized
     return normalized
   })
@@ -110,7 +110,7 @@ export async function setBackendBaseUrl(value: string): Promise<string> {
 export async function resetBackendBaseUrl(): Promise<string> {
   const defaultUrl = resolveBuiltinDefaultBaseUrl()
   return enqueue(async () => {
-    await bridge.storeDelete(BACKEND_BASE_URL_STORE_KEY)
+    await bridge.storeDeleteBackendUrl()
     backendBaseUrl = defaultUrl
     return defaultUrl
   })

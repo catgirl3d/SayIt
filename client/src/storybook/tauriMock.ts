@@ -135,6 +135,15 @@ function asString(value: unknown, command: string, field: string): string {
   return value
 }
 
+// Mirrors the real generic store commands: the backend address may only change through the dedicated commands.
+const BACKEND_BASE_URL_KEY = 'backendBaseUrl'
+
+function rejectBackendBaseUrlKey(command: string): never {
+  throw new Error(
+    `'${BACKEND_BASE_URL_KEY}' cannot be changed through ${command}; use store_set_backend_url or store_delete_backend_url`,
+  )
+}
+
 function builtInStoreHandler(session: StorySession, command: string): TauriCommandHandler | undefined {
   switch (command) {
     case 'store_get':
@@ -147,6 +156,7 @@ function builtInStoreHandler(session: StorySession, command: string): TauriComma
       return (args) => {
         const payload = asRecord(args, command)
         const key = asString(payload.key, command, 'key')
+        if (key === BACKEND_BASE_URL_KEY) rejectBackendBaseUrlKey(command)
         if (!isJsonValue(payload.value)) throw new Error(`Tauri command "${command}" received a non-JSON value`)
         session.settings.set(key, cloneJsonValue(payload.value))
       }
@@ -154,6 +164,7 @@ function builtInStoreHandler(session: StorySession, command: string): TauriComma
       return (args) => {
         const payload = asRecord(args, command)
         const key = asString(payload.key, command, 'key')
+        if (key === BACKEND_BASE_URL_KEY) rejectBackendBaseUrlKey(command)
         session.settings.delete(key)
       }
     case 'store_set_app_settings':
@@ -163,6 +174,7 @@ function builtInStoreHandler(session: StorySession, command: string): TauriComma
         if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) {
           throw new Error(`Tauri command "${command}" expected an object field "settings"`)
         }
+        if (BACKEND_BASE_URL_KEY in settings) rejectBackendBaseUrlKey(command)
         // Validate the whole batch before writing anything: the real command runs through
         // apply_config_transaction, so a partially applied batch must not be observable.
         const validated: Array<[string, JsonValue]> = []
@@ -171,6 +183,16 @@ function builtInStoreHandler(session: StorySession, command: string): TauriComma
           validated.push([key, cloneJsonValue(value)])
         }
         for (const [key, value] of validated) session.settings.set(key, value)
+      }
+    case 'store_set_backend_url':
+      return (args) => {
+        const payload = asRecord(args, command)
+        const url = asString(payload.url, command, 'url')
+        session.settings.set(BACKEND_BASE_URL_KEY, url)
+      }
+    case 'store_delete_backend_url':
+      return () => {
+        session.settings.delete(BACKEND_BASE_URL_KEY)
       }
     default:
       return undefined
