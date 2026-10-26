@@ -1,7 +1,27 @@
-import { describe, expect, it } from 'vitest'
-import { normalizeRemoteNotice } from '../notice'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const getBackendBaseUrl = vi.hoisted(() => vi.fn())
+vi.mock('../runtimeConfig', () => ({ getBackendBaseUrl }))
+
+import { fetchActiveNotice, normalizeRemoteNotice } from '../notice'
 
 const base = { id: 'notice-1', level: 'info' as const }
+
+describe('notice loading without a configured server', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('returns null without fetching', async () => {
+    getBackendBaseUrl.mockReturnValue('')
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await expect(fetchActiveNotice('0.0.0')).resolves.toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
 
 describe('normalizeRemoteNotice', () => {
   it('keeps legacy single-language notices compatible', () => {

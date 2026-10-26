@@ -40,7 +40,7 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 - **Live computer subtitles & translation** — translate spoken audio from videos, calls (Zoom, Discord), and any app in real time via native Windows WASAPI loopback, with no extra drivers needed. Includes a click-through overlay, dual-subtitle display (original speech alongside translation), and independent language controls.
 - **Editable AI processing** — remove filler words, repair recognition errors, format ideas, or keep a faithful transcript. Every prompt is yours to change.
 - **Context-aware writing** (off by default) — reads the text around your cursor so new dictation matches its tone and terminology. Select text first and your speech becomes an editing instruction—translate, tighten, rewrite, or ask a question—replacing the selection directly. Password fields are skipped. Selection edits use your current AI model by default; choose a separate saved model in Settings → AI processing → Context awareness.
-- **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, connect to the public trial server, or host your own backend.
+- **Flexible speech recognition** — use a cloud ASR provider, run a local GGUF model on your own GPU, or connect to a SayIt backend you host or trust.
 - **English and Ukrainian interface** — the UI follows your system language and can be switched at any time.
 - **Hotwords and per-app rules** — improve names and technical terms, then change AI processing behavior automatically for different apps.
 - **Overlay feedback** — a small waveform overlay shows recording state and elapsed time, with optional live captions while you speak.
@@ -53,7 +53,7 @@ Typing is often the slowest part of working with AI. SayIt turns speech into tex
 | --- | --- | --- |
 | **Local mode** | Privacy and offline use | Speech recognition stays on your PC. With AI processing off, nothing leaves the device. |
 | **Cloud API mode** | The best balance for personal use | Your PC talks directly to the ASR and AI providers you configure. No SayIt server is involved. |
-| **Server mode** | Teams and managed deployments | Audio is processed by a SayIt backend you control—or by the public trial server for a quick start. |
+| **Server mode** | Teams and managed deployments | Audio is processed by a SayIt backend you run or trust. |
 
 The current local catalog contains 15 downloadable GGUF model variants, with GPU acceleration when available: Parakeet Unified EN, Parakeet TDT v3 and 1.1B, SenseVoice Small, Fun-ASR Nano and MLT Nano, Nemotron 3.5 ASR (40 languages), GigaAM v3 (RNN-T and CTC), Qwen3-ASR 0.6B and two 1.7B quantizations, and Whisper Small, Large v3, and Large v3 Turbo. Cloud recognition supports Doubao, Qwen, Xiaomi MiMo, and Groq Whisper; AI processing works with DeepSeek, Qwen, Doubao, Groq, MiMo, Ollama, and any OpenAI-compatible endpoint.
 
@@ -100,10 +100,10 @@ The current local catalog contains 15 downloadable GGUF model variants, with GPU
 ## Get started
 
 1. Download the latest [Windows installer](https://github.com/catgirl3d/SayIt/releases/latest).
-2. Open SayIt and choose a voice engine. The default public server is enough for a quick trial.
+2. Open SayIt and choose a voice engine — Local (download a model), Cloud API (your own key), or your own server. The first-run guide helps you set it up.
 3. Press the configured shortcut in any app and speak. By default you press once to start and again to finish; hold-to-talk is available too, under a separate shortcut.
 
-For regular use, choose Local mode or add your own cloud provider keys from the in-app settings. The provider console links are available beside each key field.
+Cloud provider keys go into the in-app settings, with a link to each provider's console beside its key field.
 
 ## Self-hosting
 

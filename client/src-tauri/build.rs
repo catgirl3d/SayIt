@@ -12,34 +12,24 @@ fn main() {
     tauri_build::build();
 }
 
-/// Resolves the built-in default server URL and exports it to the crate as
+/// Resolves the optional built-in default server URL and exports it to the crate as
 /// `SAYIT_BUILTIN_DEFAULT_SERVER_URL` for `net_policy.rs`, which never grants a certificate
-/// exception to that host. The environment variable wins when it is non-blank; otherwise the
-/// shared `default-server-url.txt` is used. `client/vite.config.ts` resolves the frontend's
-/// default from the same two sources, so the TLS policy protects the host users actually see.
+/// exception to that host. `SAYIT_DEFAULT_SERVER_URL` is optional; an empty value means this
+/// build has no built-in server.
 fn emit_builtin_default_server_url() {
     const ENV_NAME: &str = "SAYIT_DEFAULT_SERVER_URL";
-    const FALLBACK_FILE: &str = "default-server-url.txt";
 
     println!("cargo:rerun-if-env-changed={ENV_NAME}");
-    println!("cargo:rerun-if-changed={FALLBACK_FILE}");
 
-    let from_env = match std::env::var(ENV_NAME) {
-        Ok(value) => Some(value.trim().to_owned()).filter(|value| !value.is_empty()),
-        Err(std::env::VarError::NotPresent) => None,
+    let url = match std::env::var(ENV_NAME) {
+        Ok(value) => value.trim().to_owned(),
+        Err(std::env::VarError::NotPresent) => String::new(),
         Err(std::env::VarError::NotUnicode(_)) => panic!("{ENV_NAME} is not valid Unicode"),
     };
-    let url = match from_env {
-        Some(url) => url,
-        None => {
-            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-            let path = Path::new(&manifest_dir).join(FALLBACK_FILE);
-            std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
-                .trim()
-                .to_owned()
-        }
-    };
+    if url.is_empty() {
+        println!("cargo:rustc-env=SAYIT_BUILTIN_DEFAULT_SERVER_URL=");
+        return;
+    }
 
     // Extract the bare host (no userinfo, no port) so that inputs like "https://:8443" are
     // rejected here instead of failing URL parsing at runtime. Whitespace or control
@@ -56,7 +46,7 @@ fn emit_builtin_default_server_url() {
     if host.is_empty() || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         panic!(
             "the built-in default server URL {url:?} is invalid: it must be an http:// or https:// URL \
-             with a host and no whitespace. Fix {ENV_NAME} or {FALLBACK_FILE}."
+             with a host and no whitespace. Fix {ENV_NAME}."
         );
     }
 

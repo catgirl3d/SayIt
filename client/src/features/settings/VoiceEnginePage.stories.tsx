@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { initProviderFromStore } from '@/services/transcription'
 import VoiceEnginePage from './VoiceEnginePage'
 import type { AsrProfile } from './asrProviderCatalog'
 
@@ -24,6 +25,9 @@ const deepgramProfile = {
 const meta = {
   title: 'settings/VoiceEnginePage',
   component: VoiceEnginePage,
+  beforeEach: async () => {
+    await initProviderFromStore()
+  },
   parameters: {
     tauri: {
       settings: {

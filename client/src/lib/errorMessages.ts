@@ -148,8 +148,10 @@ function isTimeout(text: string): boolean {
 }
 
 /**
- * 服务器地址类错误（健康检查、WebSocket 连接）。
- * `hasCustomUrl` 为 true 时才建议「恢复默认地址」——地址本来就是默认值时这个动作没意义。
+ * Server-address errors (health checks, WebSocket connections).
+ * `hasCustomUrl` controls whether the caller may offer a reset action: restoring the
+ * build's default address, or clearing the saved one when the build has no default.
+ * When the address already equals the default, that action has no effect.
  */
 export function describeServerError(error: unknown, hasCustomUrl: boolean): FriendlyError {
   const { code: stableCode, text } = decodeError(error)

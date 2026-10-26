@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,6 +9,8 @@ const lifecycle = vi.hoisted(() => ({
   initRecorder: vi.fn(),
   cleanupRecorder: vi.fn(),
   initFileTranscription: vi.fn(),
+  applyWorkMode: vi.fn(),
+  completeDefaultServerMigration: vi.fn(),
   initTheme: vi.fn(),
   initAiEnabled: vi.fn(),
   initActivePreset: vi.fn(),
@@ -33,7 +36,7 @@ vi.mock('./pages/FileTranscription', () => ({ default: () => null }))
 vi.mock('./pages/SystemAudio', () => ({ default: () => null }))
 vi.mock('./pages/History', () => ({ default: () => null }))
 vi.mock('./pages/Dictionary', () => ({ default: () => null }))
-vi.mock('./features/settings/VoiceEnginePage', () => ({ default: () => null }))
+vi.mock('./features/settings/VoiceEnginePage', () => ({ default: () => <div>voice-engine-page</div> }))
 vi.mock('./features/settings/AIServicePage', () => ({ default: () => null }))
 vi.mock('./features/settings/AIInstructionsPage', () => ({ default: () => null }))
 vi.mock('./features/settings/AudioSettingsPage', () => ({ default: () => null }))
@@ -44,6 +47,13 @@ vi.mock('./features/settings/PersonalizationPage', () => ({ default: () => null 
 vi.mock('./features/settings/DiagnosticsPage', () => ({ default: () => null }))
 vi.mock('./pages/About', () => ({ default: () => null }))
 vi.mock('./features/update/UpdateDialog', () => ({ default: () => null }))
+vi.mock('./components/WorkModeMigrationDialog', () => ({
+  default: ({ onChoose }: { onChoose: (mode: 'local' | 'cloud_api') => Promise<void> }) => (
+    <div role="dialog" aria-label="Choose a work mode">
+      <button type="button" onClick={() => void onChoose('local')}>Choose Local</button>
+    </div>
+  ),
+}))
 
 vi.mock('./services/recorder', () => ({
   initRecorder: (...args: unknown[]) => lifecycle.initRecorder(...args),
@@ -71,14 +81,20 @@ vi.mock('./services/bridge', () => ({ notifyShortcutsChanged: vi.fn() }))
 vi.mock('./services/systemAudio', () => ({
   systemAudioSession: { stop: (...args: unknown[]) => lifecycle.stopSystemAudio(...args) },
 }))
+vi.mock('./services/transcription/applyWorkMode', () => ({
+  applyWorkMode: (...args: unknown[]) => lifecycle.applyWorkMode(...args),
+}))
+vi.mock('./services/defaultServerMigration', () => ({
+  completeDefaultServerMigration: (...args: unknown[]) => lifecycle.completeDefaultServerMigration(...args),
+}))
 vi.mock('@tauri-apps/api/event', () => ({ listen: (...args: unknown[]) => lifecycle.listen(...args) }))
 
 import App from './App'
 
-function renderApp(runtimeConfigReady: boolean) {
+function renderApp(runtimeConfigReady: boolean, needsWorkModeChoice = false) {
   return render(
     <MemoryRouter>
-      <App runtimeConfigReady={runtimeConfigReady} />
+      <App runtimeConfigReady={runtimeConfigReady} needsWorkModeChoice={needsWorkModeChoice} />
     </MemoryRouter>,
   )
 }
@@ -89,6 +105,8 @@ describe('App startup recorder admission', () => {
     lifecycle.initRecorder.mockReset().mockImplementation(async () => { lifecycle.events.push('recorder') })
     lifecycle.cleanupRecorder.mockReset().mockImplementation(() => { lifecycle.events.push('cleanup') })
     lifecycle.initFileTranscription.mockReset().mockImplementation(async () => { lifecycle.events.push('file') })
+    lifecycle.applyWorkMode.mockReset().mockImplementation(async (mode: string) => { lifecycle.events.push(`apply:${mode}`) })
+    lifecycle.completeDefaultServerMigration.mockReset().mockImplementation(async () => { lifecycle.events.push('complete') })
     lifecycle.initTheme.mockReset().mockResolvedValue(undefined)
     lifecycle.initAiEnabled.mockReset().mockResolvedValue(undefined)
     lifecycle.initActivePreset.mockReset().mockResolvedValue(undefined)
@@ -125,6 +143,22 @@ describe('App startup recorder admission', () => {
 
     view.unmount()
     await waitFor(() => expect(lifecycle.events.slice(-2)).toEqual(['stop', 'cleanup']))
+  })
+
+  it('waits for the work mode choice before starting the recorder', async () => {
+    renderApp(true, true)
+
+    expect(await screen.findByRole('dialog', { name: 'Choose a work mode' })).toBeTruthy()
+    await waitFor(() => expect(lifecycle.events).toEqual(['file', 'update', 'webdav']))
+    expect(lifecycle.initRecorder).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose Local' }))
+
+    await waitFor(() => expect(screen.getByText('voice-engine-page')).toBeTruthy())
+    expect(lifecycle.applyWorkMode).toHaveBeenCalledExactlyOnceWith('local')
+    expect(lifecycle.completeDefaultServerMigration).toHaveBeenCalledOnce()
+    expect(lifecycle.initRecorder).toHaveBeenCalledOnce()
+    expect(lifecycle.events).toEqual(['file', 'update', 'webdav', 'apply:local', 'complete', 'recorder'])
   })
 
   it('keeps the existing recorder startup when runtimeConfigReady is true', async () => {

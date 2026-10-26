@@ -97,8 +97,9 @@ export async function reprocessViaServer(
   clientMeta: Awaited<ReturnType<typeof bridge.getClientRuntimeInfo>> | null,
   language: SpeechInputLanguage,
 ): Promise<ReprocessResult> {
-  const { getWSUrl } = await import('@/services/runtimeConfig')
+  const { getWSUrl, serverNotConfiguredMessage } = await import('@/services/runtimeConfig')
   const wsUrl = getWSUrl()
+  if (!wsUrl) throw new Error(serverNotConfiguredMessage())
   const [serverAiSource, rawAiMinDurationSec] = await Promise.all([
     readStoredServerAiSource(), // Read-only lookup: History must not overwrite the live provider's runtime value.
     getSetting('aiMinDurationSec', 0),

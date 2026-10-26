@@ -21,10 +21,11 @@ pub const BACKEND_BASE_URL_KEY: &str = "backendBaseUrl";
 
 const CERTIFICATE_CACHE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The built-in default server URL, baked in by `build.rs` from the `SAYIT_DEFAULT_SERVER_URL`
-/// environment variable, falling back to `default-server-url.txt`. `vite.config.ts` resolves the
-/// frontend's `__SAYIT_DEFAULT_SERVER_URL__` from the same two sources, so both sides of the app
-/// agree on which host is the built-in default.
+/// The optional built-in default server URL, baked in by `build.rs` from the
+/// `SAYIT_DEFAULT_SERVER_URL` environment variable. There is no file fallback; an empty value
+/// means the build has no built-in server and no host is protected. `vite.config.ts` resolves the
+/// frontend's `__SAYIT_DEFAULT_SERVER_URL__` from the same optional environment variable, so both
+/// sides of the app agree on which host is the built-in default.
 const BUILTIN_DEFAULT_SERVER_URL: &str = env!("SAYIT_BUILTIN_DEFAULT_SERVER_URL");
 
 pub fn browser_args_from_environment() -> Result<(&'static str, String), String> {
@@ -219,11 +220,15 @@ fn canonical_host(url: &Url) -> Option<String> {
 
 /// Canonical host of the built-in default server, which never gets a certificate exception,
 /// even when the user saves it as a custom address (Settings "Save and test" does exactly that
-/// with the prefilled default). `None` only if the compiled URL has no usable host, which the
-/// `build.rs` validation is meant to make unreachable; then no host is protected.
+/// with the prefilled default). `None` when the build has no built-in server, or when the
+/// compiled URL has no usable host (which the `build.rs` validation is meant to make
+/// unreachable); then no host is protected.
 fn builtin_default_host() -> Option<&'static str> {
     static HOST: OnceLock<Option<String>> = OnceLock::new();
     HOST.get_or_init(|| {
+        if BUILTIN_DEFAULT_SERVER_URL.is_empty() {
+            return None;
+        }
         let host =
             parse_strict_url(BUILTIN_DEFAULT_SERVER_URL).and_then(|url| canonical_host(&url));
         if host.is_none() {
@@ -620,7 +625,42 @@ mod tests {
     }
 
     #[test]
+    fn certificate_exception_matrix_without_protected_host_is_strict_for_custom_host() {
+        let cases = [
+            (
+                Some("https://custom.example"),
+                "https://custom.example/healthz",
+                true,
+            ),
+            (
+                Some("https://custom.example"),
+                "https://other.example/healthz",
+                false,
+            ),
+            (
+                Some("http://custom.example"),
+                "https://custom.example/healthz",
+                false,
+            ),
+            (None, "https://custom.example/healthz", false),
+        ];
+
+        for (saved, request, expected) in cases {
+            assert_eq!(
+                cert_error_allowed(saved, None, request),
+                expected,
+                "saved={saved:?}, request={request}"
+            );
+        }
+    }
+
+    #[test]
     fn compiled_builtin_default_server_never_gets_a_certificate_exception() {
+        if BUILTIN_DEFAULT_SERVER_URL.is_empty() {
+            assert_eq!(builtin_default_host(), None);
+            return;
+        }
+
         let host = builtin_default_host()
             .expect("the compiled built-in default server URL must yield a host");
         let state = TlsPolicyState::new(Some(BUILTIN_DEFAULT_SERVER_URL));

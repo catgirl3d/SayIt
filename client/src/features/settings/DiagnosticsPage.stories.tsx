@@ -1,10 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { initProviderFromStore } from '@/services/transcription'
 import DiagnosticsPage from './DiagnosticsPage'
 import { diagnosticsPreviewFixture } from './diagnosticsPreviewFixture'
 
 const meta = {
   title: 'settings/DiagnosticsPage',
   component: DiagnosticsPage,
+  beforeEach: async () => {
+    await initProviderFromStore()
+  },
   parameters: {
     tauri: {
       commands: {

@@ -60,7 +60,7 @@ export const DEFAULTS: Record<string, unknown> = {
   'ui.language': 'auto', // 'auto' follows the system locale; otherwise 'en' | 'uk'
 
   // ── Work mode ──
-  workMode: 'server', // Options: 'server' | 'cloud_api' | 'local'
+  workMode: 'local', // Options: 'server' | 'cloud_api' | 'local'
 
   // ── Shortcuts ──
   // Push-to-talk. Legacy single keys keep the DOM code; combos use the physical code

@@ -24,6 +24,9 @@ interface ServiceResult {
   detail?: string
 }
 
+/** Neutral example shown when the build ships no default server address. */
+const SERVER_ADDRESS_EXAMPLE = 'https://your-server.example'
+
 export default function ServerSection({ speechLanguage }: { speechLanguage: SpeechInputLanguage }) {
   const t = useT()
   const [backendBaseUrl, setBackendBaseUrl] = useState('')
@@ -156,17 +159,44 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
     }
   }
 
-  /** Restore the built-in default address and reconnect immediately, so the user does not have to remember the default */
+  /**
+   * Restore the built-in default address, or clear the saved one when the build has
+   * no built-in default.
+   *
+   * A non-empty default is reconnected and probed immediately, so the user does not
+   * have to remember the address. With no default there is nothing to restore or
+   * probe: server mode cannot connect until an address is entered, so the action only
+   * drops the saved address and tells the user why server mode now needs one.
+   */
   async function handleResetDefault() {
     if (busy) return
     setBusy(true)
     setResult(null)
+    let next: string
     try {
-      const next = await resetBackendBaseUrl()
-      setBackendBaseUrl(next)
-      setSavedBaseUrl(next)
-      setEngineDraftDirty(false)
-      reconnectProvider()
+      next = await resetBackendBaseUrl()
+    } catch (error) {
+      setResult({
+        tone: 'error',
+        message: defaultBaseUrl ? t('server.saveFailed') : t('server.clearFailed'),
+        detail: String(error),
+      })
+      setBusy(false)
+      return
+    }
+
+    setBackendBaseUrl(next)
+    setSavedBaseUrl(next)
+    setEngineDraftDirty(false)
+    reconnectProvider()
+
+    if (!next) {
+      setResult({ tone: 'info', message: t('server.addressCleared') })
+      setBusy(false)
+      return
+    }
+
+    try {
       const payload = await probeHealth(next)
       setResult(describeHealth(payload, t('server.restoredPrefix', { url: next })))
     } catch (error) {
@@ -218,7 +248,7 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
                 value={backendBaseUrl}
                 onChange={(e) => handleUrlChange(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveAndTest() }}
-                placeholder={defaultBaseUrl || 'https://sayitapp.site'}
+                placeholder={defaultBaseUrl || SERVER_ADDRESS_EXAMPLE}
                 className="h-9 min-w-[16rem] flex-1 rounded-md border border-input-border bg-input-bg px-3 text-sm transition-colors focus:border-input-focus-border"
               />
               <Button size="sm" className="h-9 shrink-0" onClick={() => void handleSaveAndTest()} disabled={busy}>
@@ -226,18 +256,16 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
               </Button>
               {isCustom && (
                 <Button size="sm" variant="ghost" className="h-9 shrink-0" onClick={() => void handleResetDefault()} disabled={busy}>
-                  {t('server.restoreDefault')}
+                  {defaultBaseUrl ? t('server.restoreDefault') : t('server.clearAddress')}
                 </Button>
               )}
             </div>
           </div>
 
-          {/* The failure hint used to carry a second "restore default address (https://…)"
-              button: first, it stuffed the whole URL into the button label — nowhere else
-              in the app does that; second, it was exactly synonymous with the "restore
-              default" button next to the input, which is always present once the address
-              was changed and thus covers every case where this failure hint appears.
-              Keeping one button is enough. */}
+          {/* The failure hint used to carry a second reset button: it stuffed the whole
+              URL into the label, and it duplicated the reset/clear action next to the
+              input. That action follows the build: restore the default when one exists,
+              otherwise clear the address. One entry point is enough. */}
           {result && (
             <Feedback
               className="mt-3"

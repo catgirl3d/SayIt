@@ -42,10 +42,12 @@ vi.mock('@/services/bridge', () => ({
   listen: (...args: unknown[]) => mocks.listen(...args),
   readAudioFile: vi.fn(),
   readAudioPcm: vi.fn(),
+  storeSetBackendUrl: vi.fn().mockResolvedValue(undefined),
 }))
 
 import History, { buildReprocessMetadata, reprocessViaCloudApi, reprocessViaLocal, reprocessViaServer } from '../History'
 import * as bridge from '@/services/bridge'
+import { setBackendBaseUrl } from '@/services/runtimeConfig'
 import type { HistoryRecord } from '@/services/store'
 import { switchProvider } from '@/services/transcription'
 import { getRuntimeServerAiSource, setRuntimeServerAiSource } from '@/services/transcription/serverAiSource'
@@ -898,9 +900,10 @@ function sentStartMessage(): Record<string, unknown> {
 }
 
 describe('history server reprocessing', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.invoke.mockReset()
     mocks.getSetting.mockReset()
+    await setBackendBaseUrl('https://server.example')
     mocks.invoke.mockResolvedValue({ text: 'cleaned by custom', elapsed_ms: 7 })
     FakeWebSocket.instances = []
     setServerFinal({ asr_text: 'raw server transcript', llm_text: 'raw server transcript', asr_ms: 10, llm_ms: 0, duration_sec: 1 })

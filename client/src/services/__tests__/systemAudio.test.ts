@@ -28,6 +28,7 @@ import { CloudAPIProvider } from '../transcription/CloudAPIProvider'
 import { ServerProvider } from '../transcription/ServerProvider'
 import { addRuntimeEvent } from '../debugLog'
 import { DEEPGRAM_KEYTERM_LIMIT } from '../transcription/types'
+import { setBackendBaseUrl } from '../runtimeConfig'
 import { t } from '@/i18n'
 import type {
   LiveAsrCallbacks,
@@ -292,7 +293,7 @@ function emitLiveIdle(payload: {
   native.listeners.get('system-audio-live-idle')?.({ payload })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers()
   setPipelineDebugEnabled(false)
   clearPipelineTrace()
@@ -329,6 +330,7 @@ beforeEach(() => {
     if (name === 'cloud_transcribe') return { text: 'Original speech', elapsed_ms: 5 }
     return 1
   })
+  await setBackendBaseUrl('https://server.example')
   session = new SystemAudioSession({
     getProvider: () => new LocalProvider(),
     acquire: async () => { if (leased) throw new Error('Recorder busy'); leased = true },

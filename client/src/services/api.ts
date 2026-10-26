@@ -1,9 +1,11 @@
 // HTTP API service for SayIt backend
 
-import { getBackendBaseUrl } from './runtimeConfig'
+import { getBackendBaseUrl, serverNotConfiguredMessage } from './runtimeConfig'
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${getBackendBaseUrl()}${path}`, options)
+  const base = getBackendBaseUrl()
+  if (!base) throw new Error(serverNotConfiguredMessage())
+  const res = await fetch(`${base}${path}`, options)
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
 }

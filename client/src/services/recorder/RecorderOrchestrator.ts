@@ -64,6 +64,7 @@ import { t } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
 import { describeMicSource, micSourceChanged } from './micSourceReminder'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
+import { ServerNotConfiguredError } from '../runtimeConfig'
 import {
   CONTEXT_SELECTION_EDIT_PROMPT,
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
@@ -1664,6 +1665,10 @@ export class RecorderOrchestrator {
   private ensureConnection() {
     if (this.subtitleModeActive || this.provider.isReady()) return
     const connection = this.provider.connect(this.buildProviderCallbacks()).catch((err) => {
+      if (err instanceof ServerNotConfiguredError) {
+        addRuntimeEvent('warn', 'websocket', 'No server address is configured; not reconnecting')
+        return
+      }
       addRuntimeEvent('warn', 'websocket', 'Preconnection failed; retrying in 5s', { error: String(err) })
       setTimeout(() => this.ensureConnection(), 5000)
     })

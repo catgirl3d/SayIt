@@ -171,7 +171,7 @@ export function Modal({
       >
         {sectioned ? (
           <>
-            <header className="shrink-0 px-6 pb-4 pt-5">
+            <header className="shrink-0 px-6 pb-2.5 pt-5">
               <div className="flex items-start gap-3">
                 {icon}
                 <div className="min-w-0 flex-1 pt-0.5">
@@ -183,7 +183,11 @@ export function Modal({
                 {showCloseButton && closeButton('-mr-1.5 -mt-1 shrink-0')}
               </div>
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-5">{children}</div>
+            {/* The body clips its content (overflow-y-auto), so it needs its own top padding:
+                otherwise a focus ring around the first control (2px ring + 2px offset) is cut
+                off by the scrollport edge. The header gives back the same 6px, keeping the
+                resting gap between the description and the content unchanged. */}
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-5 pt-1.5">{children}</div>
             {footer != null && (
               <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 bg-muted/20 px-6 py-3.5">
                 {footer}

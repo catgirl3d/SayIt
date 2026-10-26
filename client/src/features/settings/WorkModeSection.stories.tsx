@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, fn, userEvent, within } from 'storybook/test'
 import WorkModeSection from './WorkModeSection'
 
 const localModelId = 'nemotron-asr-streaming-0.6b-gguf'
@@ -58,5 +59,31 @@ export const CloudNeedsSetup: Story = {
   args: { value: 'cloud_api', onChange: () => undefined },
   parameters: {
     tauri: { settings: emptyCloudSettings },
+  },
+}
+
+export const Disabled: Story = {
+  args: { value: 'local', onChange: fn(), disabled: true },
+  parameters: {
+    tauri: {
+      commands: {
+        list_downloaded_models: () => [{ id: localModelId, complete: true }],
+      },
+      settings: {
+        workMode: 'local',
+        'localAsr.modelId': localModelId,
+      },
+    },
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const radios = canvas.getAllByRole('radio')
+    expect(radios).toHaveLength(3)
+    for (const radio of radios) {
+      await expect(radio).toBeDisabled()
+    }
+
+    await userEvent.click(radios[2])
+    await expect(args.onChange).not.toHaveBeenCalled()
   },
 }

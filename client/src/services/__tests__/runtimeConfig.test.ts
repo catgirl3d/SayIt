@@ -253,8 +253,9 @@ describe('runtime backend configuration', () => {
 
     resetDelete.resolve()
     await expect(saved).resolves.toBe('https://saved.example')
-    await expect(reset).resolves.toBe(runtimeConfig.getDefaultBackendBaseUrl())
-    expect(runtimeConfig.getBackendBaseUrl()).toBe(runtimeConfig.getDefaultBackendBaseUrl())
+    await expect(reset).resolves.toBe('')
+    expect(runtimeConfig.getDefaultBackendBaseUrl()).toBe('')
+    expect(runtimeConfig.getBackendBaseUrl()).toBe('')
   })
 
   it('keeps the saved URL after a failed reset deletion', async () => {
@@ -266,6 +267,16 @@ describe('runtime backend configuration', () => {
     await expect(runtimeConfig.resetBackendBaseUrl()).rejects.toBe(failure)
 
     expect(runtimeConfig.getBackendBaseUrl()).toBe('https://kept.example')
+  })
+
+  it('drops the active URL for the session without deleting the stored one', async () => {
+    const runtimeConfig = await loadRuntimeConfig()
+    await expect(runtimeConfig.setBackendBaseUrl('https://kept.example')).resolves.toBe('https://kept.example')
+
+    await runtimeConfig.discardBackendBaseUrlForSession()
+
+    expect(runtimeConfig.getBackendBaseUrl()).toBe(runtimeConfig.getDefaultBackendBaseUrl())
+    expect(bridge.storeDeleteBackendUrl).not.toHaveBeenCalled()
   })
 
   it('queues persisted reads behind a pending save', async () => {
@@ -328,10 +339,10 @@ describe('runtime backend configuration', () => {
       expectedWebSocket: 'wss://environment.example/ws/transcribe',
     },
     {
-      name: 'the built-in default URL',
+      name: 'the empty built-in default',
       backendEnv: '',
-      expectedBackend: 'https://sayitapp.site',
-      expectedWebSocket: 'wss://sayitapp.site/ws/transcribe',
+      expectedBackend: '',
+      expectedWebSocket: '',
     },
   ])('uses $name when no backend URL is saved', async ({ backendEnv, expectedBackend, expectedWebSocket }) => {
     const runtimeConfig = await initializeWithSavedUrl(null, () => {
