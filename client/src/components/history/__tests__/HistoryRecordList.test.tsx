@@ -6,7 +6,8 @@ import { clearRuntimeEvents, getRuntimeEvents } from '@/services/debugLog'
 import type { HistoryRecord } from '@/services/store'
 import HistoryRecordList from '../HistoryRecordList'
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }))
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 function record(overrides: Partial<HistoryRecord> = {}): HistoryRecord {
   return {
@@ -129,5 +130,63 @@ describe('history rerun failures', () => {
     expect(alert.textContent).toBe(
       t('record.reprocessFailed', { reason: t('record.reprocessUnknown') }),
     )
+  })
+})
+
+describe('history recording downloads', () => {
+  beforeEach(() => {
+    setLocale('en')
+    invokeMock.mockReset().mockResolvedValue(undefined)
+  })
+
+  afterEach(() => setLocale('en'))
+
+  function renderDownloadRecord() {
+    const timestamp = new Date(2026, 9, 25, 10, 11, 12).getTime()
+    const audioFilePath = 'C:\\recordings\\one.wav'
+    const item = record({ timestamp, audioFilePath })
+    render(<HistoryRecordList records={[item]} onDelete={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: t('record.details') }))
+    return { item, audioFilePath }
+  }
+
+  it('copies the recording directly with the generated flat filename', async () => {
+    const { item, audioFilePath } = renderDownloadRecord()
+    const savedPath = 'C:\\Users\\Storybook\\Downloads\\sayit_20261025_101112.wav'
+    invokeMock.mockResolvedValueOnce(savedPath)
+
+    fireEvent.click(await screen.findByRole('button', { name: t('record.downloadAudio') }))
+
+    expect(invokeMock).toHaveBeenCalledWith('save_recording_to_downloads', {
+      filePath: audioFilePath,
+      fileName: 'sayit_20261025_101112.wav',
+    })
+    expect(invokeMock.mock.calls.some(([command]) => command === 'read_audio_file')).toBe(false)
+    expect(invokeMock.mock.calls.some(([command]) => command === 'save_audio_to_downloads')).toBe(false)
+    expect(item).toEqual(expect.objectContaining({ audioFilePath }))
+    expect(await screen.findByText(t('record.savedTo', { path: savedPath }))).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: t('record.openFolder') }))
+    expect(invokeMock).toHaveBeenCalledWith('reveal_file_in_folder', { filePath: savedPath })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it.each([
+    ['missing', 'record.downloadMissing'],
+    ['invalid_name', 'record.downloadInvalidName'],
+    ['already_exists', 'record.downloadAlreadyExists'],
+    ['unreadable', 'record.downloadUnreadable'],
+  ] as const)('shows a localized message for %s and leaves the record unchanged', async (errorCode, key) => {
+    invokeMock.mockRejectedValueOnce(errorCode)
+    const { item, audioFilePath } = renderDownloadRecord()
+    const before = { ...item }
+
+    fireEvent.click(await screen.findByRole('button', { name: t('record.downloadAudio') }))
+
+    expect(await screen.findByText(t(key), { exact: false })).toBeTruthy()
+    expect(item).toEqual(before)
+    expect(invokeMock).toHaveBeenCalledWith('save_recording_to_downloads', {
+      filePath: audioFilePath,
+      fileName: 'sayit_20261025_101112.wav',
+    })
   })
 })

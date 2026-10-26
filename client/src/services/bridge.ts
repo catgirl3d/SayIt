@@ -428,6 +428,10 @@ export function readAudioFile(filePath: string) {
   return invoke<string | null>('read_audio_file', { filePath })
 }
 
+export function saveRecordingToDownloads(filePath: string, fileName: string) {
+  return invoke<string>('save_recording_to_downloads', { filePath, fileName })
+}
+
 export async function readAudioPcm(filePath: string): Promise<ArrayBuffer> {
   const result = await invoke<ArrayBuffer>('read_audio_pcm', { filePath })
   if (!(result instanceof ArrayBuffer)) {
