@@ -803,7 +803,6 @@ fn main() {
             commands::system::check_update_manifest,
             commands::system::clear_legacy_update_artifacts,
             commands::system::append_debug_log,
-            commands::system::save_audio_to_downloads,
             commands::system::reveal_file_in_folder,
             commands::system::open_folder,
             // Tray
@@ -815,6 +814,7 @@ fn main() {
             commands::tray::quit_from_tray,
             // Audio
             commands::audio::save_pcm_as_wav,
+            commands::audio::save_recording_to_downloads,
             commands::audio::read_audio_file,
             commands::audio::read_audio_pcm,
             commands::audio::audio_file_exists,

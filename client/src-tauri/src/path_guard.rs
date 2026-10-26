@@ -38,13 +38,14 @@ pub fn is_plain_wav_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// Whether the file stem is a reserved MS-DOS device name. Windows resolves
-/// these names to a device even when they carry an extension and are joined to
-/// a directory, so `Downloads\NUL.wav` is not a file in Downloads.
+/// Whether the base name before the first extension is a reserved MS-DOS device
+/// name. Windows resolves these names to a device even when they carry multiple
+/// extensions and are joined to a directory, so `Downloads\NUL.extra.wav` is
+/// not a file in Downloads.
 fn is_reserved_windows_name(name: &str) -> bool {
-    let stem = Path::new(name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
+    let stem = name
+        .split('.')
+        .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
@@ -154,6 +155,9 @@ mod tests {
         assert!(!is_plain_wav_name("nul.WAV"));
         assert!(!is_plain_wav_name("COM1.wav"));
         assert!(!is_plain_wav_name("lpt9.wav"));
+        assert!(!is_plain_wav_name("NUL.extra.wav"));
+        assert!(!is_plain_wav_name("CON.backup.wav"));
+        assert!(!is_plain_wav_name("COM1.extra.wav"));
         assert!(is_plain_wav_name("console.wav"));
         assert!(is_plain_wav_name("com10.wav"));
     }

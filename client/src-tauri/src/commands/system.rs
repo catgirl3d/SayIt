@@ -1188,35 +1188,6 @@ pub fn append_debug_log(payload: Value) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn save_audio_to_downloads(base64_data: String, filename: String) -> Result<String, String> {
-    let downloads = dirs::download_dir()
-        .ok_or_else(|| "Could not locate the Downloads directory".to_string())?;
-
-    save_audio_to_downloads_in(&downloads, &base64_data, &filename)
-}
-
-fn save_audio_to_downloads_in(
-    downloads: &std::path::Path,
-    base64_data: &str,
-    filename: &str,
-) -> Result<String, String> {
-    if !crate::path_guard::is_plain_wav_name(filename) {
-        return Err("Invalid audio file name".to_string());
-    }
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64_data)
-        .map_err(|e| format!("Failed to decode base64 audio: {}", e))?;
-
-    let dest = downloads.join(filename);
-    std::fs::write(&dest, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
-
-    let path_str = dest.to_string_lossy().to_string();
-    write_log_line(&format!("[INFO] [audio] Audio saved to {}", path_str));
-    Ok(path_str)
-}
-
 /// 打开文件所在的文件夹（并选中文件）
 #[tauri::command]
 pub fn reveal_file_in_folder(file_path: String) -> Result<(), String> {
@@ -1648,53 +1619,5 @@ mod resume_download_tests {
         assert_eq!(requests.len(), 2);
         assert!(requests[1].contains("range: bytes=6-"), "{}", requests[1]);
         cleanup(&part);
-    }
-}
-
-#[cfg(test)]
-mod file_command_tests {
-    use super::save_audio_to_downloads_in;
-
-    fn temp_root() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("sayit-file-command-{}", uuid::Uuid::new_v4()))
-    }
-
-    #[test]
-    fn audio_download_rejects_a_traversal_filename() {
-        let root = temp_root();
-        let downloads = root.join("Downloads");
-        std::fs::create_dir_all(&downloads).unwrap();
-        let outside = root.join("outside.wav");
-
-        let result = save_audio_to_downloads_in(&downloads, "SGVsbG8=", r"..\outside.wav");
-        let escaped = outside.exists();
-
-        let _ = std::fs::remove_dir_all(&root);
-
-        assert!(
-            !escaped,
-            "the audio was written outside the Downloads directory"
-        );
-        assert!(result.is_err(), "a traversal filename must be rejected");
-    }
-
-    #[test]
-    fn audio_download_still_saves_a_generated_wav_name() {
-        let root = temp_root();
-        let downloads = root.join("Downloads");
-        std::fs::create_dir_all(&downloads).unwrap();
-
-        let result =
-            save_audio_to_downloads_in(&downloads, "SGVsbG8=", "sayit_20261025_101010.wav")
-                .unwrap();
-        let bytes = std::fs::read(&result).unwrap();
-        let parent = std::path::Path::new(&result)
-            .parent()
-            .map(|p| p.to_path_buf());
-
-        let _ = std::fs::remove_dir_all(&root);
-
-        assert_eq!(bytes, b"Hello");
-        assert_eq!(parent.as_deref(), Some(downloads.as_path()));
     }
 }
