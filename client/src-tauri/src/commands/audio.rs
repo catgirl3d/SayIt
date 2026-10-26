@@ -1,6 +1,7 @@
 use crate::providers::wav::{WavPcmError, parse_wav_pcm, pcm_to_wav};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -11,6 +12,17 @@ pub enum AudioReadError {
     MalformedWav,
     UnsupportedFormat,
     EmptyAudio,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSaveError {
+    Missing,
+    InvalidName,
+    AlreadyExists,
+    Unreadable,
+    WriteFailed,
+    DownloadsUnavailable,
 }
 
 impl From<WavPcmError> for AudioReadError {
@@ -111,6 +123,99 @@ fn read_audio_file_from(dir: &Path, file_path: &str) -> Result<Option<String>, S
 #[tauri::command]
 pub fn read_audio_file(file_path: String) -> Result<Option<String>, String> {
     read_audio_file_from(&audio_dir(), &file_path)
+}
+
+fn audio_save_source_error(error: &std::io::Error) -> AudioSaveError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        AudioSaveError::Missing
+    } else {
+        AudioSaveError::Unreadable
+    }
+}
+
+fn copy_audio_bytes(
+    source: &mut fs::File,
+    destination: &mut fs::File,
+) -> Result<(), AudioSaveError> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = loop {
+            match source.read(&mut buffer) {
+                Ok(read) => break read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(audio_save_source_error(&error)),
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        destination
+            .write_all(&buffer[..read])
+            .map_err(|_| AudioSaveError::WriteFailed)?;
+    }
+    destination.flush().map_err(|_| AudioSaveError::WriteFailed)
+}
+
+fn save_recording_to_downloads_in(
+    audio_dir: &Path,
+    downloads_dir: &Path,
+    file_path: &str,
+    file_name: &str,
+) -> Result<String, AudioSaveError> {
+    save_recording_to_downloads_in_with_copy(
+        audio_dir,
+        downloads_dir,
+        file_path,
+        file_name,
+        copy_audio_bytes,
+    )
+}
+
+fn save_recording_to_downloads_in_with_copy(
+    audio_dir: &Path,
+    downloads_dir: &Path,
+    file_path: &str,
+    file_name: &str,
+    copy: impl FnOnce(&mut fs::File, &mut fs::File) -> Result<(), AudioSaveError>,
+) -> Result<String, AudioSaveError> {
+    let Some(source_path) = audio_file_in_dir(audio_dir, file_path) else {
+        return Err(AudioSaveError::Missing);
+    };
+    if !crate::path_guard::is_plain_wav_name(file_name) {
+        return Err(AudioSaveError::InvalidName);
+    }
+
+    let mut source =
+        fs::File::open(&source_path).map_err(|error| audio_save_source_error(&error))?;
+    let destination_path = downloads_dir.join(file_name);
+    let mut destination = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(AudioSaveError::AlreadyExists);
+        }
+        Err(_) => return Err(AudioSaveError::WriteFailed),
+    };
+
+    if let Err(error) = copy(&mut source, &mut destination) {
+        drop(destination);
+        let _ = fs::remove_file(&destination_path);
+        return Err(error);
+    }
+
+    Ok(destination_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn save_recording_to_downloads(
+    file_path: String,
+    file_name: String,
+) -> Result<String, AudioSaveError> {
+    let downloads_dir = dirs::download_dir().ok_or(AudioSaveError::DownloadsUnavailable)?;
+    save_recording_to_downloads_in(&audio_dir(), &downloads_dir, &file_path, &file_name)
 }
 
 fn audio_read_error_from_io(error: &std::io::Error) -> AudioReadError {
@@ -411,6 +516,163 @@ mod tests {
                 audio_read_error_from_io(&std::io::Error::from(kind)),
                 expected,
                 "kind={kind:?}"
+            );
+        }
+    }
+
+    fn copy_fixture() -> (PathBuf, PathBuf, PathBuf) {
+        let root = temp_root();
+        let audio = root.join("audio");
+        let downloads = root.join("Downloads");
+        let source = audio.join("recording.wav");
+        fs::create_dir_all(&audio).unwrap();
+        fs::create_dir_all(&downloads).unwrap();
+        fs::write(&source, b"recording-bytes").unwrap();
+        (root, downloads, source)
+    }
+
+    #[test]
+    fn recording_download_treats_rejected_source_paths_as_missing() {
+        let (root, downloads, source) = copy_fixture();
+        let audio = source.parent().unwrap();
+        let outside = root.join("outside.wav");
+        let nested = audio.join("nested").join("nested.wav");
+        let non_wav = audio.join("notes.txt");
+        fs::write(&outside, b"outside").unwrap();
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(&nested, b"nested").unwrap();
+        fs::write(&non_wav, b"not audio").unwrap();
+
+        for file_path in [
+            audio.join("missing.wav"),
+            outside,
+            audio.join("..").join("outside.wav"),
+            nested,
+            non_wav,
+        ] {
+            let error = save_recording_to_downloads_in(
+                audio,
+                &downloads,
+                &file_path.to_string_lossy(),
+                "copy.wav",
+            )
+            .unwrap_err();
+            assert_eq!(error, AudioSaveError::Missing, "path={file_path:?}");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recording_download_rejects_unsafe_destination_names() {
+        let (root, downloads, source) = copy_fixture();
+        let audio = source.parent().unwrap();
+        let unsafe_names = [
+            "../escape.wav",
+            r"..\escape.wav",
+            "/tmp/escape.wav",
+            r"C:\escape.wav",
+            r"\\server\share\escape.wav",
+            "recording.wav:stream",
+            "CON.wav",
+            "NUL.extra.wav",
+            "COM1.extra.wav",
+            "recording.mp3",
+        ];
+
+        for file_name in unsafe_names {
+            let error = save_recording_to_downloads_in(
+                audio,
+                &downloads,
+                &source.to_string_lossy(),
+                file_name,
+            )
+            .unwrap_err();
+            assert_eq!(error, AudioSaveError::InvalidName, "name={file_name:?}");
+        }
+
+        assert_eq!(fs::read_dir(&downloads).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recording_download_rejects_an_existing_destination_without_modifying_it() {
+        let (root, downloads, source) = copy_fixture();
+        let destination = downloads.join("copy.wav");
+        fs::write(&destination, b"existing-bytes").unwrap();
+
+        let error = save_recording_to_downloads_in(
+            source.parent().unwrap(),
+            &downloads,
+            &source.to_string_lossy(),
+            "copy.wav",
+        )
+        .unwrap_err();
+
+        assert_eq!(error, AudioSaveError::AlreadyExists);
+        assert_eq!(fs::read(&destination).unwrap(), b"existing-bytes");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recording_download_copies_bytes_without_changing_the_source() {
+        let (root, downloads, source) = copy_fixture();
+        let bytes: Vec<u8> = (0..200_000).map(|index| (index % 251) as u8).collect();
+        fs::write(&source, &bytes).unwrap();
+
+        let saved_path = save_recording_to_downloads_in(
+            source.parent().unwrap(),
+            &downloads,
+            &source.to_string_lossy(),
+            "copy.wav",
+        )
+        .unwrap();
+
+        assert_eq!(saved_path, downloads.join("copy.wav").to_string_lossy());
+        assert_eq!(fs::read(downloads.join("copy.wav")).unwrap(), bytes);
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recording_download_removes_a_partial_destination_after_copy_failure() {
+        let (root, downloads, source) = copy_fixture();
+        let destination = downloads.join("copy.wav");
+
+        let error = save_recording_to_downloads_in_with_copy(
+            source.parent().unwrap(),
+            &downloads,
+            &source.to_string_lossy(),
+            "copy.wav",
+            |_, destination| {
+                destination.write_all(b"partial").unwrap();
+                Err(AudioSaveError::WriteFailed)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, AudioSaveError::WriteFailed);
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&source).unwrap(), b"recording-bytes");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recording_download_errors_have_stable_wire_codes() {
+        for (error, code) in [
+            (AudioSaveError::Missing, "missing"),
+            (AudioSaveError::InvalidName, "invalid_name"),
+            (AudioSaveError::AlreadyExists, "already_exists"),
+            (AudioSaveError::Unreadable, "unreadable"),
+            (AudioSaveError::WriteFailed, "write_failed"),
+            (
+                AudioSaveError::DownloadsUnavailable,
+                "downloads_unavailable",
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&error).unwrap(),
+                format!("\"{code}\"")
             );
         }
     }

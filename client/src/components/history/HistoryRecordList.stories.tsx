@@ -76,7 +76,7 @@ const meta = {
         copy_text: () => undefined,
         audio_file_exists: () => true,
         read_audio_file: () => EMPTY_WAV_BASE64,
-        save_audio_to_downloads: () => 'C:\\Users\\Storybook\\Downloads\\sayit-demo.wav',
+        save_recording_to_downloads: () => 'C:\\Users\\Storybook\\Downloads\\sayit-demo.wav',
         reveal_file_in_folder: () => undefined,
         get_client_runtime_info: () => ({
           userId: 'storybook-user',
@@ -137,6 +137,45 @@ export const RichHistory: Story = {
     records,
     ...callbacks,
     highlight: 'release',
+  },
+}
+
+const downloadRecord: HistoryRecord = {
+  ...records[0],
+  id: 'history-download',
+  timestamp: new Date(2026, 9, 25, 10, 11, 12).getTime(),
+}
+
+export const DownloadSuccess: Story = {
+  args: {
+    records: [downloadRecord],
+    ...callbacks,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole('button', { name: t('record.details') }))
+    await userEvent.click(await canvas.findByRole('button', { name: t('record.downloadAudio') }))
+    await expect(await canvas.findByText(t('record.savedTo', { path: 'C:\\Users\\Storybook\\Downloads\\sayit-demo.wav' }))).toBeTruthy()
+  },
+}
+
+export const DownloadAlreadyExists: Story = {
+  args: {
+    records: [downloadRecord],
+    ...callbacks,
+  },
+  parameters: {
+    tauri: {
+      commands: {
+        save_recording_to_downloads: () => { throw 'already_exists' },
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole('button', { name: t('record.details') }))
+    await userEvent.click(await canvas.findByRole('button', { name: t('record.downloadAudio') }))
+    await expect(await canvas.findByText(t('record.downloadAlreadyExists'), { exact: false })).toBeTruthy()
   },
 }
 

@@ -5,7 +5,6 @@ import { Card, CardContent } from '@/components/ui/card'
 import { type HistoryRecord } from '@/services/store'
 import * as bridge from '@/services/bridge'
 import { pickVoiceDurationSec } from '@/services/timeModel'
-import { loadAudioAsDataUrl } from '@/services/audioFileService'
 import { invoke } from '@tauri-apps/api/core'
 import { getLocale, t } from '@/i18n'
 import { useT } from '@/i18n/useT'
@@ -36,6 +35,19 @@ function asrProviderDisplay(provider: string): string {
     return `${t('asrProvider.openaiCompat')} · ${provider.slice(prefix.length)}`
   }
   return ASR_PROVIDER_DISPLAY[provider] || provider
+}
+
+function recordingDownloadErrorMessage(error: unknown): string {
+  const code = (typeof error === 'string' ? error : error instanceof Error ? error.message : '').trim()
+  switch (code) {
+    case 'missing': return t('record.downloadMissing')
+    case 'invalid_name': return t('record.downloadInvalidName')
+    case 'already_exists': return t('record.downloadAlreadyExists')
+    case 'unreadable': return t('record.downloadUnreadable')
+    case 'write_failed': return t('record.downloadWriteFailed')
+    case 'downloads_unavailable': return t('record.downloadUnavailable')
+    default: return t('record.downloadUnknown')
+  }
 }
 
 interface HistoryRecordListProps {
@@ -128,9 +140,21 @@ function HistoryItem({
   const [downloading, setDownloading] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState<'idle' | 'ok' | 'fail'>('idle')
   const [downloadPath, setDownloadPath] = useState('')
+  const [downloadMessage, setDownloadMessage] = useState('')
+  const downloadResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [copied, setCopied] = useState(false)
   const [correcting, setCorrecting] = useState(false)
   const playback = useRecordingPlayback(record.audioFilePath)
+
+  const scheduleDownloadReset = useCallback((delay: number) => {
+    if (downloadResetTimerRef.current !== null) clearTimeout(downloadResetTimerRef.current)
+    downloadResetTimerRef.current = setTimeout(() => {
+      downloadResetTimerRef.current = null
+      setDownloadStatus('idle')
+      setDownloadPath('')
+      setDownloadMessage('')
+    }, delay)
+  }, [])
 
   const text = record.llmText || record.asrText
   const isEmpty = record.isEmpty || (!text && record.charCount === 0)
@@ -206,42 +230,39 @@ function HistoryItem({
   // 离开页面（组件卸载）时若仍在编辑，自动保存。
   useEffect(() => () => { void commitEdit() }, [commitEdit])
 
+  useEffect(() => () => {
+    if (downloadResetTimerRef.current !== null) clearTimeout(downloadResetTimerRef.current)
+  }, [])
+
   const handleDownloadAudio = useCallback(async () => {
     if (!record.audioFilePath || downloading) return
     setDownloading(true)
+    if (downloadResetTimerRef.current !== null) {
+      clearTimeout(downloadResetTimerRef.current)
+      downloadResetTimerRef.current = null
+    }
     setDownloadStatus('idle')
     setDownloadPath('')
+    setDownloadMessage('')
+
+    const ts = new Date(record.timestamp)
+    const dateStr = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}_${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}${String(ts.getSeconds()).padStart(2, '0')}`
+    const filename = `sayit_${dateStr}.wav`
+
     try {
-      const dataUrl = await loadAudioAsDataUrl(record.audioFilePath)
-      if (!dataUrl) {
-        setDownloadStatus('fail')
-        setDownloadPath(t('record.audioMissing'))
-        setTimeout(() => setDownloadStatus('idle'), 3000)
-        return
-      }
-
-      const ts = new Date(record.timestamp)
-      const dateStr = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}_${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}${String(ts.getSeconds()).padStart(2, '0')}`
-      const filename = `sayit_${dateStr}.wav`
-
-      // Extract base64 from data URL
-      const base64Data = dataUrl.split(',')[1]
-      const savedPath = await invoke<string>('save_audio_to_downloads', {
-        base64Data,
-        filename,
-      })
+      const savedPath = await bridge.saveRecordingToDownloads(record.audioFilePath, filename)
 
       setDownloadStatus('ok')
       setDownloadPath(savedPath)
-      setTimeout(() => setDownloadStatus('idle'), 5000)
-    } catch (err) {
+      scheduleDownloadReset(5000)
+    } catch (error) {
       setDownloadStatus('fail')
-      setDownloadPath(String(err))
-      setTimeout(() => setDownloadStatus('idle'), 3000)
+      setDownloadMessage(recordingDownloadErrorMessage(error))
+      scheduleDownloadReset(3000)
     } finally {
       setDownloading(false)
     }
-  }, [record.audioFilePath, record.timestamp, downloading])
+  }, [record.audioFilePath, record.timestamp, downloading, scheduleDownloadReset])
 
   const open = expanded
 
@@ -457,7 +478,7 @@ function HistoryItem({
                       </Tooltip>
                     )}
                     {record.audioFilePath && (
-                      <Tooltip content={downloadStatus === 'ok' ? t('record.savedTo', { path: downloadPath }) : downloadStatus === 'fail' ? t('record.downloadFailed', { path: downloadPath }) : t('record.downloadAudio')}>
+                      <Tooltip content={downloadStatus === 'ok' ? t('record.savedTo', { path: downloadPath }) : downloadStatus === 'fail' ? t('record.downloadFailed', { message: downloadMessage }) : t('record.downloadAudio')}>
                         <button
                           type="button"
                           onClick={() => { void handleDownloadAudio() }}
@@ -512,7 +533,7 @@ function HistoryItem({
                   <div className="col-span-2 mt-1 flex items-center gap-2 text-xs text-success break-all">
                     <span className="min-w-0 truncate">{t('record.savedTo', { path: downloadPath })}</span>
                     <button
-                      onClick={() => void invoke('reveal_file_in_folder', { filePath: downloadPath })}
+                      onClick={() => { void invoke('reveal_file_in_folder', { filePath: downloadPath }) }}
                       className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       aria-label={t('record.openFolder')}
                     >
@@ -520,9 +541,9 @@ function HistoryItem({
                     </button>
                   </div>
                 )}
-                {downloadStatus === 'fail' && downloadPath && (
+                {downloadStatus === 'fail' && downloadMessage && (
                   <div className="col-span-2 mt-1 text-xs text-destructive break-all">
-                    {t('record.downloadFailed', { path: downloadPath })}
+                    {t('record.downloadFailed', { message: downloadMessage })}
                   </div>
                 )}
                 {reprocessError && !reprocessing && (

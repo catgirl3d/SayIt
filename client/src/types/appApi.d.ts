@@ -158,6 +158,7 @@ export interface AppAPI {
   }) => Promise<string>
   readLogFile: (logType: 'frontend' | 'ptt') => Promise<string | null>
   readAudioFile: (filePath: string) => Promise<string | null>
+  saveRecordingToDownloads: (filePath: string, fileName: string) => Promise<string>
   readAudioPcm: (filePath: string) => Promise<ArrayBuffer>
   deleteAudioFile: (filePath: string) => Promise<boolean>
   onOverlayState: (cb: (data: unknown) => void) => void
