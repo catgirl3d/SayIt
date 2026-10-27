@@ -8,6 +8,9 @@
 server:
   host: "0.0.0.0"
   port: 8000
+  trusted_proxies: []                 # Empty trusts only the direct peer.
+                                      # Set ALB/proxy CIDRs (e.g. 10.0.0.0/16 or 127.0.0.1/32); otherwise all clients behind a proxy share one IP.
+                                      # Never use 0.0.0.0/0, ::/0, or a range containing real clients.
   cors_origins:                      # Allowed CORS origins
     - "*"                            # Default: allow all. Restrict in production.
   # Max HTTP request body size, counted on the bytes actually received (oversize -> 413).

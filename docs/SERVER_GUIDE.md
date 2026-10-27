@@ -29,7 +29,7 @@ Open PowerShell or Command Prompt (CMD) and run:
 ```cmd
 cd /d "e:\git_external\SayIt\server\backend"
 call .venv\Scripts\activate.bat
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
 ---

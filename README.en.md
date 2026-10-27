@@ -142,7 +142,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 cd backend
-uvicorn app.main:app --port 8000
+uvicorn app.main:app --port 8000 --no-proxy-headers
 ```
 
 Requirements: Python 3.10+ and, for GPU inference, an NVIDIA GPU with CUDA.

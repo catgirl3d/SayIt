@@ -38,6 +38,7 @@ class ServerConfig:
     port: int = 8000
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
     body_limits: BodyLimitConfig = field(default_factory=BodyLimitConfig)
+    trusted_proxies: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -414,6 +415,17 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
     port = int(server_raw.get("port") or defaults.server.port)
     backend_host = "127.0.0.1" if host == "0.0.0.0" else host
     debug_llm = bool(logging_raw.get("debug_llm", defaults.logging.debug_llm))
+    trusted_proxies_raw = server_raw.get("trusted_proxies")
+    if isinstance(trusted_proxies_raw, str):
+        trusted_proxies = [trusted_proxies_raw.strip()] if trusted_proxies_raw.strip() else []
+    elif isinstance(trusted_proxies_raw, list):
+        trusted_proxies = [
+            value.strip()
+            for value in trusted_proxies_raw
+            if isinstance(value, str) and value.strip()
+        ]
+    else:
+        trusted_proxies = []
 
     prompt_dir = _resolve_path(
         paths_raw.get("prompt_dir") or llm_raw.get("prompt_dir"),
@@ -492,6 +504,7 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
             port=port,
             cors_origins=_env_list("SAYIT_CORS_ORIGINS", list(server_raw.get("cors_origins") or defaults.server.cors_origins)),
             body_limits=_load_body_limits(_pick(server_raw, "body_limits", default={}) or {}),
+            trusted_proxies=trusted_proxies,
         ),
         gateway=GatewayConfig(
             host=str(gateway_raw.get("host") or defaults.gateway.host),

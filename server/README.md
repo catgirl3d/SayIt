@@ -192,9 +192,21 @@ docker compose up -d --build
 ### Behind an ALB or reverse proxy
 
 1. Terminate TLS at the ALB or reverse proxy.
-2. Set `SAYIT_TLS_ENABLED=false` in `.env`.
-3. Forward requests to the container's HTTP port `8000`.
-4. Use `/healthz` as the health check endpoint.
+2. Add the proxy source CIDRs to `config.yaml`:
+
+   ```yaml
+   server:
+     trusted_proxies:
+       - "10.0.0.0/16"
+   ```
+
+   Use the CIDR of every proxy hop that can connect to the backend: `127.0.0.1/32` for a gateway on the same host, or the gateway container/network CIDR for a separate container. Never use `0.0.0.0/0`, `::/0`, or a range that contains real clients: every peer in that range is then treated as a proxy and its forged X-Forwarded-For is trusted. Without this setting, X-Forwarded-For is ignored and all clients behind a proxy share one IP for limits and telemetry. Mount the edited file into the container (see the commented `config.yaml` volume in `docker-compose.yml`) or bake it into your image.
+3. Set `SAYIT_TLS_ENABLED=false` in `.env`.
+4. Forward requests to the container's HTTP port `8000`.
+5. Configure the ALB to append `X-Forwarded-For`, not preserve a client-supplied value. `FORWARDED_ALLOW_IPS=*` is not a substitute for `server.trusted_proxies`.
+6. Use `/healthz` as the health check endpoint.
+
+Uvicorn access logs record the proxy address because the entrypoint runs with `--no-proxy-headers`; use the ALB or gateway access logs for HTTP client addresses. WebSocket session audit lines use the resolved client IP.
 
 ## Development
 
@@ -206,7 +218,8 @@ pip install -r backend/requirements.txt
 
 # Run backend directly
 cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# The application resolves X-Forwarded-For itself; do not let uvicorn rewrite the client.
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers
 
 # Run tests (from server/, where the backend package is importable)
 cd ..

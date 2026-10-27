@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .asr import ASREngine
 from .asr_corrections import router as asr_corrections_router
+from .client_ip import ClientIpResolver, broad_networks, parse_networks, websocket_client_ip
 from .config import load_config
 from .db import Database
 from .errors import public_error_message
@@ -33,6 +34,21 @@ from .bodylimit import BodyLimitMiddleware, build_body_limit_rules
 cfg = load_config()
 configure_logging(cfg.logging.level, cfg.logging.file, cfg.logging.retention_days, cfg.telemetry.node_id)
 logger = logging.getLogger("sayit")
+trusted_networks, invalid_trusted_proxies = parse_networks(cfg.server.trusted_proxies)
+for invalid_proxy in invalid_trusted_proxies:
+    logger.warning("Ignoring invalid trusted proxy network: %s", invalid_proxy)
+ip_resolver = ClientIpResolver(trusted_networks)
+for broad_network in broad_networks(trusted_networks):
+    logger.warning(
+        "server.trusted_proxies contains the broad network %s; every peer inside it is treated as a proxy "
+        "and X-Forwarded-For can be forged.",
+        broad_network,
+    )
+if not trusted_networks:
+    logger.warning(
+        "X-Forwarded-For is ignored; behind a proxy all clients will share the proxy IP because "
+        "server.trusted_proxies has no valid entries."
+    )
 
 asr_engine: ASREngine | None = None
 llm_engine: LLMEngine | None = None
@@ -147,6 +163,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="SayIt", lifespan=_lifespan)
 app.state.config = cfg
+app.state.client_ip_resolver = ip_resolver
 app.include_router(asr_corrections_router)
 
 # Middleware order: in Starlette, the middleware added LAST is the OUTERMOST. CORS must be added last so
@@ -161,6 +178,7 @@ app.add_middleware(
     requests_per_minute=120,
     burst=30,
     exclude_paths=("/healthz", "/ws/"),
+    ip_resolver=ip_resolver,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -352,32 +370,6 @@ def _normalize_audio_stats(payload: object) -> dict[str, float | int | None]:
         "silence_ratio": _float("silence_ratio", "silenceRatio"),
         "total_frames": _int("total_frames", "totalFrames"),
     }
-
-
-def _client_ip(ws: WebSocket) -> tuple[str | None, str | None]:
-    direct = ws.client.host if ws.client else None
-    forwarded_for = ws.headers.get("x-forwarded-for") or ws.headers.get("x-real-ip")
-    return direct, forwarded_for
-
-
-def _client_ip_key(direct: str | None, forwarded: str | None) -> str:
-    """The real client IP used as the key for per-IP rate limiting and connection counting.
-
-    Behind the ALB, ws.client.host is always the ALB's internal address (the same for every user),
-    so the client IP must come from X-Forwarded-For. The header may be a "client, proxy1, ..." list,
-    so the left-most entry is taken. This is consistent with client_ip.get_client_ip, which applies
-    the same rule to HTTP requests.
-
-    Note: the left-most value can in theory be forged by the client. A single trusted ALB hop is
-    enough for this deployment. If more untrusted proxies were placed in front, the value should be
-    taken from the right by counting trusted hops, so that a client cannot forge another user's IP
-    and use up that user's quota.
-    """
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
-    return (direct or "unknown").strip() or "unknown"
 
 
 def _is_web_demo(ws: WebSocket) -> bool:
@@ -607,8 +599,7 @@ async def ws_transcribe(ws: WebSocket):
     connection_tokens = bind_log_context(connection_id=cid)
     telemetry = _get_telemetry()
     is_web_demo = _is_web_demo(ws)
-    client_ip_direct, client_ip_forwarded = _client_ip(ws)
-    ws_ip_key = _client_ip_key(client_ip_direct, client_ip_forwarded)
+    ws_ip_key, client_ip_forwarded = websocket_client_ip(ws, ip_resolver)
 
     # 先 accept，再用带专属 close code 的关闭来拒绝：
     # 若在 accept 之前 close，框架会以 HTTP 403 拒绝握手，客户端只能看到通用错误(1006)，无法区分原因。
@@ -809,7 +800,7 @@ async def ws_transcribe(ws: WebSocket):
         # Audit log: metadata only (no transcript text persisted)
         logger.info(
             "audit ip=%s user=%s process=%s dur=%.1fs asr_ms=%d llm_ms=%d asr_len=%d llm_len=%d",
-            client_ip_forwarded or client_ip_direct or "-",
+            ws_ip_key,
             client_meta.get("user_id") or client_meta.get("user_name") or "-",
             app_context.get("process_name") or "-",
             result.get("duration_sec", 0),
@@ -910,7 +901,7 @@ async def ws_transcribe(ws: WebSocket):
                 last_audio_stats = {}
                 session_id = telemetry.create_session(
                     connection_id=cid,
-                    client_ip=client_ip_direct,
+                    client_ip=ws_ip_key,
                     forwarded_for=client_ip_forwarded,
                     client_meta=client_meta,
                     app_context=app_context,
