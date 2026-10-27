@@ -8,7 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .client_ip import get_client_ip
+from .client_ip import ClientIpResolver
 
 _PRUNE_INTERVAL = 300  # prune stale buckets every 5 minutes
 _BUCKET_TTL = 600  # remove buckets idle for 10 minutes
@@ -23,13 +23,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     requests_per_minute : max requests per minute per IP (default 120)
     burst : max burst size (default 30)
     exclude_paths : path prefixes exempt from limiting (e.g. healthz)
+    ip_resolver : trusted-proxy resolver; defaults to trusting only the direct peer
     """
 
-    def __init__(self, app, *, requests_per_minute: int = 120, burst: int = 30, exclude_paths: tuple[str, ...] = ()):
+    def __init__(
+        self,
+        app,
+        *,
+        requests_per_minute: int = 120,
+        burst: int = 30,
+        exclude_paths: tuple[str, ...] = (),
+        ip_resolver: ClientIpResolver | None = None,
+    ):
         super().__init__(app)
         self._rate = requests_per_minute / 60.0  # tokens per second
         self._burst = burst
         self._exclude = exclude_paths
+        self._ip_resolver = ip_resolver if ip_resolver is not None else ClientIpResolver()
         self._buckets: dict[str, list[float]] = defaultdict(lambda: [float(burst), time.monotonic()])
         self._last_prune = time.monotonic()
 
@@ -58,7 +68,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self._exclude):
             return await call_next(request)
         self._prune_stale()
-        ip = get_client_ip(request)
+        peer = request.client.host if request.client else None
+        ip = self._ip_resolver.resolve(peer, request.headers)
         if not self._allow(ip):
             return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
         return await call_next(request)

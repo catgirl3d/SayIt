@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .asr import ASREngine
 from .asr_corrections import router as asr_corrections_router
+from .client_ip import build_client_ip_resolver, websocket_client_ip
 from .config import load_config
 from .db import Database
 from .errors import public_error_message
@@ -29,10 +30,12 @@ from .notice import read_notice
 from .releases import read_public_download, read_release_manifest, resolve_release_file
 from .telemetry import TelemetryService
 from .bodylimit import BodyLimitMiddleware, build_body_limit_rules
+from .ws_start import StartLimitError, validate_start_fields
 
 cfg = load_config()
 configure_logging(cfg.logging.level, cfg.logging.file, cfg.logging.retention_days, cfg.telemetry.node_id)
 logger = logging.getLogger("sayit")
+ip_resolver = build_client_ip_resolver(cfg.server.trusted_proxies)
 
 asr_engine: ASREngine | None = None
 llm_engine: LLMEngine | None = None
@@ -147,6 +150,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="SayIt", lifespan=_lifespan)
 app.state.config = cfg
+app.state.client_ip_resolver = ip_resolver
 app.include_router(asr_corrections_router)
 
 # Middleware order: in Starlette, the middleware added LAST is the OUTERMOST. CORS must be added last so
@@ -161,6 +165,7 @@ app.add_middleware(
     requests_per_minute=120,
     burst=30,
     exclude_paths=("/healthz", "/ws/"),
+    ip_resolver=ip_resolver,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -352,32 +357,6 @@ def _normalize_audio_stats(payload: object) -> dict[str, float | int | None]:
         "silence_ratio": _float("silence_ratio", "silenceRatio"),
         "total_frames": _int("total_frames", "totalFrames"),
     }
-
-
-def _client_ip(ws: WebSocket) -> tuple[str | None, str | None]:
-    direct = ws.client.host if ws.client else None
-    forwarded_for = ws.headers.get("x-forwarded-for") or ws.headers.get("x-real-ip")
-    return direct, forwarded_for
-
-
-def _client_ip_key(direct: str | None, forwarded: str | None) -> str:
-    """The real client IP used as the key for per-IP rate limiting and connection counting.
-
-    Behind the ALB, ws.client.host is always the ALB's internal address (the same for every user),
-    so the client IP must come from X-Forwarded-For. The header may be a "client, proxy1, ..." list,
-    so the left-most entry is taken. This is consistent with client_ip.get_client_ip, which applies
-    the same rule to HTTP requests.
-
-    Note: the left-most value can in theory be forged by the client. A single trusted ALB hop is
-    enough for this deployment. If more untrusted proxies were placed in front, the value should be
-    taken from the right by counting trusted hops, so that a client cannot forge another user's IP
-    and use up that user's quota.
-    """
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
-    return (direct or "unknown").strip() or "unknown"
 
 
 def _is_web_demo(ws: WebSocket) -> bool:
@@ -607,8 +586,7 @@ async def ws_transcribe(ws: WebSocket):
     connection_tokens = bind_log_context(connection_id=cid)
     telemetry = _get_telemetry()
     is_web_demo = _is_web_demo(ws)
-    client_ip_direct, client_ip_forwarded = _client_ip(ws)
-    ws_ip_key = _client_ip_key(client_ip_direct, client_ip_forwarded)
+    ws_ip_key, client_ip_forwarded = websocket_client_ip(ws, ip_resolver)
 
     # 先 accept，再用带专属 close code 的关闭来拒绝：
     # 若在 accept 之前 close，框架会以 HTTP 403 拒绝握手，客户端只能看到通用错误(1006)，无法区分原因。
@@ -657,6 +635,13 @@ async def ws_transcribe(ws: WebSocket):
         if session_tokens:
             reset_log_context(session_tokens)
             session_tokens = {}
+
+    def _supersede_open_session() -> None:
+        # A start without a preceding stop abandons the open session; close it instead of leaving it recording.
+        nonlocal session_id
+        if telemetry and session_id:
+            telemetry.mark_terminal_status(session_id, cid, "superseded", "New start received before stop")
+        session_id = None
 
     async def _process_stop():
         nonlocal session_id, web_demo_slot_acquired, pcm_total_bytes
@@ -809,7 +794,7 @@ async def ws_transcribe(ws: WebSocket):
         # Audit log: metadata only (no transcript text persisted)
         logger.info(
             "audit ip=%s user=%s process=%s dur=%.1fs asr_ms=%d llm_ms=%d asr_len=%d llm_len=%d",
-            client_ip_forwarded or client_ip_direct or "-",
+            ws_ip_key,
             client_meta.get("user_id") or client_meta.get("user_name") or "-",
             app_context.get("process_name") or "-",
             result.get("duration_sec", 0),
@@ -877,6 +862,21 @@ async def ws_transcribe(ws: WebSocket):
                     await ws.send_json({"type": "error", "message": "当前部署未启用网页体验"})
                     await ws.send_json({"type": "done"})
                     continue
+                try:
+                    (
+                        validated_system_prompt,
+                        validated_hotwords_context,
+                        validated_language,
+                    ) = validate_start_fields(payload, cfg.server)
+                except StartLimitError as exc:
+                    active = False
+                    pcm_buffers.clear()
+                    pcm_total_bytes = 0
+                    _clear_session_context()
+                    _supersede_open_session()
+                    await ws.send_json({"type": "error", "code": exc.code, "message": exc.message})
+                    await ws.send_json({"type": "done"})
+                    continue
                 if is_web_demo and not web_demo_slot_acquired:
                     if not _try_acquire_web_demo_slot(ws_ip_key):
                         await ws.send_json(
@@ -889,6 +889,7 @@ async def ws_transcribe(ws: WebSocket):
                         continue
                     web_demo_slot_acquired = True
                 _clear_session_context()
+                _supersede_open_session()
                 pcm_buffers.clear()
                 pcm_total_bytes = 0
                 active = True
@@ -897,9 +898,9 @@ async def ws_transcribe(ws: WebSocket):
                     is_web_demo and (not cfg.web_demo.llm.enabled or _selected_llm_engine(True) is None)
                 )
                 hw = payload.get("hotwords")
-                ctx_override = " ".join(hw) if isinstance(hw, list) else None
-                sys_prompt = None if is_web_demo else payload.get("system_prompt")
-                lang_override = payload.get("language")  # per-session language override
+                ctx_override = validated_hotwords_context
+                sys_prompt = None if is_web_demo else validated_system_prompt
+                lang_override = validated_language  # per-session language override
                 source = str(payload.get("source") or "live").strip()
                 client_meta = _normalize_client_meta(payload.get("client_meta"))
                 app_context = _normalize_app_context(payload.get("app_context"))
@@ -910,7 +911,7 @@ async def ws_transcribe(ws: WebSocket):
                 last_audio_stats = {}
                 session_id = telemetry.create_session(
                     connection_id=cid,
-                    client_ip=client_ip_direct,
+                    client_ip=ws_ip_key,
                     forwarded_for=client_ip_forwarded,
                     client_meta=client_meta,
                     app_context=app_context,

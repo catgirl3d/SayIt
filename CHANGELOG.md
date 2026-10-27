@@ -14,6 +14,11 @@ Sections are ordered by version, newest first.
 - Settings now dim AI-dependent controls when AI processing is off and explain why. Hotword injection and context awareness keep their saved choice but are disabled; presets and per-app rules stay editable; the AI providers page explains that saved services are not used for automatic processing while keeping them editable and testable. In Server mode, the note makes clear that a service chosen for selected-text editing can still be used.
 
 ### Fixed
+#### Server
+- Per-IP limits now resolve clients through `server.trusted_proxies`; forged `X-Forwarded-For` and `X-Real-IP` values from untrusted peers are ignored, and ALB/reverse-proxy deployments must configure trusted proxy networks or all clients share one IP. The server logs a warning at startup for overly broad trusted ranges and when a trusted proxy forwards an unparsable `X-Forwarded-For` entry. Uvicorn now runs with `--no-proxy-headers`, so its HTTP access log records the proxy address; use the ALB or gateway access logs for HTTP client addresses.
+- WebSocket start requests now cap client-supplied system prompts, hotwords, and the language override to protect downstream LLM and ASR context limits.
+- A usage session abandoned by a new start before stop is now closed with the `superseded` status instead of staying in `recording` forever.
+
 #### Desktop Client
 - History reprocessing now validates recordings in Rust and sends only raw mono 16 kHz 16-bit PCM from a WAV file to the selected speech engine, reporting malformed or unsupported audio before any transcription request.
 - History recording downloads now copy the existing WAV directly in Rust from the app's audio folder to Downloads instead of sending the file through the renderer as base64; an existing destination is reported explicitly instead of being overwritten. The generated `sayit_<date>.wav` names and flat filename validation remain unchanged.

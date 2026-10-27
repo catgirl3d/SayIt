@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.app import asr_corrections
+from backend.app.client_ip import ClientIpResolver
 from backend.app.db import Database
 
 SAMPLE_RATE = 16000
@@ -67,6 +68,7 @@ class AsrCorrectionsTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(asr_corrections.router)
         app.state.database = self.db
+        app.state.client_ip_resolver = ClientIpResolver()
         self.client = TestClient(app)
 
         self._storage_patch = patch.object(asr_corrections, "STORAGE_DIR", self.storage)

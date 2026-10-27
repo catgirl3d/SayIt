@@ -107,6 +107,7 @@ class TelemetryService:
         now = _now_ms()
         client_meta = client_meta or {}
         app_context = app_context or {}
+        forwarded_for = _safe_text(forwarded_for, 512)
         exe_path = _safe_text(app_context.get("exe_path")) if self._cfg.telemetry.collect_exe_path else None
         window_title = _safe_text(app_context.get("window_title")) if self._cfg.telemetry.collect_window_title else None
 
@@ -132,7 +133,7 @@ class TelemetryService:
                     _safe_text(client_meta.get("platform")),
                     _safe_text(client_meta.get("local_ip"), 64),
                     _safe_text(client_ip, 128),
-                    _safe_text(forwarded_for, 512),
+                    forwarded_for,
                     self._cfg.telemetry.node_id,
                     self._cfg.telemetry.deployment_mode,
                     _safe_text(source, 32),
