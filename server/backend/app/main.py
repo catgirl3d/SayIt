@@ -636,6 +636,13 @@ async def ws_transcribe(ws: WebSocket):
             reset_log_context(session_tokens)
             session_tokens = {}
 
+    def _supersede_open_session() -> None:
+        # A start without a preceding stop abandons the open session; close it instead of leaving it recording.
+        nonlocal session_id
+        if telemetry and session_id:
+            telemetry.mark_terminal_status(session_id, cid, "superseded", "New start received before stop")
+        session_id = None
+
     async def _process_stop():
         nonlocal session_id, web_demo_slot_acquired, pcm_total_bytes
         try:
@@ -866,7 +873,7 @@ async def ws_transcribe(ws: WebSocket):
                     pcm_buffers.clear()
                     pcm_total_bytes = 0
                     _clear_session_context()
-                    session_id = None
+                    _supersede_open_session()
                     await ws.send_json({"type": "error", "code": exc.code, "message": exc.message})
                     await ws.send_json({"type": "done"})
                     continue
@@ -882,6 +889,7 @@ async def ws_transcribe(ws: WebSocket):
                         continue
                     web_demo_slot_acquired = True
                 _clear_session_context()
+                _supersede_open_session()
                 pcm_buffers.clear()
                 pcm_total_bytes = 0
                 active = True

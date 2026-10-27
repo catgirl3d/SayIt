@@ -17,6 +17,7 @@ Sections are ordered by version, newest first.
 #### Server
 - Per-IP limits now resolve clients through `server.trusted_proxies`; forged `X-Forwarded-For` and `X-Real-IP` values from untrusted peers are ignored, and ALB/reverse-proxy deployments must configure trusted proxy networks or all clients share one IP. The server logs a warning at startup for overly broad trusted ranges and when a trusted proxy forwards an unparsable `X-Forwarded-For` entry. Uvicorn now runs with `--no-proxy-headers`, so its HTTP access log records the proxy address; use the ALB or gateway access logs for HTTP client addresses.
 - WebSocket start requests now cap client-supplied system prompts, hotwords, and the language override to protect downstream LLM and ASR context limits.
+- A usage session abandoned by a new start before stop is now closed with the `superseded` status instead of staying in `recording` forever.
 
 #### Desktop Client
 - History reprocessing now validates recordings in Rust and sends only raw mono 16 kHz 16-bit PCM from a WAV file to the selected speech engine, reporting malformed or unsupported audio before any transcription request.
