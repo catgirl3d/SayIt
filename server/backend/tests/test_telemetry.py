@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -90,6 +91,25 @@ class TelemetryServiceTests(unittest.TestCase):
         self.assertIn("asr_completed", event_types)
         self.assertIn("llm_completed", event_types)
         self.assertIn("session_finished", event_types)
+
+    def test_forwarded_for_is_bounded_in_column_and_event_payload(self) -> None:
+        session_id = self.service.create_session(
+            connection_id="cid-xff",
+            client_ip="203.0.113.9",
+            forwarded_for="192.0.2.7, " * 400,
+            client_meta=None,
+            app_context=None,
+        )
+        assert session_id
+
+        column = self.db.fetch_one("SELECT forwarded_for FROM usage_sessions WHERE session_id = ?", (session_id,))
+        event = self.db.fetch_one(
+            "SELECT payload_json FROM usage_events WHERE session_id = ? AND event_type = 'session_started'",
+            (session_id,),
+        )
+        assert column is not None and event is not None
+        self.assertEqual(len(column["forwarded_for"]), 512)
+        self.assertEqual(json.loads(event["payload_json"])["forwarded_for"], column["forwarded_for"])
 
     def test_session_is_tracked_when_ai_disabled(self) -> None:
         session_id = self.service.create_session(
