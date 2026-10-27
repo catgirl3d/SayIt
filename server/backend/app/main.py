@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .asr import ASREngine
 from .asr_corrections import router as asr_corrections_router
-from .client_ip import ClientIpResolver, broad_networks, parse_networks, websocket_client_ip
+from .client_ip import build_client_ip_resolver, websocket_client_ip
 from .config import load_config
 from .db import Database
 from .errors import public_error_message
@@ -35,21 +35,7 @@ from .ws_start import StartLimitError, validate_start_fields
 cfg = load_config()
 configure_logging(cfg.logging.level, cfg.logging.file, cfg.logging.retention_days, cfg.telemetry.node_id)
 logger = logging.getLogger("sayit")
-trusted_networks, invalid_trusted_proxies = parse_networks(cfg.server.trusted_proxies)
-for invalid_proxy in invalid_trusted_proxies:
-    logger.warning("Ignoring invalid trusted proxy network: %s", invalid_proxy)
-ip_resolver = ClientIpResolver(trusted_networks)
-for broad_network in broad_networks(trusted_networks):
-    logger.warning(
-        "server.trusted_proxies contains the broad network %s; every peer inside it is treated as a proxy "
-        "and X-Forwarded-For can be forged.",
-        broad_network,
-    )
-if not trusted_networks:
-    logger.warning(
-        "X-Forwarded-For is ignored; behind a proxy all clients will share the proxy IP because "
-        "server.trusted_proxies has no valid entries."
-    )
+ip_resolver = build_client_ip_resolver(cfg.server.trusted_proxies)
 
 asr_engine: ASREngine | None = None
 llm_engine: LLMEngine | None = None

@@ -435,16 +435,14 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
     backend_host = "127.0.0.1" if host == "0.0.0.0" else host
     debug_llm = bool(logging_raw.get("debug_llm", defaults.logging.debug_llm))
     trusted_proxies_raw = server_raw.get("trusted_proxies")
-    if isinstance(trusted_proxies_raw, str):
-        trusted_proxies = [trusted_proxies_raw.strip()] if trusted_proxies_raw.strip() else []
+    if trusted_proxies_raw is None:
+        trusted_proxies_items: list[Any] = []
     elif isinstance(trusted_proxies_raw, list):
-        trusted_proxies = [
-            value.strip()
-            for value in trusted_proxies_raw
-            if isinstance(value, str) and value.strip()
-        ]
+        trusted_proxies_items = trusted_proxies_raw
     else:
-        trusted_proxies = []
+        trusted_proxies_items = [trusted_proxies_raw]
+    # Non-string entries stay as text so startup logs them as invalid networks instead of dropping them.
+    trusted_proxies = [str(value).strip() for value in trusted_proxies_items if str(value).strip()]
     max_system_prompt_chars = _positive_int_or_default(
         server_raw.get("max_system_prompt_chars"), defaults.server.max_system_prompt_chars
     )

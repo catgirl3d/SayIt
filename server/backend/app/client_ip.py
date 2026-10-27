@@ -205,6 +205,25 @@ class ClientIpResolver:
         return real_client_ip(peer, xff, self.trusted)
 
 
+def build_client_ip_resolver(trusted_proxies: Iterable[object] | None) -> ClientIpResolver:
+    """Build the resolver from configured proxy networks and log configuration problems."""
+    trusted_networks, invalid_entries = parse_networks(trusted_proxies)
+    for invalid_entry in invalid_entries:
+        logger.warning("Ignoring invalid trusted proxy network: %s", invalid_entry)
+    for broad_network in broad_networks(trusted_networks):
+        logger.warning(
+            "server.trusted_proxies contains the broad network %s; every peer inside it is treated as a proxy "
+            "and X-Forwarded-For can be forged.",
+            broad_network,
+        )
+    if not trusted_networks:
+        logger.info(
+            "X-Forwarded-For is ignored; behind a proxy all clients will share the proxy IP because "
+            "server.trusted_proxies has no valid entries."
+        )
+    return ClientIpResolver(trusted_networks)
+
+
 def get_client_ip(request: Request) -> str:
     """Resolve a request through the resolver the application installed on its state."""
     app = request.scope.get("app")

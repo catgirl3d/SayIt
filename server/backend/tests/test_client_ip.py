@@ -12,6 +12,7 @@ from starlette.websockets import WebSocket
 from backend.app.client_ip import (
     ClientIpResolver,
     broad_networks,
+    build_client_ip_resolver,
     get_client_ip,
     parse_ip,
     parse_networks,
@@ -250,6 +251,33 @@ class ClientIpTests(unittest.TestCase):
         )
         self.assertEqual(invalid, [])
         self.assertEqual(broad_networks(networks), [])
+
+    def test_build_resolver_keeps_valid_networks_and_warns_about_invalid_entries(self) -> None:
+        with self.assertLogs("sayit.client_ip", level="INFO") as logs:
+            resolver = build_client_ip_resolver(["198.51.100.0/24", "not-a-network"])
+        self.assertEqual([str(network) for network in resolver.trusted], ["198.51.100.0/24"])
+        self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+        self.assertIn("not-a-network", logs.output[0])
+
+    def test_build_resolver_warns_only_about_broad_networks(self) -> None:
+        with self.assertLogs("sayit.client_ip", level="INFO") as logs:
+            resolver = build_client_ip_resolver(["0.0.0.0/1", "10.0.0.0/8"])
+        self.assertEqual(len(resolver.trusted), 2)
+        self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+        self.assertIn("0.0.0.0/1", logs.output[0])
+        self.assertNotIn("10.0.0.0/8", logs.output[0])
+
+    def test_build_resolver_without_networks_logs_info_not_warning(self) -> None:
+        with self.assertLogs("sayit.client_ip", level="INFO") as logs:
+            resolver = build_client_ip_resolver([])
+        self.assertEqual(resolver.trusted, ())
+        self.assertEqual([record.levelname for record in logs.records], ["INFO"])
+
+    def test_build_resolver_with_only_invalid_entries_warns_and_reports_no_networks(self) -> None:
+        with self.assertLogs("sayit.client_ip", level="INFO") as logs:
+            resolver = build_client_ip_resolver(["not-a-network"])
+        self.assertEqual(resolver.trusted, ())
+        self.assertEqual([record.levelname for record in logs.records], ["WARNING", "INFO"])
 
     def test_request_without_app_state_resolver_raises(self) -> None:
         request = _make_request(

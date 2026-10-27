@@ -190,3 +190,48 @@ def test_server_config_accepts_scalar_trusted_proxy(tmp_path) -> None:
     cfg = load_config(config_path=str(config_path))
 
     assert cfg.server.trusted_proxies == ["10.0.0.0/16"]
+
+
+def test_server_config_keeps_non_string_trusted_proxies_for_invalid_reporting(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """server:
+  trusted_proxies:
+    - "10.0.0.0/16"
+    - ~
+    - 42
+    - ""
+""",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_path=str(config_path))
+
+    assert cfg.server.trusted_proxies == ["10.0.0.0/16", "None", "42"]
+    valid, invalid = parse_networks(cfg.server.trusted_proxies)
+    assert [str(network) for network in valid] == ["10.0.0.0/16"]
+    assert invalid == ["None", "42"]
+
+
+def test_server_config_reports_non_list_trusted_proxies_as_invalid(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """server:
+  trusted_proxies: 42
+""",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_path=str(config_path))
+
+    assert cfg.server.trusted_proxies == ["42"]
+    assert parse_networks(cfg.server.trusted_proxies)[1] == ["42"]
+
+
+def test_server_config_without_trusted_proxies_is_empty(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("server:\n  trusted_proxies:\n", encoding="utf-8")
+
+    cfg = load_config(config_path=str(config_path))
+
+    assert cfg.server.trusted_proxies == []
