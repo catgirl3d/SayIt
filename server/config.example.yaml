@@ -11,6 +11,11 @@ server:
   trusted_proxies: []                 # Empty trusts only the direct peer.
                                       # Set ALB/proxy CIDRs (e.g. 10.0.0.0/16 or 127.0.0.1/32); otherwise all clients behind a proxy share one IP.
                                       # Never use 0.0.0.0/0, ::/0, or a range containing real clients.
+  # WebSocket start limits; invalid or 0 values fall back to these defaults.
+  max_system_prompt_chars: 32000
+  max_hotwords: 2000
+  max_hotword_chars: 128
+  max_hotwords_total_chars: 32000
   cors_origins:                      # Allowed CORS origins
     - "*"                            # Default: allow all. Restrict in production.
   # Max HTTP request body size, counted on the bytes actually received (oversize -> 413).

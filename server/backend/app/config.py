@@ -39,6 +39,10 @@ class ServerConfig:
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
     body_limits: BodyLimitConfig = field(default_factory=BodyLimitConfig)
     trusted_proxies: list[str] = field(default_factory=list)
+    max_system_prompt_chars: int = 32_000
+    max_hotwords: int = 2_000
+    max_hotword_chars: int = 128
+    max_hotwords_total_chars: int = 32_000
 
 
 @dataclass(slots=True)
@@ -208,6 +212,21 @@ def _env_int(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _positive_int_or_default(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except (TypeError, ValueError, OverflowError):
+            return default
+    else:
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -426,6 +445,18 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
         ]
     else:
         trusted_proxies = []
+    max_system_prompt_chars = _positive_int_or_default(
+        server_raw.get("max_system_prompt_chars"), defaults.server.max_system_prompt_chars
+    )
+    max_hotwords = _positive_int_or_default(
+        server_raw.get("max_hotwords"), defaults.server.max_hotwords
+    )
+    max_hotword_chars = _positive_int_or_default(
+        server_raw.get("max_hotword_chars"), defaults.server.max_hotword_chars
+    )
+    max_hotwords_total_chars = _positive_int_or_default(
+        server_raw.get("max_hotwords_total_chars"), defaults.server.max_hotwords_total_chars
+    )
 
     prompt_dir = _resolve_path(
         paths_raw.get("prompt_dir") or llm_raw.get("prompt_dir"),
@@ -505,6 +536,10 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
             cors_origins=_env_list("SAYIT_CORS_ORIGINS", list(server_raw.get("cors_origins") or defaults.server.cors_origins)),
             body_limits=_load_body_limits(_pick(server_raw, "body_limits", default={}) or {}),
             trusted_proxies=trusted_proxies,
+            max_system_prompt_chars=max_system_prompt_chars,
+            max_hotwords=max_hotwords,
+            max_hotword_chars=max_hotword_chars,
+            max_hotwords_total_chars=max_hotwords_total_chars,
         ),
         gateway=GatewayConfig(
             host=str(gateway_raw.get("host") or defaults.gateway.host),

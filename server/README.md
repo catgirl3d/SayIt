@@ -242,6 +242,13 @@ python -m pytest backend/tests/ -v
 {"type": "done"}
 ```
 
+WebSocket start fields are capped by `max_system_prompt_chars` (default `32000`) and
+`max_hotwords` (default `2000`), `max_hotword_chars` (default `128`), and
+`max_hotwords_total_chars` (default `32000`). The `language` override is limited to
+64 characters. Excessive values are rejected with `{"type":"error","code":...}` followed
+by `{"type":"done"}`. The total hotword limit counts characters in the supplied hotword
+strings; valid values are still joined with single spaces for the ASR context.
+
 ### REST
 
 | Method | Path | Description |

@@ -30,6 +30,7 @@ from .notice import read_notice
 from .releases import read_public_download, read_release_manifest, resolve_release_file
 from .telemetry import TelemetryService
 from .bodylimit import BodyLimitMiddleware, build_body_limit_rules
+from .ws_start import StartLimitError, validate_start_fields
 
 cfg = load_config()
 configure_logging(cfg.logging.level, cfg.logging.file, cfg.logging.retention_days, cfg.telemetry.node_id)
@@ -868,6 +869,21 @@ async def ws_transcribe(ws: WebSocket):
                     await ws.send_json({"type": "error", "message": "当前部署未启用网页体验"})
                     await ws.send_json({"type": "done"})
                     continue
+                try:
+                    (
+                        validated_system_prompt,
+                        validated_hotwords_context,
+                        validated_language,
+                    ) = validate_start_fields(payload, cfg.server)
+                except StartLimitError as exc:
+                    active = False
+                    pcm_buffers.clear()
+                    pcm_total_bytes = 0
+                    _clear_session_context()
+                    session_id = None
+                    await ws.send_json({"type": "error", "code": exc.code, "message": exc.message})
+                    await ws.send_json({"type": "done"})
+                    continue
                 if is_web_demo and not web_demo_slot_acquired:
                     if not _try_acquire_web_demo_slot(ws_ip_key):
                         await ws.send_json(
@@ -888,9 +904,9 @@ async def ws_transcribe(ws: WebSocket):
                     is_web_demo and (not cfg.web_demo.llm.enabled or _selected_llm_engine(True) is None)
                 )
                 hw = payload.get("hotwords")
-                ctx_override = " ".join(hw) if isinstance(hw, list) else None
-                sys_prompt = None if is_web_demo else payload.get("system_prompt")
-                lang_override = payload.get("language")  # per-session language override
+                ctx_override = validated_hotwords_context
+                sys_prompt = None if is_web_demo else validated_system_prompt
+                lang_override = validated_language  # per-session language override
                 source = str(payload.get("source") or "live").strip()
                 client_meta = _normalize_client_meta(payload.get("client_meta"))
                 app_context = _normalize_app_context(payload.get("app_context"))
