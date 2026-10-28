@@ -152,19 +152,22 @@ impl ContextDetector {
                 _event_time: u32,
             ) {
                 APP.with(|a| {
-                    if let Some(app) = a.borrow().as_ref() {
-                        let state = app.state::<crate::window::WindowState>();
-                        if !state.overlay_visible() {
-                            return;
-                        }
-                        // Debounce: small delay to let focus settle
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        // After a foreground window switch, if the overlay is showing, push it
-                        // back to the top immediately. This covers the user switching to or
-                        // opening an always-on-top program such as PotPlayer that pushes the
-                        // overlay down.
-                        state.reassert_overlay_topmost_if_visible(app);
+                    // Clone the handle so the RefCell borrow is not held across the sleep.
+                    let Some(app) = a.borrow().as_ref().cloned() else {
+                        return;
+                    };
+                    let state = app.state::<crate::window::WindowState>();
+                    if !state.overlay_visible() {
+                        return;
                     }
+                    // After a foreground window switch, if the overlay is showing, push it back
+                    // to the top. This covers the user switching to or opening an always-on-top
+                    // program such as PotPlayer that pushes the overlay down. The short wait
+                    // lets the new foreground window finish its own z-order changes first, so
+                    // they do not undo the re-raise; 50 ms is the delay this hook has always
+                    // used.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    state.reassert_overlay_topmost_if_visible(&app);
                 });
             }
 
