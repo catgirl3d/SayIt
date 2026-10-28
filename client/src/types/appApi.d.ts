@@ -162,7 +162,6 @@ export interface AppAPI {
   readAudioPcm: (filePath: string) => Promise<ArrayBuffer>
   deleteAudioFile: (filePath: string) => Promise<boolean>
   onOverlayState: (cb: (data: unknown) => void) => void
-  onActiveAppContext: (cb: (data: ActiveAppContext | null) => void) => () => void
   onPTTDown: (cb: (data?: unknown) => void) => void
   onPTTUp: (cb: (data?: unknown) => void) => void
   onPTTToggle: (cb: (data?: unknown) => void) => void

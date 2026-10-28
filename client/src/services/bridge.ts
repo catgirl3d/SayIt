@@ -488,13 +488,6 @@ export function onOverlayState(cb: (data: unknown) => void) {
   }
 }
 
-export function onActiveAppContext(cb: (data: unknown) => void) {
-  const unlisten = listen<unknown>('active-app-context', (event) => cb(event.payload))
-  return () => {
-    unlisten.then((fn) => fn())
-  }
-}
-
 export function onPTTDown(cb: (data?: unknown) => void) {
   const unlisten = listen<unknown>('ptt-down', (event) => cb(event.payload))
   return () => {
