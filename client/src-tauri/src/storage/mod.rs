@@ -655,10 +655,26 @@ impl Storage {
         db.query_row(&sql, params_ref.as_slice(), |row| row.get(0))
     }
 
+    /// Adds a record at the top of the history without touching any existing row.
+    ///
+    /// `list_order` only matters for sorting and does not need to be contiguous,
+    /// so the new record takes the current minimum minus one instead of shifting
+    /// the whole table by one. Shifting rewrote every row and two indexes, which
+    /// cost milliseconds to hundreds of milliseconds on a large history and
+    /// blocked the connection while the dictated text waited to be inserted.
+    /// Reading the minimum and inserting happen in one transaction: one commit,
+    /// and a failed insert (for example a duplicate id) leaves the table
+    /// unchanged. The value may be negative; `history_delete` still preserves
+    /// the order across the sign change because it shifts every later row by -1.
     pub fn history_add(&self, record: &Value) -> SqlResult<()> {
-        let db = self.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap();
+        let tx = db.transaction()?;
 
-        db.execute("UPDATE history_records SET list_order = list_order + 1", [])?;
+        let list_order: i64 = tx.query_row(
+            "SELECT COALESCE(MIN(list_order), 0) - 1 FROM history_records",
+            [],
+            |row| row.get(0),
+        )?;
 
         let obj = record.as_object().cloned().unwrap_or_default();
         let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -681,13 +697,13 @@ impl Storage {
         let audio_file_path = obj.get("audioFilePath").and_then(|v| v.as_str());
         let raw_json = serde_json::to_string(record).unwrap_or_else(|_| "{}".to_string());
 
-        db.execute(
+        tx.execute(
             "INSERT INTO history_records (id, list_order, timestamp, favorite, char_count, duration_sec, is_empty, app_id, app_name, audio_file_path, raw_json)
-             VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![id, timestamp, favorite as i32, char_count, duration_sec, is_empty as i32, app_id, app_name, audio_file_path, raw_json],
+             VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![id, timestamp, favorite as i32, char_count, duration_sec, is_empty as i32, app_id, app_name, audio_file_path, raw_json, list_order],
         )?;
 
-        Ok(())
+        tx.commit()
     }
 
     pub fn history_update(&self, id: &str, patch: &Value) -> SqlResult<()> {
@@ -2808,5 +2824,283 @@ impl Storage {
         usage::usage_restore_on(&tx, usage)?;
 
         tx.commit()
+    }
+}
+
+#[cfg(test)]
+mod history_order_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn memory_storage() -> Storage {
+        Storage::new(PathBuf::from(":memory:")).unwrap()
+    }
+
+    fn record(id: &str) -> Value {
+        json!({
+            "id": id,
+            "timestamp": 1_700_000_000_i64,
+            "text": format!("text of {id}"),
+            "charCount": 10,
+            "durationSec": 1.5,
+            "isEmpty": false,
+            "favorite": false
+        })
+    }
+
+    fn favorite_record(id: &str) -> Value {
+        let mut value = record(id);
+        value["favorite"] = json!(true);
+        value
+    }
+
+    /// Seeds rows the way the old scheme (and `set("history", ...)`) numbers them: 0..n.
+    fn seed_old_rows(storage: &Storage, ids: &[&str]) {
+        let rows: Vec<Value> = ids.iter().map(|id| record(id)).collect();
+        storage.set("history", &Value::Array(rows)).unwrap();
+    }
+
+    fn add_all(storage: &Storage, ids: &[&str]) {
+        for id in ids {
+            storage.history_add(&record(id)).unwrap();
+        }
+    }
+
+    fn ids_of(rows: &[Value]) -> Vec<String> {
+        rows.iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn listed_ids(storage: &Storage) -> Vec<String> {
+        ids_of(&storage.history_list(None, false, None, None).unwrap())
+    }
+
+    /// Reads `(id, list_order)` pairs sorted by id. The connection guard is
+    /// released before returning, so callers can keep using the storage.
+    fn stored_orders(storage: &Storage) -> Vec<(String, i64)> {
+        let db = storage.db.lock().unwrap();
+        let mut stmt = db
+            .prepare("SELECT id, list_order FROM history_records ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<SqlResult<Vec<(String, i64)>>>()
+            .unwrap();
+        rows
+    }
+
+    fn order_of(storage: &Storage, id: &str) -> i64 {
+        stored_orders(storage)
+            .into_iter()
+            .find(|(row_id, _)| row_id == id)
+            .unwrap_or_else(|| panic!("row {id} must exist"))
+            .1
+    }
+
+    fn assert_distinct_orders(storage: &Storage) {
+        let mut orders: Vec<i64> = stored_orders(storage)
+            .into_iter()
+            .map(|(_, order)| order)
+            .collect();
+        let total = orders.len();
+        orders.sort_unstable();
+        orders.dedup();
+        assert_eq!(orders.len(), total, "list_order values must stay unique");
+    }
+
+    fn strs(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn t1_added_records_are_listed_newest_first() {
+        let storage = memory_storage();
+        add_all(&storage, &["a", "b", "c"]);
+
+        assert_eq!(listed_ids(&storage), strs(&["c", "b", "a"]));
+        assert_distinct_orders(&storage);
+    }
+
+    #[test]
+    fn t2_new_records_precede_rows_numbered_by_the_old_scheme() {
+        let storage = memory_storage();
+        seed_old_rows(&storage, &["old1", "old2"]);
+        assert_eq!(order_of(&storage, "old1"), 0);
+        assert_eq!(order_of(&storage, "old2"), 1);
+
+        add_all(&storage, &["new1", "new2"]);
+
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["new2", "new1", "old1", "old2"])
+        );
+        assert_eq!(order_of(&storage, "new1"), -1);
+        assert_eq!(order_of(&storage, "new2"), -2);
+        assert_eq!(
+            order_of(&storage, "old1"),
+            0,
+            "old rows must not be renumbered"
+        );
+        assert_eq!(
+            order_of(&storage, "old2"),
+            1,
+            "old rows must not be renumbered"
+        );
+    }
+
+    #[test]
+    fn t3_delete_keeps_order_across_the_positive_and_negative_ranges() {
+        let storage = memory_storage();
+        seed_old_rows(&storage, &["old0", "old1", "old2"]);
+        add_all(&storage, &["n1", "n2", "n3"]);
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["n3", "n2", "n1", "old0", "old1", "old2"])
+        );
+
+        storage.history_delete("old1").unwrap();
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["n3", "n2", "n1", "old0", "old2"]),
+            "deleting in the positive range"
+        );
+        assert_distinct_orders(&storage);
+
+        storage.history_delete("n2").unwrap();
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["n3", "n1", "old0", "old2"]),
+            "deleting in the negative range"
+        );
+        assert_distinct_orders(&storage);
+
+        storage.history_add(&record("n4")).unwrap();
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["n4", "n3", "n1", "old0", "old2"]),
+            "a record added after deletions is listed first"
+        );
+        assert_distinct_orders(&storage);
+
+        storage.history_delete("n1").unwrap();
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["n4", "n3", "old0", "old2"]),
+            "deleting the last negative row next to the positive range"
+        );
+        assert_distinct_orders(&storage);
+
+        storage.history_delete("n4").unwrap();
+        storage.history_add(&record("n5")).unwrap();
+        assert_eq!(
+            listed_ids(&storage),
+            strs(&["n5", "n3", "old0", "old2"]),
+            "deleting the newest row and adding again"
+        );
+        assert_distinct_orders(&storage);
+    }
+
+    #[test]
+    fn t4_adding_does_not_rewrite_existing_rows() {
+        let storage = memory_storage();
+        seed_old_rows(&storage, &["old1", "old2"]);
+        add_all(&storage, &["x", "y"]);
+
+        let before = stored_orders(&storage);
+        assert_eq!(before.len(), 4);
+        let lowest_before = before.iter().map(|(_, order)| *order).min().unwrap();
+
+        storage.history_add(&record("z")).unwrap();
+
+        let after = stored_orders(&storage);
+        assert_eq!(after.len(), before.len() + 1);
+        for (id, order) in &before {
+            assert!(
+                after.contains(&(id.clone(), *order)),
+                "row {id} must keep list_order {order}"
+            );
+        }
+        let new_order = order_of(&storage, "z");
+        assert!(
+            new_order < lowest_before,
+            "the new row ({new_order}) must be strictly below every existing row ({lowest_before})"
+        );
+        assert_eq!(new_order, lowest_before - 1);
+    }
+
+    #[test]
+    fn t5_pagination_spans_old_and_new_rows() {
+        let storage = memory_storage();
+        seed_old_rows(&storage, &["old0", "old1", "old2"]);
+        add_all(&storage, &["n1", "n2", "n3"]);
+
+        let page = |limit: i64, offset: i64| {
+            ids_of(
+                &storage
+                    .history_list(None, false, Some(limit), Some(offset))
+                    .unwrap(),
+            )
+        };
+
+        assert_eq!(page(2, 0), strs(&["n3", "n2"]));
+        assert_eq!(
+            page(2, 2),
+            strs(&["n1", "old0"]),
+            "slice across the sign change"
+        );
+        assert_eq!(page(2, 4), strs(&["old1", "old2"]));
+        assert_eq!(page(10, 5), strs(&["old2"]));
+        assert_eq!(page(2, 6), Vec::<String>::new());
+    }
+
+    #[test]
+    fn t6_duplicate_id_fails_and_leaves_the_table_unchanged() {
+        let storage = memory_storage();
+        seed_old_rows(&storage, &["old1"]);
+        add_all(&storage, &["a", "b"]);
+
+        let orders_before = stored_orders(&storage);
+        let listed_before = listed_ids(&storage);
+
+        let mut duplicate = record("a");
+        duplicate["text"] = json!("replacement that must not be stored");
+        assert!(storage.history_add(&duplicate).is_err());
+        assert!(
+            storage.history_add(&record("old1")).is_err(),
+            "an id seeded by the old scheme is a duplicate too"
+        );
+
+        assert_eq!(stored_orders(&storage), orders_before);
+        assert_eq!(listed_ids(&storage), listed_before);
+        let rows = storage.history_list(None, false, None, None).unwrap();
+        let original = rows.iter().find(|row| row["id"] == "a").unwrap();
+        assert_eq!(original["text"], "text of a");
+
+        storage.history_add(&record("c")).unwrap();
+        assert_eq!(listed_ids(&storage), strs(&["c", "b", "a", "old1"]));
+    }
+
+    #[test]
+    fn t7_favorite_filter_returns_favorites_newest_first() {
+        let storage = memory_storage();
+        let mut old_favorite = record("old1");
+        old_favorite["favorite"] = json!(true);
+        storage
+            .set("history", &json!([old_favorite, record("old2")]))
+            .unwrap();
+        storage.history_add(&favorite_record("n1")).unwrap();
+        storage.history_add(&record("n2")).unwrap();
+        storage.history_add(&favorite_record("n3")).unwrap();
+
+        let favorites = storage.history_list(None, true, None, None).unwrap();
+
+        assert_eq!(ids_of(&favorites), strs(&["n3", "n1", "old1"]));
+        assert_eq!(storage.history_count(None, true).unwrap(), 3);
+        assert_eq!(
+            ids_of(&storage.history_list(None, true, Some(2), Some(1)).unwrap()),
+            strs(&["n1", "old1"])
+        );
     }
 }
