@@ -427,10 +427,17 @@ impl WindowState {
         show_id != 0 && self.active_show_id.load(Ordering::SeqCst) == show_id
     }
 
-    /// 悬浮窗正显示时，把它重新顶到 topmost 带最上层。供前台窗口切换钩子调用，
-    /// 让用户切到/打开别的置顶程序时，悬浮窗立即回到最上面。
+    /// True while an overlay show is active (a non-zero `active_show_id`), i.e. between
+    /// `present_overlay` and `hide_overlay`.
+    pub fn overlay_visible(&self) -> bool {
+        self.active_show_id.load(Ordering::SeqCst) != 0
+    }
+
+    /// While the overlay is showing, re-raise it to the top of the topmost band. Called by the
+    /// foreground-window-change hook so that when the user switches to or opens another
+    /// always-on-top program, the overlay immediately returns to the top.
     pub fn reassert_overlay_topmost_if_visible(&self, app: &AppHandle) {
-        if self.active_show_id.load(Ordering::SeqCst) == 0 {
+        if !self.overlay_visible() {
             return;
         }
         reassert_overlay_topmost(app);
@@ -1147,6 +1154,18 @@ mod tests {
 
         state.active_show_id.store(0, Ordering::SeqCst);
         assert!(state.payload_for_emit(true).is_none());
+    }
+
+    #[test]
+    fn overlay_visible_tracks_a_non_zero_active_show_id() {
+        let state = WindowState::new();
+        assert!(!state.overlay_visible());
+
+        state.active_show_id.store(7, Ordering::SeqCst);
+        assert!(state.overlay_visible());
+
+        state.active_show_id.store(0, Ordering::SeqCst);
+        assert!(!state.overlay_visible());
     }
 
     #[test]

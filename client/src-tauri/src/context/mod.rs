@@ -1,12 +1,11 @@
 //! Window context detection — captures information about the foreground window
 //! and focused element to determine text injection strategy.
-//! Also runs a WinEvent hook to push context updates when the foreground window changes.
+//! Also runs a WinEvent hook that re-raises the overlay when the foreground window changes.
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HWND;
@@ -92,42 +91,32 @@ pub struct MonitorBounds {
 }
 
 pub struct ContextDetector {
-    cached_context: Mutex<Option<AppContext>>,
     winevent_running: AtomicBool,
 }
 
 impl ContextDetector {
     pub fn new() -> Self {
         Self {
-            cached_context: Mutex::new(None),
             winevent_running: AtomicBool::new(false),
         }
     }
 
     /// Capture the current foreground window context
     pub fn capture(&self, reason: &str) -> AppContext {
-        let ctx = capture_context_with_text(reason, false);
-        *self.cached_context.lock().unwrap() = Some(ctx.clone());
-        ctx
+        capture_context_with_text(reason, false)
     }
 
     /// Capture the recording target, optionally including a bounded slice of editor text.
-    /// This separate entry point is intentional: WinEvent hooks must never start reading text
-    /// merely because the feature exists.
+    /// This separate entry point is intentional: editor text is read only when the caller asks
+    /// for it here, never by `capture` or `capture_context`, and never merely because the
+    /// feature exists.
     pub fn capture_recording(&self, reason: &str, include_text_context: bool) -> AppContext {
-        let ctx = capture_context_with_text(reason, include_text_context);
-        *self.cached_context.lock().unwrap() = Some(ctx.clone());
-        ctx
+        capture_context_with_text(reason, include_text_context)
     }
 
-    /// Get the last cached context without re-capturing
-    #[allow(dead_code)]
-    pub fn get_cached(&self) -> Option<AppContext> {
-        self.cached_context.lock().unwrap().clone()
-    }
-
-    /// Start the WinEvent hook that monitors foreground window changes
-    /// and pushes active-app-context events to the frontend
+    /// Start the WinEvent hook that watches foreground window changes and, while the overlay is
+    /// visible, re-raises it above the new foreground window. The hook does not capture or
+    /// publish any application context.
     #[cfg(windows)]
     pub fn start_winevent_hook(&self, app: &AppHandle) {
         if self.winevent_running.swap(true, Ordering::SeqCst) {
@@ -135,8 +124,6 @@ impl ContextDetector {
         }
 
         let app_handle = app.clone();
-        let cached = Arc::new(Mutex::new(None::<AppContext>));
-        let cached_for_cb = cached.clone();
 
         thread::spawn(move || {
             use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
@@ -146,17 +133,14 @@ impl ContextDetector {
 
             // WinEvent constants
             const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
-            const EVENT_OBJECT_FOCUS: u32 = 0x8005;
             const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 
             // Store app handle in thread-local for the callback
             thread_local! {
                 static APP: std::cell::RefCell<Option<AppHandle>> = std::cell::RefCell::new(None);
-                static CACHED: std::cell::RefCell<Option<Arc<Mutex<Option<AppContext>>>>> = std::cell::RefCell::new(None);
             }
 
             APP.with(|a| *a.borrow_mut() = Some(app_handle));
-            CACHED.with(|c| *c.borrow_mut() = Some(cached_for_cb));
 
             unsafe extern "system" fn winevent_proc(
                 _hook: HWINEVENTHOOK,
@@ -167,24 +151,19 @@ impl ContextDetector {
                 _event_thread: u32,
                 _event_time: u32,
             ) {
-                // Debounce: small delay to let focus settle
-                std::thread::sleep(std::time::Duration::from_millis(50));
-
-                let ctx = capture_context("winevent");
-
                 APP.with(|a| {
                     if let Some(app) = a.borrow().as_ref() {
-                        let _ = app.emit("active-app-context", &ctx);
-                        // 前台窗口切换后，若悬浮窗正显示，立即把它重新顶回最上层——
-                        // 覆盖「用户切到/打开 PotPlayer 等置顶程序把悬浮窗压下去」的场景。
-                        app.state::<crate::window::WindowState>()
-                            .reassert_overlay_topmost_if_visible(app);
-                    }
-                });
-
-                CACHED.with(|c| {
-                    if let Some(cache) = c.borrow().as_ref() {
-                        *cache.lock().unwrap() = Some(ctx);
+                        let state = app.state::<crate::window::WindowState>();
+                        if !state.overlay_visible() {
+                            return;
+                        }
+                        // Debounce: small delay to let focus settle
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        // After a foreground window switch, if the overlay is showing, push it
+                        // back to the top immediately. This covers the user switching to or
+                        // opening an always-on-top program such as PotPlayer that pushes the
+                        // overlay down.
+                        state.reassert_overlay_topmost_if_visible(app);
                     }
                 });
             }
@@ -193,16 +172,6 @@ impl ContextDetector {
                 let _fg_hook = SetWinEventHook(
                     EVENT_SYSTEM_FOREGROUND,
                     EVENT_SYSTEM_FOREGROUND,
-                    None,
-                    Some(winevent_proc),
-                    0,
-                    0,
-                    WINEVENT_OUTOFCONTEXT,
-                );
-
-                let _focus_hook = SetWinEventHook(
-                    EVENT_OBJECT_FOCUS,
-                    EVENT_OBJECT_FOCUS,
                     None,
                     Some(winevent_proc),
                     0,
