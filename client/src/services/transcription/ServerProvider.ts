@@ -21,10 +21,24 @@ import type {
   StopOptions,
 } from './types'
 
+/**
+ * Pending PCM is forwarded to the websocket once it reaches this size: 6400 bytes is 200 ms of 16 kHz 16-bit mono
+ * audio. The capture path delivers one tiny frame per AudioWorklet render quantum (about 125 per second, and about
+ * 375 per second on the 48 kHz fallback path), and sending each as its own websocket message costs measurable CPU
+ * for the whole recording. The server only appends incoming bytes to its PCM buffer and starts recognition on the
+ * stop command, so coarser packets change neither results nor latency. A batch may exceed this size by less than
+ * one frame, and a single large buffer (a system-audio segment) is passed through as it is.
+ */
+const SEND_BATCH_BYTES = 6400
+
 export class ServerProvider implements TranscriptionProvider {
   readonly mode = 'server' as const
 
   private callbacks: TranscriptionCallbacks = {}
+  // Audio frames waiting for the next batch. The capture path hands over a freshly allocated buffer per frame, so
+  // holding the references until the flush is safe.
+  private pendingAudio: ArrayBuffer[] = []
+  private pendingAudioBytes = 0
   private activeRunId = 0
   private activeStartOpts: Readonly<StartOptions> | undefined
   // Where the configured source runs the AI stage. Readiness reads only this: the websocket re-fires onReady after
@@ -152,6 +166,10 @@ export class ServerProvider implements TranscriptionProvider {
       serverAiSource: source,
       selectionAiChosen: Boolean(opts.selectionAiConfig),
     })
+    // Capture starts in parallel with connect(), so frames can arrive before start(); the websocket layer drops
+    // those while no session is started. Drop them here too: they must not become the head of this run's audio, and
+    // neither must a late frame left over from the previous run. start() does not go through resetRun().
+    this.dropPendingAudio()
     this.activeRunId = opts.runId
     this.activeStartOpts = {
       ...opts,
@@ -188,13 +206,19 @@ export class ServerProvider implements TranscriptionProvider {
   }
 
   sendAudio(buffer: ArrayBuffer): void {
-    ws.sendAudio(buffer)
+    // An empty buffer carries no audio; queueing it would make a lone empty buffer look like a pending tail.
+    if (buffer.byteLength === 0) return
+    this.pendingAudio.push(buffer)
+    this.pendingAudioBytes += buffer.byteLength
+    if (this.pendingAudioBytes >= SEND_BATCH_BYTES) this.flushAudio()
   }
 
   stop(opts?: StopOptions): boolean {
     if (opts?.disableAi && this.activeStartOpts && !this.activeStartOpts.disableAi) {
       this.activeStartOpts = { ...this.activeStartOpts, disableAi: true, disableAiCause: opts.disableAiCause }
     }
+    // The server starts recognition on stop and ignores audio that arrives later, so the tail goes out first.
+    this.flushAudio()
     return ws.sendStop(this.runRoute === 'client' ? { ...opts, disableAi: true } : opts)
   }
 
@@ -205,6 +229,31 @@ export class ServerProvider implements TranscriptionProvider {
 
   isReady(): boolean {
     return ws.isConnected()
+  }
+
+  // Sends everything pending as one websocket message, in arrival order. A single pending buffer goes through
+  // without a copy. Nothing pending means nothing is sent, never an empty packet.
+  private flushAudio(): void {
+    if (this.pendingAudioBytes === 0) return
+    const chunks = this.pendingAudio
+    const totalBytes = this.pendingAudioBytes
+    this.dropPendingAudio()
+    if (chunks.length === 1) {
+      ws.sendAudio(chunks[0])
+      return
+    }
+    const merged = new Uint8Array(totalBytes)
+    let offset = 0
+    for (const chunk of chunks) {
+      merged.set(new Uint8Array(chunk), offset)
+      offset += chunk.byteLength
+    }
+    ws.sendAudio(merged.buffer)
+  }
+
+  private dropPendingAudio(): void {
+    this.pendingAudio = []
+    this.pendingAudioBytes = 0
   }
 
   private routeForSource(source: ServerAiSource): AiPolishRoute {
@@ -249,5 +298,7 @@ export class ServerProvider implements TranscriptionProvider {
     this.activeStartOpts = undefined
     this.customFinalPending = false
     this.serverDonePending = false
+    // An abandoned run's audio must never reach a later run.
+    this.dropPendingAudio()
   }
 }
