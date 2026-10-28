@@ -2915,7 +2915,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t1_added_records_are_listed_newest_first() {
+    fn added_records_are_listed_newest_first() {
         let storage = memory_storage();
         add_all(&storage, &["a", "b", "c"]);
 
@@ -2924,7 +2924,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t2_new_records_precede_rows_numbered_by_the_old_scheme() {
+    fn new_records_precede_rows_numbered_by_the_old_scheme() {
         let storage = memory_storage();
         seed_old_rows(&storage, &["old1", "old2"]);
         assert_eq!(order_of(&storage, "old1"), 0);
@@ -2951,7 +2951,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t3_delete_keeps_order_across_the_positive_and_negative_ranges() {
+    fn delete_keeps_order_across_the_positive_and_negative_ranges() {
         let storage = memory_storage();
         seed_old_rows(&storage, &["old0", "old1", "old2"]);
         add_all(&storage, &["n1", "n2", "n3"]);
@@ -3003,7 +3003,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t4_adding_does_not_rewrite_existing_rows() {
+    fn adding_does_not_rewrite_existing_rows() {
         let storage = memory_storage();
         seed_old_rows(&storage, &["old1", "old2"]);
         add_all(&storage, &["x", "y"]);
@@ -3031,7 +3031,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t5_pagination_spans_old_and_new_rows() {
+    fn pagination_spans_old_and_new_rows() {
         let storage = memory_storage();
         seed_old_rows(&storage, &["old0", "old1", "old2"]);
         add_all(&storage, &["n1", "n2", "n3"]);
@@ -3056,7 +3056,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t6_duplicate_id_fails_and_leaves_the_table_unchanged() {
+    fn duplicate_id_fails_and_leaves_the_table_unchanged() {
         let storage = memory_storage();
         seed_old_rows(&storage, &["old1"]);
         add_all(&storage, &["a", "b"]);
@@ -3083,7 +3083,7 @@ mod history_order_tests {
     }
 
     #[test]
-    fn t7_favorite_filter_returns_favorites_newest_first() {
+    fn favorite_filter_returns_favorites_newest_first() {
         let storage = memory_storage();
         let mut old_favorite = record("old1");
         old_favorite["favorite"] = json!(true);
