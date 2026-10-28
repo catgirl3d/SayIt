@@ -61,6 +61,8 @@ export class OverlayService {
   private readySoundEnabled = true
   private widthPreset: OverlayWidthPreset = 'medium'
   private lastFrameAt = 0
+  /** Arrival time of the latest PCM frame, which can be newer than `lastFrameAt` when the throttle drops it. */
+  private lastPcmAt = 0
   private tickerId: ReturnType<typeof setInterval> | null = null
   private fallbackHideId: ReturnType<typeof setTimeout> | null = null
   /** Persistent warning text — included in every overlay update until cleared */
@@ -233,7 +235,14 @@ export class OverlayService {
     // waiting artificially for the ticker's first 33 ms. PCM still drives the real
     // waveform through pushListeningBars afterwards.
     this.pushListeningBars(undefined, true)
+    // While PCM frames keep arriving, pushListeningBars already publishes every 33 ms with the
+    // waveform, timer, streaming text and warnings attached, so the ticker yields. It fills in
+    // only after 33 ms without frames (stalled capture, no first frame yet, PTT Lab). The two
+    // sources used to run independently, giving ~60 updates per second for a 30 fps picture.
+    // The yield decision uses frame arrival time, not the last publish: a fixed-phase ticker
+    // that yielded on the last publish alone would win every slot and starve the bars.
     this.tickerId = setInterval(() => {
+      if (Date.now() - this.lastPcmAt < 33) return
       this.publishLiveListening()
     }, 33)
   }
@@ -264,6 +273,7 @@ export class OverlayService {
 
   pushListeningBars(bars?: number[], force = false) {
     const now = Date.now()
+    if (bars) this.lastPcmAt = now
     if (!force && now - this.lastFrameAt < 33) return
     this.lastFrameAt = now
     this.publishLiveListening({ bars })
