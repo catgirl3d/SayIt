@@ -26,6 +26,15 @@ interface MicSourceHint {
 const MIC_SOURCE_HINT_DURATION_MS = 3000
 
 /**
+ * How long a context woken by `prepareReadySound()` may stay running while no tone is requested.
+ *
+ * A recording attempt that is cancelled before the microphone is up (a short press) never plays
+ * the tone, so nothing else would suspend the context again. Capture normally starts well within
+ * this window, which is why the timer only covers the abandoned attempts.
+ */
+const READY_SOUND_IDLE_SUSPEND_MS = 5000
+
+/**
  * Window width assigned to toast and single-line error notices.
  *
  * Recording waveforms take a fixed width according to `OverlayWidthPreset` (200-360px),
@@ -89,41 +98,127 @@ export class OverlayService {
     this.widthPreset = normalizeWidthPreset(await getSetting('overlayWidth', 'medium'))
   }
 
+  /**
+   * The ready-tone context is kept between recordings, but only suspended: a running idle
+   * context keeps rendering its audio graph (measured in Chromium 141: about 18.6 ms of CPU
+   * per second against 8.5 ms suspended and 7.5 ms with no context at all, roughly 1% of a core
+   * for as long as the app runs). Waking it takes a median of about 35 ms (rarely a few hundred),
+   * and a brand-new context costs the same, so it is woken early, when the recording attempt
+   * begins (`prepareReadySound`), and the tone is not delayed by it: capture start takes hundreds
+   * of milliseconds anyway.
+   */
   private readySoundCtx: AudioContext | null = null
+  /**
+   * Tail of the chain that serializes every wake, tone and suspend of the context.
+   *
+   * resume() and suspend() are asynchronous and `state` only changes once they settle, so a
+   * tone requested while a suspend is in flight would still see `running` and schedule its
+   * oscillator on a context that is about to freeze. Running the transitions one after another
+   * also lets a tone reuse the wake-up that `prepareReadySound` already started instead of
+   * calling resume() a second time.
+   */
+  private readySoundChain: Promise<void> = Promise.resolve()
+  /** Tones requested or still sounding; the context is suspended only after the last one ends. */
+  private readySoundPending = 0
+  private readySoundIdleId: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Wake the ready-tone context at the start of a recording attempt, so that it is already
+   * running when `playReadySound` fires once capture is up. Does nothing when the sound is off.
+   */
+  prepareReadySound() {
+    if (!this.readySoundEnabled) return
+    const ctx = this.ensureReadySoundCtx()
+    if (!ctx) return
+    this.clearReadySoundIdleTimer()
+    this.readySoundIdleId = setTimeout(() => {
+      this.readySoundIdleId = null
+      this.enqueueReadySoundStep(() => this.suspendReadySoundCtx(ctx))
+    }, READY_SOUND_IDLE_SUSPEND_MS)
+    this.enqueueReadySoundStep(() => this.wakeReadySoundCtx(ctx))
+  }
 
   private playReadySound() {
     if (!this.readySoundEnabled) return
-    try {
-      if (!this.readySoundCtx || this.readySoundCtx.state === 'closed') {
-        this.readySoundCtx = new AudioContext()
+    const ctx = this.ensureReadySoundCtx()
+    if (!ctx) return
+    // A tone is on its way: the context must stay awake until it has ended.
+    this.clearReadySoundIdleTimer()
+    this.readySoundPending++
+    let settled = false
+    const settle = () => {
+      if (settled) return
+      settled = true
+      this.settleReadyTone(ctx)
+    }
+    this.enqueueReadySoundStep(async () => {
+      try {
+        await this.wakeReadySoundCtx(ctx)
+        this.emitReadyTone(ctx, settle)
+      } catch {
+        // The chime is cosmetic and must never disturb recording. Release the tone so the
+        // pending count cannot leak and keep the context awake for good.
+        settle()
       }
-      const ctx = this.readySoundCtx
-      // A fresh AudioContext, or one left idle for a long time, is often in the suspended
-      // state (browser autoplay/save-power policies). resume() is asynchronous: calling
-      // start() without waiting for it can silently drop or delay the oscillator —
-      // this is the root cause of "no ready tone on the first hands-free press, and none
-      // on a later one either".
-      if (ctx.state === 'suspended') {
-        ctx.resume().then(() => this.emitReadyTone(ctx)).catch(() => { /* ignore */ })
-      } else {
-        this.emitReadyTone(ctx)
-      }
-    } catch { /* ignore */ }
+    })
   }
 
-  private emitReadyTone(ctx: AudioContext) {
+  /** Reuse the context unless it is missing or closed; null when the WebView cannot create one. */
+  private ensureReadySoundCtx(): AudioContext | null {
+    if (this.readySoundCtx && this.readySoundCtx.state !== 'closed') return this.readySoundCtx
     try {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.frequency.value = 880
-      osc.type = 'sine'
-      gain.gain.setValueAtTime(0.2, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15)
-      osc.start(ctx.currentTime)
-      osc.stop(ctx.currentTime + 0.15)
-    } catch { /* ignore */ }
+      this.readySoundCtx = new AudioContext()
+    } catch {
+      // No AudioContext (jsdom, unsupported WebView): the recorder works fine without the chime.
+      this.readySoundCtx = null
+    }
+    return this.readySoundCtx
+  }
+
+  /**
+   * Run one context transition after all earlier ones have settled. A failed step is swallowed
+   * so that it can never block the next one: each step reads the context's actual state again.
+   */
+  private enqueueReadySoundStep(step: () => Promise<void>) {
+    this.readySoundChain = this.readySoundChain.then(step).catch(() => { /* ignore */ })
+  }
+
+  private async wakeReadySoundCtx(ctx: AudioContext) {
+    // A fresh AudioContext (browser autoplay/save-power policies), or one suspended after the
+    // previous tone, is in the suspended state. resume() is asynchronous: calling start()
+    // without waiting for it can silently drop or delay the oscillator — this is the root
+    // cause of "no ready tone on the first hands-free press, and none on a later one either".
+    if (ctx.state === 'suspended') await ctx.resume()
+  }
+
+  private async suspendReadySoundCtx(ctx: AudioContext) {
+    if (ctx.state === 'running') await ctx.suspend()
+  }
+
+  private settleReadyTone(ctx: AudioContext) {
+    if (--this.readySoundPending > 0) return
+    this.enqueueReadySoundStep(() => this.suspendReadySoundCtx(ctx))
+  }
+
+  private clearReadySoundIdleTimer() {
+    if (this.readySoundIdleId) {
+      clearTimeout(this.readySoundIdleId)
+      this.readySoundIdleId = null
+    }
+  }
+
+  private emitReadyTone(ctx: AudioContext, onEnded: () => void) {
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.frequency.value = 880
+    osc.type = 'sine'
+    gain.gain.setValueAtTime(0.2, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15)
+    osc.onended = onEnded
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.15)
   }
 
   getCommonPayload(): OverlayCommonPayload {
@@ -214,6 +309,8 @@ export class OverlayService {
   }
 
   showWaiting() {
+    // A recording attempt begins: wake the ready-tone context now so the tone is not delayed.
+    this.prepareReadySound()
     this.beginPresentation('waiting')
     this.setEscapeMode('off', 0)
     this.clearFallbackHideTimer()
