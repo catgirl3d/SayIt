@@ -662,10 +662,12 @@ impl Storage {
     /// the whole table by one. Shifting rewrote every row and two indexes, which
     /// cost milliseconds to hundreds of milliseconds on a large history and
     /// blocked the connection while the dictated text waited to be inserted.
-    /// Reading the minimum and inserting happen in one transaction: one commit,
-    /// and a failed insert (for example a duplicate id) leaves the table
-    /// unchanged. The value may be negative; `history_delete` still preserves
-    /// the order across the sign change because it shifts every later row by -1.
+    /// The value may be negative; rows numbered 0..n by the old scheme or by
+    /// `set("history", ...)` keep their values and still sort after it.
+    ///
+    /// The INSERT is the only write and is atomic by itself, so a failed insert
+    /// (for example a duplicate id) leaves the table unchanged. The transaction
+    /// is kept to match upstream, where it also covers a statistics update.
     pub fn history_add(&self, record: &Value) -> SqlResult<()> {
         let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
@@ -768,25 +770,15 @@ impl Storage {
         Ok(())
     }
 
+    /// Deletes one record; a missing id is a no-op.
+    ///
+    /// The remaining rows keep their `list_order`: gaps do not affect sorting,
+    /// and `history_add` only needs the current minimum. Shifting every later
+    /// row by -1 rewrote all older records, and the whole table when the newest
+    /// one was deleted, as canceling a dictation does right after saving it.
     pub fn history_delete(&self, id: &str) -> SqlResult<()> {
         let db = self.db.lock().unwrap();
-
-        let list_order: Option<i64> = db
-            .query_row(
-                "SELECT list_order FROM history_records WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(list_order) = list_order else {
-            return Ok(());
-        };
-
         db.execute("DELETE FROM history_records WHERE id = ?1", params![id])?;
-        db.execute(
-            "UPDATE history_records SET list_order = list_order - 1 WHERE list_order > ?1",
-            params![list_order],
-        )?;
         Ok(())
     }
 
@@ -3028,6 +3020,34 @@ mod history_order_tests {
             "the new row ({new_order}) must be strictly below every existing row ({lowest_before})"
         );
         assert_eq!(new_order, lowest_before - 1);
+    }
+
+    #[test]
+    fn deleting_does_not_rewrite_remaining_rows() {
+        let storage = memory_storage();
+        seed_old_rows(&storage, &["old1", "old2"]);
+        add_all(&storage, &["x", "y"]);
+        let before = stored_orders(&storage);
+
+        storage.history_delete("missing").unwrap();
+        assert_eq!(stored_orders(&storage), before, "a missing id is a no-op");
+
+        storage.history_delete("y").unwrap();
+        storage.history_delete("old1").unwrap();
+
+        let expected: Vec<(String, i64)> = before
+            .into_iter()
+            .filter(|(id, _)| id != "y" && id != "old1")
+            .collect();
+        assert_eq!(
+            stored_orders(&storage),
+            expected,
+            "deleting the newest and an old row must not renumber the rest"
+        );
+
+        storage.history_add(&record("z")).unwrap();
+        assert_eq!(listed_ids(&storage), strs(&["z", "x", "old2"]));
+        assert_distinct_orders(&storage);
     }
 
     #[test]
