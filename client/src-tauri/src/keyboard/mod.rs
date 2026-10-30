@@ -42,15 +42,159 @@ static SHORTCUT_CAPTURE: AtomicBool = AtomicBool::new(false);
 /// 捕获到侧键 down 后，记住其 vk，好把配对的 up 也一并吞掉（否则可能残留导航）。
 static CONSUME_XUP_VK: AtomicU32 = AtomicU32::new(0);
 
+/// Thread id of the running hook thread, used to ask it to install the mouse
+/// hook. 0 means no hook thread is running.
+#[cfg(windows)]
+static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+/// Thread message (WM_APP + 0x51) asking the hook thread to install the mouse hook.
+#[cfg(windows)]
+const WM_SAYIT_INSTALL_MOUSE_HOOK: u32 = 0x8000 + 0x51;
+
+/// Whether the mouse hook is needed at all.
+///
+/// It is needed while a shortcut can consume a mouse event: an active shortcut
+/// recording, a captured button whose release has not arrived yet, or a
+/// shortcut bound to the middle or a side button. Keyboard shortcuts and the
+/// browser back/forward keys do not need it, because those arrive through the
+/// keyboard hook.
+fn needs_mouse_hook(
+    bound_vks: impl IntoIterator<Item = u32>,
+    capturing: bool,
+    pending_up_vk: u32,
+) -> bool {
+    capturing || pending_up_vk != 0 || bound_vks.into_iter().any(is_mouse_vk)
+}
+
 /// 打开/关闭录制捕获模式（供设置页录制快捷键时调用）。
 pub fn set_shortcut_capture(on: bool) {
     SHORTCUT_CAPTURE.store(on, Ordering::SeqCst);
-    // 只在“开始录制”时清零，作为一次干净的起点。
-    // 绝不在“结束录制”时清零——因为捕获到 down 后配对的 up 往往稍晚才到，
-    // 若在结束时就清掉，这个“抬起”就会漏给 webview（后退键会导致页面返回）。
+    // Reset only when a recording starts, as a clean starting point.
+    // Never reset when the recording ends: the up paired with a captured down
+    // usually arrives slightly later, and clearing it at the end would let that
+    // release reach the webview (a back button would navigate back).
     if on {
         CONSUME_XUP_VK.store(0, Ordering::SeqCst);
+        // The user may press a mouse button while recording, and only the
+        // mouse hook can swallow it at the OS level (otherwise the webview
+        // treats a side button as "back"). Hooks are installed by the hook
+        // thread, so ask that thread to install it. If the request cannot be
+        // posted, the next hook thread sees SHORTCUT_CAPTURE on startup.
+        #[cfg(windows)]
+        {
+            let thread_id = HOOK_THREAD_ID.load(Ordering::SeqCst);
+            if thread_id != 0 {
+                let posted = unsafe {
+                    PostThreadMessageW(thread_id, WM_SAYIT_INSTALL_MOUSE_HOOK, WPARAM(0), LPARAM(0))
+                };
+                if let Err(error) = posted {
+                    // Non-fatal: if the thread is exiting right now, the next
+                    // thread reads SHORTCUT_CAPTURE on startup and installs the
+                    // hook itself.
+                    crate::commands::system::write_log_line(&format!(
+                        "[ptt-lifecycle] failed to request the mouse hook from thread {}: {}",
+                        thread_id, error,
+                    ));
+                }
+            }
+        }
     }
+}
+
+/// Why the mouse hook was installed when the hook thread started.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseHookReason {
+    Capture,
+    PendingUp,
+    Binding,
+}
+
+#[cfg(windows)]
+impl MouseHookReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Capture => "capture",
+            Self::PendingUp => "pending-up",
+            Self::Binding => "binding",
+        }
+    }
+}
+
+/// Publishes the hook thread id and installs the mouse hook when the bindings or the
+/// capture state need it. Returns the installed hook and the reason, or `(None, None)`
+/// when no mouse hook is needed.
+#[cfg(windows)]
+fn start_mouse_hook<H>(
+    thread_id: u32,
+    bound_vks: impl IntoIterator<Item = u32>,
+    install: impl FnOnce() -> Option<H>,
+) -> (Option<H>, Option<MouseHookReason>) {
+    // Publish the id before reading the flags. The hook thread, not
+    // start(), publishes it, because start() learns the id only later
+    // through the channel and would lose a capture request posted in
+    // between. All accesses are SeqCst: either this thread observes
+    // SHORTCUT_CAPTURE below, or set_shortcut_capture observes this id
+    // and posts WM_SAYIT_INSTALL_MOUSE_HOOK, so a recording started
+    // during stop() -> start() never misses the hook.
+    HOOK_THREAD_ID.store(thread_id, Ordering::SeqCst);
+
+    // The mouse hook is installed only when it has something to
+    // consume: a shortcut bound to a mouse button, an active shortcut
+    // recording, or a captured button whose matching release is still
+    // pending. WH_MOUSE_LL is called for every mouse movement. Measured
+    // on the 0.3.1 release (issue #61), each event costs the hook thread
+    // about 20 microseconds of CPU, so 1,000 events per second keep
+    // 1-2.5% of a CPU core busy while the mouse moves, even though the
+    // callback only forwards the event.
+    //
+    // The pending-release case matters because the frontend saves a
+    // captured button 400 ms after it arrives. Holding the button
+    // longer reconfigures the hook thread, and the new thread must keep
+    // the mouse hook until the matching up is swallowed; otherwise that
+    // up reaches the webview and the window navigates back.
+    let capturing = SHORTCUT_CAPTURE.load(Ordering::SeqCst);
+    let pending_up_vk = CONSUME_XUP_VK.load(Ordering::SeqCst);
+    if !needs_mouse_hook(bound_vks, capturing, pending_up_vk) {
+        return (None, None);
+    }
+    let reason = if capturing {
+        MouseHookReason::Capture
+    } else if pending_up_vk != 0 {
+        MouseHookReason::PendingUp
+    } else {
+        MouseHookReason::Binding
+    };
+    (install(), Some(reason))
+}
+
+/// Pumps the hook thread's message queue until WM_QUIT. A
+/// WM_SAYIT_INSTALL_MOUSE_HOOK request calls `install_on_request` when the mouse hook is
+/// not installed yet. On exit, HOOK_THREAD_ID is cleared only if it still holds this
+/// thread's id.
+#[cfg(windows)]
+fn run_hook_message_loop<H>(
+    thread_id: u32,
+    mouse_hook: &mut Option<H>,
+    mut install_on_request: impl FnMut() -> Option<H>,
+) {
+    let mut msg = MSG::default();
+    while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
+        // The request is posted as a thread message, which has no
+        // window. Checking for a null hwnd keeps a window message that
+        // reuses the same WM_APP value from being taken as the request.
+        if msg.hwnd.0.is_null() && msg.message == WM_SAYIT_INSTALL_MOUSE_HOOK {
+            if mouse_hook.is_none() {
+                *mouse_hook = install_on_request();
+            }
+            continue;
+        }
+        unsafe {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    let _ = HOOK_THREAD_ID.compare_exchange(thread_id, 0, Ordering::SeqCst, Ordering::SeqCst);
 }
 
 // ── 全局 Esc 动作 ──
@@ -1513,42 +1657,64 @@ impl KeyboardHookManager {
                 }
             };
 
-            // 低级鼠标钩子始终随键盘钩子一起挂上：一是支持侧键做 PTT/免提，二是设置页
-            // 录制侧键时需要靠它在 OS 层把侧键吞掉（否则 webview 会先把侧键当“后退”）。
-            // 它与键盘钩子共用本线程的同一个消息循环；回调对鼠标移动等有最前置的快速放行，
-            // 开销可忽略。只有真正命中侧键（录制捕获 / 已绑为热键）时才会吞事件。
-            let mouse_hook: Option<windows::Win32::UI::WindowsAndMessaging::HHOOK> =
-                match SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0) {
-                    Ok(h) => {
-                        log::info!("SetWindowsHookExW(WH_MOUSE_LL) succeeded: {:?}", h.0);
-                        crate::commands::system::write_log_line(
-                            "[ptt-lifecycle] mouse hook installed (side-button support active)",
-                        );
-                        Some(h)
-                    }
-                    Err(e) => {
-                        log::error!("SetWindowsHookExW(WH_MOUSE_LL) failed: {}", e);
-                        crate::commands::system::write_log_line(&format!(
-                            "[ptt-lifecycle] mouse hook FAILED to install: {}",
-                            e,
-                        ));
-                        None
+            let install_mouse_hook =
+                || -> Option<windows::Win32::UI::WindowsAndMessaging::HHOOK> {
+                    match SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0) {
+                        Ok(h) => {
+                            log::info!("SetWindowsHookExW(WH_MOUSE_LL) succeeded: {:?}", h.0);
+                            Some(h)
+                        }
+                        Err(e) => {
+                            log::error!("SetWindowsHookExW(WH_MOUSE_LL) failed: {}", e);
+                            crate::commands::system::write_log_line(&format!(
+                                "[ptt-lifecycle] mouse hook FAILED to install: {}",
+                                e,
+                            ));
+                            None
+                        }
                     }
                 };
 
             let thread_id = GetCurrentThreadId();
+            let (mut mouse_hook, mouse_hook_reason) = start_mouse_hook(
+                thread_id,
+                state
+                    .ptt_vk_codes
+                    .iter()
+                    .chain(state.hf_vk_codes.iter())
+                    .chain(state.ai_toggle_vk_codes.iter())
+                    .copied(),
+                install_mouse_hook,
+            );
+            if let Some(reason) = mouse_hook_reason {
+                // A failed install is already logged by install_mouse_hook.
+                if mouse_hook.is_some() {
+                    crate::commands::system::write_log_line(&format!(
+                        "[ptt-lifecycle] mouse hook installed (reason: {})",
+                        reason.as_str(),
+                    ));
+                }
+            } else {
+                crate::commands::system::write_log_line(
+                    "[ptt-lifecycle] mouse hook not installed (no mouse button bound)",
+                );
+            }
+
             let _ = tx.send(thread_id);
             log::info!(
                 "keyboard hook message loop starting on thread {}",
                 thread_id
             );
 
-            let mut msg = MSG::default();
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-
+            run_hook_message_loop(thread_id, &mut mouse_hook, || {
+                let installed = install_mouse_hook();
+                if installed.is_some() {
+                    crate::commands::system::write_log_line(
+                        "[ptt-lifecycle] mouse hook installed on demand for shortcut capture",
+                    );
+                }
+                installed
+            });
             log::info!("keyboard hook message loop exited");
             let _ = UnhookWindowsHookEx(hook);
             if let Some(mh) = mouse_hook {
@@ -2147,14 +2313,39 @@ unsafe extern "system" fn low_level_keyboard_proc(
 mod tests {
     #[cfg(windows)]
     use super::queue_ptt_release;
+    #[cfg(windows)]
+    use super::{
+        CONSUME_XUP_VK, HOOK_THREAD_ID, MouseHookReason, SHORTCUT_CAPTURE, run_hook_message_loop,
+        set_shortcut_capture, start_mouse_hook,
+    };
     use super::{
         DEFAULT_PTT_SETTING, DEFAULT_PTT_VK, KeyboardHookManager, LLKHF_ALTDOWN, MODIFIER_VK_CODES,
-        SINGLE_KEY_TABLE, begin_hf_press, begin_ptt_press, claim_ptt_release, complete_ptt_release,
-        end_hf_press, is_injection_exempt_vk, is_mouse_button_setting, is_mouse_vk,
-        press_ptt_member, ptt_key_config, release_ptt_member, should_consume_combo_main_down,
-        single_key_blocked_by_modifiers,
+        SINGLE_KEY_TABLE, VK_BROWSER_BACK, begin_hf_press, begin_ptt_press, claim_ptt_release,
+        complete_ptt_release, end_hf_press, is_injection_exempt_vk, is_mouse_button_setting,
+        is_mouse_vk, needs_mouse_hook, press_ptt_member, ptt_key_config, release_ptt_member,
+        should_consume_combo_main_down, single_key_blocked_by_modifiers,
     };
+    #[cfg(windows)]
+    use std::sync::atomic::AtomicU32;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    #[cfg(windows)]
+    use std::time::Duration;
+    #[cfg(windows)]
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    #[cfg(windows)]
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    #[cfg(windows)]
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, WM_QUIT,
+    };
+
+    fn all_bound_vks<'a>(
+        ptt: &'a [u32],
+        hf: &'a [u32],
+        ai_toggle: &'a [u32],
+    ) -> impl Iterator<Item = u32> + 'a {
+        ptt.iter().chain(hf.iter()).chain(ai_toggle.iter()).copied()
+    }
 
     #[test]
     fn hands_free_triggers_on_first_down_and_rearms_on_up() {
@@ -2427,6 +2618,75 @@ mod tests {
         assert!(complete_ptt_release(&active_generation, active_gen));
     }
 
+    #[test]
+    fn mouse_hook_is_not_needed_for_keyboard_only_bindings() {
+        let ptt = [0xA2, 0x4B];
+        let hf = [0xA1];
+        let ai_toggle = [];
+        assert!(!needs_mouse_hook(
+            all_bound_vks(&ptt, &hf, &ai_toggle),
+            false,
+            0
+        ));
+    }
+
+    #[test]
+    fn mouse_hook_is_needed_while_capturing_or_waiting_for_a_release() {
+        let ptt = [0xA2];
+        let hf = [0xA1];
+        let ai_toggle = [];
+        assert!(needs_mouse_hook(
+            all_bound_vks(&ptt, &hf, &ai_toggle),
+            true,
+            0
+        ));
+        assert!(needs_mouse_hook(
+            all_bound_vks(&ptt, &hf, &ai_toggle),
+            false,
+            0x05
+        ));
+    }
+
+    #[test]
+    fn mouse_hook_is_needed_when_a_shortcut_uses_a_mouse_button() {
+        let empty = [];
+        assert!(needs_mouse_hook(
+            all_bound_vks(&[0x05], &empty, &empty),
+            false,
+            0
+        ));
+        assert!(needs_mouse_hook(
+            all_bound_vks(&empty, &[0x06], &empty),
+            false,
+            0
+        ));
+        assert!(needs_mouse_hook(
+            all_bound_vks(&empty, &empty, &[0x04]),
+            false,
+            0
+        ));
+    }
+
+    #[test]
+    fn mouse_hook_is_not_needed_for_a_browser_back_binding() {
+        let empty = [];
+        assert!(!needs_mouse_hook(
+            all_bound_vks(&empty, &[VK_BROWSER_BACK], &empty),
+            false,
+            0
+        ));
+    }
+
+    #[test]
+    fn mouse_hook_is_not_needed_without_any_bindings() {
+        let empty = [];
+        assert!(!needs_mouse_hook(
+            all_bound_vks(&empty, &empty, &empty),
+            false,
+            0
+        ));
+    }
+
     /// 鼠标按键清单必须与 `is_mouse_vk` 保持一致。
     ///
     /// 这两处一旦不同步就是静默失败：两个 PTT 看门狗靠 `is_mouse_vk` 绕开
@@ -2479,5 +2739,181 @@ mod tests {
         poison(&manager.shared_state);
 
         manager.stop();
+    }
+
+    /// Serializes the tests that drive the process-wide mouse hook statics.
+    #[cfg(windows)]
+    static MOUSE_HOOK_GLOBALS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(windows)]
+    const HOOK_THREAD_WAIT: Duration = Duration::from_secs(5);
+
+    /// Takes the test lock and starts from a clean state. A poisoned lock only means an
+    /// earlier test panicked, and the reset makes that harmless.
+    #[cfg(windows)]
+    fn lock_mouse_hook_globals() -> std::sync::MutexGuard<'static, ()> {
+        let guard = MOUSE_HOOK_GLOBALS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_mouse_hook_globals();
+        guard
+    }
+
+    #[cfg(windows)]
+    fn reset_mouse_hook_globals() {
+        SHORTCUT_CAPTURE.store(false, Ordering::SeqCst);
+        CONSUME_XUP_VK.store(0, Ordering::SeqCst);
+        HOOK_THREAD_ID.store(0, Ordering::SeqCst);
+    }
+
+    /// Starts a thread that runs the real start decision and message loop, with a fake
+    /// installer in place of SetWindowsHookExW. The thread reports
+    /// `(thread id, reason, hook installed)` on the first receiver, sends one message per
+    /// install on the second, and returns its install count when it exits. The second
+    /// receiver must stay alive while the thread runs.
+    #[cfg(windows)]
+    fn spawn_hook_thread(
+        bound_vks: Vec<u32>,
+    ) -> (
+        std::sync::mpsc::Receiver<(u32, Option<MouseHookReason>, bool)>,
+        std::sync::mpsc::Receiver<()>,
+        std::thread::JoinHandle<u32>,
+    ) {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (installs_tx, installs_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            // PostThreadMessageW fails for a thread without a message queue, and a test
+            // thread has no keyboard hook that would create one. PeekMessageW with
+            // PM_NOREMOVE creates the queue and leaves any message in place.
+            let mut msg = MSG::default();
+            // The return value only reports whether a message was waiting.
+            let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE) };
+            let thread_id = unsafe { GetCurrentThreadId() };
+
+            let installs = AtomicU32::new(0);
+            let fake_install = || {
+                let count = installs.fetch_add(1, Ordering::SeqCst) + 1;
+                installs_tx
+                    .send(())
+                    .expect("the test must keep the installs receiver alive");
+                Some(count)
+            };
+            let (mut hook, reason) = start_mouse_hook(thread_id, bound_vks, fake_install);
+            ready_tx
+                .send((thread_id, reason, hook.is_some()))
+                .expect("the test must wait for the start report");
+            run_hook_message_loop(thread_id, &mut hook, &fake_install);
+            installs.load(Ordering::SeqCst)
+        });
+        (ready_rx, installs_rx, handle)
+    }
+
+    #[cfg(windows)]
+    fn quit_hook_thread(thread_id: u32) {
+        let posted = unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+        posted.expect("the hook thread must accept WM_QUIT");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hook_thread_installs_mouse_hook_on_demand_when_capture_starts() {
+        let _guard = lock_mouse_hook_globals();
+        let (ready, installs, handle) = spawn_hook_thread(vec![0xA2]);
+
+        let (thread_id, reason, installed) = ready
+            .recv_timeout(HOOK_THREAD_WAIT)
+            .expect("the hook thread must report its start decision");
+        assert_eq!(reason, None, "keyboard-only bindings need no mouse hook");
+        assert!(!installed);
+        assert_eq!(HOOK_THREAD_ID.load(Ordering::SeqCst), thread_id);
+
+        set_shortcut_capture(true);
+        installs
+            .recv_timeout(HOOK_THREAD_WAIT)
+            .expect("a capture request must install the mouse hook");
+        // A second request must not install again. Requests are handled in order, so
+        // the quit below is handled after it.
+        set_shortcut_capture(true);
+
+        quit_hook_thread(thread_id);
+        assert_eq!(handle.join().expect("the hook thread must not panic"), 1);
+        assert_eq!(HOOK_THREAD_ID.load(Ordering::SeqCst), 0);
+        reset_mouse_hook_globals();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hook_thread_installs_mouse_hook_at_start_when_capture_is_already_active() {
+        let _guard = lock_mouse_hook_globals();
+        // HOOK_THREAD_ID is still 0, so this request posts nothing. The new thread must
+        // read the flag itself.
+        set_shortcut_capture(true);
+        let (ready, _installs, handle) = spawn_hook_thread(vec![0xA2]);
+
+        let (thread_id, reason, installed) = ready
+            .recv_timeout(HOOK_THREAD_WAIT)
+            .expect("the hook thread must report its start decision");
+        assert_eq!(reason, Some(MouseHookReason::Capture));
+        assert!(installed);
+
+        quit_hook_thread(thread_id);
+        assert_eq!(handle.join().expect("the hook thread must not panic"), 1);
+        assert_eq!(HOOK_THREAD_ID.load(Ordering::SeqCst), 0);
+        reset_mouse_hook_globals();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hook_thread_installs_mouse_hook_for_a_pending_side_button_release() {
+        let _guard = lock_mouse_hook_globals();
+        CONSUME_XUP_VK.store(0x05, Ordering::SeqCst);
+        let (ready, _installs, handle) = spawn_hook_thread(vec![0xA2]);
+
+        let (thread_id, reason, installed) = ready
+            .recv_timeout(HOOK_THREAD_WAIT)
+            .expect("the hook thread must report its start decision");
+        assert_eq!(reason, Some(MouseHookReason::PendingUp));
+        assert!(installed);
+
+        quit_hook_thread(thread_id);
+        assert_eq!(handle.join().expect("the hook thread must not panic"), 1);
+        assert_eq!(HOOK_THREAD_ID.load(Ordering::SeqCst), 0);
+        reset_mouse_hook_globals();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hook_thread_installs_mouse_hook_for_a_mouse_button_binding() {
+        let _guard = lock_mouse_hook_globals();
+        let (ready, _installs, handle) = spawn_hook_thread(vec![0x05]);
+
+        let (thread_id, reason, installed) = ready
+            .recv_timeout(HOOK_THREAD_WAIT)
+            .expect("the hook thread must report its start decision");
+        assert_eq!(reason, Some(MouseHookReason::Binding));
+        assert!(installed);
+
+        quit_hook_thread(thread_id);
+        assert_eq!(handle.join().expect("the hook thread must not panic"), 1);
+        assert_eq!(HOOK_THREAD_ID.load(Ordering::SeqCst), 0);
+        reset_mouse_hook_globals();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hook_thread_without_a_mouse_need_installs_nothing_and_clears_thread_id() {
+        let _guard = lock_mouse_hook_globals();
+        let (ready, _installs, handle) = spawn_hook_thread(vec![0xA2]);
+
+        let (thread_id, reason, installed) = ready
+            .recv_timeout(HOOK_THREAD_WAIT)
+            .expect("the hook thread must report its start decision");
+        assert_eq!(reason, None);
+        assert!(!installed);
+
+        quit_hook_thread(thread_id);
+        assert_eq!(handle.join().expect("the hook thread must not panic"), 0);
+        assert_eq!(HOOK_THREAD_ID.load(Ordering::SeqCst), 0);
+        reset_mouse_hook_globals();
     }
 }
