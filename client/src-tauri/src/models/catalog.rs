@@ -483,8 +483,8 @@ const PARAKEET_TDT_V3_Q8: GgufWeight = GgufWeight {
 const FUNASR_MLT_NANO_Q8: GgufWeight = GgufWeight {
     repo: "handy-computer/Fun-ASR-MLT-Nano-2512-gguf",
     file: "Fun-ASR-MLT-Nano-2512-Q8_0.gguf",
-    size: 891_271_232,
-    sha256: "d12476d8d9f2baa0ebf738fa955fa05ed33a654f1567289033a810c45d9d9002",
+    size: 891_271_392,
+    sha256: "419d350b220d5a1d398740ec1511c8ea751517f2157043a73a399b76b60f21e4",
 };
 
 const PARAKEET_TDT_11B_Q8: GgufWeight = GgufWeight {
@@ -532,8 +532,8 @@ const WHISPER_SMALL_Q4: GgufWeight = GgufWeight {
 const WHISPER_LARGE_V3_TURBO_Q4: GgufWeight = GgufWeight {
     repo: "handy-computer/whisper-large-v3-turbo-gguf",
     file: "whisper-large-v3-turbo-Q4_K_M.gguf",
-    size: 536_069_728,
-    sha256: "ecfe9b6beb4ab18fef49187cc968cc74b5168b94629c8830e2ca6b794c6e25ed",
+    size: 536_069_696,
+    sha256: "c6e172d0074f0fa9440b88247854b50643cd4bb58b8515c797bbed16d858c7df",
 };
 
 const SENSEVOICE: GgufWeight = GgufWeight {
@@ -690,8 +690,8 @@ mod tests {
             ),
             (
                 "whisper-large-v3-turbo-gguf",
-                536_069_728,
-                "ecfe9b6beb4ab18fef49187cc968cc74b5168b94629c8830e2ca6b794c6e25ed",
+                536_069_696,
+                "c6e172d0074f0fa9440b88247854b50643cd4bb58b8515c797bbed16d858c7df",
             ),
             (
                 "whisper-large-v3-gguf",

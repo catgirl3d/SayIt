@@ -20,6 +20,7 @@ Sections are ordered by version, newest first.
 - A usage session abandoned by a new start before stop is now closed with the `superseded` status instead of staying in `recording` forever.
 
 #### Desktop Client
+- Downloading Fun-ASR MLT Nano and Whisper Large v3 Turbo no longer stops with a size or checksum mismatch. Upstream re-exported both files (metadata refresh), and the catalog now pins the current sizes and SHA-256 values, so these downloads verify again.
 - History reprocessing now validates recordings in Rust and sends only raw mono 16 kHz 16-bit PCM from a WAV file to the selected speech engine, reporting malformed or unsupported audio before any transcription request.
 - History recording downloads now copy the existing WAV directly in Rust from the app's audio folder to Downloads instead of sending the file through the renderer as base64; an existing destination is reported explicitly instead of being overwritten. The generated `sayit_<date>.wav` names and flat filename validation remain unchanged.
 - Saving a support bundle now copies only a `.zip` that exists directly in the app's diagnostics folder and only to a `.zip` destination. The command no longer accepts an arbitrary source file, so it cannot be used to copy and then delete an unrelated file, and it cannot write the archive under an executable extension.
