@@ -235,6 +235,13 @@
   transform-origin: center;
 }
 
+/* WebView2 keeps the hidden overlay page "visible", so pause its animations until it is shown. */
+[data-overlay-animations-paused] *,
+[data-overlay-animations-paused] *::before,
+[data-overlay-animations-paused] *::after {
+  animation-play-state: paused !important;
+}
+
 .overlay-recording-content {
   opacity: 0;
   clip-path: inset(0 calc(50% - 24px) 0 calc(50% - 24px));

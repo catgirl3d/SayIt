@@ -318,11 +318,16 @@ export default function Overlay() {
   const [warningTone, setWarningTone] = useState<'warn' | 'error'>('warn')
   const [micSourceMode, setMicSourceMode] = useState<'auto' | 'fixed' | null>(null)
   const [micSourceLabel, setMicSourceLabel] = useState('')
+  // The overlay WebView is created hidden and WebView2 keeps it "visible" while hidden, so its
+  // CSS animations would keep running in the tray. Start paused; any overlay-state payload resumes
+  // them and overlay-hidden pauses them again.
+  const [animationsPaused, setAnimationsPaused] = useState(true)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const preparingPaintFrameRef = useRef<number | null>(null)
   const pendingListeningVisualRef = useRef(false)
   const elapsedSecRef = useRef(0)
+  const shownIdRef = useRef(0)
 
   // 根据录音时长计算预估处理时间（秒）
   const calculateThinkingDuration = (recordingSec: number): number => {
@@ -339,6 +344,7 @@ export default function Overlay() {
   useEffect(() => {
     let disposed = false
     let removeOverlayListener: (() => void) | null = null
+    let removeHiddenListener: (() => void) | null = null
 
     const cancelPreparingPaint = () => {
       if (preparingPaintFrameRef.current !== null) {
@@ -365,7 +371,13 @@ export default function Overlay() {
 
     const handleOverlayState = (data: unknown) => {
       const payload = data as OverlayPayload
-      if (typeof payload._overlayShowId === 'number') setPresentationId(payload._overlayShowId)
+      // A late update for an already hidden show arrives with show id 0 and must not wake the
+      // hidden page; with id 0 the window is shown only for the interactive fallback card.
+      if (payload._overlayShowId !== 0 || payload.state === 'fallback') setAnimationsPaused(false)
+      if (typeof payload._overlayShowId === 'number') {
+        shownIdRef.current = payload._overlayShowId
+        setPresentationId(payload._overlayShowId)
+      }
       // 语言先落地再渲染本帧：悬浮窗没有自己的初始化时机，语言只能随 payload 来。
       // setLocale 对同值是空操作，所以每帧都调也不会造成额外重渲染。
       if (isLocale(payload.locale)) setLocale(payload.locale)
@@ -486,6 +498,13 @@ export default function Overlay() {
       })
     }
 
+    const handleOverlayHidden = (data: unknown) => {
+      const showId = (data as { showId?: unknown } | null)?.showId
+      // A hide for an earlier show can arrive after the next show's state; ignore it.
+      if (typeof showId === 'number' && showId !== shownIdRef.current) return
+      setAnimationsPaused(true)
+    }
+
     void bridge.listen<unknown>('overlay-state', (event) => handleOverlayState(event.payload))
       .then((unlisten) => {
         if (disposed) {
@@ -496,11 +515,21 @@ export default function Overlay() {
         void bridge.overlayReady().catch(() => { })
       })
 
+    void bridge.listen<unknown>('overlay-hidden', (event) => handleOverlayHidden(event.payload))
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten()
+          return
+        }
+        removeHiddenListener = unlisten
+      })
+
     return () => {
       disposed = true
       cancelPreparingPaint()
       pendingListeningVisualRef.current = false
       removeOverlayListener?.()
+      removeHiddenListener?.()
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current)
         hideTimerRef.current = null
@@ -576,6 +605,7 @@ export default function Overlay() {
   return (
     <div
       ref={rootRef}
+      data-overlay-animations-paused={animationsPaused ? '' : undefined}
       className="pointer-events-none flex h-full items-end justify-center pb-4"
     >
       {state === 'failure' ? (

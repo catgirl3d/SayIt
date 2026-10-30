@@ -195,7 +195,7 @@ impl WindowState {
     }
 
     pub fn hide_overlay(&self, app: &AppHandle) {
-        self.active_show_id.store(0, Ordering::SeqCst);
+        let hidden_show_id = self.active_show_id.swap(0, Ordering::SeqCst);
         *self.overlay_monitor.lock().unwrap() = None;
         // 下次显示需要重新应用几何。
         *self.last_applied_layout.lock().unwrap() = None;
@@ -213,6 +213,15 @@ impl WindowState {
                 write_log_line(&format!(
                     "[overlay-diag] hide FAILED prev_layout={:?} hide_err={:?}",
                     prev_layout, error,
+                ));
+            }
+            // WebView2 keeps reporting the hidden page as visible and keeps running its CSS
+            // animations, so tell the page explicitly that its window is hidden.
+            if let Err(error) = overlay.emit("overlay-hidden", json!({ "showId": hidden_show_id }))
+            {
+                write_log_line(&format!(
+                    "[overlay-health] emit overlay-hidden FAILED show_id={} error={:?}",
+                    hidden_show_id, error,
                 ));
             }
         }
