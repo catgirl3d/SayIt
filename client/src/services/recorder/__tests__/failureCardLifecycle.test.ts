@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, type ComponentType } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ActiveAppContext } from '@/types/appContext'
-import type { UserStats } from '@/services/personalization/types'
+import type { PromptResolution, UserStats } from '@/services/personalization/types'
 import type { PromptPreset } from '@/services/store'
 import type { ProbeResult } from '../PasteService'
 
@@ -1943,6 +1943,34 @@ describe('History writes', () => {
       } finally {
         await switchProvider('cloud_api')
       }
+    })
+
+    it('still finishes the run without a recovery hint when the record metadata cannot be built', async () => {
+      const recorder = new RecorderOrchestrator()
+      await enterTimeoutGrace(recorder, timeoutPath.runId)
+      const context = recorder.testSeam().timedOutProcessingContext
+      expect(context).not.toBeNull()
+      // Building the metadata reads promptResolution.preset.id, so this snapshot makes it throw.
+      if (context) context.promptResolution = {} as PromptResolution
+
+      await timeoutPath.fire(recorder)
+      await settleHistoryWrites()
+
+      expect(harness.addHistory).not.toHaveBeenCalled()
+      expect(harness.saveRecordingAudio).not.toHaveBeenCalled()
+      expect(harness.runtimeEvents).toHaveBeenCalledWith(
+        'warn',
+        'recorder',
+        'Failed to write timeout recovery history entry',
+        expect.objectContaining({ error: expect.any(String) }),
+      )
+      expect(latestPayload('update_overlay_state')).toMatchObject({
+        state: 'failure',
+        failureRecovery: 'none',
+        cardToken: timeoutPath.runId,
+      })
+      expect(recorder.getState()).toBe('idle')
+      expect(recorder.testSeam().activeRunId).toBe(0)
     })
 
     it('upgrades the failure card to History retry and logs the save', async () => {

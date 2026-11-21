@@ -20,6 +20,7 @@ import {
   recordUsage,
   setActivePresetId,
   type HistoryFailReasonCode,
+  type HistoryRecord,
   type PromptPreset,
 } from '../store'
 import { setActivePresetKnown } from '../../stores/activePreset'
@@ -127,6 +128,34 @@ interface ResetToIdleOptions {
   preserveLateFinalContext?: boolean
 }
 
+/** What a History write has stored so far: the id and, once saved, the audio file. */
+interface PendingHistoryArtifact {
+  runId: number
+  recordId: string
+  audioFilePath?: string
+}
+
+interface WriteRunHistoryOptions {
+  runId: number
+  /** `revocable`: the run can still be canceled while the write is in flight (empty and final
+   *  results). `safetyNet`: the run's outcome is already final and nothing revokes the write
+   *  (error, timeout); the run itself may still be finishing. */
+  mode: 'revocable' | 'safetyNet'
+  audioChunks: ArrayBuffer[]
+  audioSaveFailureLog: string
+  writeFailureLog: string
+  /** The record fields of this path; the id, timestamp and audio file are added by the writer. */
+  buildRecord: () => RunHistoryFields | Promise<RunHistoryFields>
+}
+
+type RunHistoryFields = Omit<HistoryRecord, 'id' | 'timestamp' | 'audioFilePath'>
+
+type WriteRunHistoryResult =
+  | { status: 'written'; recordId: string; audioFilePath?: string }
+  | { status: 'disabled' }
+  | { status: 'stale' }
+  | { status: 'failed' }
+
 /** Test-only typed seam over the recorder internals that the recorder unit
  *  tests seed and inspect. Every delegation in testSeam() is a real member
  *  access, so renaming a private field or method breaks the build inside the
@@ -199,7 +228,7 @@ export class RecorderOrchestrator {
   private processingTimeoutId: ReturnType<typeof setTimeout> | null = null
   private finalReceivedAt = 0
   private timedOutProcessingContext: TimedOutProcessingContext | null = null
-  private pendingHistoryArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
+  private pendingHistoryArtifact: PendingHistoryArtifact | null = null
 
   private handsFreeMode = false
   private pttSuppressed = false
@@ -1062,6 +1091,81 @@ export class RecorderOrchestrator {
     }
   }
 
+  /**
+   * The one place where a run writes its History record: the audio file first, then the
+   * record, then the `history-updated` notification. Callers keep their own follow-up
+   * (cards, toasts, retry availability, run cleanup).
+   *
+   * A `revocable` write belongs to a run the user can still cancel (Esc while processing).
+   * Its artifact is registered as pendingHistoryArtifact as soon as the id exists, so
+   * cancelProcessing can remove it, and the run is re-checked after every await: a stale run
+   * removes whatever the write already stored and reports `stale` without logging. A
+   * `safetyNet` write records an outcome that is already final (an error can start it while
+   * the capture is still stopping, before the run is finished), so it never checks the run and
+   * never registers an artifact; a failed write is cleaned up and logged.
+   */
+  private async writeRunHistory(options: WriteRunHistoryOptions): Promise<WriteRunHistoryResult> {
+    const { runId } = options
+    const revocable = options.mode === 'revocable'
+    const lostRun = () => revocable && !this.isRunCurrent(runId)
+    let artifact: PendingHistoryArtifact | null = null
+    let recordWriteStarted = false
+    // Only an audio file or a started record write needs removing; an id alone stores nothing.
+    const removeStoredArtifact = () => (
+      artifact && (artifact.audioFilePath || recordWriteStarted)
+        ? this.discardCanceledHistory(artifact)
+        : undefined
+    )
+    try {
+      const historyEnabled = await getSetting('historyEnabled', true)
+      if (lostRun()) return { status: 'stale' }
+      if (!historyEnabled) return { status: 'disabled' }
+
+      const recordId = createHistoryRecordId()
+      artifact = { runId, recordId }
+      if (revocable) this.pendingHistoryArtifact = artifact
+      const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
+      if (lostRun()) return { status: 'stale' }
+      if (saveAudioEnabled && options.audioChunks.length > 0) {
+        const savedPath = await this.saveHistoryAudio(recordId, options.audioChunks, options.audioSaveFailureLog)
+        if (savedPath) artifact.audioFilePath = savedPath
+      }
+      // Re-check the run after saving the file; once stale, both the file and any record
+      // that already exists must be removed.
+      if (lostRun()) {
+        await removeStoredArtifact()
+        return { status: 'stale' }
+      }
+
+      const fields = await options.buildRecord()
+      if (lostRun()) {
+        await removeStoredArtifact()
+        return { status: 'stale' }
+      }
+
+      recordWriteStarted = true
+      await addHistory({
+        id: recordId,
+        timestamp: Date.now(),
+        ...fields,
+        audioFilePath: artifact.audioFilePath,
+      })
+      // The run is re-checked after writing the record as well: a cancel or a new run
+      // removes the file and record that were just written.
+      if (lostRun()) {
+        await removeStoredArtifact()
+        return { status: 'stale' }
+      }
+      void bridge.emit('history-updated')
+      return { status: 'written', recordId, audioFilePath: artifact.audioFilePath }
+    } catch (error) {
+      await removeStoredArtifact()
+      if (lostRun()) return { status: 'stale' }
+      addRuntimeEvent('warn', 'recorder', options.writeFailureLog, { error: String(error) })
+      return { status: 'failed' }
+    }
+  }
+
   private async persistFailureHistory(options: {
     runId: number
     audioDurationSec: number
@@ -1073,24 +1177,13 @@ export class RecorderOrchestrator {
   }): Promise<boolean> {
     if (options.audioDurationSec < 0.5 || options.audioChunks.length === 0) return false
 
-    let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
-    try {
-      if (!(await getSetting('historyEnabled', true))) return false
-
-      const recordId = createHistoryRecordId()
-      historyArtifact = { runId: options.runId, recordId }
-      if (await getSetting('audioRetentionEnabled', true)) {
-        const savedPath = await this.saveHistoryAudio(
-          recordId,
-          options.audioChunks,
-          'Failed to save audio for recognition failure',
-        )
-        if (savedPath) historyArtifact.audioFilePath = savedPath
-      }
-
-      await addHistory({
-        id: recordId,
-        timestamp: Date.now(),
+    const outcome = await this.writeRunHistory({
+      runId: options.runId,
+      mode: 'safetyNet',
+      audioChunks: options.audioChunks,
+      audioSaveFailureLog: 'Failed to save audio for recognition failure',
+      writeFailureLog: 'Failed to write recognition failure to history',
+      buildRecord: () => ({
         asrText: '',
         llmText: '',
         asrMs: 0,
@@ -1101,16 +1194,10 @@ export class RecorderOrchestrator {
         isEmpty: true,
         failReason: options.failReason,
         failReasonCode: options.failReasonCode,
-        audioFilePath: historyArtifact.audioFilePath,
         ...options.historyMeta,
-      })
-      void bridge.emit('history-updated')
-      return Boolean(historyArtifact.audioFilePath)
-    } catch (error) {
-      if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-      addRuntimeEvent('warn', 'recorder', 'Failed to write recognition failure to history', { error: String(error) })
-      return false
-    }
+      }),
+    })
+    return outcome.status === 'written' && Boolean(outcome.audioFilePath)
   }
 
   /**
@@ -1123,22 +1210,23 @@ export class RecorderOrchestrator {
     ctx: TimedOutProcessingContext,
     trigger: 'grace_expired' | 'new_recording',
   ): Promise<boolean> {
-    let historyArtifact: { recordId: string; audioFilePath?: string } | null = null
+    // Built before the first await: its fallback to the live prompt resolution must not pick
+    // up a newer run that starts while the write is in flight. A failure here is logged like
+    // any failed write, so the promise never rejects and the callers still finish the run.
+    let historyMeta: ReturnType<RecorderOrchestrator['buildHistoryMetadata']>
     try {
-      const historyMeta = this.buildHistoryMetadata(ctx.promptResolution, ctx.appContext)
-      if (!(await getSetting('historyEnabled', true))) return false
-
-      let audioFilePath: string | undefined
-      const recordId = createHistoryRecordId()
-      const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
-      if (saveAudioEnabled && ctx.audioChunks.length > 0) {
-        audioFilePath = await this.saveHistoryAudio(recordId, ctx.audioChunks, 'Failed to save audio for timeout recovery')
-      }
-      historyArtifact = { recordId, audioFilePath }
-
-      await addHistory({
-        id: recordId,
-        timestamp: Date.now(),
+      historyMeta = this.buildHistoryMetadata(ctx.promptResolution, ctx.appContext)
+    } catch (error) {
+      addRuntimeEvent('warn', 'recorder', 'Failed to write timeout recovery history entry', { error: String(error) })
+      return false
+    }
+    const outcome = await this.writeRunHistory({
+      runId: ctx.runId,
+      mode: 'safetyNet',
+      audioChunks: ctx.audioChunks,
+      audioSaveFailureLog: 'Failed to save audio for timeout recovery',
+      writeFailureLog: 'Failed to write timeout recovery history entry',
+      buildRecord: () => ({
         asrText: '',
         llmText: '',
         asrMs: 0,
@@ -1149,31 +1237,26 @@ export class RecorderOrchestrator {
         isEmpty: true,
         failReason: t('recorder.processingTimeoutTitle'),
         failReasonCode: 'processing_timeout',
-        audioFilePath,
         ...historyMeta,
         workMode: ctx.workMode,
-      })
-      void bridge.emit('history-updated')
-      addRuntimeEvent('info', 'recorder', 'Timed-out recording saved to history for retry', {
-        audioSec: ctx.audioDurationSec,
-        trigger,
-      })
-      return Boolean(audioFilePath)
-    } catch (err) {
-      if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-      addRuntimeEvent('warn', 'recorder', 'Failed to write timeout recovery history entry', { error: String(err) })
-      return false
-    }
+      }),
+    })
+    if (outcome.status !== 'written') return false
+    addRuntimeEvent('info', 'recorder', 'Timed-out recording saved to history for retry', {
+      audioSec: ctx.audioDurationSec,
+      trigger,
+    })
+    return Boolean(outcome.audioFilePath)
   }
 
   private async discardCanceledHistory(artifact: { recordId: string; audioFilePath?: string }) {
     try {
       if (artifact.audioFilePath) await bridge.deleteAudioFile(artifact.audioFilePath)
-    } catch { /* 取消清理失败不阻塞状态复位 */ }
+    } catch { /* A failed cleanup must not block the state reset */ }
     try {
       await deleteHistory(artifact.recordId)
       void bridge.emit('history-updated')
-    } catch { /* 记录可能尚未写入；processFinalResult 完成写入后会再次清理 */ }
+    } catch { /* The record may not have been written yet; writeRunHistory cleans up again once its write completes */ }
   }
 
   private async cancelRecording(
@@ -1316,64 +1399,37 @@ export class RecorderOrchestrator {
             || result.asrEngine === CUSTOM_ASR_PROVIDER
           )
         void (async () => {
-          let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
-          try {
-            const historyEnabled = await getSetting('historyEnabled', true)
-            if (!this.isRunCurrent(runId)) return
-            if (historyEnabled) {
-              const recordId = createHistoryRecordId()
-              historyArtifact = { runId, recordId }
-              this.pendingHistoryArtifact = historyArtifact
-              const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
-              if (!this.isRunCurrent(runId)) return
-              if (saveAudioEnabled && audioChunks.length > 0) {
-                const savedPath = await this.saveHistoryAudio(recordId, audioChunks, 'Failed to save audio for empty result')
-                if (savedPath) historyArtifact.audioFilePath = savedPath
-                // Re-check the run after saving the file; once stale, both the file and any
-                // record that already exists must be removed.
-                if (!this.isRunCurrent(runId)) {
-                  await this.discardCanceledHistory(historyArtifact)
-                  return
-                }
-              }
-              await addHistory({
-                id: recordId,
-                timestamp: Date.now(),
-                asrText: '',
-                llmText: '',
-                asrMs: result.asrMs || 0,
-                llmMs: 0,
-                durationSec: wallSec,
-                audioDurationSec: audioDur > 0 ? audioDur : undefined,
-                asrDurationSec: result.durationSec > 0 ? result.durationSec : undefined,
-                charCount: 0,
-                isEmpty: true,
-                // 调用本身成功，只是没出字。这一句和上面的报错要能区分开：
-                // 前者多半真没说话，后者是调用失败
-                failReason: t('recorder.noTranscript'),
-                failReasonCode: 'no_transcript',
-                aiSource: result.aiSource,
-                aiStatus: result.aiStatus,
-                audioFilePath: historyArtifact.audioFilePath,
-                ...(shouldPersistAsrModel && {
-                  asrProvider: result.asrEngine === CUSTOM_ASR_PROVIDER
-                    ? formatCustomAsrHistoryProvider(result.asrModel ?? '')
-                    : result.asrModel,
-                }),
-                ...historyMeta,
-              })
-              // 写记录后同样验代；取消/新 run 会清掉刚写入的文件与记录。
-              if (!this.isRunCurrent(runId)) {
-                await this.discardCanceledHistory(historyArtifact)
-                return
-              }
-              void bridge.emit('history-updated')
-            }
-          } catch (err) {
-            if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-            if (!this.isRunCurrent(runId)) return
-            addRuntimeEvent('warn', 'recorder', 'Failed to write empty result to history', { error: String(err) })
-          }
+          await this.writeRunHistory({
+            runId,
+            mode: 'revocable',
+            audioChunks,
+            audioSaveFailureLog: 'Failed to save audio for empty result',
+            writeFailureLog: 'Failed to write empty result to history',
+            buildRecord: () => ({
+              asrText: '',
+              llmText: '',
+              asrMs: result.asrMs || 0,
+              llmMs: 0,
+              durationSec: wallSec,
+              audioDurationSec: audioDur > 0 ? audioDur : undefined,
+              asrDurationSec: result.durationSec > 0 ? result.durationSec : undefined,
+              charCount: 0,
+              isEmpty: true,
+              // The call itself succeeded; it just produced no text. This reason must stay
+              // distinguishable from the error reasons of the failure path: the former most
+              // likely means the user really did not speak, the latter means the call failed.
+              failReason: t('recorder.noTranscript'),
+              failReasonCode: 'no_transcript',
+              aiSource: result.aiSource,
+              aiStatus: result.aiStatus,
+              ...(shouldPersistAsrModel && {
+                asrProvider: result.asrEngine === CUSTOM_ASR_PROVIDER
+                  ? formatCustomAsrHistoryProvider(result.asrModel ?? '')
+                  : result.asrModel,
+              }),
+              ...historyMeta,
+            }),
+          })
 
           if (!this.isRunCurrent(runId)) return
           this.overlayService.showNoSpeech({
@@ -2739,9 +2795,6 @@ export class RecorderOrchestrator {
     const wallSec = context.wallTimeSec > 0 ? context.wallTimeSec : audioDur
     const promptResolution = context.promptResolution
     const appContext = context.appContext
-    let historyArtifact: { runId: number; recordId: string; audioFilePath?: string } | null = null
-    let historyRetryAvailable = false
-    let historyWriteSucceeded = false
 
     if (showEmptyFailure) {
       this.processingCancelable = false
@@ -2765,33 +2818,15 @@ export class RecorderOrchestrator {
       contextApplied: result.contextApplied,
     })
 
-    try {
-      const historyEnabled = await getSetting('historyEnabled', true)
-      if (!this.isRunCurrent(runId)) return
-      if (historyEnabled) {
-        const recordId = createHistoryRecordId()
-        historyArtifact = { runId, recordId }
-        const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
-        if (!this.isRunCurrent(runId)) return
-        if (saveAudioEnabled && context.audioChunks.length > 0) {
-          const savedPath = await this.saveHistoryAudio(recordId, context.audioChunks, 'Failed to save audio file')
-          if (savedPath) historyArtifact.audioFilePath = savedPath
-        }
-
-        if (!this.isRunCurrent(runId)) {
-          await this.discardCanceledHistory(historyArtifact)
-          return
-        }
+    const historyOutcome = await this.writeRunHistory({
+      runId,
+      mode: 'revocable',
+      audioChunks: context.audioChunks,
+      audioSaveFailureLog: 'Failed to save audio file',
+      writeFailureLog: 'Failed to write history entry',
+      buildRecord: async () => {
         const providerMeta = await this.buildProviderMetadata(result)
-        if (!this.isRunCurrent(runId)) {
-          await this.discardCanceledHistory(historyArtifact)
-          return
-        }
-
-        this.pendingHistoryArtifact = historyArtifact
-        await addHistory({
-          id: recordId,
-          timestamp: Date.now(),
+        return {
           asrText: result.asrText,
           llmText: textToPaste,
           asrMs: result.asrMs,
@@ -2801,8 +2836,9 @@ export class RecorderOrchestrator {
           asrDurationSec: result.durationSec > 0 ? result.durationSec : undefined,
           charCount: hasText ? textToPaste.length : 0,
           isEmpty: !hasText,
-          // 区分「ASR 本来就没出字」和「ASR 出了字但后处理把它清空了」——
-          // 后者是我们自己的问题（替换规则/格式化），别让用户以为是没识别到
+          // Distinguish "ASR produced no text in the first place" from "ASR produced text but
+          // post-processing emptied it": the latter is our own problem (replacement rules or
+          // formatting), so the user must not be led to think nothing was recognized.
           failReason: hasText
             ? undefined
             : result.asrText?.trim()
@@ -2813,28 +2849,22 @@ export class RecorderOrchestrator {
             : result.asrText?.trim()
               ? 'empty_after_processing'
               : 'no_transcript',
-          audioFilePath: historyArtifact.audioFilePath,
           ...this.buildHistoryMetadata(promptResolution, appContext),
           ...providerMeta,
-        })
-        if (!this.isRunCurrent(runId)) {
-          await this.discardCanceledHistory(historyArtifact)
-          return
         }
-        historyWriteSucceeded = true
-        void bridge.emit('history-updated')
-        historyRetryAvailable = emptyAfterProcessing && Boolean(historyArtifact.audioFilePath)
-      }
-    } catch (error) {
-      if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-      if (!this.isRunCurrent(runId)) return
-      addRuntimeEvent('warn', 'recorder', 'Failed to write history entry', { error: String(error) })
-    }
+      },
+    })
 
     if (!this.isRunCurrent(runId)) {
-      if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
+      if (historyOutcome.status === 'written') {
+        await this.discardCanceledHistory({ recordId: historyOutcome.recordId, audioFilePath: historyOutcome.audioFilePath })
+      }
       return
     }
+    const historyWriteSucceeded = historyOutcome.status === 'written'
+    const historyRetryAvailable = historyWriteSucceeded
+      && emptyAfterProcessing
+      && Boolean(historyOutcome.audioFilePath)
 
     if (suppressLateFinalInsertion && hasText && !historyWriteSucceeded) {
       this.finishRun(runId)
