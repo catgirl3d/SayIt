@@ -13,6 +13,8 @@ type RecordingContextFixture = {
 
 const harness = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
+  /** A setting read waits for its gate, so a test can act while that read is in flight. */
+  settingGates: new Map<string, Promise<void>>(),
   historyReadError: false,
   suppressLateSettingReadError: false,
   suppressLateSettingReadCount: 0,
@@ -22,6 +24,7 @@ const harness = vi.hoisted(() => ({
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
   runtimeEvents: vi.fn(),
   addHistory: vi.fn(),
+  deleteHistory: vi.fn(),
   recordUsage: vi.fn(),
   getUserStats: vi.fn(),
   recordingContext: {
@@ -36,10 +39,12 @@ const harness = vi.hoisted(() => ({
 
 vi.mock('@/services/store', () => ({
   addHistory: (...args: unknown[]) => harness.addHistory(...args),
-  deleteHistory: vi.fn(async () => undefined),
+  deleteHistory: (...args: unknown[]) => harness.deleteHistory(...args),
   getActivePresetId: vi.fn(async () => 'intent'),
   getPromptPresets: vi.fn(async () => harness.promptPresets),
   getSetting: vi.fn(async (key: string, fallback: unknown) => {
+    const gate = harness.settingGates.get(key)
+    if (gate) await gate
     if (key === 'historyEnabled' && harness.historyReadError) throw new Error('history setting unavailable')
     if (key === 'suppressLateFinalInsertion') {
       harness.suppressLateSettingReadCount++
@@ -238,6 +243,7 @@ beforeEach(async () => {
   vi.useFakeTimers()
   vi.stubGlobal('window', globalThis)
   harness.settings.clear()
+  harness.settingGates.clear()
   harness.historyReadError = false
   harness.suppressLateSettingReadError = false
   harness.suppressLateSettingReadCount = 0
@@ -262,6 +268,7 @@ beforeEach(async () => {
     return 1
   })
   harness.addHistory.mockReset().mockResolvedValue(undefined)
+  harness.deleteHistory.mockReset().mockResolvedValue(undefined)
   harness.runtimeEvents.mockReset()
   harness.recordUsage.mockReset().mockResolvedValue(undefined)
   harness.getUserStats.mockReset().mockResolvedValue({ totalWords: 0, totalSessions: 0, domainWords: {}, appUsageCount: {} })
@@ -1631,5 +1638,395 @@ describe('recorder start lock recovery', () => {
     await recorder.refreshRuntimeSettings()
     await startRealRecording(recorder)
     expect(recorder.getState()).toBe('recording')
+  })
+})
+
+const SAVED_AUDIO_PATH = 'history/recording.wav'
+const PROVIDER_FAILURE_MESSAGE = 'sayit_error:provider_insufficient_balance:HTTP 402 {"message":"private vendor response"}'
+const EMPTY_ASR_MS = 37
+
+interface HistoryPath {
+  name: string
+  runId: number
+  /** Revocable writes are removed when Esc cancels the processing run while they are in flight. */
+  revocable: boolean
+  /** Puts a fresh recorder into the state in which the path's terminal event can occur. */
+  arm: (recorder: RecorderOrchestrator, runId: number) => Promise<void>
+  /** Delivers the terminal event (or lets the timer run) that makes the path write its record. */
+  fire: (recorder: RecorderOrchestrator) => Promise<void>
+  expectedRecord: Record<string, unknown>
+  writeFailedWarning: string
+  audioSaveFailedWarning: string
+}
+
+async function enterProcessing(recorder: RecorderOrchestrator, runId: number) {
+  const provider = await switchProvider('cloud_api')
+  vi.spyOn(provider, 'stop').mockReturnValue(true)
+  prepareRun(recorder, runId, 1, 'recording')
+  const seam = recorder.testSeam()
+  seam.recordStartPerf = performance.now() - 1_000
+  seam.cachedProbeResult = { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
+  await seam.stopRecording()
+  expect(recorder.getState()).toBe('processing')
+}
+
+const HISTORY_PATHS: HistoryPath[] = [
+  {
+    name: 'provider error',
+    runId: 301,
+    revocable: false,
+    arm: enterProcessing,
+    fire: async (recorder) => {
+      callbacksFor(recorder).onError?.(PROVIDER_FAILURE_MESSAGE)
+    },
+    expectedRecord: {
+      asrText: '',
+      llmText: '',
+      charCount: 0,
+      isEmpty: true,
+      audioDurationSec: 1,
+      failReason: describeProviderError(PROVIDER_FAILURE_MESSAGE).detail,
+      failReasonCode: 'provider_insufficient_balance',
+      audioFilePath: SAVED_AUDIO_PATH,
+    },
+    writeFailedWarning: 'Failed to write recognition failure to history',
+    audioSaveFailedWarning: 'Failed to save audio for recognition failure',
+  },
+  {
+    name: 'empty ASR result',
+    runId: 302,
+    revocable: true,
+    arm: enterProcessing,
+    fire: async (recorder) => {
+      callbacksFor(recorder).onASR?.({ text: '', asrMs: EMPTY_ASR_MS, durationSec: 1 })
+    },
+    expectedRecord: {
+      asrText: '',
+      llmText: '',
+      asrMs: EMPTY_ASR_MS,
+      llmMs: 0,
+      charCount: 0,
+      isEmpty: true,
+      audioDurationSec: 1,
+      asrDurationSec: 1,
+      failReason: en['recorder.noTranscript'],
+      failReasonCode: 'no_transcript',
+      audioFilePath: SAVED_AUDIO_PATH,
+    },
+    writeFailedWarning: 'Failed to write empty result to history',
+    audioSaveFailedWarning: 'Failed to save audio for empty result',
+  },
+  {
+    name: 'processing timeout',
+    runId: 303,
+    revocable: false,
+    arm: async (recorder, runId) => {
+      await enterTimeoutGrace(recorder, runId)
+    },
+    fire: async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    },
+    expectedRecord: {
+      asrText: '',
+      llmText: '',
+      charCount: 0,
+      isEmpty: true,
+      audioDurationSec: 1,
+      audioFilePath: SAVED_AUDIO_PATH,
+    },
+    writeFailedWarning: 'Failed to write timeout recovery history entry',
+    audioSaveFailedWarning: 'Failed to save audio for timeout recovery',
+  },
+  {
+    name: 'final result',
+    runId: 304,
+    revocable: true,
+    arm: enterProcessing,
+    fire: async (recorder) => {
+      callbacksFor(recorder).onFinal?.(makeFinal())
+    },
+    expectedRecord: {
+      asrText: 'recognized words',
+      llmText: 'recognized words',
+      charCount: 'recognized words'.length,
+      isEmpty: false,
+      audioDurationSec: 1,
+      audioFilePath: SAVED_AUDIO_PATH,
+    },
+    writeFailedWarning: 'Failed to write history entry',
+    audioSaveFailedWarning: 'Failed to save audio file',
+  },
+]
+
+/** Lets the fire-and-forget History write chains run to completion under fake timers. */
+async function settleHistoryWrites() {
+  for (let round = 0; round < 5; round++) await flushMicrotasks()
+}
+
+async function runHistoryPath(path: HistoryPath, recorder = new RecorderOrchestrator()) {
+  await path.arm(recorder, path.runId)
+  await path.fire(recorder)
+  await settleHistoryWrites()
+  return recorder
+}
+
+function writtenRecords() {
+  return harness.addHistory.mock.calls.map(([record]) => record as Record<string, unknown>)
+}
+
+function historyUpdatedEmits() {
+  return harness.emit.mock.calls.filter(([event]) => event === 'history-updated').length
+}
+
+function deletedAudioFiles() {
+  return harness.invoke.mock.calls
+    .filter(([command]) => command === 'delete_audio_file')
+    .map(([, args]) => (args as { filePath: string }).filePath)
+}
+
+/** In-memory History: a record exists from the moment its (optionally gated) write resolves. */
+function installHistoryStorage(gates: { saveAudio?: Promise<void>; addHistory?: Promise<void> } = {}) {
+  const records = new Map<string, Record<string, unknown>>()
+  const audioFiles = new Set<string>()
+  harness.saveRecordingAudio.mockImplementation(async () => {
+    await gates.saveAudio
+    audioFiles.add(SAVED_AUDIO_PATH)
+    return SAVED_AUDIO_PATH
+  })
+  harness.addHistory.mockImplementation(async (record: Record<string, unknown>) => {
+    await gates.addHistory
+    records.set(record.id as string, record)
+  })
+  harness.deleteHistory.mockImplementation(async (id: string) => {
+    records.delete(id)
+  })
+  const defaultInvoke = harness.invoke.getMockImplementation()
+  harness.invoke.mockImplementation(async (command: string, args?: unknown) => {
+    if (command === 'delete_audio_file') {
+      audioFiles.delete((args as { filePath: string }).filePath)
+      return undefined
+    }
+    return defaultInvoke?.(command, args)
+  })
+  return { records, audioFiles }
+}
+
+function pressEscapeDuringProcessing(token: number) {
+  const listener = harness.listeners.get('escape-action')
+  expect(listener).toBeTypeOf('function')
+  listener?.({ payload: { mode: 'cancel_processing', token } })
+}
+
+describe('History writes', () => {
+  const initializedRecorders: RecorderOrchestrator[] = []
+
+  afterEach(() => {
+    for (const recorder of initializedRecorders.splice(0)) recorder.cleanup()
+  })
+
+  /** A recorder whose bridge listeners (including Esc) are registered, as in the running app. */
+  async function createInitializedRecorder() {
+    const provider = await switchProvider('cloud_api')
+    vi.spyOn(provider, 'isReady').mockReturnValue(true)
+    vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    const recorder = new RecorderOrchestrator()
+    await recorder.init()
+    initializedRecorders.push(recorder)
+    return recorder
+  }
+
+  describe.each(HISTORY_PATHS)('$name', (path) => {
+    it('writes one record with the path fields and announces it', async () => {
+      await runHistoryPath(path)
+
+      const records = writtenRecords()
+      expect(records).toHaveLength(1)
+      expect(records[0]).toMatchObject(path.expectedRecord)
+      expect(records[0]?.id).toEqual(expect.any(String))
+      expect(records[0]?.timestamp).toEqual(expect.any(Number))
+      expect(harness.saveRecordingAudio).toHaveBeenCalledTimes(1)
+      expect(historyUpdatedEmits()).toBe(1)
+      expect(harness.deleteHistory).not.toHaveBeenCalled()
+      expect(deletedAudioFiles()).toEqual([])
+    })
+
+    it('writes nothing and saves no audio when History is disabled', async () => {
+      harness.settings.set('historyEnabled', false)
+
+      await runHistoryPath(path)
+
+      expect(harness.addHistory).not.toHaveBeenCalled()
+      expect(harness.saveRecordingAudio).not.toHaveBeenCalled()
+      expect(historyUpdatedEmits()).toBe(0)
+    })
+
+    it('writes the record without audio when audio retention is disabled', async () => {
+      harness.settings.set('audioRetentionEnabled', false)
+
+      await runHistoryPath(path)
+
+      const records = writtenRecords()
+      expect(records).toHaveLength(1)
+      expect(records[0]?.audioFilePath).toBeUndefined()
+      expect(harness.saveRecordingAudio).not.toHaveBeenCalled()
+      expect(historyUpdatedEmits()).toBe(1)
+    })
+
+    it('writes the record without audio and logs when the audio save fails', async () => {
+      harness.saveRecordingAudio.mockRejectedValue(new Error('disk unavailable'))
+
+      await runHistoryPath(path)
+
+      const records = writtenRecords()
+      expect(records).toHaveLength(1)
+      expect(records[0]?.audioFilePath).toBeUndefined()
+      expect(harness.runtimeEvents).toHaveBeenCalledWith(
+        'warn',
+        'recorder',
+        path.audioSaveFailedWarning,
+        expect.objectContaining({ error: expect.stringContaining('disk unavailable') }),
+      )
+      expect(historyUpdatedEmits()).toBe(1)
+    })
+
+    it('removes the saved audio and the record id and logs when the write fails', async () => {
+      harness.addHistory.mockRejectedValue(new Error('history unavailable'))
+
+      await runHistoryPath(path)
+
+      const records = writtenRecords()
+      expect(records).toHaveLength(1)
+      expect(deletedAudioFiles()).toContain(SAVED_AUDIO_PATH)
+      expect(harness.deleteHistory).toHaveBeenCalledWith(records[0]?.id)
+      expect(harness.runtimeEvents).toHaveBeenCalledWith(
+        'warn',
+        'recorder',
+        path.writeFailedWarning,
+        expect.objectContaining({ error: expect.stringContaining('history unavailable') }),
+      )
+      // Only the cleanup announces itself: its deleteHistory succeeded, the failed write did not.
+      expect(historyUpdatedEmits()).toBe(1)
+    })
+  })
+
+  describe('processing timeout record', () => {
+    const timeoutPath = HISTORY_PATHS.find((path) => path.name === 'processing timeout') as HistoryPath
+
+    it('carries no failure reason', async () => {
+      await runHistoryPath(timeoutPath)
+
+      const [record] = writtenRecords()
+      expect(record?.failReason).toBeUndefined()
+      expect(record?.failReasonCode).toBeUndefined()
+    })
+
+    it('upgrades the failure card to History retry and logs the save', async () => {
+      await runHistoryPath(timeoutPath)
+
+      expect(latestPayload('update_overlay_state')).toMatchObject({
+        state: 'failure',
+        failureTitle: en['recorder.processingTimeoutTitle'],
+        failureRecovery: 'history',
+        cardToken: timeoutPath.runId,
+      })
+      expect(harness.runtimeEvents).toHaveBeenCalledWith(
+        'info',
+        'recorder',
+        'Timed-out recording saved to history for retry',
+        expect.objectContaining({ audioSec: 1 }),
+      )
+    })
+  })
+
+  describe('failed recording guard', () => {
+    it.each([
+      { name: 'is shorter than 0.5 s', audioSec: 0.4, withChunks: true },
+      { name: 'has no audio chunks', audioSec: 1, withChunks: false },
+    ])('writes no record when the failed recording $name', async ({ audioSec, withChunks }) => {
+      const recorder = new RecorderOrchestrator()
+      prepareRun(recorder, 310, audioSec)
+      if (!withChunks) recorder.testSeam().recordedChunks = []
+
+      callbacksFor(recorder).onError?.(PROVIDER_FAILURE_MESSAGE)
+      await settleHistoryWrites()
+
+      expect(harness.addHistory).not.toHaveBeenCalled()
+      expect(harness.saveRecordingAudio).not.toHaveBeenCalled()
+      expect(historyUpdatedEmits()).toBe(0)
+    })
+  })
+
+  describe.each(HISTORY_PATHS.filter((path) => path.revocable))('$name canceled with Esc', (path) => {
+    it('leaves no record and no audio file when Esc arrives while the audio is being saved', async () => {
+      const saveAudio = deferred<void>()
+      const storage = installHistoryStorage({ saveAudio: saveAudio.promise })
+      const recorder = await createInitializedRecorder()
+      await path.arm(recorder, path.runId)
+      await path.fire(recorder)
+      await settleHistoryWrites()
+      expect(harness.saveRecordingAudio).toHaveBeenCalledTimes(1)
+
+      pressEscapeDuringProcessing(path.runId)
+      expect(recorder.getState()).toBe('idle')
+      saveAudio.resolve()
+      await settleHistoryWrites()
+
+      // The canceled run's record is never written, not written and then removed.
+      expect(harness.addHistory).not.toHaveBeenCalled()
+      expect(deletedAudioFiles()).toContain(SAVED_AUDIO_PATH)
+      expect(storage.audioFiles.size).toBe(0)
+      expect(storage.records.size).toBe(0)
+      expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+    })
+
+    it('removes the record and the audio file when Esc arrives while the record is being written', async () => {
+      const addHistory = deferred<void>()
+      const storage = installHistoryStorage({ addHistory: addHistory.promise })
+      const recorder = await createInitializedRecorder()
+      await path.arm(recorder, path.runId)
+      await path.fire(recorder)
+      await settleHistoryWrites()
+      expect(harness.addHistory).toHaveBeenCalledTimes(1)
+      const recordId = writtenRecords()[0]?.id
+
+      pressEscapeDuringProcessing(path.runId)
+      expect(recorder.getState()).toBe('idle')
+      addHistory.resolve()
+      await settleHistoryWrites()
+
+      expect(harness.deleteHistory).toHaveBeenCalledWith(recordId)
+      expect(deletedAudioFiles()).toContain(SAVED_AUDIO_PATH)
+      expect(storage.audioFiles.size).toBe(0)
+      expect(storage.records.size).toBe(0)
+      expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+    })
+  })
+
+  describe('final result canceled with Esc while its record fields are being resolved', () => {
+    const finalPath = HISTORY_PATHS.find((path) => path.name === 'final result') as HistoryPath
+
+    it('writes no record and removes the audio file', async () => {
+      const providerRead = deferred<void>()
+      const storage = installHistoryStorage()
+      const recorder = await createInitializedRecorder()
+      await finalPath.arm(recorder, finalPath.runId)
+      // The provider metadata of a cloud final reads this setting after the audio is saved.
+      harness.settingGates.set('cloudAi.provider', providerRead.promise)
+      await finalPath.fire(recorder)
+      await settleHistoryWrites()
+      expect(harness.saveRecordingAudio).toHaveBeenCalledTimes(1)
+      expect(harness.addHistory).not.toHaveBeenCalled()
+
+      pressEscapeDuringProcessing(finalPath.runId)
+      expect(recorder.getState()).toBe('idle')
+      providerRead.resolve()
+      await settleHistoryWrites()
+
+      expect(harness.addHistory).not.toHaveBeenCalled()
+      expect(deletedAudioFiles()).toContain(SAVED_AUDIO_PATH)
+      expect(storage.audioFiles.size).toBe(0)
+      expect(storage.records.size).toBe(0)
+      expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+    })
   })
 })
