@@ -101,6 +101,13 @@ fn pacing_due(sent_bytes: u64, next_bytes: u64, pacing: Pacing) -> Option<Durati
     ))
 }
 
+/// Upload deadline for the Qwen realtime one-shot path (`asr_qwen_realtime::transcribe`).
+/// The realtime endpoint has the same per-connection upload limit as Omni, so it follows the
+/// same rule: one speed for the whole recording, chosen from its length.
+pub(super) fn upload_due(sent_bytes: u64, next_bytes: u64, audio_sec: f64) -> Option<Duration> {
+    pacing_due(sent_bytes, next_bytes, pacing_for(audio_sec))
+}
+
 /// Whether the server's message is the specific upload-speed rejection.
 ///
 /// `1007` alone is the generic WebSocket "invalid frame payload data" code, so
@@ -396,7 +403,8 @@ fn apply_event(event: &serde_json::Value, transcript: &mut OmniTranscript) -> Ev
     EventStep::Continue
 }
 
-fn close_frame_reason(frame: Option<tungstenite::protocol::CloseFrame<'_>>) -> String {
+/// The close code and reason of a WebSocket close frame. Also used by the Qwen realtime one-shot path.
+pub(super) fn close_frame_reason(frame: Option<tungstenite::protocol::CloseFrame<'_>>) -> String {
     frame
         .map(|f| format!("code={} reason={}", f.code, diag::truncate(&f.reason, 200)))
         .unwrap_or_else(|| "No details".to_string())
@@ -1286,6 +1294,12 @@ mod pacing_tests {
         assert_eq!(at(0), Duration::from_secs(1));
         assert_eq!(at(rate), Duration::from_secs(2));
         assert_eq!(at(3 * rate), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn upload_due_follows_the_recording_length() {
+        assert_eq!(upload_due(0, 32_000, 30.0), None);
+        assert!(upload_due(0, 32_000, 120.0).is_some());
     }
 
     #[test]

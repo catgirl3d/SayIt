@@ -247,6 +247,19 @@ describe('ASR_PROVIDERS 结构性不变量', () => {
     expect(buildAsrProviderConfig(profile({ provider: 'doubao_v2' }), 'auto').extra).toBeUndefined()
   })
 
+  it('sends the WorkspaceId and speech language with a buffered qwen_realtime request', () => {
+    const realtime = profile({ provider: 'qwen_realtime', workspaceId: ' ws-1 ', apiKey: 'qwen-key' })
+    expect(buildAsrProviderConfig(realtime, 'uk').extra).toEqual({ workspaceId: 'ws-1', language: 'uk' })
+  })
+
+  it('omits the language and an empty WorkspaceId from a buffered qwen_realtime request under auto', () => {
+    const realtime = profile({ provider: 'qwen_realtime', workspaceId: '   ', apiKey: 'qwen-key' })
+    const { extra } = buildAsrProviderConfig(realtime, 'auto')
+    expect(extra).toEqual({})
+    expect(extra).not.toHaveProperty('language')
+    expect(extra).not.toHaveProperty('workspaceId')
+  })
+
   it('lists Deepgram as a global streaming provider with its own platform', () => {
     expect(findAsrProvider('deepgram')).toMatchObject({
       platform: 'deepgram',
