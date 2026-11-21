@@ -1,4 +1,4 @@
-import type { TextContext } from '@/types/appContext'
+import type { TextContext, TextContextDiag } from '@/types/appContext'
 
 // i18n-allow-start: model instructions, not user-facing UI copy
 /** Built-in automatic polish mode used whenever context-aware writing has a text selection. */
@@ -120,6 +120,67 @@ export function usableTextContext(context: TextContext | null | undefined): Text
     selectionTruncated: false,
   }
   return normalized.textBefore || normalized.selectedText || normalized.textAfter ? normalized : null
+}
+
+/** The text-context part of one "Recording started" record in sayit.log. */
+export interface TextContextLog {
+  /**
+   * captured, or why context was not used. Frontend-owned codes: ai_off (AI processing is off,
+   * so text is not read by design), capture_error (the native call failed), no_diag (an older
+   * native layer returned no diagnostic), selection_too_long (the selection exceeds the 6000
+   * character limit and is not sent by design), unusable (the capture was empty after cleanup).
+   * Every other code comes from the native layer; see context/mod.rs.
+   */
+  result: string
+  kind?: 'selection' | 'caret'
+  source?: string
+  beforeLen?: number
+  selectedLen?: number
+  afterLen?: number
+  depth?: number
+  elapsedMs?: number
+}
+
+/**
+ * Build the context part of the "Recording started" log. This record goes into sayit.log, so it
+ * carries reason codes and counts only, never editor text.
+ *
+ * Every recording gets a result when the feature is enabled; otherwise there is no way to tell
+ * "feature off", "empty document" and "this app cannot expose text" apart. Returning null means
+ * context-aware writing is off, so users who never enabled it do not get an extra line on every
+ * recording.
+ */
+export function describeTextContextForLog(input: {
+  featureOn: boolean
+  aiOn: boolean
+  captureFailed: boolean
+  diag?: TextContextDiag | null
+  raw?: TextContext | null
+  usable: TextContext | null
+}): TextContextLog | null {
+  if (!input.featureOn) return null
+  if (!input.aiOn) return { result: 'ai_off' }
+  if (input.captureFailed) return { result: 'capture_error' }
+
+  const diag = input.diag
+  const timing = diag ? { depth: diag.depth, elapsedMs: diag.elapsedMs } : {}
+  if (input.usable) {
+    return {
+      result: 'captured',
+      kind: input.usable.selectedText ? 'selection' : 'caret',
+      source: input.usable.source,
+      beforeLen: input.usable.textBefore.length,
+      selectedLen: input.usable.selectedText.length,
+      afterLen: input.usable.textAfter.length,
+      ...timing,
+    }
+  }
+  if (input.raw?.selectionTruncated) {
+    return { result: 'selection_too_long', source: input.raw.source, ...timing }
+  }
+  if (!diag) return { result: 'no_diag' }
+  if (diag.result === 'captured') return { result: 'unusable', ...timing }
+  return { result: String(diag.result || 'unknown').slice(0, 32), ...timing }
 }
 
 /**
