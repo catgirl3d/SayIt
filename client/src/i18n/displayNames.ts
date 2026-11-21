@@ -111,6 +111,7 @@ const LOCAL_MODEL_KEYS: Record<
 const HISTORY_FAILURE_KEYS: Record<HistoryFailReasonCode, TranslationKey> = {
   no_transcript: 'recorder.noTranscript',
   empty_after_processing: 'recorder.emptyAfterProcessing',
+  processing_timeout: 'recorder.processingTimeoutTitle',
   provider_timeout: 'err.provider.timeout',
   provider_unreachable: 'err.provider.unreachable',
   provider_bad_key: 'err.provider.badKey',

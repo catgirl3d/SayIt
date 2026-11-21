@@ -261,6 +261,12 @@ describe('历史失败原因显示', () => {
     expect(ukrainian).not.toBe(record.failReason)
   })
 
+  it('shows the timeout title for a recording whose processing timed out', () => {
+    setLocale('en')
+    expect(historyFailureReasonDisplay({ failReasonCode: 'processing_timeout' }))
+      .toBe(en['recorder.processingTimeoutTitle'])
+  })
+
   it('老记录没有 code 时原样显示', () => {
     setLocale('en')
     expect(historyFailureReasonDisplay({ failReason: '旧版失败原因' })).toBe('旧版失败原因')

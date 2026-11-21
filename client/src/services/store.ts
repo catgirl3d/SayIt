@@ -85,6 +85,7 @@ export interface HistoryRecord {
 export type HistoryFailReasonCode =
   | 'no_transcript'
   | 'empty_after_processing'
+  | 'processing_timeout'
   | 'provider_timeout'
   | 'provider_unreachable'
   | 'provider_bad_key'
