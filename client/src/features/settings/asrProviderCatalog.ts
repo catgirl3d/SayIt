@@ -545,7 +545,13 @@ export function buildAsrProviderConfig(
       }
       : entry?.platform === 'deepgram' && profile.deepgramKeytermsEnabled === true
         ? { ...extra, keyterms_enabled: true }
-        : extra,
+        // Buffered realtime requests need the same WorkspaceId and language as the stream.
+        : profile.provider === 'qwen_realtime'
+          ? {
+            ...(profile.workspaceId?.trim() ? { workspaceId: profile.workspaceId.trim() } : {}),
+            ...(language === 'auto' ? {} : { language }),
+          }
+          : extra,
   }
 }
 
