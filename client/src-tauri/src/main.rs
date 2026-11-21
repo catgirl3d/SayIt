@@ -3,6 +3,7 @@
 
 mod commands;
 mod context;
+mod defaults;
 mod error_protocol;
 mod inject;
 mod keyboard;
@@ -323,15 +324,21 @@ fn main() {
 
     // Read PTT setting before moving storage into managed state
     let ptt_setting_val = storage.get("shortcutPTT", None);
-    // 兜底键与 storage 种子、前端 defaults.ts 保持一致；绝不能是 Shift（会触发筛选键）
+    // Fallbacks are defined in crate::defaults.
     let ptt_str = ptt_setting_val
         .as_str()
-        .unwrap_or("ControlRight")
+        .unwrap_or(crate::defaults::SHORTCUT_PTT)
         .to_string();
     let hf_setting_val = storage.get("shortcutHandsFree", None);
-    let hf_str = hf_setting_val.as_str().unwrap_or("AltRight").to_string();
+    let hf_str = hf_setting_val
+        .as_str()
+        .unwrap_or(crate::defaults::SHORTCUT_HANDS_FREE)
+        .to_string();
     let ai_toggle_setting_val = storage.get("shortcutToggleAi", None);
-    let ai_toggle_str = ai_toggle_setting_val.as_str().unwrap_or("").to_string();
+    let ai_toggle_str = ai_toggle_setting_val
+        .as_str()
+        .unwrap_or(crate::defaults::SHORTCUT_TOGGLE_AI)
+        .to_string();
     log::info!(
         "PTT setting from DB: raw={:?} parsed={:?}",
         ptt_setting_val,
@@ -796,14 +803,14 @@ fn main() {
 
             Ok(())
         })
+        // Only the plugins the app actually uses are registered. The frontend
+        // calls shell (open) and dialog (open/save), granted in
+        // capabilities/main.json; global-shortcut, autostart and single-instance
+        // are used from Rust. App updates go through our own update commands in
+        // commands/system.rs, not the Tauri updater plugin.
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // updater plugin disabled until signing keys are generated
-        // .plugin(tauri_plugin_updater::Builder::new().build())
-        // .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),

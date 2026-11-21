@@ -416,16 +416,18 @@ impl PttKeyConfig {
     }
 }
 
-/// 「按住说话」的默认键，同时也是配置非法时的回退。
+/// Default push-to-talk key. It is also the fallback when the saved setting is invalid.
 ///
-/// **不能是 Shift**：长按右 Shift 约 8 秒会触发 Windows 筛选键，那之后我们收不到
-/// 这次「松开」，录音不会随手指抬起而结束。这里曾经是 ShiftRight，于是每台新装的
-/// 机器开箱就绑在那个键上（前端也一样，见 services/defaults.ts）。
-/// 右 Ctrl 位置相近、没有辅助功能陷阱，也不和免提的默认键（右 Alt）撞。
+/// It must not be Shift. Holding the right Shift key for about 8 seconds triggers Windows
+/// FilterKeys, after which the app never receives the key release, so recording does not stop
+/// when the key is let go. This used to be `ShiftRight`, which bound every fresh install to that
+/// key out of the box; the frontend shipped the same default (see `src/services/defaults.ts`).
+/// Right Ctrl sits nearby, has no accessibility trap, and does not collide with the hands-free
+/// default (right Alt).
 ///
-/// ⚠️ 改这里要同步：src/services/defaults.ts、storage/mod.rs 的种子默认值、
-/// main.rs 读设置时的兜底。
-const DEFAULT_PTT_SETTING: &str = "ControlRight";
+/// The value lives in `crate::defaults::SHORTCUT_PTT`; its tests keep it in step with the storage
+/// seed and `src/services/defaults.ts`.
+const DEFAULT_PTT_SETTING: &str = crate::defaults::SHORTCUT_PTT;
 const DEFAULT_PTT_VK: u32 = 0xA3;
 
 /// 解析向后兼容的 PTT 物理键格式。旧单键仍是单成员；组合成员用 `+` 分隔。
@@ -2548,6 +2550,11 @@ mod tests {
         assert_eq!(
             ptt_key_config(DEFAULT_PTT_SETTING).setting,
             DEFAULT_PTT_SETTING
+        );
+        // The hardcoded virtual-key code must match the configured key name.
+        assert_eq!(
+            ptt_key_config(DEFAULT_PTT_SETTING).vk_codes,
+            vec![DEFAULT_PTT_VK]
         );
     }
 

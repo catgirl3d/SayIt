@@ -27,8 +27,6 @@ pub struct ModelInfo {
     pub total_size_bytes: u64,
     pub languages: Vec<String>,
     pub sources: Vec<DownloadSource>,
-    #[serde(default)]
-    pub archive_url: Option<String>,
     /// Speed rating 0-10 (decimal allowed, 10 is fastest).
     #[serde(default)]
     pub speed: f32,
@@ -179,7 +177,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q4_K_M".into(),
             languages: lang_vec(&["en"]),
             sources: PARAKEET_UNIFIED_EN_Q4.sources(),
-            archive_url: None,
         },
         // ── SenseVoice Small GGUF (ggml engine) ──
         // Punctuation is controlled via RunOptions itn=on (default is <|woitn|> branch, without punctuation).
@@ -199,7 +196,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(&["zh", "en", "ja", "ko", "yue"]),
             sources: SENSEVOICE.sources(),
-            archive_url: None,
         },
         // Parakeet TDT v3 GGUF: fast multilingual European transcription.
         ModelInfo {
@@ -217,7 +213,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(PARAKEET_V3_LANGUAGES),
             sources: PARAKEET_TDT_V3_Q8.sources(),
-            archive_url: None,
         },
         // ── Nemotron 3.5 ASR Streaming 0.6B GGUF (NVIDIA, parakeet family) ──
         // 40 language-locales across three tiers (19 transcription-ready, 13 broad-coverage, 8 adaptation-ready),
@@ -240,7 +235,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q4_K_M".into(),
             languages: lang_vec(NEMOTRON_LANGUAGES),
             sources: NEMOTRON_STREAMING_Q4.sources(),
-            archive_url: None,
         },
         // ── Sber GigaAM v3 e2e RNN-T GGUF (ggml engine, transcribe.cpp) ──
         // 220M parameter Conformer-RNNT model for Russian speech recognition.
@@ -260,7 +254,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(&["ru"]),
             sources: GIGAAM_V3_E2E_RNNT_Q8.sources(),
-            archive_url: None,
         },
         // GigaAM v3 CTC GGUF: a compact Russian-only recognizer.
         ModelInfo {
@@ -278,7 +271,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(&["ru"]),
             sources: GIGAAM_V3_E2E_CTC_Q8.sources(),
-            archive_url: None,
         },
         // ── Fun-ASR Nano 2512 GGUF (SenseVoice encoder + Qwen3 decoder) ──
         // Developed by FunAudioLLM for zh/en/ja. Outperforms Qwen3-ASR 0.6B in speed and accuracy:
@@ -299,7 +291,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(&["zh", "en", "ja"]),
             sources: FUNASR_NANO_Q8.sources(),
-            archive_url: None,
         },
         // Fun-ASR MLT Nano: broad language coverage in a compact model.
         ModelInfo {
@@ -317,7 +308,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(FUNASR_MLT_LANGUAGES),
             sources: FUNASR_MLT_NANO_Q8.sources(),
-            archive_url: None,
         },
         // ── Qwen3-ASR 0.6B GGUF (ggml engine, transcribe.cpp) ──
         // GGUF block quantization + ggml inference: 9s Chinese audio pure CPU RTF 0.167.
@@ -337,7 +327,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(QWEN3_LANGUAGES),
             sources: QWEN3_06B_Q8.sources(),
-            archive_url: None,
         },
         // Whisper Small Q4_K_M GGUF (multilingual, transcribe.cpp).
         // The lightweight Whisper tier: 100 languages, including Ukrainian.
@@ -356,7 +345,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q4_K_M".into(),
             languages: lang_vec(WHISPER_LANGUAGES),
             sources: WHISPER_SMALL_Q4.sources(),
-            archive_url: None,
         },
         // Parakeet TDT 1.1B GGUF: high-accuracy English transcription.
         ModelInfo {
@@ -374,7 +362,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q8_0".into(),
             languages: lang_vec(&["en"]),
             sources: PARAKEET_TDT_11B_Q8.sources(),
-            archive_url: None,
         },
         // ── Qwen3-ASR 1.7B GGUF Q4_K_M (1.7B lightweight tier) ──
         // Upstream WER 1.81%, substantially better than 0.6B Q8_0 (2.11%), only 448 MB larger.
@@ -394,7 +381,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q4_K_M".into(),
             languages: lang_vec(QWEN3_LANGUAGES),
             sources: QWEN3_17B_Q4.sources(),
-            archive_url: None,
         },
         // ── Qwen3-ASR 1.7B GGUF Q5_K_M (maximum accuracy tier) ──
         // Upstream WER 1.65%. Upstream default tier for 1.7B. Decoding cost ~2x of 0.6B.
@@ -413,7 +399,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q5_K_M".into(),
             languages: lang_vec(QWEN3_LANGUAGES),
             sources: QWEN3_17B_Q5.sources(),
-            archive_url: None,
         },
         // Whisper Large v3 Turbo Q4_K_M GGUF (multilingual, transcribe.cpp).
         // Fast, high-accuracy multilingual recognition across 100 languages.
@@ -432,7 +417,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q4_K_M".into(),
             languages: lang_vec(WHISPER_LANGUAGES),
             sources: WHISPER_LARGE_V3_TURBO_Q4.sources(),
-            archive_url: None,
         },
         // Whisper Large v3 GGUF: broad multilingual coverage at high accuracy.
         ModelInfo {
@@ -450,7 +434,6 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             quant: "Q4_K_M".into(),
             languages: lang_vec(WHISPER_LANGUAGES),
             sources: WHISPER_LARGE_V3_Q4.sources(),
-            archive_url: None,
         },
     ]
 }
