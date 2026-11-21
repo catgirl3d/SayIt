@@ -83,6 +83,7 @@ import en from '@/i18n/locales/en.json'
 import uk from '@/i18n/locales/uk.json'
 import { DEFAULTS } from '@/services/defaults'
 import { setLocale, t } from '@/i18n'
+import { historyFailureReasonDisplay } from '@/i18n/displayNames'
 import { describeProviderError } from '@/lib/errorMessages'
 import * as textPostProcess from '@/services/textPostProcess'
 import { RecorderOrchestrator, type RecorderOrchestratorTestSeam } from '../RecorderOrchestrator'
@@ -1732,6 +1733,8 @@ const HISTORY_PATHS: HistoryPath[] = [
       charCount: 0,
       isEmpty: true,
       audioDurationSec: 1,
+      failReason: en['recorder.processingTimeoutTitle'],
+      failReasonCode: 'processing_timeout',
       audioFilePath: SAVED_AUDIO_PATH,
     },
     writeFailedWarning: 'Failed to write timeout recovery history entry',
@@ -1912,12 +1915,12 @@ describe('History writes', () => {
   describe('processing timeout record', () => {
     const timeoutPath = HISTORY_PATHS.find((path) => path.name === 'processing timeout') as HistoryPath
 
-    it('carries no failure reason', async () => {
+    it('shows the timeout title as its reason in History', async () => {
       await runHistoryPath(timeoutPath)
 
       const [record] = writtenRecords()
-      expect(record?.failReason).toBeUndefined()
-      expect(record?.failReasonCode).toBeUndefined()
+      expect(historyFailureReasonDisplay(record as Parameters<typeof historyFailureReasonDisplay>[0]))
+        .toBe(en['recorder.processingTimeoutTitle'])
     })
 
     it('upgrades the failure card to History retry and logs the save', async () => {

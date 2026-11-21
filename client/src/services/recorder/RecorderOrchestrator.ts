@@ -2400,6 +2400,8 @@ export class RecorderOrchestrator {
               audioDurationSec: timedOutCtx.audioDurationSec > 0 ? timedOutCtx.audioDurationSec : undefined,
               charCount: 0,
               isEmpty: true,
+              failReason: t('recorder.processingTimeoutTitle'),
+              failReasonCode: 'processing_timeout',
               audioFilePath,
               ...historyMeta,
             })
