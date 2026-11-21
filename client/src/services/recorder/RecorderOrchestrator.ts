@@ -69,6 +69,7 @@ import { ServerNotConfiguredError } from '../runtimeConfig'
 import {
   CONTEXT_SELECTION_EDIT_PROMPT,
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
+  describeTextContextForLog,
   normalizeContextSelectionEditPrompt,
   resolveContextAwareOutput,
   usableTextContext,
@@ -1901,6 +1902,7 @@ export class RecorderOrchestrator {
       preserveExistingOnFailure: true,
     })
     let activeAppContext: ActiveAppContext | null
+    let recordingContextFailed = false
     try {
       // AI is the only consumer of editor text. If cleanup is off, do not read the text even when
       // the preference remains enabled, so the privacy boundary matches actual behavior.
@@ -1919,8 +1921,19 @@ export class RecorderOrchestrator {
     } catch {
       activeAppContext = null
       this.cachedProbeResult = null
+      recordingContextFailed = true
     }
     const textContext = usableTextContext(activeAppContext?.textContext)
+    // Read the raw capture before it is deleted: selection_too_long is decided on the original
+    // context, and the diagnostic must survive the usable-context filtering.
+    const textContextLog = describeTextContextForLog({
+      featureOn: this.cachedContextAwareWriting,
+      aiOn: this.cachedAiEnabled,
+      captureFailed: recordingContextFailed,
+      diag: activeAppContext?.textContextDiag,
+      raw: activeAppContext?.textContext,
+      usable: textContext,
+    })
     if (activeAppContext) {
       if (textContext) activeAppContext.textContext = textContext
       else delete activeAppContext.textContext
@@ -1947,12 +1960,6 @@ export class RecorderOrchestrator {
         ),
         summary: `${this.currentPromptResolution.summary} | Text context: ${textContext.selectedText ? 'selection' : 'caret'}`,
       }
-      addRuntimeEvent('info', 'recorder', 'Text context captured', {
-        source: textContext.source,
-        beforeLen: textContext.textBefore.length,
-        selectedLen: textContext.selectedText.length,
-        afterLen: textContext.textAfter.length,
-      })
     }
 
     // Freeze the selection-edit service for this run: editing settings mid-recording must not
@@ -1975,6 +1982,8 @@ export class RecorderOrchestrator {
         promptRuleId: this.currentPromptResolution.matchedRule?.id,
         summary: this.currentPromptResolution.summary,
       },
+      // Reason codes and counts only; see describeTextContextForLog.
+      ...(textContextLog && { textContext: textContextLog }),
     })
     addRuntimeEvent('info', 'personalization', 'Prompt routing resolved', {
       appContext: this.summarizeAppContext(activeAppContext || null),

@@ -35,6 +35,40 @@ pub struct TextContext {
     pub selection_truncated: bool,
 }
 
+/// Why text capture succeeded or stopped. Only codes and timings: this reaches sayit.log.
+///
+/// `result` values are stable and greppable:
+/// - `captured`: text was read; the frontend still decides whether it is usable
+/// - `no_foreground`: no foreground window or application
+/// - `uia_unavailable`: UI Automation could not start
+/// - `no_focused_element`: the focused element could not be obtained
+/// - `password`: a password control, never read by design
+/// - `element_disabled`: the focused element is disabled or its enabled state is unreadable
+/// - `no_text_pattern`: no readable text interface on the element or four ancestors
+/// - `text_pattern2_cast_failed`: TextPattern2 existed but could not be cast to TextPattern,
+///   and no other layer produced text
+/// - `no_caret`: an interface exists but neither a caret nor a selection was available
+/// - `empty`: text was readable but the caret surroundings and selection were empty
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TextContextDiag {
+    pub result: String,
+    /// Layer where text was found, relative to the focused element (0 = the element itself).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u8>,
+    /// Time spent in the text-capture step. UIA can be slow in some applications.
+    pub elapsed_ms: u64,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn text_diag(result: &str, depth: Option<u8>, started: std::time::Instant) -> TextContextDiag {
+    TextContextDiag {
+        result: result.to_string(),
+        depth,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct AppContext {
     pub reason: String,
@@ -78,6 +112,9 @@ pub struct AppContext {
     /// tracking and diagnostics never read or retain editor text.
     #[serde(rename = "textContext", skip_serializing_if = "Option::is_none")]
     pub text_context: Option<TextContext>,
+    /// Present whenever the caller requested text, whether it was read or not.
+    #[serde(rename = "textContextDiag", skip_serializing_if = "Option::is_none")]
+    pub text_context_diag: Option<TextContextDiag>,
 }
 
 /// 前台窗口所在显示器的物理工作区，已排除任务栏。
@@ -213,6 +250,10 @@ fn capture_context_with_text(reason: &str, include_text_context: bool) -> AppCon
     unsafe {
         let foreground = GetForegroundWindow();
         if foreground.0 == std::ptr::null_mut() {
+            if include_text_context {
+                ctx.text_context_diag =
+                    Some(text_diag("no_foreground", None, std::time::Instant::now()));
+            }
             return ctx;
         }
         ctx.hwnd = format!("{}", foreground.0 as isize);
@@ -303,13 +344,28 @@ unsafe fn populate_uia_fields(ctx: &mut AppContext, include_text_context: bool) 
     let co_init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     let need_co_uninit = co_init_result.is_ok();
 
+    let started = std::time::Instant::now();
     let result = (|| -> Result<(), String> {
-        let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| format!("CoCreateInstance CUIAutomation: {}", e))?;
+        let uia: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+        {
+            Ok(uia) => uia,
+            Err(e) => {
+                if include_text_context {
+                    ctx.text_context_diag = Some(text_diag("uia_unavailable", None, started));
+                }
+                return Err(format!("CoCreateInstance CUIAutomation: {}", e));
+            }
+        };
 
-        let focused = uia
-            .GetFocusedElement()
-            .map_err(|e| format!("GetFocusedElement: {}", e))?;
+        let focused = match uia.GetFocusedElement() {
+            Ok(focused) => focused,
+            Err(e) => {
+                if include_text_context {
+                    ctx.text_context_diag = Some(text_diag("no_focused_element", None, started));
+                }
+                return Err(format!("GetFocusedElement: {}", e));
+            }
+        };
 
         // ControlType (int → string name)
         let ct_val = focused.GetCurrentPropertyValue(UIA_ControlTypePropertyId);
@@ -384,8 +440,18 @@ unsafe fn populate_uia_fields(ctx: &mut AppContext, include_text_context: bool) 
             }
         }
 
-        if include_text_context && !ctx.is_password && ctx.is_enabled {
-            ctx.text_context = capture_uia_text_context(&uia, &focused);
+        if include_text_context {
+            if ctx.is_password {
+                ctx.text_context_diag = Some(text_diag("password", None, started));
+            } else if !ctx.is_enabled {
+                ctx.text_context_diag = Some(text_diag("element_disabled", None, started));
+            } else {
+                // Time only the text read; the property queries above run regardless.
+                let text_started = std::time::Instant::now();
+                let (text, result, depth) = capture_uia_text_context(&uia, &focused);
+                ctx.text_context = text;
+                ctx.text_context_diag = Some(text_diag(result, depth, text_started));
+            }
         }
 
         Ok(())
@@ -407,51 +473,116 @@ const TEXT_AFTER_LIMIT: i32 = 300;
 #[cfg(windows)]
 const SELECTED_TEXT_LIMIT: i32 = 6000;
 
+#[cfg(windows)]
+enum TextPatternOutcome {
+    Captured(TextContext),
+    Failed(&'static str),
+    Unavailable,
+}
+
+/// Decide what one element contributes. TextPattern2 is tried before TextPattern, and a failure
+/// in either pattern must not hide a capture from the other or from an ancestor.
+#[cfg(windows)]
+fn choose_text_pattern_outcome(
+    pattern2: TextPatternOutcome,
+    text_pattern: TextPatternOutcome,
+) -> (Option<TextContext>, Option<&'static str>) {
+    let mut failure = None;
+    for outcome in [pattern2, text_pattern] {
+        match outcome {
+            TextPatternOutcome::Captured(context) => return (Some(context), None),
+            TextPatternOutcome::Failed(reason) => {
+                failure = note_text_context_failure(failure, reason);
+            }
+            TextPatternOutcome::Unavailable => {}
+        }
+    }
+    (None, failure)
+}
+
+#[cfg(windows)]
+unsafe fn text_pattern2_outcome(
+    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
+) -> TextPatternOutcome {
+    use windows::Win32::UI::Accessibility::{
+        IUIAutomationTextPattern, IUIAutomationTextPattern2, UIA_TextPattern2Id,
+    };
+    use windows::core::Interface;
+
+    let Ok(pattern2) = element.GetCurrentPatternAs::<IUIAutomationTextPattern2>(UIA_TextPattern2Id)
+    else {
+        return TextPatternOutcome::Unavailable;
+    };
+    let mut active = windows::Win32::Foundation::BOOL::default();
+    let caret = pattern2
+        .GetCaretRange(&mut active)
+        .ok()
+        .filter(|_| active.as_bool());
+    match pattern2.cast::<IUIAutomationTextPattern>() {
+        Ok(base) => match text_context_from_pattern(&base, caret, "text_pattern2") {
+            Ok(context) => TextPatternOutcome::Captured(context),
+            Err(reason) => TextPatternOutcome::Failed(reason),
+        },
+        Err(_) => TextPatternOutcome::Failed("text_pattern2_cast_failed"),
+    }
+}
+
+#[cfg(windows)]
+unsafe fn text_pattern_outcome(
+    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
+) -> TextPatternOutcome {
+    use windows::Win32::UI::Accessibility::{IUIAutomationTextPattern, UIA_TextPatternId};
+
+    let Ok(pattern) = element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+    else {
+        return TextPatternOutcome::Unavailable;
+    };
+    match text_context_from_pattern(&pattern, None, "text_pattern") {
+        Ok(context) => TextPatternOutcome::Captured(context),
+        Err(reason) => TextPatternOutcome::Failed(reason),
+    }
+}
+
 /// Read a small, caret-relative slice rather than the whole document. TextPattern is attempted on
 /// the focused element and a few ancestors because Chromium/Office often put it on the enclosing
 /// Document element. ValuePattern is a conservative fallback for simple inputs and is treated as
 /// text-before-caret only (most such controls expose no selection/caret API through UIA).
+///
+/// Returns the text, the diagnostic reason code, and the depth where text was found.
 #[cfg(windows)]
 unsafe fn capture_uia_text_context(
     uia: &windows::Win32::UI::Accessibility::IUIAutomation,
     focused: &windows::Win32::UI::Accessibility::IUIAutomationElement,
-) -> Option<TextContext> {
+) -> (Option<TextContext>, &'static str, Option<u8>) {
     use windows::Win32::UI::Accessibility::{
-        IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationTextPattern2,
-        IUIAutomationValuePattern, UIA_TextPattern2Id, UIA_TextPatternId, UIA_ValuePatternId,
+        IUIAutomationElement, IUIAutomationValuePattern, UIA_ValuePatternId,
     };
-    use windows::core::Interface;
 
     let mut element: IUIAutomationElement = focused.clone();
     let walker = uia.RawViewWalker().ok();
-    let value_fallback = focused
+    let value_pattern = focused
         .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-        .ok()
+        .ok();
+    let value_pattern_present = value_pattern.is_some();
+    let value_fallback = value_pattern
         .and_then(|pattern| pattern.CurrentValue().ok())
         .map(|value| sanitize_uia_text(&value.to_string()))
         .filter(|value| !value.is_empty());
 
-    for _depth in 0..=4 {
-        if let Ok(pattern2) =
-            element.GetCurrentPatternAs::<IUIAutomationTextPattern2>(UIA_TextPattern2Id)
-        {
-            let mut active = windows::Win32::Foundation::BOOL::default();
-            let caret = pattern2
-                .GetCaretRange(&mut active)
-                .ok()
-                .filter(|_| active.as_bool());
-            let base: IUIAutomationTextPattern = pattern2.cast().ok()?;
-            if let Some(context) = text_context_from_pattern(&base, caret, "text_pattern2") {
-                return Some(context);
-            }
-        }
+    // The final reason when no layer produced text: an empty document is more useful than a
+    // missing caret because it explains what the user is looking at.
+    let mut pattern_failure: Option<&'static str> = None;
 
-        if let Ok(pattern) =
-            element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-        {
-            if let Some(context) = text_context_from_pattern(&pattern, None, "text_pattern") {
-                return Some(context);
-            }
+    for depth in 0..=4u8 {
+        let (text, failure) = choose_text_pattern_outcome(
+            text_pattern2_outcome(&element),
+            text_pattern_outcome(&element),
+        );
+        if let Some(context) = text {
+            return (Some(context), "captured", Some(depth));
+        }
+        if let Some(reason) = failure {
+            pattern_failure = note_text_context_failure(pattern_failure, reason);
         }
 
         let Some(ref tree_walker) = walker else { break };
@@ -461,11 +592,17 @@ unsafe fn capture_uia_text_context(
         element = parent;
     }
 
-    value_fallback.map(|value| TextContext {
-        source: "value_pattern_tail".to_string(),
-        text_before: tail_chars(&value, TEXT_BEFORE_LIMIT as usize),
-        ..Default::default()
-    })
+    if let Some(value) = value_fallback {
+        let context = TextContext {
+            source: "value_pattern_tail".to_string(),
+            text_before: tail_chars(&value, TEXT_BEFORE_LIMIT as usize),
+            ..Default::default()
+        };
+        return (Some(context), "captured", Some(0));
+    }
+
+    let reason = text_context_failure_reason(pattern_failure, value_pattern_present);
+    (None, reason, None)
 }
 
 #[cfg(windows)]
@@ -473,7 +610,7 @@ unsafe fn text_context_from_pattern(
     pattern: &windows::Win32::UI::Accessibility::IUIAutomationTextPattern,
     caret: Option<windows::Win32::UI::Accessibility::IUIAutomationTextRange>,
     source: &str,
-) -> Option<TextContext> {
+) -> Result<TextContext, &'static str> {
     use windows::Win32::UI::Accessibility::IUIAutomationTextRange;
 
     let selection_range = pattern.GetSelection().ok().and_then(|ranges| {
@@ -498,9 +635,9 @@ unsafe fn text_context_from_pattern(
     }
 
     let anchor: IUIAutomationTextRange = if !selected_text.is_empty() {
-        selection_range.clone()?
+        selection_range.clone().ok_or("no_caret")?
     } else {
-        caret.or(selection_range)?
+        caret.or(selection_range).ok_or("no_caret")?
     };
 
     let text_before = text_before_range(&anchor).unwrap_or_default();
@@ -510,10 +647,10 @@ unsafe fn text_context_from_pattern(
         && text_after.is_empty()
         && !selection_truncated
     {
-        return None;
+        return Err("empty");
     }
 
-    Some(TextContext {
+    Ok(TextContext {
         source: source.to_string(),
         text_before,
         selected_text,
@@ -598,6 +735,35 @@ fn sanitize_uia_text(value: &str) -> String {
 fn tail_chars(value: &str, limit: usize) -> String {
     let count = value.chars().count();
     value.chars().skip(count.saturating_sub(limit)).collect()
+}
+
+/// Keep the strongest reason seen across the ancestor walk. An empty document is more useful
+/// than a missing caret because it explains what the user is looking at.
+#[cfg(windows)]
+fn note_text_context_failure(
+    current: Option<&'static str>,
+    reason: &'static str,
+) -> Option<&'static str> {
+    if current == Some("empty") {
+        current
+    } else {
+        Some(reason)
+    }
+}
+
+/// Pick the final reason when no layer produced text. When no pattern reported a reason, a
+/// present-but-empty ValuePattern means the document is empty; a missing one means the
+/// application exposes no text interface.
+#[cfg(windows)]
+fn text_context_failure_reason(
+    pattern_failure: Option<&'static str>,
+    value_pattern_present: bool,
+) -> &'static str {
+    pattern_failure.unwrap_or(if value_pattern_present {
+        "empty"
+    } else {
+        "no_text_pattern"
+    })
 }
 
 /// Map UIA ControlType ID to a human-readable name.
@@ -733,5 +899,114 @@ unsafe fn get_process_image_name(handle: windows::Win32::Foundation::HANDLE) -> 
         String::from_utf16_lossy(&buf[..size as usize])
     } else {
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_context_diag_serializes_codes_only() {
+        let diag = text_diag("no_text_pattern", None, std::time::Instant::now());
+        let json = serde_json::to_value(&diag).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(
+            obj.get("result").and_then(|value| value.as_str()),
+            Some("no_text_pattern")
+        );
+        assert!(obj.contains_key("elapsedMs"));
+        assert!(!obj.contains_key("depth"));
+        assert_eq!(obj.len(), 2);
+
+        let captured =
+            serde_json::to_value(text_diag("captured", Some(2), std::time::Instant::now()))
+                .unwrap();
+        assert_eq!(
+            captured.get("depth").and_then(|value| value.as_u64()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn app_context_omits_diag_unless_text_was_requested() {
+        let json = serde_json::to_value(AppContext::default()).unwrap();
+        assert!(json.get("textContextDiag").is_none());
+
+        let requested = AppContext {
+            text_context_diag: Some(text_diag("captured", Some(1), std::time::Instant::now())),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(requested).unwrap();
+        assert!(json.get("textContextDiag").is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn text_context_failure_policy_prefers_empty_and_distinguishes_no_pattern() {
+        assert_eq!(
+            note_text_context_failure(None, "no_caret"),
+            Some("no_caret")
+        );
+        assert_eq!(
+            note_text_context_failure(Some("no_caret"), "empty"),
+            Some("empty")
+        );
+        assert_eq!(
+            note_text_context_failure(Some("empty"), "no_caret"),
+            Some("empty")
+        );
+
+        assert_eq!(text_context_failure_reason(Some("empty"), true), "empty");
+        assert_eq!(
+            text_context_failure_reason(Some("no_caret"), true),
+            "no_caret"
+        );
+        assert_eq!(text_context_failure_reason(None, true), "empty");
+        assert_eq!(text_context_failure_reason(None, false), "no_text_pattern");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cast_failure_still_uses_text_pattern_on_the_same_element() {
+        let context = TextContext {
+            source: "text_pattern".to_string(),
+            ..Default::default()
+        };
+        let (captured, failure) = choose_text_pattern_outcome(
+            TextPatternOutcome::Failed("text_pattern2_cast_failed"),
+            TextPatternOutcome::Captured(context),
+        );
+        assert_eq!(
+            captured.as_ref().map(|value| value.source.as_str()),
+            Some("text_pattern")
+        );
+        assert!(failure.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cast_failure_is_reported_only_when_no_layer_captures() {
+        let (captured, failure) = choose_text_pattern_outcome(
+            TextPatternOutcome::Failed("text_pattern2_cast_failed"),
+            TextPatternOutcome::Unavailable,
+        );
+        assert!(captured.is_none());
+        assert_eq!(failure, Some("text_pattern2_cast_failed"));
+        assert_eq!(
+            text_context_failure_reason(failure, false),
+            "text_pattern2_cast_failed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn empty_wins_over_a_caret_failure_across_patterns() {
+        let (captured, failure) = choose_text_pattern_outcome(
+            TextPatternOutcome::Failed("no_caret"),
+            TextPatternOutcome::Failed("empty"),
+        );
+        assert!(captured.is_none());
+        assert_eq!(failure, Some("empty"));
     }
 }
