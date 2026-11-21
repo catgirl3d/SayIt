@@ -97,20 +97,28 @@ impl<'a> DoubaoAuth<'a> {
     }
 }
 
-/// 把火山的状态码翻成用户能照着做事的一句话。
+/// Turns a Volcengine status code into one sentence the user can act on.
 ///
-/// 这些码会经历史记录的「原因」展示给用户看 —— 只给一串数字等于没说。
+/// These codes reach the user as the "reason" in the history, where a bare number tells them nothing.
 ///
-/// **只写有实据的**：`20000003` 有本仓库既有代码为证（test_connection 一直把它当静音音频
-/// 放行），`45000030` 是拿真实凭据打线上接口实测到的（`requested resource not granted`）。
-/// 其余按前缀分族给一个方向性说明，不猜具体含义 —— 猜错了比不写更坏，会把用户引到
-/// 错误的地方去排查。
+/// **Only evidenced codes get a specific explanation**: `20000003` is backed by existing code in this repository
+/// (test_connection has always let it through as silent audio), `45000030` was measured against the live API with
+/// real credentials (`requested resource not granted`), and `45000002`, `45000081` and `55000031` are listed in
+/// Volcengine's official streaming ASR error-code table. Any other code gets a directional explanation by prefix
+/// family and no guessed meaning: a wrong guess is worse than none, because it sends the user to the wrong place to
+/// investigate.
 pub fn explain_status_code(code: &str) -> Option<&'static str> {
     match code {
         "20000003" => Some("The audio was classified as silence; no speech was detected"),
         "45000030" => Some(
             "This account has not enabled the requested resource or has exhausted its quota; check the Volcengine console",
         ),
+        // These codes come from the official Volcengine streaming ASR error-code table (docs.volcengine.com/docs/6561/1354869).
+        "45000002" => Some("The audio sent to Volcengine was empty"),
+        "45000081" => Some(
+            "Volcengine stopped waiting for the next audio packet; the connection stalled while uploading",
+        ),
+        "55000031" => Some("Volcengine is overloaded; try again later"),
         _ => {
             if code.starts_with("45") {
                 Some(
@@ -246,14 +254,26 @@ mod tests {
         );
     }
 
-    /// 有实据的两个码要给出具体说明。
+    /// Documented or evidenced codes get a specific explanation. For 45000081, a generic
+    /// "request rejected, check parameters and quota" would point the user the wrong way.
     #[test]
     fn explains_the_codes_we_have_evidence_for() {
         assert!(explain_status_code("20000003").unwrap().contains("silence"));
         assert!(explain_status_code("45000030").unwrap().contains("quota"));
+        assert!(
+            explain_status_code("45000081")
+                .unwrap()
+                .contains("next audio packet")
+        );
+        assert!(explain_status_code("45000002").unwrap().contains("empty"));
+        assert!(
+            explain_status_code("55000031")
+                .unwrap()
+                .contains("overloaded")
+        );
     }
 
-    /// 没实据的码按前缀给方向，不编造具体含义。
+    /// Codes without evidence get a family-level hint by prefix and no invented specific meaning.
     #[test]
     fn falls_back_to_code_family() {
         assert!(
@@ -262,7 +282,7 @@ mod tests {
                 .contains("rejected")
         );
         assert!(
-            explain_status_code("55000031")
+            explain_status_code("55000001")
                 .unwrap()
                 .contains("Volcengine")
         );
