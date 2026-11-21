@@ -447,6 +447,88 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(finals[0]).toMatchObject({ asrEngine: 'doubao_v2', asrModel: 'Doubao-Seed-ASR-2.0' })
   })
 
+  describe('Doubao stream finish failure', () => {
+    const doubaoProfile = {
+      id: 'doubao-account',
+      provider: 'doubao_v2',
+      apiKey: 'doubao-key',
+      appId: '',
+      model: 'Doubao-Seed-ASR-2.0',
+      omniPrompt: '',
+    }
+
+    // Records two chunks on a Doubao run whose stream opens, stops it and waits for the run to finish.
+    async function recordStreamedRun() {
+      mocks.loadActiveAsrProfile.mockResolvedValue(doubaoProfile)
+      const callbacks = { onFinal: vi.fn(), onError: vi.fn(), onDone: vi.fn() }
+      const provider = new CloudAPIProvider()
+      await provider.connect(callbacks)
+      expect(provider.start({ runId: 13, language: 'uk' })).toBe(true)
+      provider.sendAudio(new Uint8Array(16000).fill(1).buffer as ArrayBuffer)
+      provider.sendAudio(new Uint8Array(16000).fill(2).buffer as ArrayBuffer)
+      // The Doubao stream opens asynchronously; stop only takes the streaming path once ready.
+      await vi.waitFor(() => {
+        expect(mocks.invoke.mock.calls.some(([command]) => command === 'doubao_stream_open')).toBe(true)
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(provider.stop()).toBe(true)
+      await vi.waitFor(() => expect(callbacks.onDone).toHaveBeenCalled())
+      return callbacks
+    }
+
+    it('retries once with the full recording when the stream finish fails', async () => {
+      mocks.invoke.mockImplementation(async (command: string) => {
+        if (command === 'doubao_stream_finish') {
+          throw new Error('Recognition error: server closed the connection before the final result')
+        }
+        if (command === 'cloud_transcribe') return { text: 'recovered text', elapsed_ms: 42 }
+        return undefined
+      })
+
+      const callbacks = await recordStreamedRun()
+
+      const cloudCalls = mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')
+      expect(cloudCalls).toHaveLength(1)
+      const fullRecording = new Uint8Array(32000)
+      fullRecording.set(new Uint8Array(16000).fill(1), 0)
+      fullRecording.set(new Uint8Array(16000).fill(2), 16000)
+      const request = (cloudCalls[0][1] as {
+        request: { audio_b64: string; asr_config: Record<string, unknown> }
+      }).request
+      expect(request.audio_b64).toBe(uint8ArrayToBase64(fullRecording))
+      expect(request.asr_config.provider).toBe('doubao_v2')
+      expect(callbacks.onFinal).toHaveBeenCalledWith(expect.objectContaining({ asrText: 'recovered text' }))
+      expect(callbacks.onError).not.toHaveBeenCalled()
+    })
+
+    it('reports the error when the retry also fails', async () => {
+      mocks.invoke.mockImplementation(async (command: string) => {
+        if (command === 'doubao_stream_finish') {
+          throw new Error('Recognition error: server closed the connection before the final result')
+        }
+        if (command === 'cloud_transcribe') throw new Error('one-shot failed')
+        return undefined
+      })
+
+      const callbacks = await recordStreamedRun()
+
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_transcribe')).toHaveLength(1)
+      expect(callbacks.onError).toHaveBeenCalledTimes(1)
+      expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining('one-shot failed'))
+    })
+
+    it('does not retry when the stream finish succeeds', async () => {
+      mocks.invoke.mockImplementation(async (command: string) => (
+        command === 'doubao_stream_finish' ? 'streamed text' : undefined
+      ))
+
+      const callbacks = await recordStreamedRun()
+
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
+      expect(callbacks.onFinal).toHaveBeenCalledWith(expect.objectContaining({ asrText: 'streamed text' }))
+    })
+  })
+
   it('sends the selected speech language to the Qwen realtime session', async () => {
     mocks.loadActiveAsrProfile.mockResolvedValue({
       id: 'qwen-account',
