@@ -65,7 +65,7 @@ import { t } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
 import { describeMicSource, micSourceChanged } from './micSourceReminder'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
-import { ServerNotConfiguredError } from '../runtimeConfig'
+import { ServerNotConfiguredError, WebSocketConnectError } from '../runtimeConfig'
 import {
   CONTEXT_SELECTION_EDIT_PROMPT,
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
@@ -1783,6 +1783,13 @@ export class RecorderOrchestrator {
         addRuntimeEvent('warn', 'websocket', 'No server address is configured; not reconnecting')
         return
       }
+      // The socket was created, so websocket.ts already schedules its own backoff reconnect, or the close was intentional.
+      // A second 5 s loop here would double the attempts and the log lines. Failures before a socket exists
+      // (settings reads, a bad URL) still retry below.
+      if (err instanceof WebSocketConnectError) {
+        addRuntimeEvent('warn', 'websocket', 'Preconnection failed; websocket auto-reconnect will retry', { error: String(err) })
+        return
+      }
       addRuntimeEvent('warn', 'websocket', 'Preconnection failed; retrying in 5s', { error: String(err) })
       setTimeout(() => this.ensureConnection(), 5000)
     })
@@ -2066,12 +2073,14 @@ export class RecorderOrchestrator {
     let resolveCaptureReady: () => void
     this.captureReadyPromise = new Promise<void>((resolve) => { resolveCaptureReady = resolve })
 
+    let capture: ReturnType<typeof startCapture> | undefined
     try {
 
-      // 并行执行 WebSocket 连接和麦克风采集，减少等待时间
+      // Connect the WebSocket and open the microphone in parallel to cut the wait. The capture promise is kept
+      // so the catch below can let a still-opening microphone settle before stopping it.
       const [, captureResult] = await Promise.all([
         provider.connect(this.buildProviderCallbacks()),
-        startCapture(
+        capture = startCapture(
           this.cachedMicId || undefined,
           (buffer) => {
             if (!this.isRunCurrent(runId)) return
@@ -2179,6 +2188,9 @@ export class RecorderOrchestrator {
 
     } catch (error) {
       resolveCaptureReady!()
+      // Promise.all rejects as soon as the connection fails, while the microphone may still be opening.
+      // stopCapture only releases what is already assigned, so stopping before capture settles would leave the microphone open. Wait for it first.
+      await capture?.catch(() => { })
       this.startRecordingLock = false
       this.pendingStopWhileStarting = false
       // 录音启动失败也要恢复系统输出，避免系统一直静音

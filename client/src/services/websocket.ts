@@ -8,7 +8,7 @@ import {
   addRuntimeEvent,
   hasActiveSession,
 } from './debugLog'
-import { getWSUrl, ServerNotConfiguredError } from './runtimeConfig'
+import { getWSUrl, ServerNotConfiguredError, WebSocketConnectError } from './runtimeConfig'
 import { withLegacyServerTextContext } from './contextAware'
 import { normalizeServerLlmDebug, type ServerLlmEvidence } from './transcription/aiOutcome'
 import { setConnectionStatus } from '../stores/connectionStatus'
@@ -188,9 +188,14 @@ export function connect(cbs: WSCallbacks): Promise<void> {
     ws = null
   }
 
+  // A new connection attempt (a hotkey start, an address change) makes the queued auto-reconnect redundant.
+  // If it fired later, it would call connect() again and close this still-handshaking socket as "unready".
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+
   return new Promise((resolve, reject) => {
     intentionalClose = false
     serverSupportsTextContext = false
+    let opened = false
     updateGlobalState('connecting')
     const wsUrl = getWSUrl()
     if (!wsUrl) {
@@ -215,12 +220,13 @@ export function connect(cbs: WSCallbacks): Promise<void> {
         }
         updateGlobalState('error')
         addRuntimeEvent('error', 'websocket', 'Connection timed out (10s)', { url: wsUrl })
-        reject(new Error('WebSocket connection timeout'))
+        reject(new WebSocketConnectError('WebSocket connection timeout'))
       }
     }, 10000)
 
     socket.onopen = () => {
       clearTimeout(timeout)
+      opened = true
       openedAtMs = Date.now()
       updateGlobalState('connected')
       const wasReconnect = reconnectAttempts > 0
@@ -320,6 +326,11 @@ export function connect(cbs: WSCallbacks): Promise<void> {
 
     socket.onclose = (ev) => {
       clearTimeout(timeout)
+      // A socket that closes before open (refused, a proxy 502, replaced by disconnect() or a newer connect()) must reject.
+      // The timeout was just cleared, so without this the caller's await would hang forever: a hotkey start would sit
+      // on "waiting" with the microphone open. If the timeout already rejected, a second reject is a no-op.
+      // It goes before the stale check because a replaced socket's caller is waiting too.
+      if (!opened) reject(new WebSocketConnectError(`WebSocket closed before open (code=${ev.code})`))
       if (ws !== socket) {
         addRuntimeEvent('info', 'websocket', 'Ignored close event from stale connection', { code: ev.code })
         return
@@ -342,7 +353,9 @@ export function connect(cbs: WSCallbacks): Promise<void> {
           sentStart,
         })
         reconnectAttempts++
-        reconnectTimer = setTimeout(() => connect(callbacks), delay)
+        // Nobody awaits an automatic reconnect, and its failure is already logged by the timeout or onclose;
+        // without the catch every failed attempt is an unhandled promise rejection.
+        reconnectTimer = setTimeout(() => { connect(callbacks).catch(() => { }) }, delay)
       } else {
         // Client-initiated closes used to be completely silent (switching provider/address, connect() replacing an old connection, disconnect()).
         // They now also log one line marking the close as client-initiated, to tell a server kick apart from the client closing on its own.
