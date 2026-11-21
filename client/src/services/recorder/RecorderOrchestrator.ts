@@ -2648,15 +2648,15 @@ export class RecorderOrchestrator {
     }
   }
 
-  /** 异步获取当前模式下的 ASR/AI 供应商信息 */
-  private async buildProviderMetadata(finalResult?: FinalResult): Promise<{
+  /** Asynchronously resolves the ASR/AI provider info for the given work mode. The caller passes
+   *  the mode captured for the run, which can differ from the live provider mode. */
+  private async buildProviderMetadata(mode: WorkMode, finalResult?: FinalResult): Promise<{
     asrProvider?: string
     aiProvider?: string
     aiModel?: string
     aiSource?: FinalResult['aiSource']
     aiStatus?: FinalResult['aiStatus']
   }> {
-    const mode = this.provider.mode
     const executionMeta = {
       aiSource: finalResult?.aiSource,
       aiStatus: finalResult?.aiStatus,
@@ -2825,7 +2825,7 @@ export class RecorderOrchestrator {
       audioSaveFailureLog: 'Failed to save audio file',
       writeFailureLog: 'Failed to write history entry',
       buildRecord: async () => {
-        const providerMeta = await this.buildProviderMetadata(result)
+        const providerMeta = await this.buildProviderMetadata(context.workMode, result)
         return {
           asrText: result.asrText,
           llmText: textToPaste,
@@ -2851,6 +2851,7 @@ export class RecorderOrchestrator {
               : 'no_transcript',
           ...this.buildHistoryMetadata(promptResolution, appContext),
           ...providerMeta,
+          workMode: context.workMode,
         }
       },
     })

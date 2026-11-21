@@ -2053,6 +2053,44 @@ describe('History writes', () => {
     })
   })
 
+  describe('final result work mode', () => {
+    async function lateFinalRecord(switchModeDuringGrace: boolean) {
+      harness.addHistory.mockClear()
+      const recorder = new RecorderOrchestrator()
+      const callbacks = await enterTimeoutGrace(recorder, 340)
+      try {
+        if (switchModeDuringGrace) await switchProvider('local')
+        callbacks.onFinal?.(makeFinal({ asrEngine: 'openai_transcribe', asrModel: 'gpt-4o-transcribe' }))
+        await settleHistoryWrites()
+      } finally {
+        await switchProvider('cloud_api')
+      }
+      expect(writtenRecords()).toHaveLength(1)
+      return writtenRecords()[0]
+    }
+
+    it('keeps the work mode and provider names of the run when a late final arrives after a mode switch', async () => {
+      harness.settings.set('cloudAi.provider', 'openrouter')
+      harness.settings.set('cloudAi.model', 'model-x')
+
+      const control = await lateFinalRecord(false)
+      const switched = await lateFinalRecord(true)
+
+      expect(control).toMatchObject({
+        workMode: 'cloud_api',
+        asrProvider: 'gpt-4o-transcribe',
+        aiProvider: 'openrouter',
+        aiModel: 'model-x',
+      })
+      expect(switched).toMatchObject({
+        workMode: 'cloud_api',
+        asrProvider: control?.asrProvider,
+        aiProvider: control?.aiProvider,
+        aiModel: control?.aiModel,
+      })
+    })
+  })
+
   describe('failed recording guard', () => {
     it.each([
       { name: 'is shorter than 0.5 s', audioSec: 0.4, withChunks: true },

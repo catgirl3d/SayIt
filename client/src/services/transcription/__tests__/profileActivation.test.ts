@@ -39,7 +39,7 @@ import {
   loadActiveAsrProfile,
   saveAsrProfiles,
 } from '@/features/settings/asrProfileStore'
-import { switchProvider } from '@/services/transcription'
+import { switchProvider, type WorkMode } from '@/services/transcription'
 import { CloudAPIProvider } from '../CloudAPIProvider'
 import { RecorderOrchestrator } from '@/services/recorder/RecorderOrchestrator'
 
@@ -606,9 +606,10 @@ describe('ASR profile activation and recording ordering', () => {
     })
     const buildProviderMetadata = Reflect.get(RecorderOrchestrator.prototype, 'buildProviderMetadata') as (
       this: RecorderOrchestrator,
+      mode: WorkMode,
       result: { asrEngine: string; asrModel: string },
     ) => Promise<{ asrProvider?: string }>
-    await expect(buildProviderMetadata.call(recorder, {
+    await expect(buildProviderMetadata.call(recorder, 'cloud_api', {
       asrEngine: 'openai_compat',
       asrModel: 'local-whisper',
     })).resolves.toMatchObject({ asrProvider: 'openai_compat:local-whisper' })
