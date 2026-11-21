@@ -101,6 +101,14 @@ export class ServerNotConfiguredError extends Error {
   }
 }
 
+/** The WebSocket failed or closed before it opened, or timed out while opening. websocket.ts schedules its own automatic reconnect for these, so callers must not add another retry loop. */
+export class WebSocketConnectError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'WebSocketConnectError'
+  }
+}
+
 // Update checking no longer has any relationship with the speech backend: the update
 // source is the pinned fork release manifest (see services/projectLinks.ts and
 // features/update/updateChecker.ts). A user-configurable backend URL must never

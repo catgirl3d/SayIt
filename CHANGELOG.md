@@ -20,6 +20,7 @@ Sections are ordered by version, newest first.
 - A usage session abandoned by a new start before stop is now closed with the `superseded` status instead of staying in `recording` forever.
 
 #### Desktop Client
+- In Server mode, a recording no longer gets stuck on "waiting" with the microphone open when the connection to the server drops right as you press the hotkey. The start now fails with "Recording couldn't start", hotkeys keep working, and SayIt keeps reconnecting in the background.
 - Long Doubao recordings no longer fail or come back cut short. SayIt now reads Doubao's replies while it is still recording, so they no longer pile up and stall the connection. If the stream still breaks before the final result, or no result arrives within 15 seconds after the recording ends, the full recording is sent again once instead of returning partial text, so you no longer have to retry from History. Volcengine error codes 45000081 (stalled upload), 45000002 (empty audio) and 55000031 (overloaded) now get specific explanations.
 - Downloading Fun-ASR MLT Nano and Whisper Large v3 Turbo no longer stops with a size or checksum mismatch. Upstream re-exported both files (metadata refresh), and the catalog now pins the current sizes and SHA-256 values, so these downloads verify again.
 - History reprocessing now validates recordings in Rust and sends only raw mono 16 kHz 16-bit PCM from a WAV file to the selected speech engine, reporting malformed or unsupported audio before any transcription request.
