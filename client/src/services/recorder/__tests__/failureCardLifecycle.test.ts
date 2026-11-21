@@ -1368,11 +1368,16 @@ describe('recorder failure cards', () => {
     expect(newRunId).not.toBe(137)
 
     callbacks.onFinal?.(makeFinal())
-    await flushMicrotasks()
+    await settleHistoryWrites()
 
     expect(recorder.getState()).toBe('recording')
     expect(recorder.testSeam().activeRunId).toBe(newRunId)
-    expect(harness.addHistory).not.toHaveBeenCalled()
+    expect(harness.addHistory).toHaveBeenCalledTimes(1)
+    expect(harness.addHistory).toHaveBeenCalledWith(expect.objectContaining({
+      isEmpty: true,
+      failReasonCode: 'processing_timeout',
+    }))
+    expect(harness.addHistory).not.toHaveBeenCalledWith(expect.objectContaining({ asrText: 'recognized words' }))
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'paste_text')).toHaveLength(0)
   })
 
@@ -1420,6 +1425,7 @@ describe('exclusive system-audio ownership', () => {
         seam.timedOutProcessingContext = {
           runId: 83,
           timedOutAt: 0,
+          workMode: 'cloud_api',
           audioDurationSec: 0,
           wallTimeSec: 0,
           suppressLateFinalInsertion: false,
@@ -1923,6 +1929,22 @@ describe('History writes', () => {
         .toBe(en['recorder.processingTimeoutTitle'])
     })
 
+    it('keeps the work mode of the timed-out run when the provider mode changes during the grace period', async () => {
+      const recorder = new RecorderOrchestrator()
+      await enterTimeoutGrace(recorder, timeoutPath.runId)
+      try {
+        expect((await switchProvider('local')).mode).toBe('local')
+
+        await timeoutPath.fire(recorder)
+        await settleHistoryWrites()
+
+        expect(writtenRecords()).toHaveLength(1)
+        expect(writtenRecords()[0]).toMatchObject({ workMode: 'cloud_api' })
+      } finally {
+        await switchProvider('cloud_api')
+      }
+    })
+
     it('upgrades the failure card to History retry and logs the save', async () => {
       await runHistoryPath(timeoutPath)
 
@@ -1936,8 +1958,70 @@ describe('History writes', () => {
         'info',
         'recorder',
         'Timed-out recording saved to history for retry',
-        expect.objectContaining({ audioSec: 1 }),
+        expect.objectContaining({ audioSec: 1, trigger: 'grace_expired' }),
       )
+    })
+  })
+
+  describe('processing timeout record when a new recording starts during the grace period', () => {
+    async function startNewRecording(recorder: RecorderOrchestrator) {
+      recorder.testSeam().cachedPresets = [{ id: 'intent', name: 'Intent', systemPrompt: '', builtin: true }]
+      return startRealRecording(recorder)
+    }
+
+    it('saves the timeout record once, when the new recording starts', async () => {
+      const recorder = new RecorderOrchestrator()
+      await enterTimeoutGrace(recorder, 320)
+
+      const next = await startNewRecording(recorder)
+      await settleHistoryWrites()
+
+      expect(next.runId).not.toBe(320)
+      expect(recorder.getState()).toBe('recording')
+      expect(writtenRecords()).toHaveLength(1)
+      expect(writtenRecords()[0]).toMatchObject({
+        isEmpty: true,
+        failReasonCode: 'processing_timeout',
+        audioFilePath: SAVED_AUDIO_PATH,
+      })
+      expect(historyUpdatedEmits()).toBe(1)
+      expect(harness.runtimeEvents).toHaveBeenCalledWith(
+        'info',
+        'recorder',
+        'Timed-out recording saved to history for retry',
+        expect.objectContaining({ audioSec: 1, trigger: 'new_recording' }),
+      )
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      await settleHistoryWrites()
+
+      expect(writtenRecords()).toHaveLength(1)
+      expect(harness.saveRecordingAudio).toHaveBeenCalledTimes(1)
+      expect(recorder.getState()).toBe('recording')
+      expect(recorder.testSeam().activeRunId).toBe(next.runId)
+      expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+      expect(overlayPayloads('update_overlay_state').some((payload) => payload.cardToken === 320)).toBe(false)
+    })
+
+    it('does not make the new recording wait for the timeout record to be saved', async () => {
+      const saveAudio = deferred<void>()
+      const storage = installHistoryStorage({ saveAudio: saveAudio.promise })
+      const recorder = new RecorderOrchestrator()
+      await enterTimeoutGrace(recorder, 321)
+
+      const next = await startNewRecording(recorder)
+      await settleHistoryWrites()
+
+      expect(recorder.getState()).toBe('recording')
+      expect(harness.saveRecordingAudio).toHaveBeenCalledTimes(1)
+      expect(storage.records.size).toBe(0)
+
+      saveAudio.resolve()
+      await settleHistoryWrites()
+
+      expect(storage.records.size).toBe(1)
+      expect(recorder.getState()).toBe('recording')
+      expect(recorder.testSeam().activeRunId).toBe(next.runId)
     })
   })
 

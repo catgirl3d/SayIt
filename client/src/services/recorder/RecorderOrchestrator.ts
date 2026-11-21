@@ -117,6 +117,9 @@ interface TimedOutProcessingContext {
   appContext: ActiveAppContext | null
   audioChunks: ArrayBuffer[]
   probeResult: ProbeResult | null
+  /** Mode of the run that timed out. The provider mode can change before the record is written,
+   *  and the History record must keep the mode the recording was made in. */
+  workMode: WorkMode
 }
 
 interface ResetToIdleOptions {
@@ -1110,6 +1113,59 @@ export class RecorderOrchestrator {
     }
   }
 
+  /**
+   * Saves the recording of a run whose processing timed out to History, flagged as an empty
+   * result, so the user can re-recognize it from there. It works only from the context snapshot,
+   * so it stays valid after the run is finished and a newer run has started. Returns whether a
+   * record with its audio file was written.
+   */
+  private async persistTimedOutRunHistory(
+    ctx: TimedOutProcessingContext,
+    trigger: 'grace_expired' | 'new_recording',
+  ): Promise<boolean> {
+    let historyArtifact: { recordId: string; audioFilePath?: string } | null = null
+    try {
+      const historyMeta = this.buildHistoryMetadata(ctx.promptResolution, ctx.appContext)
+      if (!(await getSetting('historyEnabled', true))) return false
+
+      let audioFilePath: string | undefined
+      const recordId = createHistoryRecordId()
+      const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
+      if (saveAudioEnabled && ctx.audioChunks.length > 0) {
+        audioFilePath = await this.saveHistoryAudio(recordId, ctx.audioChunks, 'Failed to save audio for timeout recovery')
+      }
+      historyArtifact = { recordId, audioFilePath }
+
+      await addHistory({
+        id: recordId,
+        timestamp: Date.now(),
+        asrText: '',
+        llmText: '',
+        asrMs: 0,
+        llmMs: 0,
+        durationSec: ctx.wallTimeSec,
+        audioDurationSec: ctx.audioDurationSec > 0 ? ctx.audioDurationSec : undefined,
+        charCount: 0,
+        isEmpty: true,
+        failReason: t('recorder.processingTimeoutTitle'),
+        failReasonCode: 'processing_timeout',
+        audioFilePath,
+        ...historyMeta,
+        workMode: ctx.workMode,
+      })
+      void bridge.emit('history-updated')
+      addRuntimeEvent('info', 'recorder', 'Timed-out recording saved to history for retry', {
+        audioSec: ctx.audioDurationSec,
+        trigger,
+      })
+      return Boolean(audioFilePath)
+    } catch (err) {
+      if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
+      addRuntimeEvent('warn', 'recorder', 'Failed to write timeout recovery history entry', { error: String(err) })
+      return false
+    }
+  }
+
   private async discardCanceledHistory(artifact: { recordId: string; audioFilePath?: string }) {
     try {
       if (artifact.audioFilePath) await bridge.deleteAudioFile(artifact.audioFilePath)
@@ -1382,6 +1438,7 @@ export class RecorderOrchestrator {
         void this.processFinalResult(result, {
           runId: this.activeRunId,
           timedOutAt: 0,
+          workMode: this.provider.mode,
           audioDurationSec: this.getAudioDurationSec(),
           wallTimeSec: this.wallTimeAtStopSec > 0 ? this.wallTimeAtStopSec : this.getAudioDurationSec(),
           suppressLateFinalInsertion: false,
@@ -1749,10 +1806,16 @@ export class RecorderOrchestrator {
       return
     }
 
-    // 新 run 创建前先废弃 timeout 宽限期的旧 provider 代次；后续原有 connect 流程
-    // 会为 ServerProvider 建立新 socket，Cloud/Local 也会因 cancel 丢弃旧回调。
+    // Before the new run is created, retire the old provider generation left over from the
+    // timeout grace period; the existing connect flow below sets up a new socket for
+    // ServerProvider, and Cloud/Local drop the old callbacks because of cancel.
+    // The grace timer returns early once the context is retired, so this is the only place
+    // that can still save the timed-out recording; it is started first and not awaited (the
+    // new recording must not wait on disk). It works from the context snapshot alone, so the
+    // run reset below cannot affect it.
     const timedOutContext = this.timedOutProcessingContext
     if (timedOutContext) {
+      void this.persistTimedOutRunHistory(timedOutContext, 'new_recording')
       this.timedOutProcessingContext = null
       provider.cancel()
       this.finishRun(timedOutContext.runId)
@@ -2337,6 +2400,7 @@ export class RecorderOrchestrator {
       const timedOutCtx: TimedOutProcessingContext = {
         runId,
         timedOutAt: Date.now(),
+        workMode: this.provider.mode,
         audioDurationSec: audioDur,
         wallTimeSec,
         suppressLateFinalInsertion: this.cachedSuppressLateFinalInsertion,
@@ -2352,13 +2416,15 @@ export class RecorderOrchestrator {
         lateFinalGraceMs: LATE_FINAL_GRACE_MS,
       })
 
-      // 安全网：快照本次录音音频与元数据。若宽限期内没等到迟到的 final，就把音频存入历史
-      // （标记为空结果），用户可在历史里“重新识别”，避免超时丢失整段录音。
-      // resetToIdle 不会清空 recordedChunks，这里再 slice 一份，防止后续录音替换缓冲。
-      const audioChunks = timedOutCtx.audioChunks
-      const historyMeta = this.buildHistoryMetadata(timedOutCtx.promptResolution, timedOutCtx.appContext)
+      // Safety net: if no late final arrives within the grace period, the recording is saved
+      // to History (flagged as an empty result) so the user can "re-recognize" it there and a
+      // timeout does not lose the whole recording. resetToIdle does not clear recordedChunks,
+      // but a following recording replaces that buffer, so the write works from the audio and
+      // metadata snapshot held by timedOutCtx instead of the live recorder fields.
       window.setTimeout(() => {
-        // onFinal 若在宽限期内消费了 context（迟到 final 已落历史）→ 跳过，避免重复记录。
+        // Skip if the context is gone: onFinal consumed it during the grace period (the late
+        // final is already in History), or a new recording retired it (startRecordingInner has
+        // already saved this run's record). Either way exactly one record exists per run.
         if (this.timedOutProcessingContext !== timedOutCtx || !this.isRunCurrent(timedOutCtx.runId)) return
         // The grace period has expired, so reject late results. Retire the old Provider session
         // before saving timeout recovery asynchronously; server mode must rotate its socket so
@@ -2371,51 +2437,10 @@ export class RecorderOrchestrator {
         )
         this.provider.cancel()
         if (this.provider.mode === 'server') this.ensureConnection()
-        void (async () => {
-          let historyArtifact: { recordId: string; audioFilePath?: string } | null = null
-          try {
-            const historyEnabled = await getSetting('historyEnabled', true)
-            if (!historyEnabled) {
-              this.overlayService.updateFailureRecovery('none', timedOutCtx.runId)
-              this.finishRun(timedOutCtx.runId)
-              return
-            }
-
-            let audioFilePath: string | undefined
-            const recordId = createHistoryRecordId()
-            const saveAudioEnabled = await getSetting('audioRetentionEnabled', true)
-            if (saveAudioEnabled && audioChunks.length > 0) {
-              audioFilePath = await this.saveHistoryAudio(recordId, audioChunks, 'Failed to save audio for timeout recovery')
-            }
-            historyArtifact = { recordId, audioFilePath }
-
-            await addHistory({
-              id: recordId,
-              timestamp: Date.now(),
-              asrText: '',
-              llmText: '',
-              asrMs: 0,
-              llmMs: 0,
-              durationSec: timedOutCtx.wallTimeSec,
-              audioDurationSec: timedOutCtx.audioDurationSec > 0 ? timedOutCtx.audioDurationSec : undefined,
-              charCount: 0,
-              isEmpty: true,
-              failReason: t('recorder.processingTimeoutTitle'),
-              failReasonCode: 'processing_timeout',
-              audioFilePath,
-              ...historyMeta,
-            })
-            void bridge.emit('history-updated')
-            this.overlayService.updateFailureRecovery(audioFilePath ? 'history' : 'none', timedOutCtx.runId)
-            this.finishRun(timedOutCtx.runId)
-            addRuntimeEvent('info', 'recorder', 'Timed-out recording saved to history for retry', { audioSec: timedOutCtx.audioDurationSec })
-          } catch (err) {
-            if (historyArtifact) await this.discardCanceledHistory(historyArtifact)
-            this.overlayService.updateFailureRecovery('none', timedOutCtx.runId)
-            this.finishRun(timedOutCtx.runId)
-            addRuntimeEvent('warn', 'recorder', 'Failed to write timeout recovery history entry', { error: String(err) })
-          }
-        })()
+        void this.persistTimedOutRunHistory(timedOutCtx, 'grace_expired').then((hasSavedAudio) => {
+          this.overlayService.updateFailureRecovery(hasSavedAudio ? 'history' : 'none', timedOutCtx.runId)
+          this.finishRun(timedOutCtx.runId)
+        })
       }, LATE_FINAL_GRACE_MS)
 
       this.resetToIdle({ preserveLateFinalContext: true })
