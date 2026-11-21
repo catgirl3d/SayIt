@@ -36,7 +36,6 @@ const KEY_LAST_RESULT: &str = "webdav.lastResult";
 
 /// 备份文件名前缀，与本地导出一致，便于用户对着看。
 const BACKUP_PREFIX: &str = "sayit-backup-";
-const DEFAULT_KEEP_COUNT: u64 = 5;
 const PROGRESS_EVENT: &str = "webdav-backup-progress";
 
 /// 元数据类请求（PROPFIND / MKCOL / MOVE / DELETE）的超时。
@@ -133,21 +132,30 @@ fn setting_string(storage: &Storage, key: &str) -> String {
         .to_string()
 }
 
-fn setting_bool(storage: &Storage, key: &str) -> bool {
-    storage.get(key, None).as_bool().unwrap_or(false)
+fn setting_bool(storage: &Storage, key: &str, default: bool) -> bool {
+    storage.get(key, None).as_bool().unwrap_or(default)
 }
 
-/// 备份档位一律从设置读，不接受调用方传参。
+/// The backup scope is always read from settings; callers cannot pass one in.
 ///
-/// 手动「立即备份」和后台定时备份必须打出一样的包 —— 两个入口各带一份 scope 的话，
-/// 「界面上勾了音频但自动备份里没有」这类问题会很难查。
+/// A manual "Back up now" and the scheduled background backup must produce the same archive.
+/// If each entry point carried its own scope, a mismatch such as "audio is ticked in the UI but
+/// missing from automatic backups" would be hard to trace.
 ///
-/// 两个默认值都是 false：读不到设置时宁可打一个只含配置的小包，也不要悄悄上传
-/// 几个 GB 音频。
+/// Both defaults are false: when a setting cannot be read, prefer a small config-only archive
+/// over silently uploading several GB of audio. The defaults come from `crate::defaults`.
 fn scope_from_settings(storage: &Storage) -> BackupScope {
     BackupScope {
-        include_history: setting_bool(storage, KEY_INCLUDE_HISTORY),
-        include_audio: setting_bool(storage, KEY_INCLUDE_AUDIO),
+        include_history: setting_bool(
+            storage,
+            KEY_INCLUDE_HISTORY,
+            crate::defaults::WEBDAV_INCLUDE_HISTORY,
+        ),
+        include_audio: setting_bool(
+            storage,
+            KEY_INCLUDE_AUDIO,
+            crate::defaults::WEBDAV_INCLUDE_AUDIO,
+        ),
     }
 }
 
@@ -731,7 +739,7 @@ async fn prune_old_backups(
         .get(KEY_KEEP_COUNT, None)
         .as_u64()
         .filter(|value| *value >= 1)
-        .unwrap_or(DEFAULT_KEEP_COUNT) as usize;
+        .unwrap_or(crate::defaults::WEBDAV_KEEP_COUNT) as usize;
 
     // entries 是按名字倒序（= 时间从新到旧）的，但刚上传的这一份可能还没出现在
     // 列表里（回读发生在 MOVE 之后，正常都在），所以显式合并一次再排序。
@@ -973,11 +981,12 @@ mod tests {
         assert_eq!(upload_percent(0, 0), 90.0);
     }
 
-    /// 设置没配过时，scope 必须是「只有配置」。
+    /// With the settings never written, the scope must be config-only.
     ///
-    /// 这条要用真的 Storage 跑：默认值在 defaults.ts 和这里各有一份，靠
-    /// `setting_bool` 的 `unwrap_or(false)` 兜底。一旦有人把兜底改成 true，
-    /// 后果是每台机器悄悄开始上传整个音频库，而界面上的勾还是没勾的。
+    /// This runs against a real Storage. The defaults live in `crate::defaults` (and in
+    /// `src/services/defaults.ts`), and `setting_bool` falls back to the WEBDAV_INCLUDE_*
+    /// constants. If that fallback ever became `true`, every machine would silently start
+    /// uploading its whole audio library while the UI checkbox stays unchecked.
     #[test]
     fn scope_defaults_to_config_only_when_unset() {
         let dir = std::env::temp_dir().join(format!("sayit-webdav-test-{}", uuid::Uuid::new_v4()));

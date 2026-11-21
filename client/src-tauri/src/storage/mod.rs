@@ -10,12 +10,16 @@ mod usage;
 
 pub use usage::{UsageBackup, UsageEventInput, UsageSummary, parse_usage_backup};
 
-/// Default settings values (mirrors electron-app/electron/store.ts)
-const DEFAULT_SETTINGS: &[(&str, &str)] = &[
+/// Default settings values (mirrors electron-app/electron/store.ts).
+///
+/// The seeds are JSON literals, so they cannot name the constants in `crate::defaults`. The
+/// tests in `defaults.rs` reconcile these seeds with `crate::defaults` and with
+/// `src/services/defaults.ts`.
+pub(crate) const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     // Default push-to-talk key. It must not be Shift: holding the right Shift
     // key enables Windows Filter Keys, which leaves recording running after the
-    // key is released. Keep this in sync with src/services/defaults.ts and
-    // DEFAULT_PTT_SETTING in keyboard/mod.rs.
+    // key is released. The defaults.rs tests check this value against
+    // crate::defaults::SHORTCUT_PTT.
     ("shortcutPTT", r#""ControlRight""#),
     ("shortcutPTTCombo", r#""Alt+Q""#),
     ("shortcutHandsFree", r#""AltRight""#),

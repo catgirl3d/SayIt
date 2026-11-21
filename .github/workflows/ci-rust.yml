@@ -9,6 +9,9 @@ on:
       - 'rustfmt.toml'
       - '.github/actions/install-vulkan-sdk/**'
       - '.github/workflows/ci-rust.yml'
+      # The Rust defaults reconciliation test reads this file via include_str!, so a
+      # frontend-only edit must still run Rust CI.
+      - 'client/src/services/defaults.ts'
   pull_request:
     paths:
       - 'client/src-tauri/**'
@@ -16,6 +19,9 @@ on:
       - 'rustfmt.toml'
       - '.github/actions/install-vulkan-sdk/**'
       - '.github/workflows/ci-rust.yml'
+      # The Rust defaults reconciliation test reads this file via include_str!, so a
+      # frontend-only edit must still run Rust CI.
+      - 'client/src/services/defaults.ts'
   workflow_dispatch: {}
 
 concurrency:

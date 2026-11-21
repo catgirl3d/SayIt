@@ -3,6 +3,7 @@
 
 mod commands;
 mod context;
+mod defaults;
 mod error_protocol;
 mod inject;
 mod keyboard;
@@ -323,15 +324,21 @@ fn main() {
 
     // Read PTT setting before moving storage into managed state
     let ptt_setting_val = storage.get("shortcutPTT", None);
-    // 兜底键与 storage 种子、前端 defaults.ts 保持一致；绝不能是 Shift（会触发筛选键）
+    // Fallbacks are defined in crate::defaults.
     let ptt_str = ptt_setting_val
         .as_str()
-        .unwrap_or("ControlRight")
+        .unwrap_or(crate::defaults::SHORTCUT_PTT)
         .to_string();
     let hf_setting_val = storage.get("shortcutHandsFree", None);
-    let hf_str = hf_setting_val.as_str().unwrap_or("AltRight").to_string();
+    let hf_str = hf_setting_val
+        .as_str()
+        .unwrap_or(crate::defaults::SHORTCUT_HANDS_FREE)
+        .to_string();
     let ai_toggle_setting_val = storage.get("shortcutToggleAi", None);
-    let ai_toggle_str = ai_toggle_setting_val.as_str().unwrap_or("").to_string();
+    let ai_toggle_str = ai_toggle_setting_val
+        .as_str()
+        .unwrap_or(crate::defaults::SHORTCUT_TOGGLE_AI)
+        .to_string();
     log::info!(
         "PTT setting from DB: raw={:?} parsed={:?}",
         ptt_setting_val,

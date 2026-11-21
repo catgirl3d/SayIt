@@ -70,9 +70,9 @@ export const DEFAULTS: Record<string, unknown> = {
   // in lib/shortcutKeys.ts). This used to be 'ShiftRight', which bound every fresh install
   // to that key out of the box. Right Ctrl is nearby, has no accessibility trap, and does
   // not collide with the hands-free default (right Alt).
-  // ⚠️ Changing this must be mirrored in Rust: the seed defaults in
-  // src-tauri/src/storage/mod.rs, the fallback in main.rs, and
-  // PttKeyConfig::fallback() in keyboard/mod.rs.
+  // ⚠️ Changing this must be mirrored in src-tauri/src/defaults.rs (SHORTCUT_PTT). Its
+  // reconciliation test fails until this file and that constant agree. Keep this entry a
+  // single-line literal: the test parses it line by line.
   shortcutPTT: 'ControlRight',
   shortcutHandsFree: 'AltRight', // Hands-free mode. Defaults to the right Alt single key. Also accepts combos like 'Control+Shift+S'
   // AI-cleanup master shortcut. Empty = not registered, so an upgrade never silently
@@ -248,10 +248,10 @@ export const DEFAULTS: Record<string, unknown> = {
   // default to false: a recording library can be several GB, and cloud drives
   // (especially the free Nutstore tier) have monthly traffic quotas — enabling them by
   // default would make an expensive decision on the user's behalf.
-  // ⚠️ The Rust side (commands/webdav.rs) keeps its own copies of these defaults
-  // (setting_bool's unwrap_or(false) and DEFAULT_KEEP_COUNT); changing one side requires
-  // changing the other — when the two disagree, what the UI shows and what actually gets
-  // uploaded are not the same thing.
+  // ⚠️ The Rust copies of these defaults live in src-tauri/src/defaults.rs. Changing one side
+  // requires changing the other; the reconciliation test in that file fails when they disagree,
+  // because otherwise what the UI shows and what actually gets uploaded would not be the same
+  // thing. Keep these entries single-line literals: the test parses them line by line.
   'webdav.enabled': false, // Automatic periodic backup. Options: true | false
   'webdav.url': '', // Directory URL; HTTPS only (Basic auth means the password travels in clear text otherwise)
   'webdav.username': '',
