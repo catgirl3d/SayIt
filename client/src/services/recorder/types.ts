@@ -1,5 +1,6 @@
 export type RecorderState = 'idle' | 'recording' | 'processing'
 import { t } from '@/i18n'
+import type { CustomWaveColors, OverlayWaveTheme } from '@/lib/overlayWaveColors'
 
 /** Caption data the subtitle session hands to the overlay; transport shape (state, locale) belongs to OverlayService. */
 export interface SubtitleOverlayPayload {
@@ -14,7 +15,7 @@ export interface SubtitleOverlayPayload {
   subtitleSource: string
 }
 
-export type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
+export type { CustomWaveColors, OverlayWaveTheme }
 
 export type FailureRecovery = 'unknown' | 'history' | 'none'
 
@@ -41,6 +42,14 @@ export const OVERLAY_WIDTH_PRESETS: Record<OverlayWidthPreset, OverlayWidthConfi
 
 export interface OverlayCommonPayload {
   theme: OverlayWaveTheme
+  /**
+   * Custom wave colors. Sent whatever the active theme is, so every payload built by `getCommonPayload()`
+   * is self-contained: the native side replaces the latest overlay payload as a whole and re-emits it
+   * (`emit_latest` in window/mod.rs, e.g. after the overlay webview is recreated), so a re-emit must not
+   * depend on a field that only an earlier payload carried. Subtitle payloads skip `getCommonPayload()`
+   * and carry no theme; they draw no theme colors. It is three short strings, so the cost is negligible.
+   */
+  customWave: CustomWaveColors
   showDuration: boolean
   baseWidth?: number
   barCount?: number

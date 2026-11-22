@@ -393,3 +393,37 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Color picker for the custom wave (react-colorful, ColorPopover in CustomWaveEditor.tsx).
+ * The component ships with 200px squares, large radii and thick white handles. Here the picker
+ * follows the panel width, uses the same corner radius as the cards, and has thinner handles with
+ * a shadow so they stay visible in the dark theme as well.
+ */
+.sayit-colorful .react-colorful {
+  width: 100%;
+  height: 148px;
+}
+
+.sayit-colorful .react-colorful__saturation {
+  border-radius: 6px 6px 0 0;
+  border-bottom: 0;
+}
+
+.sayit-colorful .react-colorful__hue {
+  height: 12px;
+  margin-top: 10px;
+  border-radius: 999px;
+}
+
+.sayit-colorful .react-colorful__last-control {
+  border-radius: 999px;
+}
+
+.sayit-colorful .react-colorful__saturation-pointer,
+.sayit-colorful .react-colorful__hue-pointer {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}

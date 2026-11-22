@@ -91,3 +91,21 @@ export const CompactNoAnimation: Story = {
     </div>
   ),
 }
+
+export const ExtraSmall: Story = {
+  render: () => (
+    <div className="space-y-2">
+      <p id="wave-style-label" className="text-sm font-medium">Style</p>
+      <Segmented
+        labelledBy="wave-style-label"
+        size="xs"
+        value="gradient"
+        options={[
+          { value: 'solid', label: 'Solid' },
+          { value: 'gradient', label: 'Gradient' },
+        ]}
+        onChange={() => undefined}
+      />
+    </div>
+  ),
+}

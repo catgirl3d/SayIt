@@ -9,6 +9,8 @@
  *   - App prompt rules → BUILTIN_APP_RULES in src/services/personalization/defaults.ts
  */
 
+import { DEFAULT_CUSTOM_WAVE } from '@/lib/overlayWaveColors'
+
 // Microphone boost is stored as a string: 'auto' (browser AGC) or a fixed linear gain such
 // as '3' or '7.5'. The string form predates the slider (the old picker saved '1' | '2' |
 // '3' | '5' | 'auto'), so every previously saved value still resolves to the same gain
@@ -210,7 +212,10 @@ export const DEFAULTS: Record<string, unknown> = {
   'server.aiSource': 'managed', // Options: 'managed' | 'custom'
 
   // ── Overlay window ──
-  overlayWaveTheme: 'black-rainbow', // Options: 'black-rainbow' | 'black-blue' | 'black-white'
+  overlayWaveTheme: 'black-rainbow', // Options: 'black-rainbow' | 'black-blue' | 'black-white' | 'custom'
+  // Colors used when overlayWaveTheme is 'custom': { mode: 'solid' | 'gradient', from: '#rrggbb', to: '#rrggbb' }.
+  // Colors too dark for the black overlay capsule are brightened automatically; see lib/overlayWaveColors.ts.
+  overlayWaveCustom: DEFAULT_CUSTOM_WAVE,
   overlayShowDuration: true, // Whether to show the recording duration. Options: true | false
   overlayWidth: 'short', // Options: 'short' | 'medium' | 'long'
 

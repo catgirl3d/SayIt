@@ -6,6 +6,9 @@ Sections are ordered by version, newest first.
 ## v0.3.2 (unreleased)
 
 ### Added
+#### Desktop Client
+- The overlay waveform has a new **Custom** theme in Settings → Appearance: pick a color from the presets or with the color picker, as one color or a two-color gradient. The colors are included in the settings export. Colors too dark for the black overlay are brightened, and the settings page shows the brightened color.
+
 #### Hotwords
 - Built-in hotword categories now accept your own terms. An add field appears under each enabled built-in category, the terms follow that category's switch, survive restarts, and are included in the hotword export. Reset is now a small icon that asks for a second click and only appears while the list differs from the defaults.
 

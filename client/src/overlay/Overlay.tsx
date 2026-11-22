@@ -5,48 +5,46 @@ import { isLocale, setLocale } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { addRuntimeEvent } from '../services/debugLog'
 import { formatRecordingTimer } from '../services/recorder/types'
+import type { FailureOverlayPayload, OverlayCommonPayload, SubtitleOverlayPayload } from '../services/recorder/types'
+import {
+  buildWavePalette,
+  DEFAULT_CUSTOM_WAVE,
+  getWaveThinkingColor,
+  getWaveTimerColor,
+  normalizeCustomWave,
+  normalizeWaveTheme,
+  sameCustomWave,
+  type CustomWaveColors,
+  type OverlayWaveTheme,
+} from '@/lib/overlayWaveColors'
 
 type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast' | 'subtitles'
 type RecordingVisualPhase = 'preparing' | 'listening'
-type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
-
-interface OverlayPayload {
-  state?: OverlayState
-  bars?: number[]
-  elapsedSec?: number
-  theme?: OverlayWaveTheme
-  showDuration?: boolean
-  barCount?: number
-  fallbackText?: string
-  fallbackReason?: string
-  failureTitle?: string
-  failureDetail?: string
-  failureRecovery?: 'unknown' | 'history' | 'none'
-  cardToken?: number
-  errorMessage?: string
-  warning?: string
-  /** warning 的严重级别：warn=琥珀（声音小/未检测到），error=红色高警（麦克风已被静音） */
-  warningTone?: 'warn' | 'error'
-  toastText?: string
-  /** toast 的语气：info=中性（如切换预设），warn=琥珀色+图标（如未检测到声音） */
-  toastTone?: 'info' | 'warn'
-  streaming?: boolean
-  streamingText?: string
-  subtitleText?: string
-  subtitleStatus?: string
-  subtitleError?: string
-  subtitleNotice?: string
-  subtitleSource?: string
-  subtitleLiveText?: string
-  subtitleLiveRecognition?: boolean
-  micSourceMode?: 'auto' | 'fixed' | null
-  micSourceLabel?: string
-  /** 界面语言，由主窗随每次更新下发（见 OverlayCommonPayload.locale）。 */
-  locale?: string
-  _overlayShowId?: number
-  _overlayGeneration?: number
-  _overlayProbe?: boolean
-}
+type OverlayPayload =
+  /** UI language, sent by the main window with every update (see OverlayCommonPayload.locale). */
+  Partial<OverlayCommonPayload> &
+    Partial<Omit<FailureOverlayPayload, 'state'>> &
+    Partial<SubtitleOverlayPayload> & {
+      state?: OverlayState
+      bars?: number[]
+      elapsedSec?: number
+      fallbackText?: string
+      fallbackReason?: string
+      errorMessage?: string
+      warning?: string
+      /** Warning severity: warn = amber (quiet or no sound detected), error = red alert (microphone muted). */
+      warningTone?: 'warn' | 'error'
+      toastText?: string
+      /** Toast tone: info = neutral (e.g. a preset was switched), warn = amber with an icon (e.g. no sound detected). */
+      toastTone?: 'info' | 'warn'
+      streaming?: boolean
+      streamingText?: string
+      micSourceMode?: 'auto' | 'fixed' | null
+      micSourceLabel?: string
+      _overlayShowId?: number
+      _overlayGeneration?: number
+      _overlayProbe?: boolean
+    }
 
 const DEFAULT_BAR_COUNT = 24
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
@@ -247,44 +245,6 @@ export function OverlayFailureCard({ title, detail, recovery, warning, onDismiss
   )
 }
 
-function normalizeTheme(theme: unknown): OverlayWaveTheme {
-  if (theme === 'black-white' || theme === 'black-blue' || theme === 'black-rainbow') {
-    return theme
-  }
-  return 'black-blue'
-}
-
-function getListeningBarColor(index: number, total: number, theme: OverlayWaveTheme): string {
-  const safeTotal = Math.max(1, total - 1)
-  const t = index / safeTotal
-
-  if (theme === 'black-white') {
-    return '#f1f5f9'
-  }
-
-  if (theme === 'black-rainbow') {
-    const hue = 140 - Math.round(t * 110)
-    const lightness = 64 - Math.round(Math.abs(t - 0.5) * 12)
-    return `hsl(${hue} 95% ${lightness}%)`
-  }
-
-  const hue = 190 + Math.round(t * 30)
-  const lightness = 62 - Math.round(Math.abs(t - 0.5) * 14)
-  return `hsl(${hue} 90% ${lightness}%)`
-}
-
-function getTimerColor(theme: OverlayWaveTheme): string {
-  if (theme === 'black-white') return '#e5e7eb'
-  if (theme === 'black-rainbow') return '#fef08a'
-  return '#bae6fd'
-}
-
-function getThinkingColor(theme: OverlayWaveTheme): string {
-  if (theme === 'black-white') return '#e2e8f0'
-  if (theme === 'black-rainbow') return '#facc15'
-  return '#38bdf8'
-}
-
 export default function Overlay() {
   const t = useT()
   const [state, setState] = useState<OverlayState>('waiting')
@@ -292,6 +252,7 @@ export default function Overlay() {
   const [bars, setBars] = useState<number[]>(IDLE_BARS)
   const [elapsedSec, setElapsedSec] = useState(0)
   const [theme, setTheme] = useState<OverlayWaveTheme>('black-blue')
+  const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
   const [showDuration, setShowDuration] = useState(true)
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
   const [presentationId, setPresentationId] = useState(0)
@@ -421,7 +382,13 @@ export default function Overlay() {
         setElapsedSec(payload.elapsedSec)
       }
       if (typeof payload.showDuration === 'boolean') setShowDuration(payload.showDuration)
-      if (payload.theme) setTheme(normalizeTheme(payload.theme))
+      if (payload.theme) setTheme(normalizeWaveTheme(payload.theme, 'black-blue'))
+      if (payload.customWave) {
+        // Every frame's payload carries a freshly deserialized object. Keep the previous reference
+        // when the colors are unchanged, otherwise the palette memo below would be rebuilt on every frame.
+        const next = normalizeCustomWave(payload.customWave)
+        setCustomWave((prev) => (sameCustomWave(prev, next) ? prev : next))
+      }
       if (typeof payload.barCount === 'number' && payload.barCount > 0) setBarCount(payload.barCount)
       if (typeof payload.fallbackText === 'string') setFallbackText(payload.fallbackText)
       if (typeof payload.failureTitle === 'string') setFailureTitle(payload.failureTitle)
@@ -570,10 +537,19 @@ export default function Overlay() {
     ? normalizedBars
     : normalizedBars.slice(0, barBudget)
 
+  // Recording re-renders about 30 times per second, but the palette only changes with the theme, the
+  // custom colors or the bar count, and custom colors need an OKLCH conversion per bar, so it is memoized.
+  // It is built for normalizedBars.length, the same length visibleBars is a prefix of, so
+  // palette[index] is defined for every rendered bar.
+  const palette = useMemo(
+    () => buildWavePalette(normalizedBars.length, theme, customWave),
+    [normalizedBars.length, theme, customWave],
+  )
+  const themeTimerColor = useMemo(() => getWaveTimerColor(theme, customWave), [theme, customWave])
+  const thinkingColor = useMemo(() => getWaveThinkingColor(theme, customWave), [theme, customWave])
   const timerColor = inCountdown
     ? (urgent ? '#fb923c' : '#fbbf24')
-    : getTimerColor(theme)
-  const thinkingColor = getThinkingColor(theme)
+    : themeTimerColor
 
   const handleCopyFallback = async () => {
     if (!fallbackText) return
@@ -808,7 +784,7 @@ export default function Overlay() {
                           min-w-0 仍然留着兜底：万一文字特别长，宁可裁波形也不折行。 */}
                       <div className="flex min-w-0 items-center gap-[2px] overflow-hidden" style={{ height: '20px' }}>
                         {visibleBars.map((height, index) => {
-                          const color = getListeningBarColor(index, normalizedBars.length, theme)
+                          const color = palette[index]
                           return (
                             <div
                               key={index}

@@ -13,6 +13,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale } from '@/i18n'
+import { DEFAULT_CUSTOM_WAVE } from '@/lib/overlayWaveColors'
 import { OverlayService } from '../OverlayService'
 
 interface RecordedUpdate {
@@ -126,5 +127,98 @@ describe('overlay listening throttle', () => {
       streaming: true,
       streamingText: 'hello',
     })
+  })
+})
+
+describe('overlay listening payload customWave', () => {
+  let savedSettings: Record<string, unknown>
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    setLocale('en')
+    updates = []
+    savedSettings = {}
+    native.invoke.mockReset().mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'store_get') {
+        return savedSettings[(args as { key: string }).key]
+      }
+      if (command === 'update_overlay_state') {
+        updates.push({
+          at: Date.now(),
+          data: (args as { data: Record<string, unknown> }).data,
+        })
+      }
+      return undefined
+    })
+  })
+
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
+  it('carries the theme and the normalized custom colors on a listening update', async () => {
+    savedSettings = {
+      overlayWaveTheme: 'custom',
+      overlayWaveCustom: { mode: 'solid', from: '#22D3EE', to: '#f472b6' },
+    }
+    const overlay = new OverlayService(() => 7)
+    await overlay.refreshSettings()
+    overlay.pushListeningBars([3, 5, 8], true)
+
+    expect(updates).toHaveLength(1)
+    expect(updates[0].data).toMatchObject({
+      state: 'listening',
+      theme: 'custom',
+      customWave: { mode: 'solid', from: '#22d3ee', to: '#f472b6' },
+    })
+  })
+
+  it('sends the custom colors with a built-in theme too, so every payload is self-contained', async () => {
+    savedSettings = {
+      overlayWaveTheme: 'black-white',
+      overlayWaveCustom: { mode: 'gradient', from: '#60a5fa', to: '#c084fc' },
+    }
+    const overlay = new OverlayService(() => 0)
+    await overlay.refreshSettings()
+    overlay.pushListeningBars([3], true)
+
+    expect(updates[0].data).toMatchObject({
+      theme: 'black-white',
+      customWave: { mode: 'gradient', from: '#60a5fa', to: '#c084fc' },
+    })
+  })
+
+  it('falls back to the normalized default colors when the saved custom colors are garbage', async () => {
+    savedSettings = {
+      overlayWaveTheme: 'custom',
+      overlayWaveCustom: { mode: 'neon', from: 'red', to: 42 },
+    }
+    const overlay = new OverlayService(() => 0)
+    await overlay.refreshSettings()
+    overlay.pushListeningBars([3], true)
+
+    expect(updates[0].data.customWave).toEqual(DEFAULT_CUSTOM_WAVE)
+  })
+
+  it('falls back to black-blue for an unknown saved theme', async () => {
+    savedSettings = { overlayWaveTheme: 'neon' }
+    const overlay = new OverlayService(() => 0)
+    await overlay.refreshSettings()
+    overlay.pushListeningBars([3], true)
+
+    expect(updates[0].data.theme).toBe('black-blue')
+  })
+
+  it('sends the saved customWave on every frame while the settings are unchanged', async () => {
+    savedSettings = { overlayWaveTheme: 'custom', overlayWaveCustom: { mode: 'solid', from: '#a3e635', to: '#000000' } }
+    const overlay = new OverlayService(() => 0)
+    await overlay.refreshSettings()
+    overlay.pushListeningBars([3, 4], true)
+    overlay.pushListeningBars([5, 6], true)
+
+    expect(updates).toHaveLength(2)
+    expect(updates[0].data.customWave).toEqual({ mode: 'solid', from: '#a3e635', to: '#000000' })
+    expect(updates[1].data.customWave).toEqual({ mode: 'solid', from: '#a3e635', to: '#000000' })
   })
 })
