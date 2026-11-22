@@ -6,6 +6,7 @@ import { clampSec } from '../timeModel'
 import type { AiFailureReason } from '../transcription/types'
 import {
   DEFAULT_CUSTOM_WAVE,
+  DEFAULT_WAVE_THEME,
   normalizeCustomWave,
   normalizeWaveTheme,
   type CustomWaveColors,
@@ -64,7 +65,7 @@ function normalizeWidthPreset(value: unknown): OverlayWidthPreset {
 }
 
 export class OverlayService {
-  private theme: OverlayWaveTheme = 'black-rainbow'
+  private theme: OverlayWaveTheme = DEFAULT_WAVE_THEME
   private customWave: CustomWaveColors = DEFAULT_CUSTOM_WAVE
   private showDuration = true
   private readySoundEnabled = true
@@ -92,7 +93,7 @@ export class OverlayService {
   constructor(private readonly getElapsedSec: () => number) { }
 
   async refreshSettings() {
-    this.theme = normalizeWaveTheme(await getSetting('overlayWaveTheme', 'black-rainbow'), 'black-blue')
+    this.theme = normalizeWaveTheme(await getSetting('overlayWaveTheme', DEFAULT_WAVE_THEME))
     this.customWave = normalizeCustomWave(await getSetting('overlayWaveCustom', DEFAULT_CUSTOM_WAVE))
     this.showDuration = Boolean(await getSetting('overlayShowDuration', true))
     this.readySoundEnabled = Boolean(await getSetting('readySoundEnabled', true))

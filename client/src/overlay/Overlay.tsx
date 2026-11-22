@@ -9,6 +9,7 @@ import type { FailureOverlayPayload, OverlayCommonPayload, SubtitleOverlayPayloa
 import {
   buildWavePalette,
   DEFAULT_CUSTOM_WAVE,
+  DEFAULT_WAVE_THEME,
   getWaveThinkingColor,
   getWaveTimerColor,
   normalizeCustomWave,
@@ -251,7 +252,7 @@ export default function Overlay() {
   const [recordingVisualPhase, setRecordingVisualPhase] = useState<RecordingVisualPhase>('preparing')
   const [bars, setBars] = useState<number[]>(IDLE_BARS)
   const [elapsedSec, setElapsedSec] = useState(0)
-  const [theme, setTheme] = useState<OverlayWaveTheme>('black-blue')
+  const [theme, setTheme] = useState<OverlayWaveTheme>(DEFAULT_WAVE_THEME)
   const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
   const [showDuration, setShowDuration] = useState(true)
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
@@ -382,7 +383,7 @@ export default function Overlay() {
         setElapsedSec(payload.elapsedSec)
       }
       if (typeof payload.showDuration === 'boolean') setShowDuration(payload.showDuration)
-      if (payload.theme) setTheme(normalizeWaveTheme(payload.theme, 'black-blue'))
+      if (payload.theme) setTheme(normalizeWaveTheme(payload.theme))
       if (payload.customWave) {
         // Every frame's payload carries a freshly deserialized object. Keep the previous reference
         // when the colors are unchanged, otherwise the palette memo below would be rebuilt on every frame.

@@ -3,6 +3,7 @@ import {
   buildWavePalette,
   CUSTOM_WAVE_MODES,
   DEFAULT_CUSTOM_WAVE,
+  DEFAULT_WAVE_THEME,
   getWaveThinkingColor,
   getWaveTimerColor,
   needsBrightening,
@@ -93,12 +94,14 @@ describe('normalizeCustomWave / normalizeWaveTheme', () => {
     expect(normalizeCustomWave(null)).toEqual(DEFAULT_CUSTOM_WAVE)
   })
 
-  it('accepts every declared theme and falls back for unknown themes', () => {
+  it('accepts every declared theme', () => {
     for (const theme of OVERLAY_WAVE_THEMES) {
-      const fallback = theme === 'black-white' ? 'black-blue' : 'black-white'
-      expect(normalizeWaveTheme(theme, fallback)).toBe(theme)
+      expect(normalizeWaveTheme(theme)).toBe(theme)
     }
-    expect(normalizeWaveTheme('neon', 'black-blue')).toBe('black-blue')
+  })
+
+  it('falls back to the app default for unknown themes', () => {
+    expect(normalizeWaveTheme('neon')).toBe(DEFAULT_WAVE_THEME)
   })
 
   it('accepts every declared custom wave mode and falls back for unknown modes', () => {
@@ -106,12 +109,6 @@ describe('normalizeCustomWave / normalizeWaveTheme', () => {
       expect(normalizeCustomWave({ mode, from: '#f472b6', to: '#a78bfa' }).mode).toBe(mode)
     }
     expect(normalizeCustomWave({ mode: 'neon', from: '#f472b6', to: '#a78bfa' }).mode).toBe(DEFAULT_CUSTOM_WAVE.mode)
-  })
-
-  it('recognizes custom and falls back to the caller-provided default for unknown themes', () => {
-    expect(normalizeWaveTheme('custom', 'black-blue')).toBe('custom')
-    expect(normalizeWaveTheme('black-rainbow', 'black-blue')).toBe('black-rainbow')
-    expect(normalizeWaveTheme('neon', 'black-blue')).toBe('black-blue')
   })
 })
 

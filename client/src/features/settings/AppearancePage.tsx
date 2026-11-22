@@ -14,6 +14,7 @@ import { isOverlayWidthPreset, OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } 
 import {
   buildWavePalette,
   DEFAULT_CUSTOM_WAVE,
+  DEFAULT_WAVE_THEME,
   getWaveTimerColor,
   normalizeCustomWave,
   normalizeWaveTheme,
@@ -178,7 +179,7 @@ function OverlayPreview({ theme, customWave, showDuration, barCount, streaming }
 export default function AppearancePage() {
   const t = useT()
   const [activeTheme, setActiveTheme] = useState(getActiveThemeId)
-  const [overlayWaveTheme, setOverlayWaveTheme] = useState<OverlayWaveTheme>('black-rainbow')
+  const [overlayWaveTheme, setOverlayWaveTheme] = useState<OverlayWaveTheme>(DEFAULT_WAVE_THEME)
   const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
   const customWaveSaveRef = useRef<{ timer: ReturnType<typeof setTimeout>; value: CustomWaveColors } | null>(null)
   const [overlayShowDuration, setOverlayShowDuration] = useState(true)
@@ -222,14 +223,14 @@ export default function AppearancePage() {
       const [showDuration, streaming, waveTheme, waveCustom, width] = await Promise.all([
         getSetting('overlayShowDuration', true).catch(() => true),
         getSetting('streamingDisplayEnabled', false).catch(() => false),
-        getSetting('overlayWaveTheme', 'black-rainbow').catch(() => 'black-rainbow'),
+        getSetting('overlayWaveTheme', DEFAULT_WAVE_THEME).catch(() => DEFAULT_WAVE_THEME),
         getSetting<unknown>('overlayWaveCustom', DEFAULT_CUSTOM_WAVE).catch(() => DEFAULT_CUSTOM_WAVE),
         getSetting('overlayWidth', 'medium').catch(() => 'medium'),
       ])
       if (cancelled) return
       setOverlayShowDuration(Boolean(showDuration))
       setStreamingDisplay(Boolean(streaming))
-      setOverlayWaveTheme(normalizeWaveTheme(waveTheme, 'black-rainbow'))
+      setOverlayWaveTheme(normalizeWaveTheme(waveTheme))
       setCustomWave(normalizeCustomWave(waveCustom))
       if (isOverlayWidthPreset(width)) setOverlayWidth(width)
       setReady(true)

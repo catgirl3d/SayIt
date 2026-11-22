@@ -18,6 +18,9 @@ export const OVERLAY_WAVE_THEMES = ['black-white', 'black-blue', 'black-rainbow'
 
 export type OverlayWaveTheme = (typeof OVERLAY_WAVE_THEMES)[number]
 
+/** Theme used when no valid saved or received theme is available. */
+export const DEFAULT_WAVE_THEME: OverlayWaveTheme = 'black-rainbow'
+
 export const CUSTOM_WAVE_MODES = ['solid', 'gradient'] as const
 
 export type CustomWaveMode = (typeof CUSTOM_WAVE_MODES)[number]
@@ -81,8 +84,8 @@ function isCustomWaveMode(value: unknown): value is CustomWaveMode {
   return typeof value === 'string' && CUSTOM_WAVE_MODES.includes(value as CustomWaveMode)
 }
 
-export function normalizeWaveTheme(value: unknown, fallback: OverlayWaveTheme): OverlayWaveTheme {
-  return isOverlayWaveTheme(value) ? value : fallback
+export function normalizeWaveTheme(value: unknown): OverlayWaveTheme {
+  return isOverlayWaveTheme(value) ? value : DEFAULT_WAVE_THEME
 }
 
 /**

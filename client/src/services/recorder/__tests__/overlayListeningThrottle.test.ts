@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale } from '@/i18n'
-import { DEFAULT_CUSTOM_WAVE } from '@/lib/overlayWaveColors'
+import { DEFAULT_CUSTOM_WAVE, DEFAULT_WAVE_THEME } from '@/lib/overlayWaveColors'
 import { OverlayService } from '../OverlayService'
 import { OVERLAY_WIDTH_PRESET_VALUES, OVERLAY_WIDTH_PRESETS } from '../types'
 
@@ -202,13 +202,13 @@ describe('overlay listening payload settings', () => {
     expect(updates[0].data.customWave).toEqual(DEFAULT_CUSTOM_WAVE)
   })
 
-  it('falls back to black-blue for an unknown saved theme', async () => {
+  it('falls back to the app default theme for an unknown saved theme', async () => {
     savedSettings = { overlayWaveTheme: 'neon' }
     const overlay = new OverlayService(() => 0)
     await overlay.refreshSettings()
     overlay.pushListeningBars([3], true)
 
-    expect(updates[0].data.theme).toBe('black-blue')
+    expect(updates[0].data.theme).toBe(DEFAULT_WAVE_THEME)
   })
 
   it('sends the saved customWave on every frame while the settings are unchanged', async () => {
