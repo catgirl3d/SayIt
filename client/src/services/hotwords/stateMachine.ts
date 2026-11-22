@@ -4,6 +4,7 @@ export interface HotwordsState {
   hotwords: string[]
   builtinSetWords: Record<string, string[]>
   builtinSetExtraWords: Record<string, string[]>
+  builtinSetInputs: Record<string, string>
   builtinSetActive: Record<string, boolean>
   customThemes: CustomTheme[]
   customThemeActive: Record<string, boolean>
@@ -18,6 +19,7 @@ export const initialHotwordsState: HotwordsState = {
   hotwords: [],
   builtinSetWords: {},
   builtinSetExtraWords: {},
+  builtinSetInputs: {},
   builtinSetActive: {},
   customThemes: [],
   customThemeActive: {},
@@ -34,6 +36,7 @@ export type HotwordsAction =
   | { type: 'set_show_unknown'; value: boolean }
   | { type: 'set_new_theme_name'; value: string }
   | { type: 'set_theme_input'; themeId: string; value: string }
+  | { type: 'set_builtin_input'; setKey: string; value: string }
   | { type: 'set_snapshot'; payload: Partial<HotwordsState> }
 
 export function hotwordsReducer(state: HotwordsState, action: HotwordsAction): HotwordsState {
@@ -50,6 +53,11 @@ export function hotwordsReducer(state: HotwordsState, action: HotwordsAction): H
       return {
         ...state,
         themeInputs: { ...state.themeInputs, [action.themeId]: action.value },
+      }
+    case 'set_builtin_input':
+      return {
+        ...state,
+        builtinSetInputs: { ...state.builtinSetInputs, [action.setKey]: action.value },
       }
     case 'set_snapshot':
       return {

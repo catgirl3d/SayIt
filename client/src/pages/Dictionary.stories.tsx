@@ -211,6 +211,42 @@ export const ExtraThatIsNowDefaultStaysVisible: Story = {
   },
 }
 
+export const CustomThemeIdCannotStealBuiltinDraft: Story = {
+  parameters: {
+    tauri: {
+      settings: {
+        ...hotwordSettings,
+        customHotwordThemes: [{ id: 'builtin:ai', name: 'Collision theme', words: ['Vitest'] }],
+        customThemeActive: { 'builtin:ai': true },
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const customLabel = Array.from(canvasElement.querySelectorAll('p'))
+      .find((p) => p.textContent === 'Collision theme')
+    const customCard = customLabel?.closest('div.rounded-xl')
+    if (!(customCard instanceof HTMLElement)) throw new Error('Dictionary did not render the custom category card')
+    const customInput = customCard.querySelector('input')
+    if (!(customInput instanceof HTMLInputElement)) throw new Error('Custom category input is missing')
+
+    const aiCard = getAiCard(canvasElement)
+    const builtinInput = aiCard.querySelector('input')
+    if (!(builtinInput instanceof HTMLInputElement)) throw new Error('Built-in AI input is missing')
+
+    fireEvent.change(customInput, { target: { value: 'ThemeDraft' } })
+    fireEvent.change(builtinInput, { target: { value: 'BuiltinDraft' } })
+
+    await waitFor(() => {
+      if (customInput.value !== 'ThemeDraft') {
+        throw new Error('Typing in the built-in category changed the custom category draft')
+      }
+      if (builtinInput.value !== 'BuiltinDraft') {
+        throw new Error('Typing in the custom category changed the built-in category draft')
+      }
+    })
+  },
+}
+
 export const RemoveUserWordFromBuiltinSet: Story = {
   play: async ({ canvasElement }) => {
     const card = await waitFor(() => getAiCard(canvasElement))

@@ -247,24 +247,6 @@ export function normalizeBuiltinSetExtraWords(value: unknown): Record<string, st
   return result
 }
 
-/**
- * Keeps only the part of an effective word list that belongs to the current defaults. This is the
- * persisted defaults view; an empty array is kept so "all words removed" does not become "reset".
- */
-export function filterBuiltinSetDefaultWords(wordsMap: Record<string, string[]>): Record<string, string[]> {
-  const result: Record<string, string[]> = {}
-
-  for (const [key, setDef] of Object.entries(BUILTIN_SETS)) {
-    const words = wordsMap[key]
-    if (!Array.isArray(words)) continue
-
-    const allow = new Set(setDef.words)
-    result[key] = uniqueWords(words).filter((word) => allow.has(word))
-  }
-
-  return result
-}
-
 export function normalizeBuiltinSetWords(value: unknown): Record<string, string[]> {
   if (!value || typeof value !== 'object') return {}
   const obj = value as Record<string, unknown>

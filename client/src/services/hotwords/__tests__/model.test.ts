@@ -4,7 +4,6 @@ import {
   BUILTIN_SETS,
   composeHotwords,
   composeSelectedHotwords,
-  filterBuiltinSetDefaultWords,
   legacyWordsToMigrate,
   mergeBuiltinSetViews,
   normalizeBuiltinSetExtraWords,
@@ -142,15 +141,6 @@ describe('built-in hotword persistence views', () => {
     expect(normalizeBuiltinSetWords({ ai: ['GPT'] })).toEqual({ ai: ['GPT'] })
   })
 
-  it('derives the defaults view without user words and keeps an empty list', () => {
-    expect(filterBuiltinSetDefaultWords({
-      ai: [],
-      code: ['Git', 'user-added', 'Git'],
-    })).toEqual({
-      ai: [],
-      code: ['Git'],
-    })
-  })
 })
 
 describe('built-in domain hotword presets', () => {

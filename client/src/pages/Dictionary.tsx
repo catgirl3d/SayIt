@@ -10,7 +10,7 @@ import { HOTWORD_TOKEN_BUDGET, HOTWORD_WORD_BUDGET } from '@/services/hotwords/b
 import { loadDictationHotwordEngine, type DictationHotwordEngine } from '@/services/hotwords/activeEngine'
 import { loadAsrHotwordCapabilityMatrix } from '@/services/hotwords/capabilityMatrix'
 import { BUILTIN_SETS, MAX_HOTWORDS } from '@/services/hotwords/model'
-import { builtinInputKey, useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
+import { useHotwordsManager } from '@/services/hotwords/useHotwordsManager'
 import HotwordEngineNotices from '@/components/HotwordEngineNotices'
 import SuggestedTermsPicker from '@/components/SuggestedTermsPicker'
 import TextReplacementSection from '@/components/TextReplacementSection'
@@ -180,6 +180,7 @@ export default function Dictionary() {
   const {
     hotwords,
     builtinSetWords,
+    builtinSetInputs,
     builtinSetActive,
     customThemes,
     customThemeActive,
@@ -201,6 +202,7 @@ export default function Dictionary() {
     setSearch,
     setShowUnknown,
     setThemeInput,
+    setBuiltinSetInput,
     addTheme,
     addWordsToTheme,
     addWordsToBuiltinSet,
@@ -595,7 +597,6 @@ export default function Dictionary() {
                 const blocked = !!builtinSetBlocked[key]
                 const activeWords = getSetWordsInHotwords(key)
                 const totalWords = (builtinSetWords[key] || []).length
-                const inputKey = builtinInputKey(key)
                 const modified = isBuiltinSetModified(key, builtinSetWords)
 
                 if (search && activeWords.length === 0 && !setDef.label.toLowerCase().includes(search.toLowerCase())) {
@@ -666,8 +667,8 @@ export default function Dictionary() {
                       {active && (
                         <div className="space-y-3">
                           <AddWordsRow
-                            value={themeInputs[inputKey] || ''}
-                            onChange={(value) => setThemeInput(inputKey, value)}
+                            value={builtinSetInputs[key] || ''}
+                            onChange={(value) => setBuiltinSetInput(key, value)}
                             onAdd={() => void addWordsToBuiltinSet(key)}
                           />
                           {activeWords.length > 0 && (
