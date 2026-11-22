@@ -4,13 +4,16 @@ import {
   BUILTIN_SETS,
   composeHotwords,
   composeSelectedHotwords,
+  filterBuiltinSetDefaultWords,
   legacyWordsToMigrate,
+  mergeBuiltinSetViews,
+  normalizeBuiltinSetExtraWords,
   normalizeBuiltinSetWords,
   removeThemeWord,
+  resolveBuiltinSetWords,
   toggleThemeWord,
   uniqueThemeName,
   withBuiltinSetActiveDefaults,
-  withBuiltinSetDefaults,
   type CustomTheme,
 } from '../model'
 
@@ -64,13 +67,13 @@ describe('built-in hotword sets', () => {
 
   it('fall back to defaults for sets without a saved word list', () => {
     // Existing installs saved only the sets that existed when the store was first written.
-    const filled = withBuiltinSetDefaults({ ai: ['GPT'] })
+    const filled = mergeBuiltinSetViews({ ai: ['GPT'] })
     expect(filled.ai).toEqual(['GPT'])
     expect(filled.code).toEqual(BUILTIN_SETS.code.words)
   })
 
   it('keep a saved empty word list instead of restoring defaults', () => {
-    expect(withBuiltinSetDefaults({ code: [] }).code).toEqual([])
+    expect(mergeBuiltinSetViews({ code: [] }).code).toEqual([])
   })
 
   it('leave sets without a saved active flag off', () => {
@@ -89,6 +92,64 @@ describe('built-in hotword sets', () => {
       { ai: true, code: false },
     )
     expect(migrated).toEqual(['Docker', 'my term'])
+  })
+})
+
+describe('built-in hotword persistence views', () => {
+  it('prunes retired defaults from the saved default view', () => {
+    const currentDefault = BUILTIN_SETS.ai.words[0]
+    expect(normalizeBuiltinSetWords({ ai: [currentDefault, 'retired-default'] })).toEqual({
+      ai: [currentDefault],
+    })
+  })
+
+  it('never filters user extras against the current defaults', () => {
+    // A user word that later becomes a default must stay in the extras store: dropping it here
+    // would remove it from the active list until a future release retired it again.
+    const currentDefault = BUILTIN_SETS.ai.words[0]
+    expect(normalizeBuiltinSetExtraWords({ ai: [currentDefault, 'user-added', currentDefault] })).toEqual({
+      ai: [currentDefault, 'user-added'],
+    })
+  })
+
+  it('keeps a user extra that is a current default when the saved default snapshot predates it', () => {
+    const currentDefault = BUILTIN_SETS.ai.words[0]
+    // The raw view holds only the defaults that existed when it was last written, so the new
+    // default is missing there; only the extras store can keep it in the effective list.
+    expect(resolveBuiltinSetWords({ ai: [] }, { ai: [currentDefault] }).effectiveWords.ai).toEqual([
+      currentDefault,
+    ])
+  })
+
+  it('loads all current defaults plus extras when only the extras store exists', () => {
+    expect(resolveBuiltinSetWords({}, { ai: ['user-added'] }).effectiveWords.ai).toEqual([
+      ...BUILTIN_SETS.ai.words,
+      'user-added',
+    ])
+  })
+
+  it('resolves the persisted views together', () => {
+    const views = resolveBuiltinSetWords({ ai: ['GPT', 'retired-default'] }, { ai: ['MyTerm'] })
+    expect(views.savedDefaultWords).toEqual({ ai: ['GPT'] })
+    expect(views.extraWords).toEqual({ ai: ['MyTerm'] })
+    expect(views.effectiveWords.ai).toEqual(['GPT', 'MyTerm'])
+  })
+
+  it('preserves the old defaults behavior when no extras store is provided', () => {
+    expect(mergeBuiltinSetViews({}).ai).toEqual(BUILTIN_SETS.ai.words)
+    expect(mergeBuiltinSetViews({ ai: [] }).ai).toEqual([])
+    expect(normalizeBuiltinSetWords(undefined)).toEqual({})
+    expect(normalizeBuiltinSetWords({ ai: ['GPT'] })).toEqual({ ai: ['GPT'] })
+  })
+
+  it('derives the defaults view without user words and keeps an empty list', () => {
+    expect(filterBuiltinSetDefaultWords({
+      ai: [],
+      code: ['Git', 'user-added', 'Git'],
+    })).toEqual({
+      ai: [],
+      code: ['Git'],
+    })
   })
 })
 

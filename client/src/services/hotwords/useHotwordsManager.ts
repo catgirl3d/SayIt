@@ -4,6 +4,7 @@ import { getSetting, setSetting } from '@/services/store'
 import {
   BUILTIN_SETS,
   BUILTIN_SET_ACTIVE_KEY,
+  BUILTIN_SET_EXTRA_WORDS_KEY,
   BUILTIN_SET_WORDS_KEY,
   CUSTOM_THEME_ACTIVE_KEY,
   CUSTOM_THEMES_KEY,
@@ -12,18 +13,18 @@ import {
   collectAllSourceWords,
   composeHotwords,
   createThemeId,
+  filterBuiltinSetDefaultWords,
   legacyWordsToMigrate,
   normalizeBuiltinSetActive,
-  normalizeBuiltinSetWords,
   normalizeCustomThemeActive,
   normalizeCustomThemes,
   parseWordsInput,
   removeThemeWord,
+  resolveBuiltinSetWords,
   toggleThemeWord,
   uniqueThemeName,
   uniqueWords,
   withBuiltinSetActiveDefaults,
-  withBuiltinSetDefaults,
 } from './model'
 import {
   builtinSetActivationFits,
@@ -40,11 +41,27 @@ import {
 import { t } from '@/i18n'
 import { hotwordsReducer, initialHotwordsState } from './stateMachine'
 
+// Persist extras first so a failed second write cannot lose user words on the next load. Reversing
+// the order could drop a new user word before the extras that record it reach the store.
+async function persistBuiltinWords(
+  wordsMap: Record<string, string[]>,
+  extraWords: Record<string, string[]>,
+) {
+  await setSetting(BUILTIN_SET_EXTRA_WORDS_KEY, extraWords)
+  await setSetting(BUILTIN_SET_WORDS_KEY, filterBuiltinSetDefaultWords(wordsMap))
+}
+
+// Prefix built-in categories in themeInputs so they cannot collide with custom theme ids.
+export function builtinInputKey(setKey: string) {
+  return `builtin:${setKey}`
+}
+
 export function useHotwordsManager() {
   const [state, dispatch] = useReducer(hotwordsReducer, initialHotwordsState)
   const {
     hotwords,
     builtinSetWords,
+    builtinSetExtraWords,
     builtinSetActive,
     customThemes,
     customThemeActive,
@@ -62,9 +79,10 @@ export function useHotwordsManager() {
   const persistBuiltinStates = useCallback(async (
     wordsMap: Record<string, string[]>,
     activeMap: Record<string, boolean>,
+    extraWords: Record<string, string[]>,
   ) => {
     await Promise.all([
-      setSetting(BUILTIN_SET_WORDS_KEY, wordsMap),
+      persistBuiltinWords(wordsMap, extraWords),
       setSetting(BUILTIN_SET_ACTIVE_KEY, activeMap),
     ])
   }, [])
@@ -89,12 +107,14 @@ export function useHotwordsManager() {
     try {
       const [
         rawSetWords,
+        rawSetExtraWords,
         rawSetActive,
         rawCustomThemes,
         rawCustomThemeActive,
         legacyManualWords,
       ] = await Promise.all([
         getSetting<Record<string, unknown>>(BUILTIN_SET_WORDS_KEY, {}),
+        getSetting<Record<string, unknown>>(BUILTIN_SET_EXTRA_WORDS_KEY, {}),
         getSetting<Record<string, unknown>>(BUILTIN_SET_ACTIVE_KEY, {}),
         getSetting<unknown>(CUSTOM_THEMES_KEY, []),
         getSetting<Record<string, unknown>>(CUSTOM_THEME_ACTIVE_KEY, {}),
@@ -102,10 +122,12 @@ export function useHotwordsManager() {
       ])
 
       // All hotwords are loaded from the local store and do not depend on the remote server
-      const savedSetWords = normalizeBuiltinSetWords(rawSetWords)
+      const {
+        savedDefaultWords,
+        extraWords: savedSetExtraWords,
+        effectiveWords: nextSetWords,
+      } = resolveBuiltinSetWords(rawSetWords, rawSetExtraWords)
       const savedSetActive = normalizeBuiltinSetActive(rawSetActive)
-
-      const nextSetWords = withBuiltinSetDefaults(savedSetWords)
       const nextSetActive = withBuiltinSetActiveDefaults(savedSetActive)
 
       let nextCustomThemes = normalizeCustomThemes(rawCustomThemes)
@@ -142,19 +164,20 @@ export function useHotwordsManager() {
       setSnapshot({
         hotwords: composed,
         builtinSetWords: nextSetWords,
+        builtinSetExtraWords: savedSetExtraWords,
         builtinSetActive: nextSetActive,
         customThemes: nextCustomThemes,
         customThemeActive: nextCustomThemeActive,
       })
       setHotwordsCache(composed)
 
-      const needPersistBuiltin = Object.keys(savedSetWords).length === 0 || Object.keys(savedSetActive).length === 0
+      const needPersistBuiltin = Object.keys(savedDefaultWords).length === 0 || Object.keys(savedSetActive).length === 0
       const needPersistCustom = normalizeCustomThemes(rawCustomThemes).length === 0
         || Object.keys(savedCustomThemeActive).length === 0
         || (nextCustomThemes.length > 0 && migratedManualWords.length > 0)
 
       if (needPersistBuiltin) {
-        void persistBuiltinStates(nextSetWords, nextSetActive)
+        void persistBuiltinStates(nextSetWords, nextSetActive, savedSetExtraWords)
       }
       if (needPersistCustom) {
         void persistCustomThemeStates(nextCustomThemes, nextCustomThemeActive)
@@ -205,48 +228,43 @@ export function useHotwordsManager() {
     await persistCustomThemeStates(nextThemes, nextActiveMap)
   }, [customThemeActive, customThemes, newThemeName, persistCustomThemeStates, setSnapshot, themeInputs])
 
-  const addWordsToTheme = useCallback(async (themeId: string) => {
-    const raw = (themeInputs[themeId] || '').trim()
+  const applyAddedWords = useCallback(async (
+    inputKey: string,
+    currentWords: string[],
+    build: (words: string[], addedWords: string[]) => {
+      patch: Partial<typeof state>
+      persist: () => Promise<unknown>
+    },
+  ) => {
+    const raw = (themeInputs[inputKey] || '').trim()
     if (!raw) return
 
-    const theme = customThemes.find((item) => item.id === themeId)
-    if (!theme) return
-
-    const parsedWords = parseWordsInput(raw)
-    if (parsedWords.length === 0) {
-      dispatch({ type: 'set_theme_input', themeId, value: '' })
+    const addedWords = parseWordsInput(raw).filter((word) => !currentWords.includes(word))
+    if (addedWords.length === 0) {
+      dispatch({ type: 'set_theme_input', themeId: inputKey, value: '' })
       return
     }
 
-    const toAdd = parsedWords.filter((w) => !theme.words.includes(w))
-    if (toAdd.length === 0) {
-      dispatch({ type: 'set_theme_input', themeId, value: '' })
-      return
-    }
-
-    const nextThemes = customThemes.map((item) => {
-      if (item.id !== themeId) return item
-      return { ...item, words: uniqueWords([...item.words, ...toAdd]) }
-    })
-
+    const words = uniqueWords([...currentWords, ...addedWords])
+    const { patch, persist } = build(words, addedWords)
     const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
-    const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
+    const preservedWords = hotwords.filter((word) => !currentAllSourceWords.has(word))
     const updated = composeHotwords(
       preservedWords,
-      builtinSetWords,
+      patch.builtinSetWords ?? builtinSetWords,
       builtinSetActive,
-      nextThemes,
+      patch.customThemes ?? customThemes,
       customThemeActive,
     )
 
     setSnapshot({
-      customThemes: nextThemes,
+      ...patch,
       hotwords: updated,
-      themeInputs: { ...themeInputs, [themeId]: '' },
+      themeInputs: { ...themeInputs, [inputKey]: '' },
     })
 
     await Promise.all([
-      persistCustomThemeStates(nextThemes, customThemeActive),
+      persist(),
       syncToBackend(updated),
     ])
   }, [
@@ -255,11 +273,41 @@ export function useHotwordsManager() {
     customThemeActive,
     customThemes,
     hotwords,
-    persistCustomThemeStates,
     setSnapshot,
     syncToBackend,
     themeInputs,
   ])
+
+  const addWordsToTheme = useCallback(async (themeId: string) => {
+    const theme = customThemes.find((item) => item.id === themeId)
+    if (!theme) return
+
+    await applyAddedWords(themeId, theme.words, (words) => {
+      const nextThemes = customThemes.map((item) => (
+        item.id === themeId ? { ...item, words } : item
+      ))
+      return {
+        patch: { customThemes: nextThemes },
+        persist: () => persistCustomThemeStates(nextThemes, customThemeActive),
+      }
+    })
+  }, [applyAddedWords, customThemeActive, customThemes])
+
+  const addWordsToBuiltinSet = useCallback(async (setKey: string) => {
+    if (!BUILTIN_SETS[setKey]) return
+
+    await applyAddedWords(builtinInputKey(setKey), builtinSetWords[setKey] || [], (words, addedWords) => {
+      const nextWordsMap = { ...builtinSetWords, [setKey]: words }
+      const nextExtraWords = {
+        ...builtinSetExtraWords,
+        [setKey]: uniqueWords([...(builtinSetExtraWords[setKey] ?? []), ...addedWords]),
+      }
+      return {
+        patch: { builtinSetWords: nextWordsMap, builtinSetExtraWords: nextExtraWords },
+        persist: () => persistBuiltinWords(nextWordsMap, nextExtraWords),
+      }
+    })
+  }, [applyAddedWords, builtinSetExtraWords, builtinSetWords])
 
   /**
    * Drag-and-drop reordering of custom hotword categories.
@@ -402,6 +450,11 @@ export function useHotwordsManager() {
       ...builtinSetWords,
       [key]: (builtinSetWords[key] || []).filter((w) => w !== word),
     }
+    const nextExtraWords = { ...builtinSetExtraWords }
+    const remainingExtras = (nextExtraWords[key] ?? []).filter((w) => w !== word)
+    if (remainingExtras.length > 0) nextExtraWords[key] = remainingExtras
+    else delete nextExtraWords[key]
+
     const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
     const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
     const updated = composeHotwords(
@@ -412,14 +465,19 @@ export function useHotwordsManager() {
       customThemeActive,
     )
 
-    setSnapshot({ builtinSetWords: nextSetWords, hotwords: updated })
+    setSnapshot({
+      builtinSetWords: nextSetWords,
+      builtinSetExtraWords: nextExtraWords,
+      hotwords: updated,
+    })
 
     await Promise.all([
-      setSetting(BUILTIN_SET_WORDS_KEY, nextSetWords),
+      persistBuiltinWords(nextSetWords, nextExtraWords),
       syncToBackend(updated),
     ])
   }, [
     builtinSetActive,
+    builtinSetExtraWords,
     builtinSetWords,
     customThemeActive,
     customThemes,
@@ -460,6 +518,9 @@ export function useHotwordsManager() {
 
     const defaults = uniqueWords(setDef.words)
     const nextWordsMap = { ...builtinSetWords, [key]: defaults }
+    const nextExtraWords = { ...builtinSetExtraWords }
+    delete nextExtraWords[key]
+
     const currentAllSourceWords = collectAllSourceWords(builtinSetWords, customThemes)
     const preservedWords = hotwords.filter((w) => !currentAllSourceWords.has(w))
     const updated = composeHotwords(
@@ -472,15 +533,17 @@ export function useHotwordsManager() {
 
     setSnapshot({
       builtinSetWords: nextWordsMap,
+      builtinSetExtraWords: nextExtraWords,
       hotwords: updated,
     })
 
     await Promise.all([
-      setSetting(BUILTIN_SET_WORDS_KEY, nextWordsMap),
+      persistBuiltinWords(nextWordsMap, nextExtraWords),
       syncToBackend(updated),
     ])
   }, [
     builtinSetActive,
+    builtinSetExtraWords,
     builtinSetWords,
     customThemeActive,
     customThemes,
@@ -662,6 +725,7 @@ export function useHotwordsManager() {
     setThemeInput: (themeId: string, value: string) => dispatch({ type: 'set_theme_input', themeId, value }),
     addTheme,
     addWordsToTheme,
+    addWordsToBuiltinSet,
     removeTheme,
     moveTheme,
     toggleCustomTheme,

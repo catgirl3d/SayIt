@@ -3,6 +3,7 @@ import type { CustomTheme } from './model'
 export interface HotwordsState {
   hotwords: string[]
   builtinSetWords: Record<string, string[]>
+  builtinSetExtraWords: Record<string, string[]>
   builtinSetActive: Record<string, boolean>
   customThemes: CustomTheme[]
   customThemeActive: Record<string, boolean>
@@ -16,6 +17,7 @@ export interface HotwordsState {
 export const initialHotwordsState: HotwordsState = {
   hotwords: [],
   builtinSetWords: {},
+  builtinSetExtraWords: {},
   builtinSetActive: {},
   customThemes: [],
   customThemeActive: {},

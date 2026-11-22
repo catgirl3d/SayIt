@@ -1,16 +1,16 @@
 import { getSetting } from '../store'
 import {
   BUILTIN_SET_ACTIVE_KEY,
+  BUILTIN_SET_EXTRA_WORDS_KEY,
   BUILTIN_SET_WORDS_KEY,
   CUSTOM_THEME_ACTIVE_KEY,
   CUSTOM_THEMES_KEY,
   composeHotwords,
   normalizeBuiltinSetActive,
-  normalizeBuiltinSetWords,
   normalizeCustomThemeActive,
   normalizeCustomThemes,
+  resolveBuiltinSetWords,
   withBuiltinSetActiveDefaults,
-  withBuiltinSetDefaults,
   type CustomTheme,
 } from './model'
 
@@ -40,13 +40,14 @@ export async function loadActiveHotwords(): Promise<string[]> {
  * the catalog to offer a per-job category selection composed by the same rules as dictation.
  */
 export async function loadHotwordCatalog(): Promise<HotwordCatalog> {
-  const [rawSetWords, rawSetActive, rawCustomThemes, rawCustomThemeActive] = await Promise.all([
+  const [rawSetWords, rawSetExtraWords, rawSetActive, rawCustomThemes, rawCustomThemeActive] = await Promise.all([
     getSetting(BUILTIN_SET_WORDS_KEY, {}),
+    getSetting(BUILTIN_SET_EXTRA_WORDS_KEY, {}),
     getSetting(BUILTIN_SET_ACTIVE_KEY, {}),
     getSetting(CUSTOM_THEMES_KEY, []),
     getSetting(CUSTOM_THEME_ACTIVE_KEY, {}),
   ])
-  const builtinSetWords = withBuiltinSetDefaults(normalizeBuiltinSetWords(rawSetWords as Record<string, unknown>))
+  const { effectiveWords: builtinSetWords } = resolveBuiltinSetWords(rawSetWords, rawSetExtraWords)
   const builtinSetActive = withBuiltinSetActiveDefaults(
     normalizeBuiltinSetActive(rawSetActive as Record<string, unknown>),
   )
