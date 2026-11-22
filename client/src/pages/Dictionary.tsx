@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Plus, X, Search, RotateCcw, ChevronDown, ChevronUp, FolderPlus, Trash2, Download, Info, Sparkles, CopyPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -123,6 +123,52 @@ function WordChips({
   )
 }
 
+function AddWordsRow({
+  value,
+  onChange,
+  onAdd,
+  children,
+}: {
+  value: string
+  onChange: (value: string) => void
+  onAdd: () => void
+  children?: ReactNode
+}) {
+  return (
+    <div className="flex gap-2">
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            onAdd()
+          }
+        }}
+        placeholder={t('dict.addWordsPlaceholder')}
+        className="flex-1 rounded-md border border-input-border bg-input-bg px-3 py-1.5 text-sm"
+      />
+      <Button
+        onClick={onAdd}
+        size="sm"
+        variant="outline"
+        disabled={!value.trim()}
+        className="shrink-0 gap-1.5"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        {t('dict.add')}
+      </Button>
+      {children}
+    </div>
+  )
+}
+
+function isBuiltinSetModified(key: string, builtinSetWords: Record<string, string[]>) {
+  const current = new Set(builtinSetWords[key] || [])
+  const defaults = new Set(BUILTIN_SETS[key]?.words || [])
+  return current.size !== defaults.size || [...defaults].some((word) => !current.has(word))
+}
+
 export default function Dictionary() {
   useT()
   const [hotwordCapabilities, setHotwordCapabilities] = useState<Record<string, AsrHotwordCapability>>({})
@@ -134,6 +180,7 @@ export default function Dictionary() {
   const {
     hotwords,
     builtinSetWords,
+    builtinSetInputs,
     builtinSetActive,
     customThemes,
     customThemeActive,
@@ -155,8 +202,10 @@ export default function Dictionary() {
     setSearch,
     setShowUnknown,
     setThemeInput,
+    setBuiltinSetInput,
     addTheme,
     addWordsToTheme,
+    addWordsToBuiltinSet,
     removeTheme,
     moveTheme,
     toggleCustomTheme,
@@ -171,6 +220,13 @@ export default function Dictionary() {
   } = useHotwordsManager()
   // Only one category shows the suggested-terms picker at a time.
   const [pickerThemeId, setPickerThemeId] = useState<string | null>(null)
+  const [resetArmedKey, setResetArmedKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (resetArmedKey === null) return
+    const timeoutId = setTimeout(() => setResetArmedKey(null), 3000)
+    return () => clearTimeout(timeoutId)
+  }, [resetArmedKey])
 
   useEffect(() => {
     let mounted = true
@@ -494,29 +550,11 @@ export default function Dictionary() {
 
                       {active && (
                         <div className="space-y-3">
-                          <div className="flex gap-2">
-                            <input
-                              value={themeInputs[theme.id] || ''}
-                              onChange={(e) => setThemeInput(theme.id, e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  e.preventDefault()
-                                  void addWordsToTheme(theme.id)
-                                }
-                              }}
-                              placeholder={t('dict.addWordsPlaceholder')}
-                              className="flex-1 rounded-md border border-input-border bg-input-bg px-3 py-1.5 text-sm"
-                            />
-                            <Button
-                              onClick={() => void addWordsToTheme(theme.id)}
-                              size="sm"
-                              variant="outline"
-                              disabled={!(themeInputs[theme.id] || '').trim()}
-                              className="shrink-0 gap-1.5"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                              {t('dict.add')}
-                            </Button>
+                          <AddWordsRow
+                            value={themeInputs[theme.id] || ''}
+                            onChange={(value) => setThemeInput(theme.id, value)}
+                            onAdd={() => void addWordsToTheme(theme.id)}
+                          >
                             <Button
                               onClick={() => setPickerThemeId(pickerThemeId === theme.id ? null : theme.id)}
                               size="sm"
@@ -527,7 +565,7 @@ export default function Dictionary() {
                               <Sparkles className="h-3.5 w-3.5" />
                               {t('dict.suggestedOpen')}
                             </Button>
-                          </div>
+                          </AddWordsRow>
 
                           {activeWords.length > 0 && (
                             <WordChips
@@ -559,6 +597,7 @@ export default function Dictionary() {
                 const blocked = !!builtinSetBlocked[key]
                 const activeWords = getSetWordsInHotwords(key)
                 const totalWords = (builtinSetWords[key] || []).length
+                const modified = isBuiltinSetModified(key, builtinSetWords)
 
                 if (search && activeWords.length === 0 && !setDef.label.toLowerCase().includes(search.toLowerCase())) {
                   return null
@@ -567,7 +606,7 @@ export default function Dictionary() {
                 return (
                   <Card key={key} className={cn(!active && 'border-dashed opacity-70')}>
                     <CardContent className="p-4">
-                      <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className={cn('flex items-center justify-between gap-3', active && 'mb-3')}>
                         <div className="flex items-center gap-3 min-w-0">
                           <Switch
                             checked={active}
@@ -599,23 +638,47 @@ export default function Dictionary() {
                               <CopyPlus className="h-3 w-3" /> {t('dict.copyPreset')}
                             </Button>
                           </Tooltip>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 gap-1 px-2 text-xs"
-                            onClick={() => void resetBuiltinSet(key)}
-                          >
-                            <RotateCcw className="h-3 w-3" /> {t('dict.reset')}
-                          </Button>
+                          {modified && (resetArmedKey === key ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResetArmedKey(null)
+                                void resetBuiltinSet(key)
+                              }}
+                              className="rounded px-1.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
+                            >
+                              {t('dict.resetConfirm')}
+                            </button>
+                          ) : (
+                            <Tooltip content={t('dict.resetTip')}>
+                              <button
+                                type="button"
+                                onClick={() => setResetArmedKey(key)}
+                                className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                aria-label={t('dict.resetTip')}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              </button>
+                            </Tooltip>
+                          ))}
                         </div>
                       </div>
 
-                      {active && activeWords.length > 0 && (
-                        <WordChips
-                          words={activeWords}
-                          onRemove={(word) => void removeWordFromBuiltinSet(key, word)}
-                          expandAll={!!search}
-                        />
+                      {active && (
+                        <div className="space-y-3">
+                          <AddWordsRow
+                            value={builtinSetInputs[key] || ''}
+                            onChange={(value) => setBuiltinSetInput(key, value)}
+                            onAdd={() => void addWordsToBuiltinSet(key)}
+                          />
+                          {activeWords.length > 0 && (
+                            <WordChips
+                              words={activeWords}
+                              onRemove={(word) => void removeWordFromBuiltinSet(key, word)}
+                              expandAll={!!search}
+                            />
+                          )}
+                        </div>
                       )}
                     </CardContent>
                   </Card>

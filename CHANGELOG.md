@@ -5,6 +5,10 @@ Sections are ordered by version, newest first.
 
 ## v0.3.2 (unreleased)
 
+### Added
+#### Hotwords
+- Built-in hotword categories now accept your own terms. An add field appears under each enabled built-in category, the terms follow that category's switch, survive restarts, and are included in the hotword export. Reset is now a small icon that asks for a second click and only appears while the list differs from the defaults.
+
 ### Changed
 #### Desktop Client
 - SayIt no longer ships with a built-in server. Earlier builds sent speech, announcement requests and recognition corrections to the upstream author's trial server (`sayitapp.site`) by default, which this fork does not run or control. Fresh installs now start in Local mode, and the welcome guide has a new step to choose and set up Local recognition (including the model download), Cloud API, or your own server; its test step now works in any mode once that mode is ready.

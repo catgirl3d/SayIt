@@ -31,7 +31,8 @@ const geminiProfile = {
 } satisfies AsrProfile
 
 const hotwordSettings = {
-  builtinSetWords: { ai: ['SayIt', 'Storybook'] },
+  builtinSetWords: { ai: ['SayIt'] },
+  builtinSetExtraWords: { ai: ['Storybook'] },
   builtinSetActive: { ai: true },
   customHotwordThemes: [{ id: 'storybook', name: 'Storybook terms', words: ['Vitest'] }],
   customThemeActive: { storybook: true },
@@ -67,6 +68,14 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+function getAiCard(canvasElement: HTMLElement) {
+  const label = Array.from(canvasElement.querySelectorAll('p'))
+    .find((p) => p.textContent === BUILTIN_SETS.ai.label)
+  const card = label?.closest('div.rounded-xl')
+  if (!(card instanceof HTMLElement)) throw new Error('Dictionary did not render the built-in AI card')
+  return card
+}
+
 export const Loaded: Story = {
   play: async ({ canvasElement }) => {
     const trigger = canvasElement.querySelector('svg.lucide-info')?.parentElement
@@ -90,6 +99,7 @@ export const FreshInstall: Story = {
     tauri: {
       settings: {
         builtinSetWords: null,
+        builtinSetExtraWords: null,
         builtinSetActive: null,
         customHotwordThemes: null,
         customThemeActive: null,
@@ -111,6 +121,207 @@ export const FreshInstall: Story = {
         throw new Error('Dictionary did not persist the built-in AI set as off')
       }
     })
+  },
+}
+
+export const AddTermToBuiltinSet: Story = {
+  play: async ({ canvasElement }) => {
+    const card = await waitFor(() => {
+      const element = getAiCard(canvasElement)
+      if (!element.querySelector('input')) throw new Error('Built-in AI card does not have an add-words input')
+      return element
+    })
+
+    const input = card.querySelector('input')
+    if (!(input instanceof HTMLInputElement)) throw new Error('Built-in AI add-words input is missing')
+    fireEvent.change(input, { target: { value: 'Project Falcon' } })
+
+    const addButton = Array.from(card.querySelectorAll('button'))
+      .find((button) => button.textContent?.trim() === 'Add')
+    if (!(addButton instanceof HTMLButtonElement)) throw new Error('Built-in AI add button is missing')
+    fireEvent.click(addButton)
+
+    await waitFor(async () => {
+      if (!card.textContent?.includes('Project Falcon')) {
+        throw new Error('Built-in AI card did not render the added word')
+      }
+      const extras = await getSetting<Record<string, string[]>>('builtinSetExtraWords', {})
+      if (!extras.ai?.includes('Project Falcon')) {
+        throw new Error('Built-in extra words did not persist the added word')
+      }
+      const words = await getSetting<Record<string, string[]>>('builtinSetWords', {})
+      if (words.ai?.includes('Project Falcon')) {
+        throw new Error('Built-in default words persisted the user-added word')
+      }
+      const chip = Array.from(card.querySelectorAll('span'))
+        .some((span) => span.textContent?.trim() === 'Project Falcon')
+      if (!chip) throw new Error('Built-in AI word chip is missing')
+    })
+  },
+}
+
+export const AddTermToCustomTheme: Story = {
+  play: async ({ canvasElement }) => {
+    const label = Array.from(canvasElement.querySelectorAll('p'))
+      .find((p) => p.textContent === 'Storybook terms')
+    const card = label?.closest('div.rounded-xl')
+    if (!(card instanceof HTMLElement)) throw new Error('Dictionary did not render the custom category card')
+
+    const input = card.querySelector('input')
+    if (!(input instanceof HTMLInputElement)) throw new Error('Custom category add-words input is missing')
+    fireEvent.change(input, { target: { value: 'Figma plugin' } })
+
+    const addButton = Array.from(card.querySelectorAll('button'))
+      .find((button) => button.textContent?.trim() === 'Add')
+    if (!(addButton instanceof HTMLButtonElement)) throw new Error('Custom category add button is missing')
+    fireEvent.click(addButton)
+
+    await waitFor(async () => {
+      if (!card.textContent?.includes('Figma plugin')) {
+        throw new Error('Custom category did not render the added word')
+      }
+      const themes = await getSetting<Array<{ id: string; words: string[] }>>('customHotwordThemes', [])
+      const theme = themes.find((item) => item.id === 'storybook')
+      if (!theme?.words.includes('Figma plugin')) {
+        throw new Error('Custom category did not persist the added word')
+      }
+    })
+  },
+}
+
+export const ExtraThatIsNowDefaultStaysVisible: Story = {
+  parameters: {
+    tauri: {
+      settings: {
+        ...hotwordSettings,
+        builtinSetWords: { ai: ['SayIt'] },
+        builtinSetExtraWords: { ai: [BUILTIN_SETS.ai.words[0]] },
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const card = await waitFor(() => getAiCard(canvasElement))
+    const word = BUILTIN_SETS.ai.words[0]
+    // The saved defaults snapshot predates this word; only the extras store can keep it visible.
+    await waitFor(() => {
+      if (!card.textContent?.includes(word)) {
+        throw new Error('User extra that is now a default disappeared from the built-in category')
+      }
+    })
+  },
+}
+
+export const CustomThemeIdCannotStealBuiltinDraft: Story = {
+  parameters: {
+    tauri: {
+      settings: {
+        ...hotwordSettings,
+        customHotwordThemes: [{ id: 'builtin:ai', name: 'Collision theme', words: ['Vitest'] }],
+        customThemeActive: { 'builtin:ai': true },
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const customLabel = Array.from(canvasElement.querySelectorAll('p'))
+      .find((p) => p.textContent === 'Collision theme')
+    const customCard = customLabel?.closest('div.rounded-xl')
+    if (!(customCard instanceof HTMLElement)) throw new Error('Dictionary did not render the custom category card')
+    const customInput = customCard.querySelector('input')
+    if (!(customInput instanceof HTMLInputElement)) throw new Error('Custom category input is missing')
+
+    const aiCard = getAiCard(canvasElement)
+    const builtinInput = aiCard.querySelector('input')
+    if (!(builtinInput instanceof HTMLInputElement)) throw new Error('Built-in AI input is missing')
+
+    fireEvent.change(customInput, { target: { value: 'ThemeDraft' } })
+    fireEvent.change(builtinInput, { target: { value: 'BuiltinDraft' } })
+
+    await waitFor(() => {
+      if (customInput.value !== 'ThemeDraft') {
+        throw new Error('Typing in the built-in category changed the custom category draft')
+      }
+      if (builtinInput.value !== 'BuiltinDraft') {
+        throw new Error('Typing in the custom category changed the built-in category draft')
+      }
+    })
+  },
+}
+
+export const RemoveUserWordFromBuiltinSet: Story = {
+  play: async ({ canvasElement }) => {
+    const card = await waitFor(() => getAiCard(canvasElement))
+    const deleteButton = card.querySelector('button[aria-label="Delete Storybook"]')
+    if (!(deleteButton instanceof HTMLButtonElement)) throw new Error('Built-in extra word chip is missing')
+
+    fireEvent.click(deleteButton)
+
+    await waitFor(async () => {
+      const extras = await getSetting<Record<string, string[]>>('builtinSetExtraWords', {})
+      if (extras.ai?.includes('Storybook')) {
+        throw new Error('Removing a user word left it in the extras store')
+      }
+      const words = await getSetting<Record<string, string[]>>('builtinSetWords', {})
+      if (JSON.stringify(words.ai) !== JSON.stringify(['SayIt'])) {
+        throw new Error('Removing a user word changed the saved default words')
+      }
+      if (card.textContent?.includes('Storybook')) {
+        throw new Error('Built-in AI card still renders the removed user word')
+      }
+    })
+  },
+}
+
+export const ResetBuiltinSet: Story = {
+  play: async ({ canvasElement }) => {
+    const card = await waitFor(() => getAiCard(canvasElement))
+
+    const resetButton = card.querySelector('button svg.lucide-rotate-ccw')?.closest('button')
+    if (!(resetButton instanceof HTMLButtonElement)) throw new Error('Built-in AI reset button is missing')
+    fireEvent.click(resetButton)
+
+    const confirmButton = await waitFor(() => {
+      const button = Array.from(card.querySelectorAll('button'))
+        .find((candidate) => candidate.textContent?.trim() === 'Confirm reset')
+      if (!(button instanceof HTMLButtonElement)) throw new Error('Built-in AI reset confirmation is missing')
+      return button
+    })
+    fireEvent.click(confirmButton)
+
+    await waitFor(async () => {
+      const extras = await getSetting<Record<string, string[]>>('builtinSetExtraWords', {})
+      if (extras.ai && extras.ai.length > 0) {
+        throw new Error('Built-in extra words were not cleared by reset')
+      }
+      const words = await getSetting<Record<string, string[]>>('builtinSetWords', {})
+      if (JSON.stringify(words.ai) !== JSON.stringify(BUILTIN_SETS.ai.words)) {
+        throw new Error('Built-in reset did not restore the default words')
+      }
+      if (card.textContent?.includes('Storybook')) {
+        throw new Error('Built-in AI card still renders the extra word after reset')
+      }
+    })
+  },
+}
+
+export const ResetHiddenForDefaultWords: Story = {
+  parameters: {
+    tauri: {
+      settings: {
+        ...hotwordSettings,
+        builtinSetWords: { ai: [...BUILTIN_SETS.ai.words] },
+        builtinSetExtraWords: null,
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const card = await waitFor(() => getAiCard(canvasElement))
+
+    await waitFor(() => {
+      if (!card.querySelector('input')) throw new Error('Built-in AI card has not rendered its add-words input')
+    })
+    if (card.querySelector('button svg.lucide-rotate-ccw')) {
+      throw new Error('Built-in AI reset button is visible for default words')
+    }
   },
 }
 

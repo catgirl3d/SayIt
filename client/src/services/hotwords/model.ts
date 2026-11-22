@@ -2,6 +2,8 @@ import { t } from '@/i18n'
 
 export const MAX_HOTWORDS = 1000
 export const BUILTIN_SET_WORDS_KEY = 'builtinSetWords'
+// Store user additions separately so retired defaults can be pruned without losing them.
+export const BUILTIN_SET_EXTRA_WORDS_KEY = 'builtinSetExtraWords'
 export const BUILTIN_SET_ACTIVE_KEY = 'builtinSetActive'
 export const CUSTOM_THEMES_KEY = 'customHotwordThemes'
 export const CUSTOM_THEME_ACTIVE_KEY = 'customThemeActive'
@@ -222,6 +224,29 @@ export function composeSelectedHotwords(
   return composeHotwords([], builtinWordsMap, builtinActiveMap, customThemes, customThemeActiveMap)
 }
 
+/**
+ * Reads the words the user added to built-in categories. They are stored separately because the
+ * defaults view is filtered against the current built-in lists: a user word mixed into it would be
+ * pruned together with words retired from later releases. Extras are never filtered against the
+ * current defaults, so a word that becomes a default later stays in the list, and it stays again
+ * if a future release drops it from the defaults.
+ */
+export function normalizeBuiltinSetExtraWords(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object') return {}
+  const obj = value as Record<string, unknown>
+  const result: Record<string, string[]> = {}
+
+  for (const key of Object.keys(BUILTIN_SETS)) {
+    const raw = obj[key]
+    if (!Array.isArray(raw)) continue
+
+    const words = uniqueWords(raw.map((v) => String(v)))
+    if (words.length > 0) result[key] = words
+  }
+
+  return result
+}
+
 export function normalizeBuiltinSetWords(value: unknown): Record<string, string[]> {
   if (!value || typeof value !== 'object') return {}
   const obj = value as Record<string, unknown>
@@ -232,23 +257,47 @@ export function normalizeBuiltinSetWords(value: unknown): Record<string, string[
     if (!Array.isArray(raw)) continue
 
     const allow = new Set(setDef.words)
-    result[key] = uniqueWords(raw.map((v) => String(v))).filter((w) => allow.has(w))
+    result[key] = uniqueWords(raw.map((v) => String(v))).filter((word) => allow.has(word))
   }
 
   return result
 }
 
 /**
- * Fills built-in sets that have no saved word list with their defaults. The store gets a set's
- * words only after the user edits or resets it, so a set added in a later release is missing
- * from existing installs while its saved active flag can already be on.
+ * Fills built-in sets that have no saved word list with their defaults, then appends the user's
+ * extras. The store gets a set's words only after the user edits or resets it, so a set added in
+ * a later release is missing from existing installs while its saved active flag can already be on.
  */
-export function withBuiltinSetDefaults(savedWords: Record<string, string[]>): Record<string, string[]> {
+export function mergeBuiltinSetViews(
+  savedWords: Record<string, string[]>,
+  extraWords: Record<string, string[]> = {},
+): Record<string, string[]> {
   const result: Record<string, string[]> = {}
   for (const [key, setDef] of Object.entries(BUILTIN_SETS)) {
-    result[key] = savedWords[key] ?? uniqueWords(setDef.words)
+    const base = savedWords[key] ?? uniqueWords(setDef.words)
+    result[key] = uniqueWords([...base, ...(extraWords[key] ?? [])])
   }
   return result
+}
+
+export interface BuiltinSetWordViews {
+  /** Saved default words after words retired from the current defaults are filtered out. */
+  savedDefaultWords: Record<string, string[]>
+  /** Words the user added; never filtered against the current defaults. */
+  extraWords: Record<string, string[]>
+  /** Effective list: saved defaults (or all defaults when unsaved) plus user extras. */
+  effectiveWords: Record<string, string[]>
+}
+
+/** Resolves the two persisted views and the effective list from raw settings values. */
+export function resolveBuiltinSetWords(value: unknown, extraValue?: unknown): BuiltinSetWordViews {
+  const savedDefaultWords = normalizeBuiltinSetWords(value)
+  const extraWords = normalizeBuiltinSetExtraWords(extraValue)
+  return {
+    savedDefaultWords,
+    extraWords,
+    effectiveWords: mergeBuiltinSetViews(savedDefaultWords, extraWords),
+  }
 }
 
 export function normalizeBuiltinSetActive(value: unknown): Record<string, boolean> {

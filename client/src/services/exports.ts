@@ -3,10 +3,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { getHotwords } from './api'
 import {
   BUILTIN_SET_ACTIVE_KEY,
+  BUILTIN_SET_EXTRA_WORDS_KEY,
   BUILTIN_SET_WORDS_KEY,
   CUSTOM_THEME_ACTIVE_KEY,
   CUSTOM_THEMES_KEY,
   LEGACY_MANUAL_WORDS_KEY,
+  resolveBuiltinSetWords,
 } from './hotwords/model'
 import { getAppPromptRules, getUserStats } from './personalization/store'
 import {
@@ -146,7 +148,8 @@ async function buildSettingsPayload() {
 async function buildHotwordsPayload() {
   const [
     activeWords,
-    builtinSetWords,
+    rawBuiltinSetWords,
+    rawBuiltinSetExtraWords,
     builtinSetActive,
     customThemes,
     customThemeActive,
@@ -156,6 +159,7 @@ async function buildHotwordsPayload() {
   ] = await Promise.all([
     getHotwords().catch(() => [] as string[]),
     getSetting<Record<string, string[]>>(BUILTIN_SET_WORDS_KEY, {}),
+    getSetting<Record<string, string[]>>(BUILTIN_SET_EXTRA_WORDS_KEY, {}),
     getSetting<Record<string, boolean>>(BUILTIN_SET_ACTIVE_KEY, {}),
     getSetting(CUSTOM_THEMES_KEY, [] as unknown[]),
     getSetting<Record<string, boolean>>(CUSTOM_THEME_ACTIVE_KEY, {}),
@@ -164,10 +168,18 @@ async function buildHotwordsPayload() {
     getSetting('hotwordLearning', null),
   ])
 
+  // The exported list is the effective one, so a reader that only knows this field still gets the
+  // user's terms; builtinSetExtraWords marks which of them the user added.
+  const {
+    effectiveWords: builtinSetWords,
+    extraWords: builtinSetExtraWords,
+  } = resolveBuiltinSetWords(rawBuiltinSetWords, rawBuiltinSetExtraWords)
+
   return {
     exportedAt: new Date().toISOString(),
     activeWords,
     builtinSetWords,
+    builtinSetExtraWords,
     builtinSetActive,
     customThemes,
     customThemeActive,
