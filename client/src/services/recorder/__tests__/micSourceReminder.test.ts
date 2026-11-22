@@ -35,6 +35,17 @@ describe('microphone source reminder', () => {
     expect(micSourceChanged(automatic.identity, fixed.identity)).toBe(true)
   })
 
+  it('distinguishes a route that avoided a virtual default from direct auto routing', () => {
+    const active = {
+      deviceId: 'physical-device-1',
+      groupId: 'group-1',
+      label: 'USB Microphone',
+    }
+
+    expect(describeMicSource(active, '', 'Microphone', 'avoided-virtual').identity)
+      .toBe('auto:device:physical-device-1:avoided-virtual')
+  })
+
   it('only reminds again when the input route changes', () => {
     expect(micSourceChanged(null, 'auto:device:a')).toBe(true)
     expect(micSourceChanged('auto:device:a', 'auto:device:a')).toBe(false)

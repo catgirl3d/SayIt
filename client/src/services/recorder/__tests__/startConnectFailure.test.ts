@@ -5,10 +5,11 @@ const harness = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
   invoke: vi.fn(),
   emitter: vi.fn(),
+  addRuntimeEvent: vi.fn(),
   provider: {
     mode: 'server' as const,
     isReady: vi.fn(() => true),
-    connect: vi.fn(async () => undefined),
+    connect: vi.fn(async (): Promise<void> => undefined),
     start: vi.fn((_options: unknown) => true),
     cancel: vi.fn(),
     disconnect: vi.fn(),
@@ -16,6 +17,7 @@ const harness = vi.hoisted(() => ({
   },
   startCapture: vi.fn(),
   stopCapture: vi.fn(),
+  listCaptureEndpoints: vi.fn(),
   loadSelectionAiConfig: vi.fn(),
   recordingContext: {
     appContext: null,
@@ -50,7 +52,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
-vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
+vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: harness.addRuntimeEvent }))
 vi.mock('@/services/transcription', () => ({ getProvider: () => harness.provider }))
 vi.mock('@/services/transcription/selectionAi', () => ({
   CONTEXT_SELECTION_AI_PROFILE_KEY: 'contextSelectionAiProfileId',
@@ -65,12 +67,15 @@ type CaptureResult = { label: string; deviceId: string; groupId: string }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
-  return { promise, resolve }
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 
-async function flushMicrotasks() {
-  for (let index = 0; index < 10; index++) await Promise.resolve()
+function waitForStartFailure() {
+  return vi.waitFor(() => expect(harness.addRuntimeEvent).toHaveBeenCalledWith(
+    'error', 'recorder', 'Failed to start recording', expect.objectContaining({ error: expect.stringContaining('closed before open') }),
+  ))
 }
 
 async function createRecorder() {
@@ -89,9 +94,11 @@ function presentedOverlayErrors() {
 
 beforeEach(() => {
   harness.settings.clear()
+  harness.addRuntimeEvent.mockClear()
   harness.invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === 'get_recording_context') return harness.recordingContext
     if (command === 'get_mic_mute_state') return { matched: false, muted: false }
+    if (command === 'list_capture_endpoints') return harness.listCaptureEndpoints()
     return 1
   })
   harness.provider.isReady.mockReset().mockReturnValue(true)
@@ -100,33 +107,83 @@ beforeEach(() => {
   harness.provider.cancel.mockReset()
   harness.startCapture.mockReset().mockResolvedValue({ label: 'Microphone', deviceId: 'd1', groupId: 'g1' })
   harness.stopCapture.mockReset().mockResolvedValue(undefined)
+  harness.listCaptureEndpoints.mockReset().mockResolvedValue([])
   harness.loadSelectionAiConfig.mockReset().mockResolvedValue(null)
 })
 
-describe('recording start when the connection fails while the microphone is still opening', () => {
+describe('recording start when the connection fails during capture setup', () => {
   it('waits for the pending capture before stopping it, then shows the start error and releases the lock', async () => {
     const capture = deferred<CaptureResult>()
+    const connection = deferred<void>()
     harness.startCapture.mockReturnValueOnce(capture.promise)
-    harness.provider.connect.mockRejectedValueOnce(new WebSocketConnectError('closed before open'))
+    harness.provider.connect.mockReturnValueOnce(connection.promise)
     const recorder = await createRecorder()
 
     const starting = recorder.startRecording()
-    await vi.waitFor(() => expect(harness.startCapture).toHaveBeenCalledTimes(1))
-    await flushMicrotasks()
+    try {
+      await vi.waitFor(() => expect(harness.startCapture).toHaveBeenCalledTimes(1))
+      connection.reject(new WebSocketConnectError('closed before open'))
+      await waitForStartFailure()
 
-    expect(harness.stopCapture).not.toHaveBeenCalled()
+      expect(harness.stopCapture).not.toHaveBeenCalled()
+      expect(recorder.testSeam().startRecordingLock).toBe(true)
 
-    capture.resolve({ label: 'Microphone', deviceId: 'd1', groupId: 'g1' })
-    await starting
+      capture.resolve({ label: 'Microphone', deviceId: 'd1', groupId: 'g1' })
+      await starting
 
-    expect(harness.stopCapture).toHaveBeenCalledTimes(1)
-    expect(harness.provider.start).not.toHaveBeenCalled()
-    expect(presentedOverlayErrors()).toContainEqual(
-      expect.objectContaining({ errorMessage: t('recorder.startFailed') }),
-    )
-    expect(recorder.testSeam().startRecordingLock).toBe(false)
+      expect(harness.stopCapture).toHaveBeenCalledTimes(1)
+      expect(harness.provider.start).not.toHaveBeenCalled()
+      expect(presentedOverlayErrors()).toContainEqual(
+        expect.objectContaining({ errorMessage: t('recorder.startFailed') }),
+      )
+      expect(recorder.testSeam().startRecordingLock).toBe(false)
 
-    await recorder.startRecording()
-    await vi.waitFor(() => expect(harness.provider.start).toHaveBeenCalledTimes(1))
+      await recorder.startRecording()
+      expect(harness.provider.start).toHaveBeenCalledTimes(1)
+    } finally {
+      connection.resolve(undefined)
+      capture.resolve({ label: 'Microphone', deviceId: 'd1', groupId: 'g1' })
+      await starting
+      recorder.cleanup()
+    }
+  })
+
+  it('does not overlap capture stops or open the replacement after a disconnect during probe cleanup', async () => {
+    const connection = deferred<void>()
+    const closingProbe = deferred<void>()
+    const virtual = { name: 'CABLE Output', enumerator: 'ROOT', isDefault: true, isDefaultCommunications: false, isVirtual: true }
+    const physical = { name: 'USB Microphone', enumerator: 'USB', isDefault: false, isDefaultCommunications: true, isVirtual: false }
+    harness.listCaptureEndpoints.mockResolvedValue([virtual, physical])
+    harness.startCapture.mockResolvedValueOnce({ label: virtual.name, deviceId: 'default', groupId: 'cable' })
+    harness.stopCapture.mockReturnValueOnce(closingProbe.promise)
+    harness.provider.connect.mockReturnValueOnce(connection.promise)
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        enumerateDevices: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([
+          { kind: 'audioinput', deviceId: 'usb-mic', groupId: 'usb', label: physical.name, toJSON: () => ({}) },
+        ]),
+      },
+    })
+
+    const recorder = await createRecorder()
+    const starting = recorder.startRecording()
+    try {
+      await vi.waitFor(() => expect(harness.stopCapture).toHaveBeenCalledTimes(1))
+      connection.reject(new WebSocketConnectError('closed before open'))
+      await waitForStartFailure()
+      expect(harness.stopCapture).toHaveBeenCalledTimes(1)
+
+      closingProbe.resolve(undefined)
+      await starting
+      expect(harness.startCapture).toHaveBeenCalledTimes(1)
+      expect(harness.provider.start).not.toHaveBeenCalled()
+      expect(recorder.testSeam().startRecordingLock).toBe(false)
+    } finally {
+      connection.resolve(undefined)
+      closingProbe.resolve(undefined)
+      await starting
+      recorder.cleanup()
+      vi.unstubAllGlobals()
+    }
   })
 })

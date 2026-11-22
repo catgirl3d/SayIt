@@ -20,6 +20,7 @@ export function describeMicSource(
   active: ActiveMicrophoneInfo,
   requestedDeviceId: string,
   fallbackLabel: string,
+  routeReason?: 'avoided-virtual',
 ): MicSourceDescriptor {
   const mode: MicSourceMode = requestedDeviceId ? 'fixed' : 'auto'
   const label = cleanActiveMicLabel(active.label) || fallbackLabel
@@ -39,7 +40,7 @@ export function describeMicSource(
   // auto-detect and a fixed endpoint should be confirmed even if both resolve to
   // the same physical microphone.
   return {
-    identity: `${mode}:${physicalIdentity}`,
+    identity: `${mode}:${physicalIdentity}${routeReason ? `:${routeReason}` : ''}`,
     mode,
     label,
   }

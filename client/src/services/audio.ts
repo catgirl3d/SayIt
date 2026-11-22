@@ -22,6 +22,7 @@ let actualSampleRate = 16000
 let firstPCMFrameLogged = false
 let firstRmsLogged = false
 let usingFallback = false
+let captureGeneration = 0
 
 const TARGET_SAMPLE_RATE = 16000
 
@@ -160,7 +161,7 @@ async function teardownCapture() {
 }
 
 /** Wire up ScriptProcessorNode as fallback when AudioWorklet fails */
-function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
+function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode, generation: number) {
   usingFallback = true
   const resampler = new PCMResampler(ctx.sampleRate, TARGET_SAMPLE_RATE)
   actualSampleRate = TARGET_SAMPLE_RATE
@@ -182,6 +183,7 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
   let captureStartTime = performance.now()
 
   spn.onaudioprocess = (event) => {
+    if (generation !== captureGeneration) return
     const input = event.inputBuffer.getChannelData(0)
     const { pcm, rms } = resampler.process(input)
 
@@ -207,13 +209,13 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
           const value = Math.abs(pcm[i])
           if (value > peak) peak = value
         }
-      addRuntimeEvent('info', 'audio', 'First PCM frame received (ScriptProcessor)', {
+        addRuntimeEvent('info', 'audio', 'First PCM frame received (ScriptProcessor)', {
           samples: pcm.length,
           peak,
           byteLength: pcmBuffer.byteLength,
           sampleRate: TARGET_SAMPLE_RATE,
         })
-      console.log('[audio-diag] first PCM frame (ScriptProcessor)', {
+        console.log('[audio-diag] first PCM frame (ScriptProcessor)', {
           samples: pcm.length,
           byteLength: pcmBuffer.byteLength,
           contextSampleRate: ctx.sampleRate,
@@ -224,7 +226,7 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode) {
       if (totalPCMFrames % 100 === 0) {
         const elapsedSec = (performance.now() - captureStartTime) / 1000
         const pcmDurationSec = (totalPCMBytes / 2) / 16000
-      console.log('[audio-diag] PCM total (ScriptProcessor)', {
+        console.log('[audio-diag] PCM total (ScriptProcessor)', {
           frames: totalPCMFrames,
           totalBytes: totalPCMBytes,
           wallTimeSec: elapsedSec.toFixed(2),
@@ -283,7 +285,7 @@ async function tryLoadAudioWorklet(ctx: AudioContext): Promise<boolean> {
 }
 
 /** Create the AudioWorkletNode and attach its message handler. */
-function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode): AudioWorkletNode {
+function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode, generation: number): AudioWorkletNode {
   const node = new AudioWorkletNode(ctx, 'pcm-processor', {
     numberOfInputs: 1,
     numberOfOutputs: 0,
@@ -305,6 +307,7 @@ function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode): AudioWorkletN
   let captureStartTime = performance.now()
 
   node.port.onmessage = (e) => {
+    if (generation !== captureGeneration) return
     // Signal worklet data receipt for the external silence monitor.
     node.dispatchEvent(new Event('worklet-data'))
 
@@ -377,6 +380,13 @@ export async function startCapture(
   onFrame?: (pcm: Int16Array) => void,
   noiseSuppression: boolean = true,
 ) {
+  const generation = ++captureGeneration
+  let openedStream: MediaStream | null = null
+
+  const ensureCurrent = () => {
+    if (generation !== captureGeneration) throw new Error('Microphone capture start superseded')
+  }
+
   // Always tear down previous capture to prevent stale state leaks
   const hadPriorCtx = audioCtx !== null
   const hadPriorWorklet = workletNode !== null
@@ -396,10 +406,12 @@ export async function startCapture(
     })
   }
   await teardownCapture()
+  ensureCurrent()
 
   const boostConfig = await getSetting('micBoost', DEFAULT_MIC_BOOST)
     .then(resolveMicBoost)
     .catch(() => resolveMicBoost(DEFAULT_MIC_BOOST))
+  ensureCurrent()
 
   onAudioData = onData
   onVolumeChange = onVolume ?? null
@@ -427,8 +439,10 @@ export async function startCapture(
 
   try {
     console.log('[audio-diag] getUserMedia starting...', { deviceId: deviceId || 'default' })
-    mediaStream = await navigator.mediaDevices.getUserMedia(constraints)
-    const track = mediaStream.getAudioTracks()[0] || null
+    openedStream = await navigator.mediaDevices.getUserMedia(constraints)
+    ensureCurrent()
+    mediaStream = openedStream
+    const track = openedStream.getAudioTracks()[0] || null
     const settings = track?.getSettings?.()
     const activeMicrophone: ActiveMicrophoneInfo = {
       // Prefer the resolved track setting over the requested id. In system-default mode
@@ -439,7 +453,7 @@ export async function startCapture(
     }
 
     console.log('[audio-diag] getUserMedia success', {
-      trackCount: mediaStream.getAudioTracks().length,
+      trackCount: openedStream.getAudioTracks().length,
       trackLabel: track?.label,
       trackEnabled: track?.enabled,
       trackMuted: track?.muted,
@@ -453,12 +467,14 @@ export async function startCapture(
       trackSettings: settings || null,
     })
 
-    audioCtx = createAudioContext()
-    actualSampleRate = audioCtx.sampleRate || TARGET_SAMPLE_RATE
-    const nativeSixteenK = audioCtx.sampleRate === TARGET_SAMPLE_RATE
+    const ctx = createAudioContext()
+    ensureCurrent()
+    audioCtx = ctx
+    actualSampleRate = ctx.sampleRate || TARGET_SAMPLE_RATE
+    const nativeSixteenK = ctx.sampleRate === TARGET_SAMPLE_RATE
     console.log('[audio-diag] AudioContext created', {
-      state: audioCtx.state,
-      sampleRate: audioCtx.sampleRate,
+      state: ctx.state,
+      sampleRate: ctx.sampleRate,
       nativeSixteenK,
     })
     // This runtime event is the only evidence that the high-quality resampling
@@ -468,8 +484,8 @@ export async function startCapture(
       targetSampleRate: TARGET_SAMPLE_RATE,
     })
 
-    sourceNode = audioCtx.createMediaStreamSource(mediaStream)
-    gainNode = audioCtx.createGain()
+    sourceNode = ctx.createMediaStreamSource(openedStream)
+    gainNode = ctx.createGain()
     gainNode.gain.value = boostConfig.gain
     sourceNode.connect(gainNode)
     addRuntimeEvent('info', 'audio', 'Microphone boost configured', {
@@ -479,29 +495,31 @@ export async function startCapture(
     })
 
     // Try AudioWorklet, with ScriptProcessor fallback
-    const fallbackCtx = audioCtx
+    const fallbackCtx = ctx
     const fallbackSrc = gainNode
     const fallbackTimerId = setTimeout(() => {
-      if (!usingFallback && fallbackCtx === audioCtx && fallbackSrc === gainNode) {
-      console.warn('[audio-diag] AudioWorklet timed out (1.5s); switching to ScriptProcessorNode')
-      addRuntimeEvent('warn', 'audio', 'AudioWorklet timed out; switching to ScriptProcessorNode fallback')
-        setupScriptProcessorFallback(fallbackCtx, fallbackSrc)
+      if (generation === captureGeneration && !usingFallback && fallbackCtx === audioCtx && fallbackSrc === gainNode) {
+        console.warn('[audio-diag] AudioWorklet timed out (1.5s); switching to ScriptProcessorNode')
+        addRuntimeEvent('warn', 'audio', 'AudioWorklet timed out; switching to ScriptProcessorNode fallback')
+        setupScriptProcessorFallback(fallbackCtx, fallbackSrc, generation)
       }
     }, 1500)
 
-    const workletLoaded = await tryLoadAudioWorklet(audioCtx)
+    const workletLoaded = await tryLoadAudioWorklet(ctx)
+    ensureCurrent()
 
-    if (audioCtx.state === 'suspended') {
+    if (ctx.state === 'suspended') {
       console.log('[audio-diag] AudioContext is suspended, resuming...')
-      await audioCtx.resume()
-      console.log('[audio-diag] AudioContext resumed, state:', audioCtx.state)
+      await ctx.resume()
+      ensureCurrent()
+      console.log('[audio-diag] AudioContext resumed, state:', ctx.state)
     }
 
     if (!workletLoaded) {
       clearTimeout(fallbackTimerId)
       if (!usingFallback) {
         console.log('[audio-diag] AudioWorklet unavailable, using ScriptProcessorNode directly')
-        setupScriptProcessorFallback(audioCtx, gainNode)
+        setupScriptProcessorFallback(ctx, gainNode, generation)
       }
       return activeMicrophone
     }
@@ -513,32 +531,38 @@ export async function startCapture(
     }
 
     // AudioWorklet loaded — set up node and monitor for data
-    workletNode = setupAudioWorkletNode(audioCtx, gainNode)
+    workletNode = setupAudioWorkletNode(ctx, gainNode, generation)
 
     // Secondary monitor: if worklet loaded but no data within 800ms, switch
     let gotWorkletData = false
     workletNode.addEventListener('worklet-data', () => { gotWorkletData = true }, { once: true })
     setTimeout(() => {
-      if (!gotWorkletData && !usingFallback && fallbackCtx === audioCtx && fallbackSrc === gainNode) {
-      console.warn('[audio-diag] AudioWorklet produced no data (800ms); switching to ScriptProcessorNode')
-      addRuntimeEvent('warn', 'audio', 'AudioWorklet was silent; switching to ScriptProcessorNode fallback')
-        setupScriptProcessorFallback(fallbackCtx, fallbackSrc)
+      if (generation === captureGeneration && !gotWorkletData && !usingFallback && fallbackCtx === audioCtx && fallbackSrc === gainNode) {
+        console.warn('[audio-diag] AudioWorklet produced no data (800ms); switching to ScriptProcessorNode')
+        addRuntimeEvent('warn', 'audio', 'AudioWorklet was silent; switching to ScriptProcessorNode fallback')
+        setupScriptProcessorFallback(fallbackCtx, fallbackSrc, generation)
       }
     }, 800)
 
     return activeMicrophone
 
   } catch (error) {
-    await teardownCapture()
-    addRuntimeEvent('error', 'audio', 'Failed to start microphone capture', {
-      requestedDeviceId: deviceId || 'default',
-      error: String(error),
-    })
+    if (openedStream && openedStream !== mediaStream && generation !== captureGeneration) {
+      openedStream.getTracks().forEach((track) => track.stop())
+    }
+    if (generation === captureGeneration) {
+      await teardownCapture()
+      addRuntimeEvent('error', 'audio', 'Failed to start microphone capture', {
+        requestedDeviceId: deviceId || 'default',
+        error: String(error),
+      })
+    }
     throw error
   }
 }
 
 export async function stopCapture() {
+  captureGeneration++
   const finalCtxRate = audioCtx?.sampleRate
   console.log('[audio-diag] stopCapture final summary', {
     contextSampleRate: finalCtxRate,
