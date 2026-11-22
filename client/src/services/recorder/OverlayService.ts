@@ -12,6 +12,7 @@ import {
 } from '@/lib/overlayWaveColors'
 import {
   formatRecordingLimit,
+  isOverlayWidthPreset,
   OVERLAY_WIDTH_PRESETS,
   type OverlayCommonPayload,
   type FailureOverlayPayload,
@@ -59,8 +60,7 @@ const AI_CLEANUP_FAILURE_TOAST_KEYS: Record<AiFailureReason, TranslationKey> = {
 }
 
 function normalizeWidthPreset(value: unknown): OverlayWidthPreset {
-  if (value === 'short' || value === 'medium' || value === 'long') return value
-  return 'long'
+  return isOverlayWidthPreset(value) ? value : 'long'
 }
 
 export class OverlayService {

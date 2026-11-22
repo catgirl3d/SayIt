@@ -10,7 +10,7 @@ import { themeList } from '@/themes'
 import { switchTheme, getActiveThemeId } from '@/stores/theme'
 import { getSetting, setSetting } from '@/services/store'
 import { refreshOverlaySettings, setStreamingDisplayCache } from '@/services/recorder'
-import { OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recorder/types'
+import { isOverlayWidthPreset, OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recorder/types'
 import {
   buildWavePalette,
   DEFAULT_CUSTOM_WAVE,
@@ -231,8 +231,7 @@ export default function AppearancePage() {
       setStreamingDisplay(Boolean(streaming))
       setOverlayWaveTheme(normalizeWaveTheme(waveTheme, 'black-rainbow'))
       setCustomWave(normalizeCustomWave(waveCustom))
-      const w = width as OverlayWidthPreset
-      if (w === 'short' || w === 'medium' || w === 'long') setOverlayWidth(w)
+      if (isOverlayWidthPreset(width)) setOverlayWidth(width)
       setReady(true)
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (!cancelled) setAnimate(true)

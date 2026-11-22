@@ -27,7 +27,9 @@ export interface FailureOverlayPayload {
   cardToken: number
 }
 
-export type OverlayWidthPreset = 'short' | 'medium' | 'long'
+export const OVERLAY_WIDTH_PRESET_VALUES = ['short', 'medium', 'long'] as const
+
+export type OverlayWidthPreset = (typeof OVERLAY_WIDTH_PRESET_VALUES)[number]
 
 export interface OverlayWidthConfig {
   barCount: number
@@ -38,6 +40,10 @@ export const OVERLAY_WIDTH_PRESETS: Record<OverlayWidthPreset, OverlayWidthConfi
   short: { barCount: 12, windowWidth: 200 },
   medium: { barCount: 18, windowWidth: 280 },
   long: { barCount: 24, windowWidth: 360 },
+}
+
+export function isOverlayWidthPreset(value: unknown): value is OverlayWidthPreset {
+  return typeof value === 'string' && OVERLAY_WIDTH_PRESET_VALUES.includes(value as OverlayWidthPreset)
 }
 
 export interface OverlayCommonPayload {

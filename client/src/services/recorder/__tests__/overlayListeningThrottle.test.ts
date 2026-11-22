@@ -15,6 +15,7 @@ vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 import { setLocale } from '@/i18n'
 import { DEFAULT_CUSTOM_WAVE } from '@/lib/overlayWaveColors'
 import { OverlayService } from '../OverlayService'
+import { OVERLAY_WIDTH_PRESET_VALUES, OVERLAY_WIDTH_PRESETS } from '../types'
 
 interface RecordedUpdate {
   at: number
@@ -130,7 +131,7 @@ describe('overlay listening throttle', () => {
   })
 })
 
-describe('overlay listening payload customWave', () => {
+describe('overlay listening payload settings', () => {
   let savedSettings: Record<string, unknown>
 
   beforeEach(() => {
@@ -220,5 +221,19 @@ describe('overlay listening payload customWave', () => {
     expect(updates).toHaveLength(2)
     expect(updates[0].data.customWave).toEqual({ mode: 'solid', from: '#a3e635', to: '#000000' })
     expect(updates[1].data.customWave).toEqual({ mode: 'solid', from: '#a3e635', to: '#000000' })
+  })
+
+  it('uses every declared width preset and falls back to long for an unknown saved width', async () => {
+    for (const preset of OVERLAY_WIDTH_PRESET_VALUES) {
+      savedSettings = { overlayWidth: preset }
+      const overlay = new OverlayService(() => 0)
+      await overlay.refreshSettings()
+      expect(overlay.getCommonPayload().barCount).toBe(OVERLAY_WIDTH_PRESETS[preset].barCount)
+    }
+
+    savedSettings = { overlayWidth: 'tiny' }
+    const fallback = new OverlayService(() => 0)
+    await fallback.refreshSettings()
+    expect(fallback.getCommonPayload().barCount).toBe(OVERLAY_WIDTH_PRESETS.long.barCount)
   })
 })
