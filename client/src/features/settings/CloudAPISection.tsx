@@ -216,6 +216,7 @@ export default function CloudAPISection({ speechLanguage }: { speechLanguage: Sp
   const sendsLanguageHint = activeProvider === 'openai_transcribe'
     || activeProvider === 'gemini_transcribe'
     || activeProvider === 'openrouter_transcribe'
+    || activeProvider === 'qwen_realtime'
     || activeProvider === CUSTOM_ASR_PROVIDER
   /** Is this card testing right now — both single-card and concurrent batch runs count */
   const isTesting = (id: string) => testingId === id || isRunning(id)

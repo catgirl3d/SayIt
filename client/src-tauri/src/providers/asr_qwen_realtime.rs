@@ -1,10 +1,12 @@
 // 千问实时语音识别 — qwen3-asr-flash-realtime
 // WebSocket 流式：边录边发，OpenAI Realtime 风格协议
 //
-// 两种模式：
-//  - 普通模式（realtime=false）：send 只发音频，finish 时才收集全部转录结果（默认）。
-//  - 实时显示模式（realtime=true）：后台 reader 持续读取识别事件，把中间结果通过
-//    `asr-partial` 事件上抛给前端做悬浮窗实时上屏；finish 返回累计的最终文本。
+// Three paths:
+//  - Normal mode (realtime=false): send only sends audio; finish collects the full transcript (default).
+//  - Live display mode (realtime=true): a background reader keeps reading recognition events and
+//    pushes interim results to the frontend via `asr-partial` for the overlay; finish returns the
+//    accumulated final text.
+//  - One-shot path (`transcribe`): record first, then send the audio in one session.
 
 use super::{
     diag,
@@ -76,7 +78,11 @@ static RT_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Fields follow the official SDK: modalities, audio format, sample rate, language, VAD.
 /// The language is optional on the service side, so `None` / empty / "auto" omits the field
 /// and lets the service identify the language itself.
-fn build_session_update(language: Option<&str>, hotwords: Option<&[String]>) -> serde_json::Value {
+fn build_session_update(
+    language: Option<&str>,
+    hotwords: Option<&[String]>,
+    sample_rate: u32,
+) -> serde_json::Value {
     let mut input_audio_transcription = serde_json::json!({});
     if let Some(language) = language
         .map(str::trim)
@@ -94,7 +100,7 @@ fn build_session_update(language: Option<&str>, hotwords: Option<&[String]>) -> 
         "session": {
             "modalities": ["text"],
             "input_audio_format": "pcm",
-            "sample_rate": 16000,
+            "sample_rate": sample_rate,
             "input_audio_transcription": input_audio_transcription,
             "turn_detection": {
                 "type": "server_vad",
@@ -115,8 +121,9 @@ fn build_session_update(language: Option<&str>, hotwords: Option<&[String]>) -> 
 fn build_oneshot_session_update(
     language: Option<&str>,
     hotwords: Option<&[String]>,
+    sample_rate: u32,
 ) -> serde_json::Value {
-    let mut update = build_session_update(language, hotwords);
+    let mut update = build_session_update(language, hotwords, sample_rate);
     update["session"]["turn_detection"] = serde_json::Value::Null;
     update
 }
@@ -184,7 +191,7 @@ async fn open_socket(api_key: &str, workspace: &str) -> Result<WsStream, String>
 ///
 /// If the quota is exhausted or access is denied, the server closes the connection right after
 /// `session.created` and gives the reason. The loop then never sees `session.updated` and returns
-/// an error, and the caller falls back to one-shot recognition.
+/// an error; the streaming caller falls back to one-shot recognition.
 async fn configure_session(ws: &mut WsStream, update: serde_json::Value) -> Result<(), String> {
     ws.send(tungstenite::Message::Text(
         serde_json::to_string(&update).unwrap().into(),
@@ -217,23 +224,16 @@ async fn configure_session(ws: &mut WsStream, update: serde_json::Value) -> Resu
                         return Ok(());
                     }
                     if event_type == "error" {
-                        let err_msg = data
-                            .get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("Unknown error");
                         return Err(diag::fail(
                             "qwen/realtime",
                             "server_error",
-                            format!("Server error: {}", err_msg),
+                            format!("Server error: {}", event_error_message(&data)),
                         ));
                     }
                 }
             }
             tungstenite::Message::Close(frame) => {
-                let reason = frame
-                    .map(|f| f.reason.to_string())
-                    .unwrap_or_else(|| "No reason".to_string());
+                let reason = super::asr_qwen_omni::close_frame_reason(frame);
                 crate::commands::system::write_log_line(&format!(
                     "[RUST] [qwen_stream] closed before ready: {}",
                     reason
@@ -263,8 +263,9 @@ fn event_error_message(data: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// One append event carries one second of 16 kHz mono 16-bit PCM. The frame size does not change
-/// the upload pacing (measured on Omni); it only changes how many events are sent.
+/// One append event carries at most one second of 16 kHz mono 16-bit PCM; at another sample rate
+/// the same size is a fixed byte cap. The frame size does not change the upload pacing (measured on
+/// Omni); it only changes how many events are sent.
 const ONESHOT_CHUNK_BYTES: usize = 32_000;
 
 /// One-shot recognition for a recording that is sent after it ends.
@@ -320,7 +321,7 @@ pub async fn transcribe(
     );
 
     let start = Instant::now();
-    let exchange = oneshot_exchange(&pcm, config, hotwords, audio_sec);
+    let exchange = oneshot_exchange(&pcm, sample_rate, config, hotwords, audio_sec);
     let text = match request_timeout {
         Some(limit) => tokio::time::timeout(limit, exchange).await.map_err(|_| {
             diag::fail(
@@ -351,6 +352,7 @@ pub async fn transcribe(
 /// audio while reading events, commit once, and collect the transcript.
 async fn oneshot_exchange(
     pcm: &[u8],
+    sample_rate: u32,
     config: &AsrProviderConfig,
     hotwords: &[String],
     audio_sec: f64,
@@ -369,7 +371,7 @@ async fn oneshot_exchange(
         let mut ws = open_socket(&config.api_key, workspace).await?;
         configure_session(
             &mut ws,
-            build_oneshot_session_update(language, Some(hotwords)),
+            build_oneshot_session_update(language, Some(hotwords), sample_rate),
         )
         .await?;
         Ok::<WsStream, String>(ws)
@@ -498,9 +500,9 @@ async fn oneshot_exchange(
         )
     })?;
 
-    // The budget grows with the audio, capped at 600 seconds: an 89-second recording returned its
-    // full text about 1.5 seconds after the commit, and longer audio takes roughly proportionally
-    // longer.
+    // The audio duration used in the budget is capped at 600 seconds, so the collection budget is
+    // at most 320 seconds (20 + 300). An 89-second recording returned its full text about 1.5
+    // seconds after the commit, and longer audio takes roughly proportionally longer.
     let collect_budget =
         Duration::from_secs(20) + Duration::from_secs_f64(audio_sec.min(600.0) / 2.0);
     let text = tokio::time::timeout(collect_budget, async {
@@ -578,7 +580,7 @@ async fn oneshot_exchange(
     Ok(text)
 }
 
-/// Settings-page connection test: handshake, then a `session.update` the server must accept.
+/// Connection probe used by diagnostics: handshake, then a `session.update` the server must accept.
 ///
 /// Tests the realtime endpoint that `qwen_realtime` profiles use. It used to call
 /// `asr_qwen::test_connection`, which checks the HTTP API of `qwen3-asr-flash`.
@@ -600,7 +602,11 @@ pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
     let start = Instant::now();
     let result = tokio::time::timeout(super::connection::TEST_TIMEOUT, async {
         let mut ws = open_socket(&config.api_key, workspace).await?;
-        configure_session(&mut ws, build_oneshot_session_update(language, None)).await?;
+        configure_session(
+            &mut ws,
+            build_oneshot_session_update(language, None, 16_000),
+        )
+        .await?;
         let _ = ws.close(None).await;
         Ok::<(), String>(())
     })
@@ -654,7 +660,8 @@ pub async fn qwen_stream_open(
     crate::commands::system::write_log_line(&format!("[RUST] [qwen_stream] realtime={}", realtime));
 
     // Send the session.update configuration.
-    let session_update = build_session_update(language.as_deref(), hotwords.as_deref());
+    // The live stream contract uses 16 kHz audio.
+    let session_update = build_session_update(language.as_deref(), hotwords.as_deref(), 16_000);
     configure_session(&mut ws, session_update).await?;
 
     if realtime {
@@ -1030,7 +1037,7 @@ mod tests {
 
     #[test]
     fn session_update_uses_the_explicit_language() {
-        let update = build_session_update(Some("uk"), None);
+        let update = build_session_update(Some("uk"), None, 16_000);
         assert_eq!(
             update["session"]["input_audio_transcription"]["language"],
             serde_json::json!("uk")
@@ -1040,7 +1047,7 @@ mod tests {
     #[test]
     fn session_update_leaves_auto_language_to_the_service() {
         for language in [None, Some(""), Some("  "), Some("auto"), Some("AUTO")] {
-            let update = build_session_update(language, None);
+            let update = build_session_update(language, None, 16_000);
             assert!(
                 update["session"]["input_audio_transcription"]
                     .get("language")
@@ -1054,7 +1061,7 @@ mod tests {
     #[test]
     fn session_update_keeps_hotwords_alongside_the_language() {
         let words = vec!["SayIt".to_string()];
-        let update = build_session_update(Some("en"), Some(&words));
+        let update = build_session_update(Some("en"), Some(&words), 16_000);
         let transcription = &update["session"]["input_audio_transcription"];
         assert_eq!(transcription["language"], serde_json::json!("en"));
         assert!(
@@ -1068,7 +1075,7 @@ mod tests {
     #[test]
     fn oneshot_session_update_turns_server_vad_off() {
         let words = vec!["SayIt".to_string()];
-        let update = build_oneshot_session_update(Some("uk"), Some(&words));
+        let update = build_oneshot_session_update(Some("uk"), Some(&words), 16_000);
         assert!(update["session"]["turn_detection"].is_null());
         let transcription = &update["session"]["input_audio_transcription"];
         assert_eq!(transcription["language"], serde_json::json!("uk"));
@@ -1077,6 +1084,21 @@ mod tests {
                 .as_str()
                 .expect("corpus text")
                 .contains("SayIt")
+        );
+    }
+
+    #[test]
+    fn session_update_builders_use_the_passed_sample_rate() {
+        let stream_update = build_session_update(None, None, 8_000);
+        let oneshot_update = build_oneshot_session_update(None, None, 48_000);
+
+        assert_eq!(
+            stream_update["session"]["sample_rate"],
+            serde_json::json!(8_000)
+        );
+        assert_eq!(
+            oneshot_update["session"]["sample_rate"],
+            serde_json::json!(48_000)
         );
     }
 

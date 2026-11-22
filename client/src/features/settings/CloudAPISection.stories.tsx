@@ -89,6 +89,10 @@ const settingsFor = (profiles: AsrProfile[], activeProfileId: string) => ({
   'cloudAsr.autoCreatedProviders': [],
 })
 
+const qwenRealtimeProfiles: AsrProfile[] = configuredProfiles.map((profile) => (
+  profile.provider === 'qwen_realtime' ? { ...profile, workspaceId: 'ws-storybook' } : profile
+))
+
 const meta = {
   title: 'settings/CloudAPISection',
   component: CloudAPISection,
@@ -103,6 +107,20 @@ export const ConfiguredProfiles: Story = {
     tauri: {
       settings: settingsFor(configuredProfiles, configuredProfiles[0].id),
     },
+  },
+}
+
+export const QwenRealtimeLanguageHint: Story = {
+  args: { speechLanguage: 'uk' },
+  parameters: {
+    tauri: {
+      settings: settingsFor(qwenRealtimeProfiles, 'asr-storybook-qwen-realtime'),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(await canvas.findByText(/selected language is sent as a hint/i)).toBeVisible()
+    expect(canvas.queryByText(/setting is not sent/i)).toBeNull()
   },
 }
 

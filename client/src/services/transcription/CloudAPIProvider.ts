@@ -1074,9 +1074,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
           // The streaming connection can die mid-recording: the server ends the session early, the connection is
           // reset, or the finish times out. The full recording is still in pcmBuffers, so the buffered upload below
           // runs once for it, the same request as "Transcribe again" in History. If that also fails, the error is
-          // reported as before. The retry is limited to Doubao: Deepgram already falls back to the buffered path on a
-          // send failure, and the buffered path for Qwen realtime goes to a different model (upstream fix daff313,
-          // not ported here).
+          // reported as before. The buffered retry covers Doubao and Qwen realtime when their finish fails. Deepgram
+          // already falls back on a failed send, but a Deepgram finish failure is not retried.
           try {
             const text = await this.invokeNativeFinish(runId, 'doubao_stream_finish')
             if (text === undefined || !this.isRunCurrent(runId)) return
@@ -1107,17 +1106,25 @@ export class CloudAPIProvider implements TranscriptionProvider {
           if (!commands) throw new Error('Qwen streaming session has no native command set')
           addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: sending finish', { command: commands.finish })
           const finishStart = performance.now()
-          const text = await this.invokeNativeFinish(runId, commands.finish)
-          if (text === undefined || !this.isRunCurrent(runId)) return
-          asrText = text
-          asrMs = Math.round(performance.now() - finishStart)
-          streamedOk = true
-          addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: recognition complete', { asrMs, textLen: asrText.length })
+          try {
+            const text = await this.invokeNativeFinish(runId, commands.finish)
+            if (text === undefined || !this.isRunCurrent(runId)) return
+            asrText = text
+            asrMs = Math.round(performance.now() - finishStart)
+            streamedOk = true
+            addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: recognition complete', { asrMs, textLen: asrText.length })
+          } catch (err) {
+            if (!this.isRunCurrent(runId)) return
+            addRuntimeEvent('warn', 'cloud_api', 'Qwen streaming finish failed; retrying with buffered upload', { error: String(err), durationSec })
+            this.isQwenStream = false
+            this.qwenStreamReady = false
+            this.qwenCommands = null
+          }
         }
       }
 
       if (!streamedOk) {
-        // No ready stream (a non-streaming provider, or a stream that failed to open), or the Doubao stream
+        // No ready stream (a non-streaming provider, or a stream that failed to open), or a Doubao/Qwen stream
         // finish failed: send the recording after it ends
         const merged = new Uint8Array(totalBytes)
         let offset = 0
