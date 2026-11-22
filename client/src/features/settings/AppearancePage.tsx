@@ -258,8 +258,11 @@ export default function AppearancePage() {
     await refreshOverlaySettings()
   }
 
+  // Normalize at the write boundary, not in the editor: the HEX input may hold a valid 3-digit
+  // shorthand while the user is still typing, and expanding it in the shared state would rewrite
+  // the field mid-entry.
   const persistCustomWave = async (value: CustomWaveColors) => {
-    await setSetting('overlayWaveCustom', value)
+    await setSetting('overlayWaveCustom', normalizeCustomWave(value))
     await refreshOverlaySettings()
   }
 

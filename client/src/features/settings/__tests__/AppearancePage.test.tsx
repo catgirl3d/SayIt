@@ -83,4 +83,22 @@ describe('AppearancePage custom wave saving', () => {
       to: '#f472b6',
     })
   })
+
+  it('writes a shorthand hex color as the canonical #rrggbb form', async () => {
+    await renderCustomWavePage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Color' }))
+    const hexInput = await screen.findByRole('textbox', { name: 'Color HEX' })
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    fireEvent.change(hexInput, { target: { value: 'abc' } })
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(mocks.setSetting).toHaveBeenCalledTimes(1)
+    expect(mocks.setSetting).toHaveBeenCalledWith('overlayWaveCustom', {
+      mode: 'solid',
+      from: '#aabbcc',
+      to: '#f472b6',
+    })
+  })
 })
