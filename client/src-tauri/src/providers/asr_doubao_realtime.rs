@@ -1,11 +1,18 @@
-// 豆包流式语音识别 2.0 — 实时流式会话管理
-// 支持边录边发：start 时建连，send_chunk 实时发送音频，finish 发最后一包等结果
+// Doubao streaming speech recognition 2.0: session management for sending audio while it is being recorded
+// Connects on start, streams audio in real time on send, and on finish sends the last packet and waits for the result
 //
-// 两种模式：
-//  - 普通模式（realtime=false）：用 bigmodel_nostream 端点，只在最后一包后返回结果，准确率更高（默认）。
-//  - 实时显示模式（realtime=true）：用 bigmodel 双向流式端点，边说边返回中间结果；
-//    后台 reader 持续读取并通过 `asr-partial` 事件上抛给前端做悬浮窗实时上屏。
-//    识别完成后，finish 返回累计的最终文本，仍会照常交给 AI 处理。
+// Two modes:
+//  - Normal mode (realtime=false): bigmodel_nostream endpoint, higher accuracy (default).
+//  - Live display mode (realtime=true): bigmodel(_async) bidirectional streaming endpoints, return interim results while
+//    the user is speaking, emitted to the frontend as `asr-partial` events for live display in the overlay.
+//
+// **Both modes must read while sending** (official docs: both endpoints return one packet for every input packet).
+// Before this change, normal mode did not read a single frame during recording. Upstream measured on 2026-10-27: a
+// 120-second recording got 605 frames and 4.76 MB back from the server, all piled up in the receive buffer. Once a
+// buffer somewhere on the user's network path filled up, flow control stalled the connection, and the server ended
+// the session after 5 seconds without a packet (45000081, packet-wait timeout). The client did not notice
+// until the key was released (an upstream diagnostic bundle: recordings over 90 seconds failed 4 times out of 10).
+// So normal mode is also split into a write half and a background reader, which simply does not emit.
 
 use super::diag;
 use super::doubao_auth::{self, DoubaoAuth};
@@ -14,7 +21,7 @@ use super::types::AsrProviderConfig;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
@@ -32,35 +39,74 @@ const WS_URL_STREAM_ASYNC: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bi
 const RESOURCE_ID_DURATION: &str = "volc.seedasr.sauc.duration";
 const RESOURCE_ID_CONCURRENT: &str = "volc.seedasr.sauc.concurrent";
 
+/// Upper bound for waiting on the final result after the last packet is sent. Measured on nostream: the full text
+/// arrives 0.6 to 1.3 seconds after the key is released.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(15);
+
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type WsSink = SplitSink<WsStream, tungstenite::Message>;
 
-/// 普通模式（nostream）会话状态：整条 WebSocket 直接持有。
-static SESSION: once_cell::sync::Lazy<Arc<Mutex<Option<WsStream>>>> =
+/// Send side (the write half) of the session. The read half is handed to the background reader.
+static SINK: once_cell::sync::Lazy<Arc<Mutex<Option<WsSink>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
 
-/// 实时模式：拆分后的发送端（写半边）。读半边交给后台 reader。
-static RT_SINK: once_cell::sync::Lazy<Arc<Mutex<Option<WsSink>>>> =
+/// Handle of the background reader task, used to abort it.
+static READER: once_cell::sync::Lazy<Arc<Mutex<Option<JoinHandle<()>>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
 
-/// 实时模式后台 reader 任务句柄（用于中止）。
-static RT_READER: once_cell::sync::Lazy<Arc<Mutex<Option<JoinHandle<()>>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
-
-/// 实时模式共享状态：累计文本 / 是否结束 / 错误。
+/// Shared session state: accumulated text, whether the session has finished, and any error.
 #[derive(Default)]
-struct RtState {
+struct SessionState {
     text: String,
     finished: bool,
     error: Option<String>,
 }
 
-static RT_STATE: once_cell::sync::Lazy<Arc<Mutex<RtState>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(RtState::default())));
+static STATE: once_cell::sync::Lazy<Arc<Mutex<SessionState>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SessionState::default())));
 
-/// 当前是否处于实时模式会话。
-static RT_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Whether a session is currently active.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+// ── Send pacing bookkeeping: when diagnosing a server packet-wait timeout, we need to know whether we stopped sending ourselves ──
+static OPENED_AT_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_SEND_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_SEND_GAP_MS: AtomicU64 = AtomicU64::new(0);
+static SENT_PACKETS: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn reset_send_stats() {
+    let now = now_ms();
+    OPENED_AT_MS.store(now, Ordering::SeqCst);
+    LAST_SEND_MS.store(now, Ordering::SeqCst);
+    MAX_SEND_GAP_MS.store(0, Ordering::SeqCst);
+    SENT_PACKETS.store(0, Ordering::SeqCst);
+}
+
+fn record_send() {
+    let now = now_ms();
+    let last = LAST_SEND_MS.swap(now, Ordering::SeqCst);
+    MAX_SEND_GAP_MS.fetch_max(now.saturating_sub(last), Ordering::SeqCst);
+    SENT_PACKETS.fetch_add(1, Ordering::SeqCst);
+}
+
+fn send_stats() -> String {
+    let opened = OPENED_AT_MS.load(Ordering::SeqCst);
+    format!(
+        "packets={} max_send_gap_ms={} since_last_send_ms={} session_ms={}",
+        SENT_PACKETS.load(Ordering::SeqCst),
+        MAX_SEND_GAP_MS.load(Ordering::SeqCst),
+        now_ms().saturating_sub(LAST_SEND_MS.load(Ordering::SeqCst)),
+        now_ms().saturating_sub(opened)
+    )
+}
 
 fn build_client_request_json(
     uid: &str,
@@ -142,7 +188,7 @@ fn describe_ws_error(err: &tungstenite::Error) -> String {
 
 /// 打开豆包流式 ASR 会话：建立 WebSocket 连接并发送 client request
 ///
-/// hotwords：热词列表，会通过 request.context 字段直传给服务端（流式输入模式最多 5000 词）
+/// hotwords: the hotword list, passed straight to the server in the request.corpus.context field (streaming input mode allows up to 5000 words)
 /// realtime：是否开启实时显示（双向流式 + 中间结果上抛）
 #[tauri::command]
 pub async fn doubao_stream_open(
@@ -154,14 +200,8 @@ pub async fn doubao_stream_open(
 ) -> Result<(), String> {
     let realtime = realtime.unwrap_or(false);
 
-    // 关闭任何遗留会话（两种模式都清）
-    cleanup_realtime().await;
-    {
-        let mut session = SESSION.lock().await;
-        if let Some(mut ws) = session.take() {
-            let _ = ws.close(None).await;
-        }
-    }
+    // Close the session left over from before
+    cleanup_session().await;
 
     let auth = DoubaoAuth::from_config(&config);
     if let Some(missing) = auth.missing_field() {
@@ -264,37 +304,39 @@ pub async fn doubao_stream_open(
         }
     }
 
-    if realtime {
-        // 拆分为读写两半：写半边留给 send/finish，读半边交给后台 reader 持续读中间结果
-        let (sink, stream) = ws.split();
-        {
-            let mut st = RT_STATE.lock().await;
-            *st = RtState::default();
-        }
-        *RT_SINK.lock().await = Some(sink);
-        let handle = tokio::spawn(run_realtime_reader(stream, app.clone(), RT_STATE.clone()));
-        *RT_READER.lock().await = Some(handle);
-        RT_ACTIVE.store(true, Ordering::SeqCst);
-        crate::commands::system::write_log_line(&format!(
-            "[RUST] [doubao_stream] realtime mode ON, endpoint={} reader spawned",
-            chosen_url
-        ));
-    } else {
-        RT_ACTIVE.store(false, Ordering::SeqCst);
-        *SESSION.lock().await = Some(ws);
-    }
+    // Split into a write half and a read half: the write half is kept for send/finish, and the read half goes to the
+    // background reader, which keeps reading.
+    let (sink, stream) = ws.split();
+    *STATE.lock().await = SessionState::default();
+    *SINK.lock().await = Some(sink);
+    reset_send_stats();
+    let handle = tokio::spawn(run_reader(stream, app.clone(), STATE.clone(), realtime));
+    *READER.lock().await = Some(handle);
+    ACTIVE.store(true, Ordering::SeqCst);
+    crate::commands::system::write_log_line(&format!(
+        "[RUST] [doubao_stream] session open realtime={} endpoint={} reader spawned",
+        realtime, chosen_url
+    ));
 
     Ok(())
 }
 
-/// 后台 reader：持续读取服务端识别结果，更新累计文本并通过事件上抛中间结果。
-async fn run_realtime_reader(
+/// Background reader: keeps reading the server's replies and updates the accumulated text; in live display mode it
+/// emits interim results.
+///
+/// If the connection drops **before** the last result packet arrives, it is always recorded as an error. Previously
+/// it was recorded as a normal end, so finish returned success with partial or even empty text. On an error the
+/// frontend re-recognizes once from the full audio it still holds.
+async fn run_reader(
     mut stream: SplitStream<WsStream>,
     app: AppHandle,
-    state: Arc<Mutex<RtState>>,
+    state: Arc<Mutex<SessionState>>,
+    emit_partials: bool,
 ) {
     let mut frame_count = 0usize;
     let mut emit_count = 0usize;
+    let mut ended_cleanly = false;
+    let mut abnormal: Option<String> = None;
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(tungstenite::Message::Binary(data)) => {
@@ -305,7 +347,6 @@ async fn run_realtime_reader(
                 };
 
                 if resp.is_error {
-                    let mut s = state.lock().await;
                     // 「last packet has been received already」属于良性收尾竞争：
                     // 服务端已经因为收到过负包/VAD 自动收尾而结束，此时应当用已累计文本正常收尾，
                     // 而不是把整条识别判为失败。
@@ -315,10 +356,10 @@ async fn run_realtime_reader(
                         crate::commands::system::write_log_line(
                             "[RUST] [doubao_stream] benign end: last packet already received",
                         );
+                        ended_cleanly = true;
                     } else {
-                        s.error = Some(resp.payload.clone());
+                        abnormal = Some(format!("server error: {}", resp.payload));
                     }
-                    s.finished = true;
                     break;
                 }
 
@@ -329,58 +370,79 @@ async fn run_realtime_reader(
                         .and_then(|t| t.as_str())
                     {
                         if !text.is_empty() {
-                            {
-                                let mut s = state.lock().await;
-                                s.text = text.to_string();
-                            }
-                            emit_count += 1;
-                            if emit_count == 1 {
-                                crate::commands::system::write_log_line(
-                                    "[RUST] [doubao_stream] emitted first asr-partial",
+                            state.lock().await.text = text.to_string();
+                            if emit_partials {
+                                emit_count += 1;
+                                if emit_count == 1 {
+                                    crate::commands::system::write_log_line(
+                                        "[RUST] [doubao_stream] emitted first asr-partial",
+                                    );
+                                }
+                                let _ = app.emit(
+                                    "asr-partial",
+                                    serde_json::json!({ "text": text, "provider": "doubao" }),
                                 );
                             }
-                            let _ = app.emit(
-                                "asr-partial",
-                                serde_json::json!({ "text": text, "provider": "doubao" }),
-                            );
                         }
                     }
                 }
 
                 if resp.is_last {
-                    let mut s = state.lock().await;
-                    s.finished = true;
+                    ended_cleanly = true;
                     break;
                 }
             }
-            Ok(tungstenite::Message::Close(_)) | Err(_) => {
-                let mut s = state.lock().await;
-                s.finished = true;
+            Ok(tungstenite::Message::Close(frame)) => {
+                let reason = frame
+                    .map(|f| format!("code={} reason={}", u16::from(f.code), f.reason))
+                    .unwrap_or_else(|| "no close frame".to_string());
+                abnormal = Some(format!(
+                    "server closed the connection before the final result ({})",
+                    reason
+                ));
+                break;
+            }
+            Err(e) => {
+                abnormal = Some(format!("connection dropped before the final result: {}", e));
                 break;
             }
             Ok(_) => {}
         }
     }
+    if !ended_cleanly && abnormal.is_none() {
+        abnormal = Some("connection ended before the final result".to_string());
+    }
+    // This line is the only evidence of who dropped the connection and when: session_ms is the time from connect to
+    // this moment. A large since_last_send_ms means we stopped sending ourselves; a small one means the server or the
+    // network cut it off.
     crate::commands::system::write_log_line(&format!(
-        "[RUST] [doubao_stream] reader stopped frames={} emits={}",
-        frame_count, emit_count
+        "[RUST] [doubao_stream] reader stopped clean={} frames={} emits={} {}{}",
+        ended_cleanly,
+        frame_count,
+        emit_count,
+        send_stats(),
+        abnormal
+            .as_deref()
+            .map(|a| format!(" err={}", a))
+            .unwrap_or_default()
     ));
-    // 兜底：无论如何退出都标记结束，避免 finish 卡等
     let mut s = state.lock().await;
+    if s.error.is_none() {
+        s.error = abnormal;
+    }
     s.finished = true;
 }
 
-/// 清理实时模式资源（关闭发送端、中止 reader、重置状态）。
-async fn cleanup_realtime() {
-    RT_ACTIVE.store(false, Ordering::SeqCst);
-    if let Some(mut sink) = RT_SINK.lock().await.take() {
+/// Cleans up session resources: closes the send side, aborts the reader and resets the state.
+async fn cleanup_session() {
+    ACTIVE.store(false, Ordering::SeqCst);
+    if let Some(mut sink) = SINK.lock().await.take() {
         let _ = sink.close().await;
     }
-    if let Some(handle) = RT_READER.lock().await.take() {
+    if let Some(handle) = READER.lock().await.take() {
         handle.abort();
     }
-    let mut st = RT_STATE.lock().await;
-    *st = RtState::default();
+    *STATE.lock().await = SessionState::default();
 }
 
 /// 发送一个音频包（非最后一包）
@@ -397,36 +459,15 @@ pub async fn doubao_stream_send(pcm_b64: String) -> Result<(), String> {
 
     let frame = doubao_protocol::build_audio_request(&pcm, false);
 
-    if RT_ACTIVE.load(Ordering::SeqCst) {
-        let mut sink = RT_SINK.lock().await;
-        let s = sink.as_mut().ok_or_else(|| {
-            diag::fail(
-                "doubao/realtime",
-                "send_without_session",
-                "Session is not open".to_string(),
-            )
-        })?;
-        s.send(tungstenite::Message::Binary(frame.into()))
-            .await
-            .map_err(|e| {
-                diag::fail(
-                    "doubao/realtime",
-                    "send_audio",
-                    format!("Failed to send audio: {}", e),
-                )
-            })?;
-        return Ok(());
-    }
-
-    let mut session = SESSION.lock().await;
-    let ws = session.as_mut().ok_or_else(|| {
+    let mut sink = SINK.lock().await;
+    let s = sink.as_mut().ok_or_else(|| {
         diag::fail(
             "doubao/realtime",
             "send_without_session",
             "Session is not open".to_string(),
         )
     })?;
-    ws.send(tungstenite::Message::Binary(frame.into()))
+    s.send(tungstenite::Message::Binary(frame.into()))
         .await
         .map_err(|e| {
             diag::fail(
@@ -435,149 +476,88 @@ pub async fn doubao_stream_send(pcm_b64: String) -> Result<(), String> {
                 format!("Failed to send audio: {}", e),
             )
         })?;
-
+    record_send();
     Ok(())
 }
 
 /// 发送最后一包并等待最终识别结果
+///
+/// Failures (a server error, the connection dropping early, or a timeout) always return Err, **never partial text**:
+/// the frontend still holds the complete recording and re-recognizes it through a one-shot upload. Previously a timeout
+/// returned the text accumulated so far as a success, so the user got text with its latter part cut off and no
+/// warning at all.
 #[tauri::command]
 pub async fn doubao_stream_finish() -> Result<String, String> {
-    // 实时模式：通过发送端发最后一包，等待后台 reader 读到最终结果
-    if RT_ACTIVE.load(Ordering::SeqCst) {
-        // 若 reader 已经自然收尾（VAD/服务端已结束），就不要再发负包，避免重复末包报错。
-        let already_finished = { RT_STATE.lock().await.finished };
-        if !already_finished {
-            let mut sink = RT_SINK.lock().await;
-            if let Some(s) = sink.as_mut() {
-                let frame = doubao_protocol::build_audio_request(&[], true);
-                // 发送失败不致命：可能服务端已经收尾，继续读已累计文本即可。
-                if let Err(e) = s.send(tungstenite::Message::Binary(frame.into())).await {
-                    crate::commands::system::write_log_line(&format!(
-                        "[RUST] [doubao_stream] finish send last-packet err(ignored)={}",
-                        e
-                    ));
-                }
-            }
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            {
-                let st = RT_STATE.lock().await;
-                if st.finished {
-                    if let Some(err) = st.error.clone() {
-                        drop(st);
-                        cleanup_realtime().await;
-                        return Err(diag::fail(
-                            "doubao/realtime",
-                            "recognition_error",
-                            format!("Recognition error: {}", err),
-                        ));
-                    }
-                    let text = st.text.clone();
-                    drop(st);
-                    cleanup_realtime().await;
-                    return Ok(text);
-                }
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(30)).await;
-        }
-
-        // 超时：返回目前已累计的文本，避免整体失败
-        let text = RT_STATE.lock().await.text.clone();
-        cleanup_realtime().await;
-        return Ok(text);
-    }
-
-    // 普通模式（nostream）：整条会话同步收结果
-    let mut session = SESSION.lock().await;
-    let ws = session.as_mut().ok_or_else(|| {
-        diag::fail(
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return Err(diag::fail(
             "doubao/realtime",
             "finish_without_session",
             "Session is not open".to_string(),
-        )
-    })?;
+        ));
+    }
+    crate::commands::system::write_log_line(&format!(
+        "[RUST] [doubao_stream] finish start {}",
+        send_stats()
+    ));
 
-    // 发送空的最后一包（负包）
-    let frame = doubao_protocol::build_audio_request(&[], true);
-    ws.send(tungstenite::Message::Binary(frame.into()))
-        .await
-        .map_err(|e| {
-            diag::fail(
-                "doubao/realtime",
-                "send_final_audio",
-                format!("Failed to send the final audio packet: {}", e),
-            )
-        })?;
-
-    // 接收最终结果
-    let mut final_text = String::new();
-
-    while let Some(msg) = ws.next().await {
-        let msg = msg.map_err(|e| {
-            diag::fail(
-                "doubao/realtime",
-                "recv",
-                format!("Failed to receive result: {}", e),
-            )
-        })?;
-        match msg {
-            tungstenite::Message::Binary(data) => {
-                let resp = doubao_protocol::parse_server_response(&data)
-                    .map_err(|e| diag::fail("doubao/realtime", "parse_result", e))?;
-                if resp.is_error {
-                    // 关闭会话
-                    let _ = ws.close(None).await;
-                    *session = None;
-                    return Err(diag::fail(
-                        "doubao/realtime",
-                        "recognition_error",
-                        format!("Recognition error: {}", resp.payload),
-                    ));
-                }
-
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp.payload) {
-                    if let Some(text) = json
-                        .get("result")
-                        .and_then(|r| r.get("text"))
-                        .and_then(|t| t.as_str())
-                    {
-                        if !text.is_empty() {
-                            final_text = text.to_string();
-                        }
-                    }
-                }
-
-                if resp.is_last {
-                    break;
-                }
+    // If the reader has already finished on its own (VAD or the server ended the session), do not send the
+    // negative-sequence packet again, to avoid a duplicate last-packet error.
+    let already_finished = { STATE.lock().await.finished };
+    if !already_finished {
+        let mut sink = SINK.lock().await;
+        if let Some(s) = sink.as_mut() {
+            let frame = doubao_protocol::build_audio_request(&[], true);
+            // A send failure is not treated as fatal here: if the connection has dropped, the reader records the cause
+            // and the error is returned below.
+            if let Err(e) = s.send(tungstenite::Message::Binary(frame.into())).await {
+                crate::commands::system::write_log_line(&format!(
+                    "[RUST] [doubao_stream] finish send last-packet err={}",
+                    e
+                ));
             }
-            tungstenite::Message::Close(_) => break,
-            _ => {}
         }
     }
 
-    // 关闭连接
-    let _ = ws.close(None).await;
-    *session = None;
+    let deadline = Instant::now() + FINISH_TIMEOUT;
+    loop {
+        {
+            let st = STATE.lock().await;
+            if st.finished {
+                let result = match st.error.clone() {
+                    Some(err) => Err(err),
+                    None => Ok(st.text.clone()),
+                };
+                drop(st);
+                cleanup_session().await;
+                return result.map_err(|err| {
+                    diag::fail(
+                        "doubao/realtime",
+                        "recognition_error",
+                        format!("Recognition error: {}", err),
+                    )
+                });
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
 
-    Ok(final_text)
+    cleanup_session().await;
+    Err(diag::fail(
+        "doubao/realtime",
+        "finish_timeout",
+        format!(
+            "Timed out waiting for the final result after {}s",
+            FINISH_TIMEOUT.as_secs()
+        ),
+    ))
 }
 
 /// 关闭会话（异常中断时调用）
 #[tauri::command]
 pub async fn doubao_stream_close() -> Result<(), String> {
-    if RT_ACTIVE.load(Ordering::SeqCst) {
-        cleanup_realtime().await;
-        return Ok(());
-    }
-    let mut session = SESSION.lock().await;
-    if let Some(mut ws) = session.take() {
-        let _ = ws.close(None).await;
-    }
+    cleanup_session().await;
     Ok(())
 }

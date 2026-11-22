@@ -1053,6 +1053,8 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
       let asrText = ''
       let asrMs = 0
+      /** The stream finish produced a result; when false, the buffered upload below runs. */
+      let streamedOk = false
 
       // Finish: set the finishing flag first (no new audio may enter the queue and
       // the timer stops), flush what is left and drain the send chain, so the
@@ -1069,11 +1071,25 @@ export class CloudAPIProvider implements TranscriptionProvider {
         if (this.isDoubaoStream) {
           addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: sending finish')
           const finishStart = performance.now()
-          const text = await this.invokeNativeFinish(runId, 'doubao_stream_finish')
-          if (text === undefined || !this.isRunCurrent(runId)) return
-          asrText = text
-          asrMs = Math.round(performance.now() - finishStart)
-          addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: recognition complete', { asrMs, textLen: asrText.length })
+          // The streaming connection can die mid-recording: the server ends the session early, the connection is
+          // reset, or the finish times out. The full recording is still in pcmBuffers, so the buffered upload below
+          // runs once for it, the same request as "Transcribe again" in History. If that also fails, the error is
+          // reported as before. The retry is limited to Doubao: Deepgram already falls back to the buffered path on a
+          // send failure, and the buffered path for Qwen realtime goes to a different model (upstream fix daff313,
+          // not ported here).
+          try {
+            const text = await this.invokeNativeFinish(runId, 'doubao_stream_finish')
+            if (text === undefined || !this.isRunCurrent(runId)) return
+            asrText = text
+            asrMs = Math.round(performance.now() - finishStart)
+            streamedOk = true
+            addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: recognition complete', { asrMs, textLen: asrText.length })
+          } catch (err) {
+            if (!this.isRunCurrent(runId)) return
+            addRuntimeEvent('warn', 'cloud_api', 'Doubao streaming finish failed; retrying with buffered upload', { error: String(err), durationSec })
+            this.isDoubaoStream = false
+            this.doubaoStreamReady = false
+          }
         } else if (this.isDeepgramStream) {
           addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: sending finish')
           const finishStart = performance.now()
@@ -1081,6 +1097,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
           if (text === undefined || !this.isRunCurrent(runId)) return
           asrText = text
           asrMs = Math.round(performance.now() - finishStart)
+          streamedOk = true
           addRuntimeEvent('info', 'cloud_api', 'Deepgram streaming: recognition complete', { asrMs, textLen: asrText.length })
         } else {
           // The command set is assigned before qwenStreamReady is set; this only narrows the type.
@@ -1094,11 +1111,14 @@ export class CloudAPIProvider implements TranscriptionProvider {
           if (text === undefined || !this.isRunCurrent(runId)) return
           asrText = text
           asrMs = Math.round(performance.now() - finishStart)
+          streamedOk = true
           addRuntimeEvent('info', 'cloud_api', 'Qwen streaming: recognition complete', { asrMs, textLen: asrText.length })
         }
-      } else {
-        // No ready stream (a non-streaming provider, or a stream that failed to open): send the recording
-        // after it ends
+      }
+
+      if (!streamedOk) {
+        // No ready stream (a non-streaming provider, or a stream that failed to open), or the Doubao stream
+        // finish failed: send the recording after it ends
         const merged = new Uint8Array(totalBytes)
         let offset = 0
         for (const buf of this.pcmBuffers) {

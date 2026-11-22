@@ -19,7 +19,7 @@ vi.mock('@/services/debugLog', () => ({
   addRuntimeEvent: (...args: unknown[]) => harness.runtimeEvents(...args),
 }))
 
-import { ServerNotConfiguredError } from '@/services/runtimeConfig'
+import { ServerNotConfiguredError, WebSocketConnectError } from '@/services/runtimeConfig'
 import { RecorderOrchestrator } from '../RecorderOrchestrator'
 
 describe('recorder preconnection retry policy', () => {
@@ -86,5 +86,24 @@ describe('recorder preconnection retry policy', () => {
 
     await vi.advanceTimersByTimeAsync(5000)
     expect(harness.provider.connect).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves a socket-level failure to the websocket auto-reconnect', async () => {
+    harness.provider.connect.mockRejectedValue(new WebSocketConnectError('closed before open'))
+    const recorder = new RecorderOrchestrator()
+
+    recorder.reconnectProvider()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(harness.provider.connect).toHaveBeenCalledTimes(1)
+    expect(harness.runtimeEvents).toHaveBeenCalledWith(
+      'warn',
+      'websocket',
+      'Preconnection failed; websocket auto-reconnect will retry',
+      { error: 'WebSocketConnectError: closed before open' },
+    )
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(harness.provider.connect).toHaveBeenCalledTimes(1)
   })
 })

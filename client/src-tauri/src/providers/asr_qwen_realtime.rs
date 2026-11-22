@@ -6,7 +6,10 @@
 //  - 实时显示模式（realtime=true）：后台 reader 持续读取识别事件，把中间结果通过
 //    `asr-partial` 事件上抛给前端做悬浮窗实时上屏；finish 返回累计的最终文本。
 
-use super::{diag, types::AsrProviderConfig};
+use super::{
+    diag,
+    types::{AsrProviderConfig, AsrResult, TestResult},
+};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -102,34 +105,27 @@ fn build_session_update(language: Option<&str>, hotwords: Option<&[String]>) -> 
     })
 }
 
-/// Open a Qwen realtime ASR session.
+/// Build the one-shot `session.update`: the stream's fields with server VAD turned off.
 ///
-/// hotwords: bias terms sent as session.input_audio_transcription.corpus.text (up to 10000 tokens)
-/// realtime: whether interim results are emitted for live captions
-/// language: the app's speech-input language; `None` / empty / "auto" lets the service identify it
-#[tauri::command]
-pub async fn qwen_stream_open(
-    app: AppHandle,
-    config: AsrProviderConfig,
-    hotwords: Option<Vec<String>>,
-    realtime: Option<bool>,
-    workspace_id: Option<String>,
-    language: Option<String>,
-) -> Result<(), String> {
-    let realtime = realtime.unwrap_or(false);
+/// With server VAD on, a recording pushed in one go is cut along the audio timeline, and the
+/// last sentence has no trailing silence, so VAD never closes it. Upstream measured a 3-second
+/// recording that returned no text at all. With VAD off, one manual commit yields one completed
+/// transcript for the whole recording, with punctuation (upstream: 89 seconds came back in
+/// about 2.3 seconds).
+fn build_oneshot_session_update(
+    language: Option<&str>,
+    hotwords: Option<&[String]>,
+) -> serde_json::Value {
+    let mut update = build_session_update(language, hotwords);
+    update["session"]["turn_detection"] = serde_json::Value::Null;
+    update
+}
 
-    // 关闭遗留会话
-    cleanup_realtime().await;
-    {
-        let mut session = SESSION.lock().await;
-        if let Some(mut ws) = session.take() {
-            let _ = ws.close(None).await;
-        }
-    }
-
-    // 实时语音识别需使用「地域 + 业务空间」专属端点（北京）；
-    // 未提供 WorkspaceId 时退回通用端点（通常只用于非实时/测试）。
-    let workspace = workspace_id.unwrap_or_default();
+/// Open the WebSocket and authenticate with the Bearer key.
+///
+/// Real-time recognition needs the region-and-workspace endpoint (Beijing). When no WorkspaceId is
+/// given, the generic endpoint is used instead (normally only for non-realtime use and tests).
+async fn open_socket(api_key: &str, workspace: &str) -> Result<WsStream, String> {
     let workspace = workspace.trim();
     let url = if workspace.is_empty() {
         format!(
@@ -152,7 +148,7 @@ pub async fn qwen_stream_open(
     })?;
     request.headers_mut().insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", config.api_key)).map_err(|e| {
+        HeaderValue::from_str(&format!("Bearer {}", api_key)).map_err(|e| {
             diag::fail_code(
                 "qwen/realtime",
                 "authorization_header",
@@ -166,7 +162,7 @@ pub async fn qwen_stream_open(
         HeaderValue::from_static(concat!("SayIt/", env!("CARGO_PKG_VERSION"))),
     );
 
-    let (mut ws, response) = tokio_tungstenite::connect_async(request)
+    let (ws, response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| {
             diag::fail(
@@ -176,17 +172,22 @@ pub async fn qwen_stream_open(
             )
         })?;
     crate::commands::system::write_log_line(&format!(
-        "[RUST] [qwen_stream] connected status={} model={} realtime={}",
+        "[RUST] [qwen_stream] connected status={} model={}",
         response.status(),
-        MODEL,
-        realtime
+        MODEL
     ));
+    Ok(ws)
+}
 
-    // Send the session.update configuration.
-    let session_update = build_session_update(language.as_deref(), hotwords.as_deref());
-
+/// Send `session.update` and wait for `session.updated`, which means the configuration was
+/// accepted and the model is usable.
+///
+/// If the quota is exhausted or access is denied, the server closes the connection right after
+/// `session.created` and gives the reason. The loop then never sees `session.updated` and returns
+/// an error, and the caller falls back to one-shot recognition.
+async fn configure_session(ws: &mut WsStream, update: serde_json::Value) -> Result<(), String> {
     ws.send(tungstenite::Message::Text(
-        serde_json::to_string(&session_update).unwrap().into(),
+        serde_json::to_string(&update).unwrap().into(),
     ))
     .await
     .map_err(|e| {
@@ -197,10 +198,6 @@ pub async fn qwen_stream_open(
         )
     })?;
 
-    // 必须等到 session.updated 才算就绪（说明配置被接受、模型可用）。
-    // 若额度耗尽/无权限，服务端会在 session.created 后直接关闭连接（携带原因），
-    // 此时下面循环拿不到 session.updated → 返回 Err → 上层回退到一次性识别。
-    let mut session_ready = false;
     while let Some(msg) = ws.next().await {
         let msg = msg.map_err(|e| {
             diag::fail(
@@ -214,11 +211,10 @@ pub async fn qwen_stream_open(
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) {
                     let event_type = data.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     if event_type == "session.updated" {
-                        session_ready = true;
                         crate::commands::system::write_log_line(
                             "[RUST] [qwen_stream] session updated",
                         );
-                        break;
+                        return Ok(());
                     }
                     if event_type == "error" {
                         let err_msg = data
@@ -251,13 +247,415 @@ pub async fn qwen_stream_open(
             _ => {}
         }
     }
-    if !session_ready {
-        return Err(diag::fail(
+    Err(diag::fail(
+        "qwen/realtime",
+        "closed_before_ready",
+        "WebSocket closed before the session became ready".to_string(),
+    ))
+}
+
+/// The message of a server `error` event, or a placeholder when the server sent none.
+fn event_error_message(data: &serde_json::Value) -> String {
+    data.get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("Unknown error")
+        .to_string()
+}
+
+/// One append event carries one second of 16 kHz mono 16-bit PCM. The frame size does not change
+/// the upload pacing (measured on Omni); it only changes how many events are sent.
+const ONESHOT_CHUNK_BYTES: usize = 32_000;
+
+/// One-shot recognition for a recording that is sent after it ends.
+///
+/// This runs when live captions are off, when the stream did not open, and for History
+/// reprocessing and file transcription. The route used to go to `asr_qwen`, which hard-codes
+/// `qwen3-asr-flash`: the user had selected the realtime model, but another model recognized and
+/// billed the audio, and nothing in the UI showed it. Do not merge this route back into `asr_qwen`.
+///
+/// Server VAD is off and the audio is committed once (see `build_oneshot_session_update`). The
+/// upload is read while it is being sent: the server keeps pushing `.text` events during the
+/// upload, and a 5-minute upload was dropped mid-send when it was not read (upstream, 2026-10-27).
+/// Errors and close reasons the server sends during the upload can only be seen this way. A close
+/// before `completed` is an error, not an empty result.
+pub async fn transcribe(
+    audio_b64: &str,
+    sample_rate: u32,
+    config: &AsrProviderConfig,
+    hotwords: &[String],
+    request_timeout: Option<Duration>,
+) -> Result<AsrResult, String> {
+    use base64::Engine;
+
+    let pcm = base64::engine::general_purpose::STANDARD
+        .decode(audio_b64)
+        .map_err(|e| {
+            diag::fail(
+                "qwen/realtime",
+                "decode_b64",
+                format!("Failed to decode base64 audio: {}", e),
+            )
+        })?;
+    if pcm.is_empty() {
+        diag::empty_result(
             "qwen/realtime",
-            "closed_before_ready",
-            "WebSocket closed before the session became ready".to_string(),
-        ));
+            "Input audio was empty; provider request was skipped",
+        );
+        return Ok(AsrResult {
+            text: String::new(),
+            elapsed_ms: 0,
+        });
     }
+    let audio_sec = pcm.len() as f64 / (sample_rate.max(1) as f64 * 2.0);
+    diag::log(
+        "qwen/realtime",
+        "oneshot_start",
+        &format!(
+            "pcm_bytes={} audio_sec={:.1} hotwords={}",
+            pcm.len(),
+            audio_sec,
+            hotwords.len()
+        ),
+    );
+
+    let start = Instant::now();
+    let exchange = oneshot_exchange(&pcm, config, hotwords, audio_sec);
+    let text = match request_timeout {
+        Some(limit) => tokio::time::timeout(limit, exchange).await.map_err(|_| {
+            diag::fail(
+                "qwen/realtime",
+                "request_timeout",
+                format!("Timed out after {}ms", limit.as_millis()),
+            )
+        })??,
+        None => exchange.await?,
+    };
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    if text.is_empty() {
+        diag::empty_result(
+            "qwen/realtime",
+            &format!(
+                "Commit completed with no transcript audio_sec={:.1} elapsed={}ms",
+                audio_sec, elapsed_ms
+            ),
+        );
+    } else {
+        diag::ok("qwen/realtime", elapsed_ms, text.chars().count());
+    }
+    Ok(AsrResult { text, elapsed_ms })
+}
+
+/// One connection for `transcribe`: connect and configure under the connect budget, upload the
+/// audio while reading events, commit once, and collect the transcript.
+async fn oneshot_exchange(
+    pcm: &[u8],
+    config: &AsrProviderConfig,
+    hotwords: &[String],
+    audio_sec: f64,
+) -> Result<String, String> {
+    use base64::Engine;
+    use futures_util::FutureExt;
+
+    let workspace = config
+        .extra
+        .get("workspaceId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let language = config.extra.get("language").and_then(|v| v.as_str());
+
+    let mut ws = tokio::time::timeout(super::connection::TEST_TIMEOUT, async {
+        let mut ws = open_socket(&config.api_key, workspace).await?;
+        configure_session(
+            &mut ws,
+            build_oneshot_session_update(language, Some(hotwords)),
+        )
+        .await?;
+        Ok::<WsStream, String>(ws)
+    })
+    .await
+    .map_err(|_| {
+        diag::fail(
+            "qwen/realtime",
+            "connect_timeout",
+            "Timed out connecting to Qwen realtime".to_string(),
+        )
+    })??;
+
+    // Pacing follows Omni's rule, because it is the same endpoint limit: recordings up to 55
+    // seconds are sent at once, longer ones at one steady rate. Reading continues while sending
+    // (see `transcribe`).
+    let send_start = Instant::now();
+    let total_chunks = pcm.len().div_ceil(ONESHOT_CHUNK_BYTES);
+    let mut wire_sent: u64 = 0;
+    let mut waits: u32 = 0;
+    for (idx, chunk) in pcm.chunks(ONESHOT_CHUNK_BYTES).enumerate() {
+        let frame = serde_json::json!({
+            "type": "input_audio_buffer.append",
+            "audio": base64::engine::general_purpose::STANDARD.encode(chunk),
+        })
+        .to_string();
+        let frame_len = frame.len() as u64;
+        if let Some(due) = super::asr_qwen_omni::upload_due(wire_sent, frame_len, audio_sec) {
+            let deadline = send_start + due;
+            if deadline > Instant::now() {
+                waits += 1;
+                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+            }
+        }
+        ws.send(tungstenite::Message::Text(frame.into()))
+            .await
+            .map_err(|e| {
+                diag::fail(
+                    "qwen/realtime",
+                    "send_audio",
+                    format!(
+                        "Failed to send audio chunk {}/{} (wire_bytes={}): {}",
+                        idx + 1,
+                        total_chunks,
+                        wire_sent,
+                        e
+                    ),
+                )
+            })?;
+        wire_sent += frame_len;
+
+        while let Some(message) = ws.next().now_or_never().flatten() {
+            match message {
+                Ok(tungstenite::Message::Text(text)) => {
+                    let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) else {
+                        continue;
+                    };
+                    if data.get("type").and_then(|t| t.as_str()) == Some("error") {
+                        let _ = ws.close(None).await;
+                        return Err(diag::fail(
+                            "qwen/realtime",
+                            "server_error_while_sending",
+                            format!(
+                                "Recognition error while sending chunk {}/{}: {}",
+                                idx + 1,
+                                total_chunks,
+                                event_error_message(&data)
+                            ),
+                        ));
+                    }
+                }
+                Ok(tungstenite::Message::Close(close_frame)) => {
+                    return Err(diag::fail(
+                        "qwen/realtime",
+                        "closed_while_sending",
+                        format!(
+                            "Server closed the connection while sending chunk {}/{} (audio={:.1}s): {}",
+                            idx + 1,
+                            total_chunks,
+                            audio_sec,
+                            super::asr_qwen_omni::close_frame_reason(close_frame)
+                        ),
+                    ));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(diag::fail(
+                        "qwen/realtime",
+                        "recv_while_sending",
+                        format!(
+                            "Read failed while sending chunk {}/{}: {}",
+                            idx + 1,
+                            total_chunks,
+                            e
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    // Evidence that pacing took effect: when debugging, first check that this line is present
+    // and that waits is above 0.
+    diag::log(
+        "qwen/realtime",
+        "oneshot_pacing",
+        &format!(
+            "wire_bytes={} chunks={} waits={} send_ms={}",
+            wire_sent,
+            total_chunks,
+            waits,
+            send_start.elapsed().as_millis()
+        ),
+    );
+
+    ws.send(tungstenite::Message::Text(
+        serde_json::json!({ "type": "input_audio_buffer.commit" })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .map_err(|e| {
+        diag::fail(
+            "qwen/realtime",
+            "send_commit",
+            format!("Failed to commit audio: {}", e),
+        )
+    })?;
+
+    // The budget grows with the audio, capped at 600 seconds: an 89-second recording returned its
+    // full text about 1.5 seconds after the commit, and longer audio takes roughly proportionally
+    // longer.
+    let collect_budget =
+        Duration::from_secs(20) + Duration::from_secs_f64(audio_sec.min(600.0) / 2.0);
+    let text = tokio::time::timeout(collect_budget, async {
+        while let Some(msg) = ws.next().await {
+            let msg = msg.map_err(|e| {
+                diag::fail(
+                    "qwen/realtime",
+                    "recv",
+                    format!("Failed to receive result: {}", e),
+                )
+            })?;
+            match msg {
+                tungstenite::Message::Text(text) => {
+                    let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) else {
+                        continue;
+                    };
+                    match data.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                        "conversation.item.input_audio_transcription.completed" => {
+                            return Ok(data
+                                .get("transcript")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .trim()
+                                .to_string());
+                        }
+                        "error" => {
+                            return Err(diag::fail(
+                                "qwen/realtime",
+                                "recognition_error",
+                                format!("Recognition error: {}", event_error_message(&data)),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                // The protocol did not finish before the close. This is an error, not a successful
+                // empty result.
+                tungstenite::Message::Close(close_frame) => {
+                    return Err(diag::fail(
+                        "qwen/realtime",
+                        "closed_before_completed",
+                        format!(
+                            "The server closed the connection before returning a result: {}",
+                            super::asr_qwen_omni::close_frame_reason(close_frame)
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Err(diag::fail(
+            "qwen/realtime",
+            "closed_before_completed",
+            "The connection ended before returning a result".to_string(),
+        ))
+    })
+    .await
+    .map_err(|_| {
+        diag::fail(
+            "qwen/realtime",
+            "collect_timeout",
+            "Timed out waiting for the recognition result".to_string(),
+        )
+    })??;
+
+    // The result is already in hand, so a failure while closing does not change this recognition.
+    let _ = ws
+        .send(tungstenite::Message::Text(
+            serde_json::json!({ "event_id": "finish", "type": "session.finish" })
+                .to_string()
+                .into(),
+        ))
+        .await;
+    let _ = ws.close(None).await;
+    Ok(text)
+}
+
+/// Settings-page connection test: handshake, then a `session.update` the server must accept.
+///
+/// Tests the realtime endpoint that `qwen_realtime` profiles use. It used to call
+/// `asr_qwen::test_connection`, which checks the HTTP API of `qwen3-asr-flash`.
+pub async fn test_connection(config: &AsrProviderConfig) -> TestResult {
+    if config.api_key.trim().is_empty() {
+        return super::connection::missing_api_key(
+            "qwen/realtime",
+            "Qwen realtime ASR",
+            format!("Model: {}", MODEL),
+        );
+    }
+
+    let workspace = config
+        .extra
+        .get("workspaceId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let language = config.extra.get("language").and_then(|v| v.as_str());
+    let start = Instant::now();
+    let result = tokio::time::timeout(super::connection::TEST_TIMEOUT, async {
+        let mut ws = open_socket(&config.api_key, workspace).await?;
+        configure_session(&mut ws, build_oneshot_session_update(language, None)).await?;
+        let _ = ws.close(None).await;
+        Ok::<(), String>(())
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(diag::fail(
+            "qwen/realtime",
+            "connect_timeout",
+            "Timed out connecting to Qwen realtime".to_string(),
+        ))
+    });
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    match result {
+        Ok(()) => super::connection::success_result(elapsed_ms, format!("model: {}", MODEL)),
+        Err(message) => TestResult {
+            ok: false,
+            message,
+            elapsed_ms,
+            detail: String::new(),
+        },
+    }
+}
+
+/// Open a Qwen realtime ASR session.
+///
+/// hotwords: bias terms sent as session.input_audio_transcription.corpus.text (up to 10000 tokens)
+/// realtime: whether interim results are emitted for live captions
+/// language: the app's speech-input language; `None` / empty / "auto" lets the service identify it
+#[tauri::command]
+pub async fn qwen_stream_open(
+    app: AppHandle,
+    config: AsrProviderConfig,
+    hotwords: Option<Vec<String>>,
+    realtime: Option<bool>,
+    workspace_id: Option<String>,
+    language: Option<String>,
+) -> Result<(), String> {
+    let realtime = realtime.unwrap_or(false);
+
+    // Close any session left over from a previous run
+    cleanup_realtime().await;
+    {
+        let mut session = SESSION.lock().await;
+        if let Some(mut ws) = session.take() {
+            let _ = ws.close(None).await;
+        }
+    }
+
+    let workspace = workspace_id.unwrap_or_default();
+    let mut ws = open_socket(&config.api_key, &workspace).await?;
+    crate::commands::system::write_log_line(&format!("[RUST] [qwen_stream] realtime={}", realtime));
+
+    // Send the session.update configuration.
+    let session_update = build_session_update(language.as_deref(), hotwords.as_deref());
+    configure_session(&mut ws, session_update).await?;
 
     if realtime {
         let (sink, stream) = ws.split();
@@ -626,7 +1024,9 @@ pub async fn qwen_stream_close() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_session_update;
+    use super::{MODEL, build_oneshot_session_update, build_session_update, transcribe};
+    use crate::providers::types::AsrProviderConfig;
+    use base64::Engine;
 
     #[test]
     fn session_update_uses_the_explicit_language() {
@@ -663,5 +1063,80 @@ mod tests {
                 .expect("corpus text")
                 .contains("SayIt")
         );
+    }
+
+    #[test]
+    fn oneshot_session_update_turns_server_vad_off() {
+        let words = vec!["SayIt".to_string()];
+        let update = build_oneshot_session_update(Some("uk"), Some(&words));
+        assert!(update["session"]["turn_detection"].is_null());
+        let transcription = &update["session"]["input_audio_transcription"];
+        assert_eq!(transcription["language"], serde_json::json!("uk"));
+        assert!(
+            transcription["corpus"]["text"]
+                .as_str()
+                .expect("corpus text")
+                .contains("SayIt")
+        );
+    }
+
+    /// PCM after a plain 44-byte WAV header, cut to `seconds` of 16 kHz mono 16-bit audio.
+    fn wav_pcm_prefix(wav: &[u8], seconds: usize) -> &[u8] {
+        let pcm = wav.get(44..).expect("wav has a 44-byte header");
+        let wanted = seconds * 32_000;
+        assert!(
+            pcm.len() >= wanted,
+            "wav is shorter than requested: {} < {} bytes",
+            pcm.len(),
+            wanted
+        );
+        &pcm[..wanted]
+    }
+
+    /// Live verification, ignored by default (needs a key and costs provider credit).
+    ///
+    ///     $env:SAYIT_QWEN_KEY=...
+    ///     $env:SAYIT_QWEN_WORKSPACE=...  (optional; without it the generic endpoint is used)
+    ///     $env:SAYIT_QWEN_LANGUAGE=zh    (optional; empty or auto lets the service decide)
+    ///     $env:SAYIT_LONG_WAV=<16 kHz mono s16 WAV with a 44-byte header>
+    ///     $env:SAYIT_LONG_SECONDS=89     (optional; default 99)
+    ///     cargo test --bins live_oneshot_against_the_real_endpoint -- --ignored --nocapture
+    ///
+    /// Check `sayit.log` for `[provider] qwen/realtime oneshot_pacing` to confirm the upload
+    /// pacing ran.
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore]
+    async fn live_oneshot_against_the_real_endpoint() {
+        let key = std::env::var("SAYIT_QWEN_KEY").expect("SAYIT_QWEN_KEY");
+        let wav = std::fs::read(std::env::var("SAYIT_LONG_WAV").expect("SAYIT_LONG_WAV"))
+            .expect("read wav");
+        let seconds: usize = std::env::var("SAYIT_LONG_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(99);
+        let workspace = std::env::var("SAYIT_QWEN_WORKSPACE").unwrap_or_default();
+        let language = std::env::var("SAYIT_QWEN_LANGUAGE").unwrap_or_default();
+
+        let pcm = wav_pcm_prefix(&wav, seconds);
+        let config = AsrProviderConfig {
+            provider: "qwen_realtime".to_string(),
+            api_key: key,
+            app_id: String::new(),
+            extra: serde_json::json!({ "workspaceId": workspace, "language": language }),
+        };
+        let b64 = base64::engine::general_purpose::STANDARD.encode(pcm);
+        let result = transcribe(&b64, 16000, &config, &[], None).await;
+        match &result {
+            Ok(result) => println!(
+                "LIVE seconds={} model={} chars={} elapsed_ms={}",
+                seconds,
+                MODEL,
+                result.text.chars().count(),
+                result.elapsed_ms
+            ),
+            Err(error) => println!("LIVE seconds={} model={} error={}", seconds, MODEL, error),
+        }
+        let result = result.expect("long audio must transcribe");
+        assert!(!result.text.trim().is_empty());
     }
 }

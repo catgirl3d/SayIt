@@ -4,6 +4,7 @@ use super::types::*;
 use super::{
     ai_ollama, ai_openai_compat, asr_deepgram, asr_doubao, asr_doubao_stream, asr_gemini, asr_groq,
     asr_mimo, asr_openai_compat, asr_openrouter, asr_qwen, asr_qwen_audio_stream, asr_qwen_omni,
+    asr_qwen_realtime,
 };
 use crate::error_protocol;
 use tauri::Emitter;
@@ -221,8 +222,14 @@ pub(crate) async fn dispatch_cloud_transcribe(
         "doubao_v2" => {
             asr_doubao_stream::transcribe(audio_b64, sample_rate, config, hotwords).await
         }
-        "qwen" | "aliyun" | "qwen_realtime" => {
+        "qwen" | "aliyun" => {
             asr_qwen::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout).await
+        }
+        // Realtime profiles must be recognized by the realtime model, never by asr_qwen's
+        // fixed qwen3-asr-flash.
+        "qwen_realtime" => {
+            asr_qwen_realtime::transcribe(audio_b64, sample_rate, config, hotwords, request_timeout)
+                .await
         }
         // Qwen-Audio-3.0 流式：关掉实时字幕、以及设置页的识别测试都走这条一次性路径。
         // 用的仍是同一个 duplex 协议，只是整段音频推完再收结果。
@@ -264,7 +271,8 @@ pub async fn test_asr_connection(config: AsrProviderConfig) -> Result<TestResult
     match config.provider.as_str() {
         "doubao" => Ok(asr_doubao::test_connection(&config).await),
         "doubao_v2" => Ok(asr_doubao_stream::test_connection(&config).await),
-        "qwen" | "aliyun" | "qwen_realtime" => Ok(asr_qwen::test_connection(&config).await),
+        "qwen" | "aliyun" => Ok(asr_qwen::test_connection(&config).await),
+        "qwen_realtime" => Ok(asr_qwen_realtime::test_connection(&config).await),
         "qwen_audio_stream" => Ok(asr_qwen_audio_stream::test_connection(&config).await),
         "qwen_omni" => Ok(asr_qwen_omni::test_connection(&config).await),
         "mimo" => Ok(asr_mimo::test_connection(&config).await),

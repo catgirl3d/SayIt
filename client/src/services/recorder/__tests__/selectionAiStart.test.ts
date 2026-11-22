@@ -19,6 +19,7 @@ const harness = vi.hoisted(() => ({
   stopCapture: vi.fn(),
   captureEndpoints: vi.fn(),
   loadSelectionAiConfig: vi.fn(),
+  runtimeEvents: [] as unknown[][],
   recordingContext: {
     appContext: {
       processName: 'Code.exe',
@@ -30,6 +31,11 @@ const harness = vi.hoisted(() => ({
         selectedText: 'Original selection',
         textAfter: 'suffix',
         selectionTruncated: false,
+      },
+      textContextDiag: {
+        result: 'captured',
+        depth: 1,
+        elapsedMs: 12,
       },
     },
     probe: { editable: true, hwnd: '0x1', process: 'Code.exe', detail: 'editable' },
@@ -66,7 +72,9 @@ vi.mock('@tauri-apps/api/event', () => ({
   },
 }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
-vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
+vi.mock('@/services/debugLog', () => ({
+  addRuntimeEvent: (...args: unknown[]) => harness.runtimeEvents.push(args),
+}))
 vi.mock('@/services/transcription', () => ({ getProvider: () => harness.provider }))
 vi.mock('@/services/transcription/selectionAi', () => ({
   CONTEXT_SELECTION_AI_PROFILE_KEY: 'contextSelectionAiProfileId',
@@ -103,6 +111,7 @@ beforeEach(() => {
   harness.events.clear()
   harness.settings.set('aiEnabled', true)
   harness.settings.set('contextAwareWritingEnabled', true)
+  harness.runtimeEvents.length = 0
   harness.invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === 'get_recording_context') return harness.recordingContext
     if (command === 'get_mic_mute_state') return { matched: false, muted: false }
@@ -137,6 +146,27 @@ describe('selection-edit service freeze at recording start', () => {
       selectionAiConfig: snapshot,
       textContext: expect.objectContaining({ selectedText: 'Original selection' }),
     })
+  })
+
+  it('records the text-context result on Recording started without editor text', async () => {
+    const recorder = await createRecorder()
+    await recorder.startRecording()
+    await vi.waitFor(() => expect(harness.provider.start).toHaveBeenCalledTimes(1))
+
+    const started = harness.runtimeEvents.find(([, , message]) => message === 'Recording started')
+    expect(started).toBeDefined()
+    const detail = started?.[3] as { textContext?: Record<string, unknown> }
+    expect(detail.textContext).toEqual({
+      result: 'captured',
+      kind: 'selection',
+      source: 'uia',
+      beforeLen: 'prefix'.length,
+      selectedLen: 'Original selection'.length,
+      afterLen: 'suffix'.length,
+      depth: 1,
+      elapsedMs: 12,
+    })
+    expect(JSON.stringify(detail.textContext)).not.toContain('Original selection')
   })
 
   it('skips the service lookup entirely while AI cleanup is off', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CONTEXT_SELECTION_EDIT_PROMPT,
+  describeTextContextForLog,
   normalizeContextSelectionEditPrompt,
   resolveContextAwareOutput,
   usableTextContext,
@@ -192,5 +193,133 @@ describe('context-aware writing prompt', () => {
       rawAsr: false,
       selectedEditWasApplied: false,
     })
+  })
+})
+
+describe('text context log', () => {
+  const captured = {
+    source: 'text_pattern2',
+    textBefore: 'secret before',
+    selectedText: 'secret selection',
+    textAfter: 'secret after',
+    selectionTruncated: false,
+  }
+
+  it('stays silent while context-aware writing is off', () => {
+    expect(describeTextContextForLog({
+      featureOn: false,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'captured', depth: 0, elapsedMs: 5 },
+      raw: captured,
+      usable: captured,
+    })).toBeNull()
+  })
+
+  it('names the frontend decision when no text was requested or capture failed', () => {
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: false,
+      captureFailed: false,
+      usable: null,
+    })).toEqual({ result: 'ai_off' })
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: true,
+      usable: null,
+    })).toEqual({ result: 'capture_error' })
+  })
+
+  it('records a captured selection with counts and native timing only', () => {
+    const log = describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'captured', depth: 2, elapsedMs: 7 },
+      raw: captured,
+      usable: captured,
+    })
+    expect(log).toEqual({
+      result: 'captured',
+      kind: 'selection',
+      source: 'text_pattern2',
+      beforeLen: captured.textBefore.length,
+      selectedLen: captured.selectedText.length,
+      afterLen: captured.textAfter.length,
+      depth: 2,
+      elapsedMs: 7,
+    })
+    expect(JSON.stringify(log)).not.toContain('secret')
+  })
+
+  it('records a captured caret when nothing is selected', () => {
+    const context = { ...captured, selectedText: '' }
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'captured', elapsedMs: 3 },
+      raw: context,
+      usable: context,
+    })).toMatchObject({
+      result: 'captured',
+      kind: 'caret',
+      selectedLen: 0,
+    })
+  })
+
+  it('keeps selection_too_long ahead of a misleading native result', () => {
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'empty', elapsedMs: 4 },
+      raw: { ...captured, selectionTruncated: true },
+      usable: null,
+    })).toEqual({
+      result: 'selection_too_long',
+      source: 'text_pattern2',
+      elapsedMs: 4,
+    })
+  })
+
+  it('distinguishes an old native layer, an empty capture and a native failure', () => {
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: undefined,
+      raw: null,
+      usable: null,
+    })).toEqual({ result: 'no_diag' })
+
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'captured', depth: 0, elapsedMs: 3 },
+      raw: captured,
+      usable: null,
+    })).toEqual({ result: 'unusable', depth: 0, elapsedMs: 3 })
+
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'no_text_pattern', depth: 1, elapsedMs: 9 },
+      raw: null,
+      usable: null,
+    })).toEqual({ result: 'no_text_pattern', depth: 1, elapsedMs: 9 })
+  })
+
+  it('bounds native reason codes before they reach the log', () => {
+    expect(describeTextContextForLog({
+      featureOn: true,
+      aiOn: true,
+      captureFailed: false,
+      diag: { result: 'x'.repeat(40), elapsedMs: 1 },
+      usable: null,
+    })).toMatchObject({ result: 'x'.repeat(32) })
   })
 })

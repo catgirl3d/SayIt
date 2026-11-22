@@ -66,10 +66,11 @@ import { describeProviderError } from '@/lib/errorMessages'
 import { describeMicSource, micSourceChanged } from './micSourceReminder'
 import { classifyActiveMic, rememberWorkingMic, resolveMicPlan, type CaptureEndpoint, type MicPlan } from '../micRouting'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
-import { ServerNotConfiguredError } from '../runtimeConfig'
+import { ServerNotConfiguredError, WebSocketConnectError } from '../runtimeConfig'
 import {
   CONTEXT_SELECTION_EDIT_PROMPT,
   CONTEXT_SELECTION_EDIT_PROMPT_SETTING_KEY,
+  describeTextContextForLog,
   normalizeContextSelectionEditPrompt,
   resolveContextAwareOutput,
   usableTextContext,
@@ -1788,6 +1789,13 @@ export class RecorderOrchestrator {
         addRuntimeEvent('warn', 'websocket', 'No server address is configured; not reconnecting')
         return
       }
+      // The socket was created, so websocket.ts already schedules its own backoff reconnect, or the close was intentional.
+      // A second 5 s loop here would double the attempts and the log lines. Failures before a socket exists
+      // (settings reads, a bad URL) still retry below.
+      if (err instanceof WebSocketConnectError) {
+        addRuntimeEvent('warn', 'websocket', 'Preconnection failed; websocket auto-reconnect will retry', { error: String(err) })
+        return
+      }
       addRuntimeEvent('warn', 'websocket', 'Preconnection failed; retrying in 5s', { error: String(err) })
       setTimeout(() => this.ensureConnection(), 5000)
     })
@@ -1909,6 +1917,7 @@ export class RecorderOrchestrator {
       preserveExistingOnFailure: true,
     })
     let activeAppContext: ActiveAppContext | null
+    let recordingContextFailed = false
     try {
       // AI is the only consumer of editor text. If cleanup is off, do not read the text even when
       // the preference remains enabled, so the privacy boundary matches actual behavior.
@@ -1927,8 +1936,19 @@ export class RecorderOrchestrator {
     } catch {
       activeAppContext = null
       this.cachedProbeResult = null
+      recordingContextFailed = true
     }
     const textContext = usableTextContext(activeAppContext?.textContext)
+    // Read the raw capture before it is deleted: selection_too_long is decided on the original
+    // context, and the diagnostic must survive the usable-context filtering.
+    const textContextLog = describeTextContextForLog({
+      featureOn: this.cachedContextAwareWriting,
+      aiOn: this.cachedAiEnabled,
+      captureFailed: recordingContextFailed,
+      diag: activeAppContext?.textContextDiag,
+      raw: activeAppContext?.textContext,
+      usable: textContext,
+    })
     if (activeAppContext) {
       if (textContext) activeAppContext.textContext = textContext
       else delete activeAppContext.textContext
@@ -1955,12 +1975,6 @@ export class RecorderOrchestrator {
         ),
         summary: `${this.currentPromptResolution.summary} | Text context: ${textContext.selectedText ? 'selection' : 'caret'}`,
       }
-      addRuntimeEvent('info', 'recorder', 'Text context captured', {
-        source: textContext.source,
-        beforeLen: textContext.textBefore.length,
-        selectedLen: textContext.selectedText.length,
-        afterLen: textContext.textAfter.length,
-      })
     }
 
     // Freeze the selection-edit service for this run: editing settings mid-recording must not
@@ -1984,6 +1998,8 @@ export class RecorderOrchestrator {
         promptRuleId: this.currentPromptResolution.matchedRule?.id,
         summary: this.currentPromptResolution.summary,
       },
+      // Reason codes and counts only; see describeTextContextForLog.
+      ...(textContextLog && { textContext: textContextLog }),
     })
     addRuntimeEvent('info', 'personalization', 'Prompt routing resolved', {
       appContext: this.summarizeAppContext(activeAppContext || null),
@@ -2066,6 +2082,7 @@ export class RecorderOrchestrator {
     let resolveCaptureReady: () => void
     this.captureReadyPromise = new Promise<void>((resolve) => { resolveCaptureReady = resolve })
 
+    let captureOperation: Promise<unknown> | undefined
     try {
       const captureCallbacks = {
         onData: (buffer: ArrayBuffer) => {
@@ -2114,13 +2131,15 @@ export class RecorderOrchestrator {
 
       const openCapture = async (plan: MicPlan, endpoints: CaptureEndpoint[]) => {
         if (!this.isRunCurrent(runId)) return null
-        const captureResult = await startCapture(
+        const opening = startCapture(
           plan.deviceId || undefined,
           captureCallbacks.onData,
           captureCallbacks.onVolume,
           captureCallbacks.onFrame,
           this.noiseSuppression,
         )
+        captureOperation = opening
+        const captureResult = await opening
         return this.isRunCurrent(runId) ? { captureResult, plan, endpoints } : null
       }
 
@@ -2138,7 +2157,8 @@ export class RecorderOrchestrator {
             openedDefaultLabel: opened.captureResult.label,
           })
           if (retry.plan.reason === 'virtual_avoided' && retry.plan.deviceId && this.isRunCurrent(runId)) {
-            await stopCapture()
+            captureOperation = stopCapture()
+            await captureOperation
             if (!this.isRunCurrent(runId)) return null
             opened = await openCapture(retry.plan, retry.endpoints)
           }
@@ -2237,7 +2257,22 @@ export class RecorderOrchestrator {
       // A failed start must not leave system output muted.
       this.restoreSystemMuteIfNeeded()
       addRuntimeEvent('error', 'recorder', 'Failed to start recording', { error: String(error) })
-      try { await stopCapture() } catch { /* ignore */ }
+      // Wait for an in-flight open or close, not the whole route lookup. The invalidated run
+      // cannot open another stream while cleanup waits.
+      if (captureOperation) {
+        try {
+          await captureOperation
+        } catch (captureError) {
+          if (captureError !== error) {
+            addRuntimeEvent('warn', 'audio', 'Capture operation also failed during recording start', { error: String(captureError) })
+          }
+        }
+      }
+      try {
+        await stopCapture()
+      } catch (stopError) {
+        addRuntimeEvent('warn', 'audio', 'Could not stop capture after a failed recording start', { error: String(stopError) })
+      }
       provider.cancel()
       // 在悬浮窗显示错误信息，让用户知道发生了什么
       const errMsg = String(error)
