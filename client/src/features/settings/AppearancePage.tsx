@@ -1,6 +1,6 @@
 // Appearance settings page - app theme, overlay style and preview
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { ExternalLink, Info } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -10,14 +10,24 @@ import { themeList } from '@/themes'
 import { switchTheme, getActiveThemeId } from '@/stores/theme'
 import { getSetting, setSetting } from '@/services/store'
 import { refreshOverlaySettings, setStreamingDisplayCache } from '@/services/recorder'
-import { OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recorder/types'
-import { type OverlayWaveTheme } from './utils'
+import { isOverlayWidthPreset, OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recorder/types'
+import {
+  buildWavePalette,
+  DEFAULT_CUSTOM_WAVE,
+  DEFAULT_WAVE_THEME,
+  getWaveTimerColor,
+  normalizeCustomWave,
+  normalizeWaveTheme,
+  type CustomWaveColors,
+  type OverlayWaveTheme,
+} from '@/lib/overlayWaveColors'
+import { CustomWaveEditor } from './CustomWaveEditor'
 import { type TranslationKey } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { ThemePicker } from './ThemePicker'
 
 const OVERLAY_OPTIONS: Array<{
-  theme: OverlayWaveTheme
+  theme: Exclude<OverlayWaveTheme, 'custom'>
   labelKey: TranslationKey
   barColors: string[]
 }> = [
@@ -25,6 +35,14 @@ const OVERLAY_OPTIONS: Array<{
     { theme: 'black-blue', labelKey: 'appearance.wave.blackBlue', barColors: ['#22d3ee', '#3b82f6', '#6366f1'] },
     { theme: 'black-rainbow', labelKey: 'appearance.wave.blackRainbow', barColors: ['#4ade80', '#facc15', '#fb923c', '#f87171'] },
   ]
+
+/**
+ * Dragging the custom wave color picker fires onChange dozens of times per second. The preview
+ * follows the pointer immediately, while saving the value and refreshing the overlay settings wait
+ * until the pointer has rested for this long, so the store is not written and the recorder does not
+ * reread its settings on every move.
+ */
+const CUSTOM_WAVE_SAVE_DELAY_MS = 250
 
 // Ordered from long to short: reading from "fullest" to "most restrained" matches the
 // intuition for picking a size better than the reverse.
@@ -34,29 +52,15 @@ const WIDTH_OPTIONS: Array<{ value: OverlayWidthPreset; labelKey: TranslationKey
   { value: 'short', labelKey: 'appearance.width.short' },
 ]
 
-function getBarColor(index: number, total: number, theme: OverlayWaveTheme): string {
-  const t = index / Math.max(1, total - 1)
-  if (theme === 'black-white') return '#f1f5f9'
-  if (theme === 'black-rainbow') {
-    const hue = 140 - Math.round(t * 110)
-    const lightness = 64 - Math.round(Math.abs(t - 0.5) * 12)
-    return `hsl(${hue} 95% ${lightness}%)`
-  }
-  const hue = 190 + Math.round(t * 30)
-  const lightness = 62 - Math.round(Math.abs(t - 0.5) * 14)
-  return `hsl(${hue} 90% ${lightness}%)`
-}
-
-function getTimerColor(theme: OverlayWaveTheme): string {
-  if (theme === 'black-white') return '#e5e7eb'
-  if (theme === 'black-rainbow') return '#fef08a'
-  return '#bae6fd'
-}
-
-
-
-function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: OverlayWaveTheme; showDuration: boolean; barCount: number; streaming: boolean }) {
+function OverlayPreview({ theme, customWave, showDuration, barCount, streaming }: {
+  theme: OverlayWaveTheme
+  customWave: CustomWaveColors
+  showDuration: boolean
+  barCount: number
+  streaming: boolean
+}) {
   const t = useT()
+  const palette = useMemo(() => buildWavePalette(barCount, theme, customWave), [barCount, theme, customWave])
   const previewText = t('appearance.streamingPreviewText')
   const barRefs = useRef<Array<HTMLDivElement | null>>([])
   const [typed, setTyped] = useState('')
@@ -142,7 +146,7 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
       <div className="flex items-center rounded-full border border-slate-600 bg-black px-4 py-2 shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
         <div className="flex items-center gap-[2px]" style={{ height: '20px' }}>
           {Array.from({ length: barCount }, (_, index) => {
-            const color = getBarColor(index, barCount, theme)
+            const color = palette[index]
             return (
               <div
                 key={index}
@@ -161,7 +165,7 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
         {showDuration && (
           <span
             className="ml-1.5 min-w-[24px] text-right font-mono tabular-nums text-xs"
-            style={{ color: getTimerColor(theme) }}
+            style={{ color: getWaveTimerColor(theme, customWave) }}
           >
             3.2s
           </span>
@@ -175,7 +179,9 @@ function OverlayPreview({ theme, showDuration, barCount, streaming }: { theme: O
 export default function AppearancePage() {
   const t = useT()
   const [activeTheme, setActiveTheme] = useState(getActiveThemeId)
-  const [overlayWaveTheme, setOverlayWaveTheme] = useState<OverlayWaveTheme>('black-rainbow')
+  const [overlayWaveTheme, setOverlayWaveTheme] = useState<OverlayWaveTheme>(DEFAULT_WAVE_THEME)
+  const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
+  const customWaveSaveRef = useRef<{ timer: ReturnType<typeof setTimeout>; value: CustomWaveColors } | null>(null)
   const [overlayShowDuration, setOverlayShowDuration] = useState(true)
   const [overlayWidth, setOverlayWidth] = useState<OverlayWidthPreset>('medium')
   const [streamingDisplay, setStreamingDisplay] = useState(false)
@@ -214,19 +220,19 @@ export default function AppearancePage() {
     //     values are still the defaults" first.
     let cancelled = false
     void (async () => {
-      const [showDuration, streaming, waveTheme, width] = await Promise.all([
+      const [showDuration, streaming, waveTheme, waveCustom, width] = await Promise.all([
         getSetting('overlayShowDuration', true).catch(() => true),
         getSetting('streamingDisplayEnabled', false).catch(() => false),
-        getSetting('overlayWaveTheme', 'black-rainbow').catch(() => 'black-rainbow'),
+        getSetting('overlayWaveTheme', DEFAULT_WAVE_THEME).catch(() => DEFAULT_WAVE_THEME),
+        getSetting<unknown>('overlayWaveCustom', DEFAULT_CUSTOM_WAVE).catch(() => DEFAULT_CUSTOM_WAVE),
         getSetting('overlayWidth', 'medium').catch(() => 'medium'),
       ])
       if (cancelled) return
       setOverlayShowDuration(Boolean(showDuration))
       setStreamingDisplay(Boolean(streaming))
-      const t = waveTheme as OverlayWaveTheme
-      if (t === 'black-white' || t === 'black-blue' || t === 'black-rainbow') setOverlayWaveTheme(t)
-      const w = width as OverlayWidthPreset
-      if (w === 'short' || w === 'medium' || w === 'long') setOverlayWidth(w)
+      setOverlayWaveTheme(normalizeWaveTheme(waveTheme))
+      setCustomWave(normalizeCustomWave(waveCustom))
+      if (isOverlayWidthPreset(width)) setOverlayWidth(width)
       setReady(true)
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (!cancelled) setAnimate(true)
@@ -240,11 +246,48 @@ export default function AppearancePage() {
     setActiveTheme(themeId)
   }
 
+  const themeCards: Array<{ theme: OverlayWaveTheme; labelKey: TranslationKey; barColors: string[] }> = [
+    ...OVERLAY_OPTIONS,
+    // The custom card's color bars use the current custom colors, so the card follows every change
+    { theme: 'custom', labelKey: 'appearance.wave.custom', barColors: buildWavePalette(4, 'custom', customWave) },
+  ]
+
   const handleOverlayThemeChange = async (theme: OverlayWaveTheme) => {
     setOverlayWaveTheme(theme)
     await setSetting('overlayWaveTheme', theme)
     await refreshOverlaySettings()
   }
+
+  // Normalize at the write boundary, not in the editor: the HEX input may hold a valid 3-digit
+  // shorthand while the user is still typing, and expanding it in the shared state would rewrite
+  // the field mid-entry.
+  const persistCustomWave = async (value: CustomWaveColors) => {
+    await setSetting('overlayWaveCustom', normalizeCustomWave(value))
+    await refreshOverlaySettings()
+  }
+
+  // The preview follows the picker immediately, while the write is coalesced until the pointer rests:
+  // dragging the picker fires onChange dozens of times per second, and writing the store and making
+  // the recorder reread its settings on each of those would be wasted work.
+  const handleCustomWaveChange = (next: CustomWaveColors) => {
+    setCustomWave(next)
+    if (customWaveSaveRef.current) clearTimeout(customWaveSaveRef.current.timer)
+    const timer = setTimeout(() => {
+      customWaveSaveRef.current = null
+      void persistCustomWave(next)
+    }, CUSTOM_WAVE_SAVE_DELAY_MS)
+    customWaveSaveRef.current = { timer, value: next }
+  }
+
+  // If the page is left less than CUSTOM_WAVE_SAVE_DELAY_MS after the last change, flush the pending write
+  // now, otherwise that last change would be lost.
+  useEffect(() => () => {
+    const pending = customWaveSaveRef.current
+    if (!pending) return
+    clearTimeout(pending.timer)
+    customWaveSaveRef.current = null
+    void persistCustomWave(pending.value)
+  }, [])
 
   const handleToggleDuration = async () => {
     const next = !overlayShowDuration
@@ -295,13 +338,15 @@ export default function AppearancePage() {
             <div className="space-y-4" style={ready ? undefined : { visibility: 'hidden' }}>
               <div>
                 <p className="mb-2 text-sm text-muted-foreground">{t('appearance.waveTheme')}</p>
-                <div className="grid gap-2 sm:grid-cols-3" style={ready ? undefined : { visibility: 'hidden' }}>
-                  {OVERLAY_OPTIONS.map((option) => (
+                {/* Four cards: one row at the default window width; two per row below the lg breakpoint, so "Rainbow on black" and its color bars do not crowd each other */}
+                <div className="grid grid-cols-2 gap-2 lg:grid-cols-4" style={ready ? undefined : { visibility: 'hidden' }}>
+                  {themeCards.map((option) => (
                     <button
                       key={option.theme}
                       type="button"
+                      aria-pressed={overlayWaveTheme === option.theme}
                       onClick={() => void handleOverlayThemeChange(option.theme)}
-                      className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${animate ? 'transition-colors' : ''} ${overlayWaveTheme === option.theme
+                      className={`flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${animate ? 'transition-colors' : ''} ${overlayWaveTheme === option.theme
                         ? 'border-primary bg-primary/5'
                         : 'border-border hover:bg-accent'
                         }`}
@@ -312,7 +357,7 @@ export default function AppearancePage() {
                         </span>
                         <span>{t(option.labelKey)}</span>
                       </span>
-                      <span className="flex gap-0.5">
+                      <span className="flex shrink-0 gap-0.5">
                         {option.barColors.map((c, i) => (
                           <span key={i} className="h-3 w-1 rounded-sm" style={{ backgroundColor: c }} />
                         ))}
@@ -320,6 +365,10 @@ export default function AppearancePage() {
                     </button>
                   ))}
                 </div>
+
+                {overlayWaveTheme === 'custom' && (
+                  <CustomWaveEditor value={customWave} onChange={handleCustomWaveChange} animate={animate} />
+                )}
 
                 <div className="mt-4">
                   <p className="mb-2 text-sm text-muted-foreground">{t('appearance.overlayWidth')}</p>
@@ -382,7 +431,7 @@ export default function AppearancePage() {
                 </div>
 
                 <div className="mt-4 flex justify-center">
-                  <OverlayPreview theme={overlayWaveTheme} showDuration={overlayShowDuration} barCount={OVERLAY_WIDTH_PRESETS[overlayWidth].barCount} streaming={streamingDisplay} />
+                  <OverlayPreview theme={overlayWaveTheme} customWave={customWave} showDuration={overlayShowDuration} barCount={OVERLAY_WIDTH_PRESETS[overlayWidth].barCount} streaming={streamingDisplay} />
                 </div>
               </div>
             </div>
