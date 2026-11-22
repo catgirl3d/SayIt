@@ -20,6 +20,7 @@ Sections are ordered by version, newest first.
 - A usage session abandoned by a new start before stop is now closed with the `superseded` status instead of staying in `recording` forever.
 
 #### Desktop Client
+- In Windows system-default mode, dictation and the microphone test can bypass a virtual input when SayIt can identify both the default and a physical replacement. SayIt prefers the last working physical microphone, then the communications default, then another matched physical microphone. The overlay and Audio settings explain the fallback. Explicit choices stay unchanged, and a silent virtual input gets its own warning.
 - Downloading Fun-ASR MLT Nano and Whisper Large v3 Turbo no longer stops with a size or checksum mismatch. Upstream re-exported both files (metadata refresh), and the catalog now pins the current sizes and SHA-256 values, so these downloads verify again.
 - History reprocessing now validates recordings in Rust and sends only raw mono 16 kHz 16-bit PCM from a WAV file to the selected speech engine, reporting malformed or unsupported audio before any transcription request.
 - History recording downloads now copy the existing WAV directly in Rust from the app's audio folder to Downloads instead of sending the file through the renderer as base64; an existing destination is reported explicitly instead of being overwritten. The generated `sayit_<date>.wav` names and flat filename validation remain unchanged.

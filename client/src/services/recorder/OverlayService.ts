@@ -446,10 +446,10 @@ export class OverlayService {
     this.publishListeningWarning(t('overlay.warnLowVolume'), 'warn')
   }
 
-  /** Show the "no signal detected" warning (a persistent lack of input means the device is unusable; red high-alert). */
-  showNoSignalWarning() {
+  /** Show the no-signal warning; a confirmed virtual ROOT endpoint gets its specific guidance. */
+  showNoSignalWarning(options: { virtualMic?: boolean } = {}) {
     if (this.activeWarning) return
-    this.publishListeningWarning(t('overlay.warnNoSignal'), 'error')
+    this.publishListeningWarning(t(options.virtualMic ? 'overlay.warnNoSignalVirtual' : 'overlay.warnNoSignal'), 'error')
   }
 
   /** Show the "mic is muted" high-alert (confirmed mute at the system level: red high-alert). */

@@ -64,6 +64,7 @@ import {
 import { t } from '@/i18n'
 import { describeProviderError } from '@/lib/errorMessages'
 import { describeMicSource, micSourceChanged } from './micSourceReminder'
+import { classifyActiveMic, rememberWorkingMic, resolveMicPlan, type CaptureEndpoint, type MicPlan } from '../micRouting'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import { ServerNotConfiguredError } from '../runtimeConfig'
 import {
@@ -289,6 +290,9 @@ export class RecorderOrchestrator {
   private get provider(): TranscriptionProvider { return getProvider() }
   private recordedChunks: ArrayBuffer[] = []
   private captureReadyPromise: Promise<void> | null = null
+  private activeCapture: { label: string; isVirtual: boolean | null } | null = null
+  /** Audio callbacks are ignored until provider.start succeeds. */
+  private captureAcceptingAudio = false
   /** 5-minute auto-stop timer for hands-free mode */
   private handsFreeAutoStopId: ReturnType<typeof setTimeout> | null = null
   /** 系统确认麦克风静音后的自动取消计时器，避免悬浮窗无限停留。 */
@@ -1030,6 +1034,8 @@ export class RecorderOrchestrator {
     this.startRecordingLock = false
     this.activeRunMode = null
     this.pendingStopWhileStarting = false
+    this.captureAcceptingAudio = false
+    this.activeCapture = null
     this.handsFreeMode = false
     this.finalHandledInCurrentRun = false
     this.asrResultReceivedInCurrentRun = false
@@ -1884,6 +1890,8 @@ export class RecorderOrchestrator {
     this.activeFallbackToken = 0
     this.startRecordingLock = true
     this.pendingStopWhileStarting = false
+    this.captureAcceptingAudio = false
+    this.activeCapture = null
     this.timedOutProcessingContext = null
     this.clearMicMutedAutoCancelTimer()
     this.osMicMuted = false
@@ -1962,8 +1970,9 @@ export class RecorderOrchestrator {
     const selectionAiConfig = this.cachedAiEnabled ? await loadSelectionAiConfig(textContext) : null
     if (!this.isRunCurrent(runId)) return
 
+    const selectedMicId = this.cachedMicId
     addRuntimeEvent('info', 'recorder', 'Recording started', {
-      micId: this.cachedMicId || 'default',
+      micId: selectedMicId || 'default',
       preset: this.currentPromptResolution.preset.id || this.currentPromptResolution.preset.name || 'none',
       targetCapture,
       appContext: this.summarizeAppContext(activeAppContext || null),
@@ -2058,64 +2067,102 @@ export class RecorderOrchestrator {
     this.captureReadyPromise = new Promise<void>((resolve) => { resolveCaptureReady = resolve })
 
     try {
+      const captureCallbacks = {
+        onData: (buffer: ArrayBuffer) => {
+          if (!this.isRunCurrent(runId) || !this.captureAcceptingAudio) return
+          if (this.audioSentSamples === 0) {
+            console.log('[ptt-diag] first onData buffer', {
+              byteLength: buffer.byteLength,
+              samples: buffer.byteLength / 2,
+            })
+          }
+          this.recordedChunks.push(buffer.slice(0))
+          provider.sendAudio(buffer)
+        },
+        onVolume: undefined,
+        onFrame: (pcmFrame: Int16Array) => {
+          if (!this.isRunCurrent(runId) || !this.captureAcceptingAudio) return
+          this.audioSentSamples += pcmFrame.length
+          const bars = computeBarsFromPCM(pcmFrame, this.overlayWaveState, {
+            barCount: this.overlayService.getBarCount(),
+            minHeight: 3,
+            maxHeight: 18,
+          })
+          this.overlayService.pushListeningBars(bars)
 
-      // 并行执行 WebSocket 连接和麦克风采集，减少等待时间
+          // Compute normalized RMS and peak from the actual PCM frame.
+          let sum = 0
+          let framePeakRaw = 0
+          for (let i = 0; i < pcmFrame.length; i++) {
+            const s = pcmFrame[i]
+            sum += s * s
+            const amp = s < 0 ? -s : s
+            if (amp > framePeakRaw) framePeakRaw = amp
+          }
+          const rms = Math.sqrt(sum / pcmFrame.length) / 32768
+          const framePeak = framePeakRaw / 32768
+
+          this.audioStatsTotalFrames++
+          this.audioStatsRmsSum += rms
+          if (rms > this.audioStatsPeakRms) this.audioStatsPeakRms = rms
+          if (framePeak > this.audioStatsPeakAmplitude) this.audioStatsPeakAmplitude = framePeak
+          if (rms < RecorderOrchestrator.SILENCE_RMS_THRESHOLD) this.audioStatsSilentFrames++
+
+          this.updateVolumeWarning(classifyMicLevel(rms, framePeak), pcmFrame.length)
+        },
+      }
+
+      const openCapture = async (plan: MicPlan, endpoints: CaptureEndpoint[]) => {
+        if (!this.isRunCurrent(runId)) return null
+        const captureResult = await startCapture(
+          plan.deviceId || undefined,
+          captureCallbacks.onData,
+          captureCallbacks.onVolume,
+          captureCallbacks.onFrame,
+          this.noiseSuppression,
+        )
+        return this.isRunCurrent(runId) ? { captureResult, plan, endpoints } : null
+      }
+
+      // Resolve the route before opening gUM; provider connection and native/WebView metadata
+      // remain parallel, but neither branch owns the other branch's cleanup.
+      const captureTask = (async () => {
+        const initial = await resolveMicPlan(selectedMicId)
+        let opened = await openCapture(initial.plan, initial.endpoints)
+        if (!opened || !this.isRunCurrent(runId)) return opened
+
+        // A hidden-label auto route may become mappable after the first permissioned stream.
+        // The first stream is never sent to the provider; at most one sequential retry follows.
+        if (initial.plan.reason === 'unmapped') {
+          const retry = await resolveMicPlan('', {
+            openedDefaultLabel: opened.captureResult.label,
+          })
+          if (retry.plan.reason === 'virtual_avoided' && retry.plan.deviceId && this.isRunCurrent(runId)) {
+            await stopCapture()
+            if (!this.isRunCurrent(runId)) return null
+            opened = await openCapture(retry.plan, retry.endpoints)
+          }
+        }
+        return opened
+      })()
+
+      // Provider connection and microphone setup run in parallel, but start is sent only after
+      // both complete. Promise.all does not cancel the other branch; the catch below invalidates
+      // this run before stopping capture so a late resolver cannot open its route.
       const [, captureResult] = await Promise.all([
         provider.connect(this.buildProviderCallbacks()),
-        startCapture(
-          this.cachedMicId || undefined,
-          (buffer) => {
-            if (!this.isRunCurrent(runId)) return
-            if (this.audioSentSamples === 0) {
-              console.log('[ptt-diag] first onData buffer', {
-                byteLength: buffer.byteLength,
-                samples: buffer.byteLength / 2,
-              })
-            }
-            this.recordedChunks.push(buffer.slice(0))
-            provider.sendAudio(buffer)
-          },
-          undefined,
-          (pcmFrame) => {
-            if (!this.isRunCurrent(runId)) return
-            this.audioSentSamples += pcmFrame.length
-            const bars = computeBarsFromPCM(pcmFrame, this.overlayWaveState, {
-              barCount: this.overlayService.getBarCount(),
-              minHeight: 3,
-              maxHeight: 18,
-            })
-            this.overlayService.pushListeningBars(bars)
-
-            // 计算本帧 RMS 与峰值幅度（均归一化到 0..1）。峰值严格为 0 才表示整帧没有输入；
-            // 只要存在任何非零采样，就必须和「未检测到声音」区分开。
-            let sum = 0
-            let framePeakRaw = 0
-            for (let i = 0; i < pcmFrame.length; i++) {
-              const s = pcmFrame[i]
-              sum += s * s
-              const amp = s < 0 ? -s : s
-              if (amp > framePeakRaw) framePeakRaw = amp
-            }
-            const rms = Math.sqrt(sum / pcmFrame.length) / 32768
-            const framePeak = framePeakRaw / 32768
-
-            // Audio stats tracking
-            this.audioStatsTotalFrames++
-            this.audioStatsRmsSum += rms
-            if (rms > this.audioStatsPeakRms) this.audioStatsPeakRms = rms
-            if (framePeak > this.audioStatsPeakAmplitude) this.audioStatsPeakAmplitude = framePeak
-            if (rms < RecorderOrchestrator.SILENCE_RMS_THRESHOLD) this.audioStatsSilentFrames++
-
-            // 两档提醒：静音（未检测到声音）/ 偏低（请靠近麦克风）
-            this.updateVolumeWarning(classifyMicLevel(rms, framePeak), pcmFrame.length)
-          },
-          this.noiseSuppression,
-        ),
+        captureTask,
       ])
       resolveCaptureReady!()
       if (!this.isRunCurrent(runId)) {
-        await stopCapture().catch(() => { })
         return
+      }
+      if (!captureResult) return
+
+      const activeMic = captureResult.captureResult
+      this.activeCapture = {
+        label: activeMic.label,
+        isVirtual: classifyActiveMic(activeMic.label, captureResult.endpoints),
       }
 
       // Both WebSocket and mic are ready — send start command
@@ -2123,6 +2170,7 @@ export class RecorderOrchestrator {
       if (!started) {
         throw new Error('sendStart failed')
       }
+      this.captureAcceptingAudio = true
       addRuntimeEvent('info', 'recorder', 'Start sent; audio capture beginning')
 
       // Audio capture is now active — transition to recording state and show audio bars
@@ -2140,22 +2188,33 @@ export class RecorderOrchestrator {
       // 实时读取供应商/WorkspaceId（避免切换供应商后缓存过期，导致非实时模型也弹气泡）。
       void this.applyStreamingActive()
       this.overlayService.startListeningTicker(runId)
-      const micSource = describeMicSource(captureResult, this.cachedMicId, t('mic.title'))
+      const avoidedVirtual = captureResult.plan.reason === 'virtual_avoided'
+      const micSource = describeMicSource(
+        activeMic,
+        selectedMicId,
+        t('mic.title'),
+        avoidedVirtual ? 'avoided-virtual' : undefined,
+      )
       if (micSourceChanged(this.lastMicSourceIdentity, micSource.identity)) {
         this.lastMicSourceIdentity = micSource.identity
-        this.overlayService.showMicSourceHint({ mode: micSource.mode, label: micSource.label })
+        const label = avoidedVirtual
+          ? t('mic.avoidedVirtualHint', { name: micSource.label })
+          : micSource.label
+        this.overlayService.showMicSourceHint({ mode: micSource.mode, label })
         addRuntimeEvent('info', 'recorder', 'Input source reminder shown', {
           mode: micSource.mode,
-          label: micSource.label,
+          label,
         })
       }
-      // 录音一开始就查一次麦克风是否被系统静音，被静音则悬浮窗即时红色高警（不阻塞录音）
-      // 用 getUserMedia 实际打开的设备再复核；若系统在初始化期间切换了默认麦克风，以这里为准。
-      void this.checkMicMuted(
-        captureResult.label || null,
-        runId,
-        ++this.micMuteProbeSequence,
-      )
+      // The early mute result describes the original Windows default, not its replacement.
+      if (avoidedVirtual) {
+        this.pendingOsMicMuted = false
+        this.pendingOsMicMutedSamples = 0
+      }
+      const probeSequence = ++this.micMuteProbeSequence
+      if (activeMic.label || !avoidedVirtual) {
+        void this.checkMicMuted(activeMic.label || null, runId, probeSequence)
+      }
       // 就绪提示音已触发，稍后再静音系统输出（避免把提示音一起静掉）
       this.scheduleSystemMuteIfEnabled()
       armHandsFreeTimer()
@@ -2170,13 +2229,15 @@ export class RecorderOrchestrator {
 
     } catch (error) {
       resolveCaptureReady!()
-      this.startRecordingLock = false
+      if (!this.isRunCurrent(runId)) return
+      this.captureAcceptingAudio = false
       this.pendingStopWhileStarting = false
-      // 录音启动失败也要恢复系统输出，避免系统一直静音
+      // Invalidate the pending route before stopping capture, even if teardown takes time.
+      this.finishRun(runId)
+      // A failed start must not leave system output muted.
       this.restoreSystemMuteIfNeeded()
       addRuntimeEvent('error', 'recorder', 'Failed to start recording', { error: String(error) })
       try { await stopCapture() } catch { /* ignore */ }
-      this.finishRun(runId)
       provider.cancel()
       // 在悬浮窗显示错误信息，让用户知道发生了什么
       const errMsg = String(error)
@@ -2228,8 +2289,8 @@ export class RecorderOrchestrator {
       }
     }
 
-    // 系统已确认被静音：保持红色高警，不让琥珀提醒覆盖它；
-    // 一旦收到真实说话（用户中途取消了静音）立即恢复正常。
+    // Preserve the confirmed OS mute alert over lower-priority warnings until normal
+    // input returns (for example, the user unmutes the microphone during recording).
     if (this.osMicMuted) {
       if (level === 'voiced') {
         this.consecutiveVoicedSamples += sampleCount
@@ -2248,17 +2309,17 @@ export class RecorderOrchestrator {
       this.consecutiveSilentSamples = 0
       this.consecutiveNonVoicedSamples = 0
       this.quietRunSawSignal = false
-      this.hasDetectedVoiceThisSession = true
+      this.markVoiceDetected()
       return
     }
 
     if (level === 'voiced') {
-      // 即使还不足 0.5s、尚未确认恢复正常，也已经证明输入不为零。
+      // A shorter burst of normal PCM rules out an all-zero input but does not confirm recovery.
       this.quietRunSawSignal = true
       this.consecutiveVoicedSamples += sampleCount
       this.consecutiveNonVoicedSamples = 0
       if (this.consecutiveVoicedSamples >= CLEAR_VOICED) {
-        this.hasDetectedVoiceThisSession = true
+        this.markVoiceDetected()
         this.consecutiveSilentSamples = 0
         this.quietRunSawSignal = false
         if (this.currentVolumeWarning !== 'none') {
@@ -2291,10 +2352,18 @@ export class RecorderOrchestrator {
     this.currentVolumeWarning = kind
     if (kind === 'muted') {
       addRuntimeEvent('warn', 'recorder', 'No microphone signal detected; device may be wrong or unavailable')
-      this.overlayService.showNoSignalWarning()
+      this.overlayService.showNoSignalWarning({ virtualMic: this.activeCapture?.isVirtual === true })
     } else {
       addRuntimeEvent('warn', 'recorder', 'Microphone volume is low')
       this.overlayService.showLowVolumeWarning()
+    }
+  }
+
+  private markVoiceDetected() {
+    if (this.hasDetectedVoiceThisSession) return
+    this.hasDetectedVoiceThisSession = true
+    if (this.activeCapture?.isVirtual === false) {
+      void rememberWorkingMic(this.activeCapture.label)
     }
   }
 

@@ -880,6 +880,7 @@ fn main() {
             commands::audio_mute::mute_system_output,
             commands::audio_mute::restore_system_output,
             commands::audio_mute::get_mic_mute_state,
+            commands::audio_mute::list_capture_endpoints,
             commands::system_audio::list_system_audio_devices,
             commands::system_audio::start_system_audio_capture,
             commands::system_audio::stop_system_audio_capture,

@@ -132,6 +132,17 @@ describe('overlay toasts', () => {
     })
   })
 
+  it('reports a silent virtual input without implying it is the system default', () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showNoSignalWarning({ virtualMic: true })
+
+    expect(latestPayload('update_overlay_state')).toMatchObject({
+      state: 'listening',
+      warning: 'Virtual mic, no sound',
+      warningTone: 'error',
+    })
+  })
+
   it('requests the expanded 600px base width for toasts to prevent clipping long notices', () => {
     const overlay = new OverlayService(() => 0)
     overlay.showAiCleanupFailed('provider_error')

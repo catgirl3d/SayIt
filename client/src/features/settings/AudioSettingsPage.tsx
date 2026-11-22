@@ -8,11 +8,13 @@ import { refreshRecorderSettings } from '@/services/recorder'
 import { DEFAULT_MIC_BOOST, resolveMicBoost, type MicBoostSetting } from '@/services/defaults'
 import { drawBars, resetWaveform } from '@/services/waveform'
 import { useT } from '@/i18n/useT'
+import { resolveMicPlan, type MicPlan } from '@/services/micRouting'
 
 export default function AudioSettingsPage() {
   const t = useT()
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
   const [selectedMic, setSelectedMic] = useState('')
+  const [micPlan, setMicPlan] = useState<MicPlan | null>(null)
   const [micBoost, setMicBoost] = useState<MicBoostSetting>(DEFAULT_MIC_BOOST)
   const [testing, setTesting] = useState(false)
   const [volumeLevel, setVolumeLevel] = useState<MicVolumeLevel>('idle')
@@ -25,6 +27,7 @@ export default function AudioSettingsPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const animRef = useRef<number>(0)
   const cleanupTestRef = useRef<(() => void) | null>(null)
+  const testAttemptRef = useRef(0)
 
   const stopMicTest = useCallback(() => {
     if (cleanupTestRef.current) {
@@ -36,12 +39,21 @@ export default function AudioSettingsPage() {
 
   useEffect(() => {
     return () => {
+      testAttemptRef.current++
       if (cleanupTestRef.current) {
         cleanupTestRef.current()
         cleanupTestRef.current = null
       }
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void resolveMicPlan(selectedMic, { webDevices: mics }).then(({ plan }) => {
+      if (!cancelled) setMicPlan(plan)
+    })
+    return () => { cancelled = true }
+  }, [mics, selectedMic])
 
   useEffect(() => {
     let cancelled = false
@@ -107,20 +119,63 @@ export default function AudioSettingsPage() {
   const testMic = async () => {
     if (testing) return
     stopMicTest()
+    const attempt = ++testAttemptRef.current
     setTesting(true)
     setVolumeLevel('idle')
     setMicError('')
+    let stream: MediaStream | null = null
+    let context: AudioContext | null = null
+    let source: MediaStreamAudioSourceNode | null = null
+    let gainNode: GainNode | null = null
+    let analyser: AnalyserNode | null = null
+    const openStream = (deviceId: string) => navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+    })
+    const releaseStream = () => {
+      const opened = stream
+      stream = null
+      opened?.getTracks().forEach((track) => track.stop())
+    }
+    const releaseAttempt = () => {
+      releaseStream()
+      try { source?.disconnect() } catch { /* ignore */ }
+      try { gainNode?.disconnect() } catch { /* ignore */ }
+      try { analyser?.disconnect() } catch { /* ignore */ }
+      if (context) void context.close().catch(() => undefined)
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: selectedMic ? { deviceId: { exact: selectedMic } } : true,
-      })
-      const context = new AudioContext()
-      const source = context.createMediaStreamSource(stream)
-      const gainNode = context.createGain()
+      const { plan } = await resolveMicPlan(selectedMic)
+      if (attempt !== testAttemptRef.current) return
+
+      stream = await openStream(plan.deviceId)
+      if (attempt !== testAttemptRef.current) {
+        releaseAttempt()
+        return
+      }
+      cleanupTestRef.current = releaseAttempt
+
+      if (plan.reason === 'unmapped') {
+        const { plan: retry } = await resolveMicPlan('', {
+          openedDefaultLabel: stream.getAudioTracks()[0]?.label ?? '',
+        })
+        if (attempt !== testAttemptRef.current) return
+        if (retry.reason === 'virtual_avoided') {
+          releaseStream()
+          stream = await openStream(retry.deviceId)
+          if (attempt !== testAttemptRef.current) {
+            releaseAttempt()
+            return
+          }
+        }
+      }
+
+      context = new AudioContext()
+      source = context.createMediaStreamSource(stream)
+      gainNode = context.createGain()
       const boostConfig = resolveMicBoost(micBoost)
       gainNode.gain.value = boostConfig.gain
       source.connect(gainNode)
-      const analyser = context.createAnalyser()
+      analyser = context.createAnalyser()
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.7
       gainNode.connect(analyser)
@@ -131,7 +186,7 @@ export default function AudioSettingsPage() {
       let peakRms = 0
       let sawNonZeroSignal = false
       const volumeCheckId = setInterval(() => {
-        analyser.getFloatTimeDomainData(dataArray)
+        analyser?.getFloatTimeDomainData(dataArray)
         let sum = 0
         for (let i = 0; i < dataArray.length; i++) {
           const v = dataArray[i]
@@ -149,17 +204,22 @@ export default function AudioSettingsPage() {
         stopMicTest()
       }, 5000)
 
-      cleanupTestRef.current = () => {
+      const cleanup = () => {
         clearTimeout(timerId)
         clearInterval(volumeCheckId)
         cancelAnimationFrame(animRef.current)
-        stream.getTracks().forEach((t) => t.stop())
-        try { source.disconnect() } catch { /* ignore */ }
-        try { gainNode.disconnect() } catch { /* ignore */ }
-        try { analyser.disconnect() } catch { /* ignore */ }
-        void context.close().catch(() => { })
+        releaseAttempt()
       }
+      if (attempt !== testAttemptRef.current) {
+        cleanup()
+        return
+      }
+      cleanupTestRef.current = cleanup
     } catch (err) {
+      if (attempt !== testAttemptRef.current) {
+        releaseAttempt()
+        return
+      }
       stopMicTest()
       const msg = err instanceof DOMException && err.name === 'NotFoundError'
         ? t('mic.error.notFound')
@@ -189,6 +249,11 @@ export default function AudioSettingsPage() {
           onTestMic={testMic}
           errorMessage={micError}
         />
+        {!selectedMic && micPlan?.reason === 'virtual_avoided' && (
+          <p className="-mt-4 text-xs text-muted-foreground">
+            {t('mic.virtualDefaultNote', { virtual: micPlan.avoidedName, name: micPlan.chosenName })}
+          </p>
+        )}
 
         <Card>
           <CardContent className="space-y-4 p-6">

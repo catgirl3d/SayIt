@@ -23,6 +23,17 @@ pub struct MicMuteState {
     pub muted: bool,
 }
 
+/// An active Windows capture endpoint and the two roles needed by the renderer's routing rule.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureEndpoint {
+    pub name: String,
+    pub enumerator: String,
+    pub is_virtual: bool,
+    pub is_default: bool,
+    pub is_default_communications: bool,
+}
+
 /// 保存的「静音前的原始状态」。None 表示当前未处于我们施加的静音中。
 #[cfg(windows)]
 static SAVED_MUTE_STATE: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
@@ -172,6 +183,33 @@ unsafe fn get_device_friendly_name(
     device: &windows::Win32::Media::Audio::IMMDevice,
 ) -> Result<String, String> {
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+
+    get_device_string_property(
+        device,
+        &PKEY_Device_FriendlyName,
+        "PKEY_Device_FriendlyName",
+    )
+}
+
+#[cfg(windows)]
+unsafe fn get_device_enumerator_name(
+    device: &windows::Win32::Media::Audio::IMMDevice,
+) -> Result<String, String> {
+    use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_EnumeratorName;
+
+    get_device_string_property(
+        device,
+        &PKEY_Device_EnumeratorName,
+        "PKEY_Device_EnumeratorName",
+    )
+}
+
+#[cfg(windows)]
+unsafe fn get_device_string_property(
+    device: &windows::Win32::Media::Audio::IMMDevice,
+    key: &windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY,
+    property_name: &str,
+) -> Result<String, String> {
     use windows::Win32::System::Com::StructuredStorage::{
         PropVariantClear, PropVariantToStringAlloc,
     };
@@ -181,21 +219,151 @@ unsafe fn get_device_friendly_name(
         .OpenPropertyStore(STGM_READ)
         .map_err(|e| format!("OpenPropertyStore: {}", e))?;
     let mut value = store
-        .GetValue(&PKEY_Device_FriendlyName)
-        .map_err(|e| format!("GetValue(PKEY_Device_FriendlyName): {}", e))?;
+        .GetValue(key)
+        .map_err(|e| format!("GetValue({}): {}", property_name, e))?;
 
     let name_result = (|| -> Result<String, String> {
         let ptr = PropVariantToStringAlloc(&value)
-            .map_err(|e| format!("PropVariantToStringAlloc: {}", e))?;
+            .map_err(|e| format!("PropVariantToStringAlloc({}): {}", property_name, e))?;
         let text = ptr
             .to_string()
-            .map_err(|e| format!("FriendlyName to_string: {}", e));
+            .map_err(|e| format!("{} to_string: {}", property_name, e));
         CoTaskMemFree(Some(ptr.0.cast()));
         text
     })();
     let clear_result = PropVariantClear(&mut value).map_err(|e| format!("PropVariantClear: {}", e));
     clear_result?;
     name_result
+}
+
+#[cfg(windows)]
+fn is_root_enumerator(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case("ROOT")
+}
+
+#[cfg(windows)]
+unsafe fn get_device_id(
+    device: &windows::Win32::Media::Audio::IMMDevice,
+) -> Result<String, String> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+
+    let ptr = device
+        .GetId()
+        .map_err(|e| format!("IMMDevice.GetId: {}", e))?;
+    let result = ptr
+        .to_string()
+        .map_err(|e| format!("IMMDevice.GetId to_string: {}", e));
+    CoTaskMemFree(Some(ptr.0.cast()));
+    result
+}
+
+#[cfg(windows)]
+unsafe fn query_capture_endpoints() -> Result<Vec<CaptureEndpoint>, String> {
+    use windows::Win32::Media::Audio::{
+        DEVICE_STATE_ACTIVE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+        eCommunications, eConsole,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize,
+    };
+
+    let co_init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    let need_co_uninit = co_init_result.is_ok();
+    let result = (|| -> Result<Vec<CaptureEndpoint>, String> {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("CoCreateInstance MMDeviceEnumerator: {}", e))?;
+        let devices = enumerator
+            .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+            .map_err(|e| format!("EnumAudioEndpoints(eCapture): {}", e))?;
+        let count = devices
+            .GetCount()
+            .map_err(|e| format!("IMMDeviceCollection.GetCount: {}", e))?;
+        let default_id = match enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) {
+            Ok(device) => get_device_id(&device).ok(),
+            Err(error) => {
+                crate::commands::system::write_log_line(&format!(
+                    "[RUST] [audio_mute] eConsole default endpoint unavailable: {}",
+                    error
+                ));
+                None
+            }
+        };
+        let communications_id = match enumerator.GetDefaultAudioEndpoint(eCapture, eCommunications)
+        {
+            Ok(device) => get_device_id(&device).ok(),
+            Err(error) => {
+                crate::commands::system::write_log_line(&format!(
+                    "[RUST] [audio_mute] eCommunications default endpoint unavailable: {}",
+                    error
+                ));
+                None
+            }
+        };
+
+        let mut endpoints = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let device: IMMDevice = devices
+                .Item(index)
+                .map_err(|e| format!("IMMDeviceCollection.Item({}): {}", index, e))?;
+            let id = get_device_id(&device)?;
+            let name = get_device_friendly_name(&device).map_err(|error| {
+                crate::commands::system::write_log_line(&format!(
+                    "[RUST] [audio_mute] capture endpoint name unavailable: {}",
+                    error
+                ));
+                error
+            })?;
+            let enumerator_name = match get_device_enumerator_name(&device) {
+                Ok(value) => value,
+                Err(error) => {
+                    crate::commands::system::write_log_line(&format!(
+                        "[RUST] [audio_mute] capture endpoint enumerator unavailable: {}",
+                        error
+                    ));
+                    String::new()
+                }
+            };
+            endpoints.push(CaptureEndpoint {
+                name,
+                is_virtual: is_root_enumerator(&enumerator_name),
+                enumerator: enumerator_name,
+                is_default: default_id.as_deref() == Some(id.as_str()),
+                is_default_communications: communications_id.as_deref() == Some(id.as_str()),
+            });
+        }
+        Ok(endpoints)
+    })();
+
+    if need_co_uninit {
+        CoUninitialize();
+    }
+
+    result
+}
+
+/// List active Windows capture endpoints. A failed query returns an empty list so the renderer
+/// keeps the existing system-default behavior instead of inventing a device choice.
+#[tauri::command]
+pub fn list_capture_endpoints() -> Vec<CaptureEndpoint> {
+    #[cfg(windows)]
+    unsafe {
+        match query_capture_endpoints() {
+            Ok(endpoints) => endpoints,
+            Err(error) => {
+                crate::commands::system::write_log_line(&format!(
+                    "[RUST] [audio_mute] list_capture_endpoints failed: {}",
+                    error
+                ));
+                Vec::new()
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
 }
 
 /// 查询采集设备的静音状态。
@@ -339,5 +507,13 @@ mod tests {
     #[test]
     fn ordinary_device_name_is_preserved_for_matching() {
         assert_eq!(normalize_mic_label("  Studio   Mic  "), "studio mic");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_the_root_enumerator_is_virtual() {
+        assert!(super::is_root_enumerator("root"));
+        assert!(super::is_root_enumerator(" ROOT "));
+        assert!(!super::is_root_enumerator("MMDEVAPI"));
     }
 }
