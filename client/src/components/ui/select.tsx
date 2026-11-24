@@ -1,6 +1,7 @@
-import { forwardRef, Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, isValidElement, type ReactNode } from 'react'
+import { forwardRef, Fragment, useState, useRef, isValidElement, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
+import { usePopover } from '@/hooks/usePopover'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
 
@@ -67,13 +68,21 @@ interface OptionElementProps {
   children?: string
 }
 
+// Room the list wants below the trigger before it considers opening above; the list never grows past the cap.
+const SELECT_LIST_PLACEMENT = { kind: 'list', preferredSpace: 180, maxHeight: 240 } as const
+
 const Select = forwardRef<HTMLButtonElement, SelectProps>(
   ({ value, onChange, options, children, className, placeholder, disabled = false, labelledBy }, ref) => {
     const t = useT()
     const [isOpen, setIsOpen] = useState(false)
-    const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
     const buttonRef = useRef<HTMLButtonElement | null>(null)
-    const dropdownRef = useRef<HTMLDivElement>(null)
+    const { panelRef, panelStyle, positioned } = usePopover({
+      open: isOpen,
+      onDismiss: () => setIsOpen(false),
+      anchorRef: buttonRef,
+      returnFocusRef: buttonRef,
+      placement: SELECT_LIST_PLACEMENT,
+    })
 
     // If options were passed as children (<option>), parse them
     const parsedOptions: SelectOption[] = options || []
@@ -92,93 +101,24 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
 
     const selectedOption = parsedOptions.find((opt) => opt.value === value)
 
-    const updatePosition = useCallback(() => {
-      const el = buttonRef.current
-      if (!el) return
-
-      const rect = el.getBoundingClientRect()
-      const spaceBelow = window.innerHeight - rect.bottom - 8
-      const spaceAbove = rect.top - 8
-      const openUpwards = spaceBelow < 180 && spaceAbove > spaceBelow
-
-      const maxHeight = Math.min(240, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
-      const top = openUpwards ? rect.top - maxHeight - 4 : rect.bottom + 4
-
-      setDropdownStyle({
-        top,
-        left: rect.left,
-        width: rect.width,
-        maxHeight,
-      })
-    }, [])
-
-    useLayoutEffect(() => {
-      if (isOpen) {
-        updatePosition()
-        const handleScrollOrResize = () => updatePosition()
-        window.addEventListener('resize', handleScrollOrResize)
-        window.addEventListener('scroll', handleScrollOrResize, true)
-        return () => {
-          window.removeEventListener('resize', handleScrollOrResize)
-          window.removeEventListener('scroll', handleScrollOrResize, true)
-        }
-      } else {
-        setDropdownStyle(null)
-      }
-    }, [isOpen, updatePosition])
-
-    useEffect(() => {
-      const handleClickOutside = (event: MouseEvent) => {
-        const target = event.target as Node
-        if (
-          buttonRef.current && !buttonRef.current.contains(target) &&
-          dropdownRef.current && !dropdownRef.current.contains(target)
-        ) {
-          setIsOpen(false)
-        }
-      }
-
-      if (isOpen) {
-        document.addEventListener('mousedown', handleClickOutside)
-        return () => document.removeEventListener('mousedown', handleClickOutside)
-      }
-    }, [isOpen])
-
-    useEffect(() => {
-      if (!isOpen) return
-      // Catches Escape on `window` in the capture phase: a surrounding Modal listens on
-      // `document` capture, and the window phase runs first, so stopping propagation here
-      // closes only the list instead of the whole dialog.
-      const handleEscape = (event: KeyboardEvent) => {
-        if (event.key !== 'Escape') return
-        event.stopPropagation()
-        event.preventDefault()
-        setIsOpen(false)
-        buttonRef.current?.focus()
-      }
-      window.addEventListener('keydown', handleEscape, true)
-      return () => window.removeEventListener('keydown', handleEscape, true)
-    }, [isOpen])
-
     const handleSelect = (optionValue: string) => {
       onChange(optionValue)
       setIsOpen(false)
     }
 
-    const dropdown = isOpen && dropdownStyle ? createPortal(
+    // The style type is shared with card mode, but list mode always sets the height; the inner
+    // scroller leaves the two panel borders out of its own cap.
+    const listMaxHeight = panelStyle.maxHeight === undefined ? undefined : panelStyle.maxHeight - 2
+
+    const dropdown = isOpen && positioned ? createPortal(
       <div
-        ref={dropdownRef}
+        ref={panelRef}
         className="fixed z-[9999] rounded-md border border-border bg-popover shadow-xl"
-        style={{
-          top: `${dropdownStyle.top}px`,
-          left: `${dropdownStyle.left}px`,
-          width: `${dropdownStyle.width}px`,
-          maxHeight: `${dropdownStyle.maxHeight}px`,
-        }}
+        style={panelStyle}
       >
         <div
           className="overflow-y-auto py-1"
-          style={{ maxHeight: `${dropdownStyle.maxHeight - 2}px` }}
+          style={{ maxHeight: listMaxHeight }}
         >
           {parsedOptions.map((option, index) => (
             <Fragment key={option.value}>

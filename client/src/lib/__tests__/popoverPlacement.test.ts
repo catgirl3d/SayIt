@@ -279,6 +279,55 @@ describe('placeList parity with the old ModelPicker formula', () => {
   })
 })
 
+const SELECT_LIST_OPTIONS: ListPlacementOptions = { preferredSpace: 180, maxHeight: 240 }
+
+// The arithmetic of the old Select.updatePosition (gap 4, margin 8, preferred 180, cap 240, floor
+// 120), copied verbatim. The old code placed an upward list by its top edge, assuming the full cap;
+// placeList pins it by the bottom edge instead, so the parity is geometric rather than literal.
+function selectReference(anchor: Anchor, vh: number): { openUpwards: boolean; top: number; maxHeight: number } {
+  const spaceBelow = vh - anchor.bottom - 8
+  const spaceAbove = anchor.top - 8
+  const openUpwards = spaceBelow < 180 && spaceAbove > spaceBelow
+  const maxHeight = Math.min(240, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
+  const top = openUpwards ? anchor.top - maxHeight - 4 : anchor.bottom + 4
+  return { openUpwards, top, maxHeight }
+}
+
+describe('placeList parity with the old Select formula', () => {
+  it('matches the old updatePosition result for every anchor, window height, left edge and width', () => {
+    let cases = 0
+    for (const height of [200, 420, 700, 900]) {
+      const tops = [-40, 0, 60, 100, 300, 460, 500, 640, height - 36, height + 40]
+      for (const top of tops) {
+        for (const left of [10, 300]) {
+          for (const width of [300, 480]) {
+            const anchor = rect(top, left, width)
+            const label = `anchor ${JSON.stringify(anchor)}, viewport height ${height}`
+            const placed = placeList(anchor, { height }, SELECT_LIST_OPTIONS)
+            const reference = selectReference(anchor, height)
+            const openUpwards = placed.top === undefined
+
+            expect(placed.maxHeight, label).toBe(reference.maxHeight)
+            expect(placed.left, label).toBe(anchor.left)
+            expect(placed.width, label).toBe(anchor.width)
+            expect(openUpwards, label).toBe(reference.openUpwards)
+            if (openUpwards) {
+              expect(placed.top, label).toBeUndefined()
+              // A full-height list occupies exactly the old top-anchored rectangle.
+              expect(height - (placed.bottom as number) - placed.maxHeight, label).toBe(reference.top)
+            } else {
+              expect(placed.bottom, label).toBeUndefined()
+              expect(placed.top, label).toBe(reference.top)
+            }
+            cases += 1
+          }
+        }
+      }
+    }
+    expect(cases).toBeGreaterThan(0)
+  })
+})
+
 describe('placeCard parity with the old popover formulas', () => {
   it('matches the ModelLanguageBadge formula for every anchor, panel and viewport', () => {
     let cases = 0
