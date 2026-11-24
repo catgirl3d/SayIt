@@ -1,12 +1,24 @@
 // Shared popover primitive: anchored placement, outside-click dismissal and Escape routing.
 //
 // The caller owns `open`; the hook only reports a placement and asks for dismissal through
-// onDismiss, so the same primitive can back an inline panel and a body portal. ColorPopover and
-// ModelLanguageBadge use it instead of their former hand-rolled measurement, mousedown and Escape
-// logic.
+// onDismiss, so the same primitive can back an inline panel and a body portal.
+//
+// Two placement modes share the dismissal and focus logic. Card mode measures the panel and places
+// it beside the anchor; ColorPopover and ModelLanguageBadge use it. List mode (`kind: 'list'`) places
+// the list from the anchor alone, caps its height, and lets the caller mount the panel only once
+// `positioned` is true; ModelPicker uses it.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import { placeCard, type PlacementOptions } from '@/lib/popoverPlacement'
+import {
+  placeCard,
+  placeList,
+  type ListPlacement,
+  type ListPlacementOptions,
+  type PlacementOptions,
+} from '@/lib/popoverPlacement'
+
+/** Card placement options keep their old shape; list placement is tagged with `kind: 'list'`. */
+export type PopoverPlacement = PlacementOptions | ({ kind: 'list' } & ListPlacementOptions)
 
 export interface UsePopoverOptions {
   /** Controlled by the caller. Listeners and the placement exist only while this is true. */
@@ -19,11 +31,27 @@ export interface UsePopoverOptions {
   triggerRef?: RefObject<HTMLElement | null>
   /** Focused after an Escape dismissal; nothing is focused by default. */
   returnFocusRef?: RefObject<HTMLElement | null>
-  placement?: PlacementOptions
+  placement?: PopoverPlacement
+}
+
+export interface PanelStyle {
+  top?: number
+  bottom?: number
+  left: number
+  width?: number
+  maxHeight?: number
 }
 
 /** Hidden until the first measurement, so the panel never flashes at the window origin. */
-const HIDDEN = { top: -9999, left: -9999 }
+const HIDDEN: PanelStyle = { top: -9999, left: -9999 }
+
+type PanelPosition = { top: number; left: number } | ListPlacement
+
+function isListPlacement(
+  placement: PopoverPlacement | undefined,
+): placement is { kind: 'list' } & ListPlacementOptions {
+  return placement !== undefined && 'kind' in placement && placement.kind === 'list'
+}
 
 // Open popovers, bottom to top. Every popover listens on window capture, and stopPropagation does
 // not keep another listener on the same node from running, so with two nested popovers a single
@@ -33,11 +61,12 @@ const layers: symbol[] = []
 
 export function usePopover(options: UsePopoverOptions): {
   panelRef: RefObject<HTMLDivElement>
-  panelStyle: { top: number; left: number }
+  panelStyle: PanelStyle
+  positioned: boolean
 } {
   const { open } = options
   const panelRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [pos, setPos] = useState<PanelPosition | null>(null)
   const stackToken = useRef(Symbol('popover')).current
 
   // The latest options are read from a ref, so a caller passing a fresh onDismiss (the normal
@@ -48,16 +77,23 @@ export function usePopover(options: UsePopoverOptions): {
 
   const measure = useCallback(() => {
     const anchor = latest.current.anchorRef.current
-    const panel = panelRef.current
-    if (!anchor || !panel) return
+    if (!anchor) return
     const anchorRect = anchor.getBoundingClientRect()
+    const placement = latest.current.placement
+    // List mode needs no panel: the caller mounts it only after this measurement succeeds.
+    if (isListPlacement(placement)) {
+      setPos(placeList(anchorRect, { height: window.innerHeight }, placement))
+      return
+    }
+    const panel = panelRef.current
+    if (!panel) return
     const panelRect = panel.getBoundingClientRect()
     setPos(
       placeCard(
         { top: anchorRect.top, bottom: anchorRect.bottom, left: anchorRect.left, width: anchorRect.width },
         { width: panelRect.width, height: panelRect.height },
         { width: window.innerWidth, height: window.innerHeight },
-        latest.current.placement,
+        placement,
       ),
     )
   }, [])
@@ -73,19 +109,25 @@ export function usePopover(options: UsePopoverOptions): {
   // Keep the panel glued to the anchor while the layout moves. Scroll is captured because the
   // settings page scrolls inside <main>, not the window. Scrolls whose target is inside the panel
   // are its own internal list: re-measuring there would reposition the panel on every wheel tick
-  // while the user browses it.
+  // while the user browses it. A scroll target may be the window rather than a Node, which counts as
+  // outside (and `contains` would throw on it).
   useEffect(() => {
     if (!open) return
     const onScroll = (event: Event) => {
-      if (panelRef.current?.contains(event.target as Node)) return
+      if (event.target instanceof Node && panelRef.current?.contains(event.target)) return
       measure()
     }
     window.addEventListener('resize', measure)
     window.addEventListener('scroll', onScroll, true)
     let observer: ResizeObserver | null = null
-    if (typeof ResizeObserver !== 'undefined' && panelRef.current) {
-      observer = new ResizeObserver(() => measure())
-      observer.observe(panelRef.current)
+    if (typeof ResizeObserver !== 'undefined') {
+      // Card mode tracks the panel, whose size follows its content. List mode tracks the anchor: the
+      // field grows when chips wrap, and the panel exists only after the first measurement.
+      const target = isListPlacement(latest.current.placement) ? latest.current.anchorRef.current : panelRef.current
+      if (target) {
+        observer = new ResizeObserver(() => measure())
+        observer.observe(target)
+      }
     }
     return () => {
       window.removeEventListener('resize', measure)
@@ -132,5 +174,5 @@ export function usePopover(options: UsePopoverOptions): {
     }
   }, [open, stackToken])
 
-  return { panelRef, panelStyle: pos ?? HIDDEN }
+  return { panelRef, panelStyle: pos ?? HIDDEN, positioned: pos !== null }
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { placeCard, type PlacementOptions } from '../popoverPlacement'
+import {
+  placeCard,
+  placeList,
+  type ListPlacement,
+  type ListPlacementOptions,
+  type PlacementOptions,
+} from '../popoverPlacement'
 
 interface Anchor {
   top: number
@@ -138,6 +144,140 @@ const panels: Size[] = [
   { width: 384, height: 300 },
   { width: 100, height: 40 },
 ]
+
+const LIST_OPTIONS: ListPlacementOptions = { preferredSpace: 320, maxHeight: 360 }
+
+describe('placeList', () => {
+  it('opens below the anchor when the room below is comfortable', () => {
+    expect(placeList(rect(100, 40, 300), { height: 900 }, LIST_OPTIONS)).toEqual({
+      top: 140,
+      bottom: undefined,
+      left: 40,
+      width: 300,
+      maxHeight: 360,
+    })
+  })
+
+  it('opens above by its bottom edge when the room below is tight and above has more', () => {
+    expect(placeList(rect(640, 40, 300), { height: 900 }, LIST_OPTIONS)).toEqual({
+      top: undefined,
+      bottom: 264,
+      left: 40,
+      width: 300,
+      maxHeight: 360,
+    })
+  })
+
+  it('stays below when above has even less room', () => {
+    // Below 96, above 52: the larger side wins even though it is under preferredSpace.
+    expect(placeList(rect(60, 10, 300), { height: 200 }, LIST_OPTIONS)).toEqual({
+      top: 100,
+      bottom: undefined,
+      left: 10,
+      width: 300,
+      maxHeight: 120,
+    })
+  })
+
+  it('stays below when the room below equals the preferred space exactly', () => {
+    // Below 900 - 572 - 8 = 320, which is not under preferredSpace; above would be 528.
+    expect(placeList(rect(536, 40, 300), { height: 900 }, LIST_OPTIONS)).toEqual({
+      top: 576,
+      bottom: undefined,
+      left: 40,
+      width: 300,
+      maxHeight: 320,
+    })
+  })
+
+  it('stays below when above has exactly as much room as below', () => {
+    // Below 400 - 218 - 8 = 174 and above 182 - 8 = 174: a tie is not "larger", so the list stays below.
+    expect(placeList(rect(182, 40, 300), { height: 400 }, LIST_OPTIONS)).toEqual({
+      top: 222,
+      bottom: undefined,
+      left: 40,
+      width: 300,
+      maxHeight: 174,
+    })
+  })
+
+  it('keeps the minimum height when neither side has room', () => {
+    // Below 76, above 12: flipping does not help, and the floor keeps the list usable.
+    expect(placeList(rect(20, 10, 300), { height: 140 }, LIST_OPTIONS)).toEqual({
+      top: 60,
+      bottom: undefined,
+      left: 10,
+      width: 300,
+      maxHeight: 120,
+    })
+  })
+
+  it('never grows past the height cap', () => {
+    const placed = placeList(rect(100, 40, 300), { height: 900 }, { preferredSpace: 320, maxHeight: 200 })
+    expect(placed.maxHeight).toBe(200)
+  })
+
+  it('uses custom gap and viewport margin values', () => {
+    const options: ListPlacementOptions = { preferredSpace: 320, maxHeight: 360, gap: 20, viewportMargin: 40 }
+
+    // Below 900 - 336 - 40 = 524: the list opens below with the custom gap.
+    expect(placeList(rect(300, 100, 300), { height: 900 }, options)).toEqual({
+      top: 356,
+      bottom: undefined,
+      left: 100,
+      width: 300,
+      maxHeight: 360,
+    })
+    // Below 24, above 260: the bigger margin flips this one above.
+    expect(placeList(rect(300, 100, 300), { height: 400 }, options)).toEqual({
+      top: undefined,
+      bottom: 120,
+      left: 100,
+      width: 300,
+      maxHeight: 260,
+    })
+  })
+
+  it('takes the left edge and width from the anchor', () => {
+    expect(placeList(rect(100, 300, 480), { height: 700 }, LIST_OPTIONS)).toMatchObject({ left: 300, width: 480 })
+  })
+})
+
+// The arithmetic of the old ModelPicker.updatePosition (gap 4, margin 8, preferred 320, cap 360,
+// floor 120), copied verbatim. placeList has to reproduce it on the whole grid.
+function listReference(anchor: Anchor, vh: number): ListPlacement {
+  const spaceBelow = vh - anchor.bottom - 8
+  const spaceAbove = anchor.top - 8
+  const openUpwards = spaceBelow < 320 && spaceAbove > spaceBelow
+  const maxHeight = Math.min(360, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
+  return {
+    top: openUpwards ? undefined : anchor.bottom + 4,
+    bottom: openUpwards ? vh - anchor.top + 4 : undefined,
+    left: anchor.left,
+    width: anchor.width,
+    maxHeight,
+  }
+}
+
+describe('placeList parity with the old ModelPicker formula', () => {
+  it('matches the old updatePosition result for every anchor, window height, left edge and width', () => {
+    let cases = 0
+    for (const height of [200, 420, 700, 900]) {
+      const tops = [-40, 0, 60, 100, 300, 460, 500, 640, height - 36, height + 40]
+      for (const top of tops) {
+        for (const left of [10, 300]) {
+          for (const width of [300, 480]) {
+            const anchor = rect(top, left, width)
+            const label = `anchor ${JSON.stringify(anchor)}, viewport height ${height}`
+            expect(placeList(anchor, { height }, LIST_OPTIONS), label).toEqual(listReference(anchor, height))
+            cases += 1
+          }
+        }
+      }
+    }
+    expect(cases).toBeGreaterThan(0)
+  })
+})
 
 describe('placeCard parity with the old popover formulas', () => {
   it('matches the ModelLanguageBadge formula for every anchor, panel and viewport', () => {
