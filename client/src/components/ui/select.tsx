@@ -144,6 +144,22 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
       }
     }, [isOpen])
 
+    useEffect(() => {
+      if (!isOpen) return
+      // Catches Escape on `window` in the capture phase: a surrounding Modal listens on
+      // `document` capture, and the window phase runs first, so stopping propagation here
+      // closes only the list instead of the whole dialog.
+      const handleEscape = (event: KeyboardEvent) => {
+        if (event.key !== 'Escape') return
+        event.stopPropagation()
+        event.preventDefault()
+        setIsOpen(false)
+        buttonRef.current?.focus()
+      }
+      window.addEventListener('keydown', handleEscape, true)
+      return () => window.removeEventListener('keydown', handleEscape, true)
+    }, [isOpen])
+
     const handleSelect = (optionValue: string) => {
       onChange(optionValue)
       setIsOpen(false)
