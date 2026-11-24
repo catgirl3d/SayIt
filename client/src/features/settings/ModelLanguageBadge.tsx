@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Languages, ChevronDown, Check, CheckCircle2, AlertCircle, Search, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
+import { usePopover } from '@/hooks/usePopover'
 import { t } from '@/i18n'
 import { useLocale, useT } from '@/i18n/useT'
+import type { PlacementOptions } from '@/lib/popoverPlacement'
 import { getLanguageDisplayName, resolveModelLanguages } from '@/lib/languageNames'
 
 interface ModelLanguageBadgeProps {
@@ -16,15 +18,22 @@ interface ModelLanguageBadgeProps {
   badgeLanguage: string
 }
 
+// Opens below the trigger, aligned to its left edge; flips above when there is no room below.
+const BADGE_POPOVER_PLACEMENT: PlacementOptions = { align: 'start', gap: 6, viewportMargin: 10 }
+
 export function ModelLanguageBadge({ model, badgeLanguage }: ModelLanguageBadgeProps) {
   useT()
   const locale = useLocale()
   const [isOpen, setIsOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
-
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
+  const { panelRef, panelStyle } = usePopover({
+    open: isOpen,
+    onDismiss: () => setIsOpen(false),
+    anchorRef: triggerRef,
+    returnFocusRef: triggerRef,
+    placement: BADGE_POPOVER_PLACEMENT,
+  })
   const searchInputRef = useRef<HTMLInputElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -53,91 +62,6 @@ export function ModelLanguageBadge({ model, badgeLanguage }: ModelLanguageBadgeP
       (item) => item.name.toLowerCase().includes(q) || item.code.toLowerCase().includes(q),
     )
   }, [resolvedLanguages, searchQuery])
-
-  // Position popover relative to the trigger and keep it aligned with viewport changes.
-  useLayoutEffect(() => {
-    if (!isOpen || !triggerRef.current || !popoverRef.current) {
-      setPos(null)
-      return
-    }
-
-    const updatePos = () => {
-      if (!triggerRef.current || !popoverRef.current) return
-      const tr = triggerRef.current.getBoundingClientRect()
-      const pop = popoverRef.current.getBoundingClientRect()
-
-      const viewportPadding = 10
-
-      // Default to placing below the trigger
-      let top = tr.bottom + 6
-      let left = tr.left
-
-      // If overflowing viewport bottom, place above
-      if (top + pop.height > window.innerHeight - viewportPadding) {
-        top = tr.top - pop.height - 6
-      }
-
-      // Keep the popover header reachable when the trigger is near the viewport edge.
-      const maxTop = Math.max(viewportPadding, window.innerHeight - pop.height - viewportPadding)
-      top = Math.min(Math.max(top, viewportPadding), maxTop)
-
-      // Clamp horizontal position
-      if (left + pop.width > window.innerWidth - viewportPadding) {
-        left = window.innerWidth - pop.width - viewportPadding
-      }
-      if (left < viewportPadding) {
-        left = viewportPadding
-      }
-
-      setPos({ top, left })
-    }
-
-    updatePos()
-
-    let resizeObserver: ResizeObserver | null = null
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(updatePos)
-      resizeObserver.observe(popoverRef.current)
-    }
-
-    window.addEventListener('resize', updatePos)
-    window.addEventListener('scroll', updatePos, true)
-    return () => {
-      resizeObserver?.disconnect()
-      window.removeEventListener('resize', updatePos)
-      window.removeEventListener('scroll', updatePos, true)
-    }
-  }, [isOpen, searchQuery])
-  // Handle clicking outside and Escape key
-  useEffect(() => {
-    if (!isOpen) return
-
-    function handlePointerDown(e: MouseEvent) {
-      const target = e.target as Node | null
-      if (
-        popoverRef.current &&
-        !popoverRef.current.contains(target) &&
-        triggerRef.current &&
-        !triggerRef.current.contains(target)
-      ) {
-        setIsOpen(false)
-      }
-    }
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        setIsOpen(false)
-        triggerRef.current?.focus()
-      }
-    }
-
-    document.addEventListener('pointerdown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isOpen])
 
   // Reset search and focus the first useful control on open
   useEffect(() => {
@@ -215,14 +139,11 @@ export function ModelLanguageBadge({ model, badgeLanguage }: ModelLanguageBadgeP
       {isOpen &&
         createPortal(
           <div
-            ref={popoverRef}
+            ref={panelRef}
             role="dialog"
             aria-label={t('local.languagesTitle', { count: languages.length })}
             className="fixed z-[9999] w-80 rounded-lg border border-border bg-popover p-3 shadow-xl sm:w-96"
-            style={{
-              top: pos ? `${pos.top}px` : '-9999px',
-              left: pos ? `${pos.left}px` : '-9999px',
-            }}
+            style={panelStyle}
           >
             {/* Header */}
             <div className="flex items-center justify-between gap-2 border-b border-border/60 pb-2">

@@ -1,10 +1,9 @@
 // Shared popover primitive: anchored placement, outside-click dismissal and Escape routing.
 //
-// This replaces the hand-rolled copies in ColorPopover and ModelLanguageBadge, which repeated the
-// same measurement, mousedown and Escape logic. The caller owns `open`; the hook only reports a
-// placement and asks for dismissal through onDismiss, so the same primitive can back an inline
-// panel and a body portal. No consumer uses it yet: ColorPopover and ModelLanguageBadge move over
-// in the next change.
+// The caller owns `open`; the hook only reports a placement and asks for dismissal through
+// onDismiss, so the same primitive can back an inline panel and a body portal. ColorPopover and
+// ModelLanguageBadge use it instead of their former hand-rolled measurement, mousedown and Escape
+// logic.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { placeCard, type PlacementOptions } from '@/lib/popoverPlacement'

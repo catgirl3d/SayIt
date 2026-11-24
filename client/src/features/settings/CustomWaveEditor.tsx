@@ -5,14 +5,16 @@
 // and a version with titles, start/end labels and a HEX input was too complicated for the common case.
 // The live overlay preview that already sits below this editor shows the result, so this editor draws no preview of its own.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { HexColorInput, HexColorPicker } from 'react-colorful'
 import { Plus } from 'lucide-react'
 import { Segmented } from '@/components/ui/segmented'
 import { Tooltip } from '@/components/ui/tooltip'
+import { usePopover } from '@/hooks/usePopover'
 import { cn } from '@/lib/utils'
 import { useT } from '@/i18n/useT'
+import type { PlacementOptions } from '@/lib/popoverPlacement'
 import {
   buildWavePalette,
   GRADIENT_WAVE_PRESETS,
@@ -47,8 +49,8 @@ const ringClass = (active: boolean) => cn(
   active ? SELECTED_RING : 'hover:ring-[1.5px] hover:ring-foreground/20 hover:ring-offset-2 hover:ring-offset-background',
 )
 
-const PANEL_GAP = 8
-const VIEWPORT_MARGIN = 8
+// Opens centered below the trigger, flips above when there is no room below, clamped horizontally to the window.
+const COLOR_POPOVER_PLACEMENT: PlacementOptions = { align: 'center', gap: 8, viewportMargin: 8 }
 
 /**
  * Custom color popover: a saturation/brightness area, a hue slider and a HEX input.
@@ -70,57 +72,14 @@ function ColorPopover({ color, label, onChange, className, style, children }: {
   children?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-
-  // By default the panel opens centered below the trigger; if there is no room below, it flips above.
-  // It is clamped horizontally to the window edges.
-  const place = () => {
-    const trigger = triggerRef.current
-    const panel = panelRef.current
-    if (!trigger || !panel) return
-    const tr = trigger.getBoundingClientRect()
-    const pw = panel.offsetWidth
-    const ph = panel.offsetHeight
-    let top = tr.bottom + PANEL_GAP
-    if (top + ph > window.innerHeight - VIEWPORT_MARGIN) top = Math.max(VIEWPORT_MARGIN, tr.top - ph - PANEL_GAP)
-    const left = Math.min(Math.max(VIEWPORT_MARGIN, tr.left + tr.width / 2 - pw / 2), window.innerWidth - pw - VIEWPORT_MARGIN)
-    setPos({ top, left })
-  }
-
-  useLayoutEffect(() => {
-    if (open) place()
-    else setPos(null)
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.stopPropagation()
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-    // The settings page scrolls inside <main>, not the window, so listen in the capture phase to catch scrolling
-    // at any ancestor level and reposition the panel.
-    const onMove = () => place()
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey, true)
-    window.addEventListener('scroll', onMove, true)
-    window.addEventListener('resize', onMove)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey, true)
-      window.removeEventListener('scroll', onMove, true)
-      window.removeEventListener('resize', onMove)
-    }
-  }, [open])
+  const { panelRef, panelStyle } = usePopover({
+    open,
+    onDismiss: () => setOpen(false),
+    anchorRef: triggerRef,
+    returnFocusRef: triggerRef,
+    placement: COLOR_POPOVER_PLACEMENT,
+  })
 
   return (
     <>
@@ -142,7 +101,7 @@ function ColorPopover({ color, label, onChange, className, style, children }: {
           role="dialog"
           aria-label={label}
           className="sayit-colorful fixed z-[9999] w-56 rounded-lg border border-border bg-card p-3 text-card-foreground shadow-lg"
-          style={{ top: pos ? pos.top : -9999, left: pos ? pos.left : -9999 }}
+          style={panelStyle}
         >
           <p className="mb-2.5 text-xs font-medium">{label}</p>
           <HexColorPicker color={color} onChange={(hex) => onChange(hex.toLowerCase())} />
