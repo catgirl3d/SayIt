@@ -131,6 +131,95 @@ function mockBoxes(boxes: { anchor: Box; panel: Box }) {
   return { anchorCalls: () => anchorCalls }
 }
 
+/** The list probe has no panel to measure: only the anchor is fed a box and counted. */
+function mockListBoxes(boxes: { anchor: Box }) {
+  let anchorCalls = 0
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    if (this.getAttribute('data-testid') === 'list-anchor') {
+      anchorCalls += 1
+      return toRect(boxes.anchor)
+    }
+    return toRect({ top: 0, left: 0, width: 0, height: 0 })
+  })
+  return { anchorCalls: () => anchorCalls }
+}
+
+interface ListProbeProps {
+  open: boolean
+  onDismiss: () => void
+  returnFocusRef?: RefObject<HTMLElement | null>
+}
+
+/** Mirrors ModelPicker: the list panel exists only while positioned. */
+function ListProbe({ open, onDismiss, returnFocusRef }: ListProbeProps) {
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const { panelRef, panelStyle, positioned } = usePopover({
+    open,
+    onDismiss,
+    anchorRef,
+    returnFocusRef,
+    placement: { kind: 'list', preferredSpace: 320, maxHeight: 360 },
+  })
+  return (
+    <>
+      <button ref={anchorRef} type="button" data-testid="list-anchor">
+        anchor
+      </button>
+      <span data-testid="list-positioned">{String(positioned)}</span>
+      {open && positioned && (
+        <div ref={panelRef} role="dialog" data-testid="list-panel" style={panelStyle}>
+          <span>content</span>
+        </div>
+      )}
+    </>
+  )
+}
+
+function ListFocusHost() {
+  const otherRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(true)
+  return (
+    <>
+      <button ref={otherRef} type="button" data-testid="other">
+        other
+      </button>
+      <ListProbe open={open} onDismiss={() => setOpen(false)} returnFocusRef={otherRef} />
+    </>
+  )
+}
+
+function DetachedAnchorProbe({ open, kind }: { open: boolean; kind: 'card' | 'list' }) {
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const placement = kind === 'list' ? { kind: 'list' as const, preferredSpace: 320, maxHeight: 360 } : undefined
+  const { panelRef, panelStyle, positioned } = usePopover({ open, onDismiss: () => {}, anchorRef, placement })
+  return (
+    <>
+      <span data-testid="detached-positioned">{String(positioned)}</span>
+      {open && <div ref={panelRef} role="dialog" data-testid="detached-panel" style={panelStyle} />}
+    </>
+  )
+}
+
+function PositionProbe({ open, kind, onDismiss }: { open: boolean; kind: 'card' | 'list'; onDismiss: () => void }) {
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const placement = kind === 'list' ? { kind: 'list' as const, preferredSpace: 320, maxHeight: 360 } : undefined
+  const { panelRef, panelStyle, positioned } = usePopover({ open, onDismiss, anchorRef, placement })
+  return (
+    <>
+      <button ref={anchorRef} type="button" data-testid="position-anchor">
+        anchor
+      </button>
+      <span data-testid="position-positioned">{String(positioned)}</span>
+      {open && <div ref={panelRef} role="dialog" data-testid="position-panel" style={panelStyle} />}
+    </>
+  )
+}
+
+function StatefulPositionProbe({ kind }: { kind: 'card' | 'list' }) {
+  const [open, setOpen] = useState(true)
+  return <PositionProbe open={open} kind={kind} onDismiss={() => setOpen(false)} />
+}
+
 function setViewport(width: number, height: number) {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
   Object.defineProperty(window, 'innerHeight', { configurable: true, value: height })
@@ -429,6 +518,164 @@ describe('ResizeObserver', () => {
     act(() => callbacks[0]([], {} as ResizeObserver))
 
     expect(panel.style.top).toBe('8px')
+  })
+})
+
+describe('list positioning', () => {
+  it('places the list below from the anchor alone', () => {
+    setViewport(800, 600)
+    mockListBoxes({ anchor: { top: 100, left: 40, width: 24, height: 36 } })
+    render(<ListProbe open onDismiss={vi.fn()} />)
+
+    const panel = screen.getByTestId('list-panel')
+    expect(panel.style.top).toBe('140px')
+    expect(panel.style.bottom).toBe('')
+    expect(panel.style.left).toBe('40px')
+    expect(panel.style.width).toBe('24px')
+    expect(panel.style.maxHeight).toBe('360px')
+  })
+
+  it('places the list above by its bottom edge when below is tight', () => {
+    setViewport(800, 600)
+    mockListBoxes({ anchor: { top: 500, left: 40, width: 24, height: 36 } })
+    render(<ListProbe open onDismiss={vi.fn()} />)
+
+    const panel = screen.getByTestId('list-panel')
+    expect(panel.style.top).toBe('')
+    expect(panel.style.bottom).toBe('104px')
+    expect(panel.style.left).toBe('40px')
+    expect(panel.style.width).toBe('24px')
+    expect(panel.style.maxHeight).toBe('360px')
+  })
+
+  it('reports not positioned while no anchor is attached, in both modes', () => {
+    for (const kind of ['card', 'list'] as const) {
+      const { unmount } = render(<DetachedAnchorProbe open kind={kind} />)
+
+      expect(screen.getByTestId('detached-positioned').textContent).toBe('false')
+      expect(screen.getByTestId('detached-panel').style.top).toBe('-9999px')
+      unmount()
+    }
+  })
+
+  it('reports positioned after a measurement and not positioned again after closing, in both modes', () => {
+    for (const kind of ['card', 'list'] as const) {
+      const { unmount } = render(<StatefulPositionProbe kind={kind} />)
+
+      expect(screen.getByTestId('position-positioned').textContent).toBe('true')
+      fireEvent.mouseDown(document.body)
+      expect(screen.getByTestId('position-positioned').textContent).toBe('false')
+      unmount()
+    }
+  })
+
+  it('re-measures on resize and on scroll outside the list, but not on scroll inside it', () => {
+    setViewport(800, 600)
+    const boxes = { anchor: { top: 100, left: 40, width: 24, height: 36 } }
+    const counter = mockListBoxes(boxes)
+    render(<ListProbe open onDismiss={vi.fn()} />)
+
+    const panel = screen.getByTestId('list-panel')
+    expect(counter.anchorCalls()).toBe(1)
+    expect(panel.style.top).toBe('140px')
+
+    boxes.anchor = { top: 200, left: 40, width: 24, height: 36 }
+    fireEvent.resize(window)
+    expect(counter.anchorCalls()).toBe(2)
+    expect(panel.style.top).toBe('240px')
+
+    boxes.anchor = { top: 210, left: 40, width: 24, height: 36 }
+    fireEvent.scroll(document.body)
+    expect(counter.anchorCalls()).toBe(3)
+    expect(panel.style.top).toBe('250px')
+
+    fireEvent.scroll(panel)
+    expect(counter.anchorCalls()).toBe(3)
+    expect(panel.style.top).toBe('250px')
+  })
+
+  it('re-measures without throwing when a scroll event targets the window, in list mode', () => {
+    setViewport(800, 600)
+    const boxes = { anchor: { top: 100, left: 40, width: 24, height: 36 } }
+    const counter = mockListBoxes(boxes)
+    render(<ListProbe open onDismiss={vi.fn()} />)
+
+    expect(counter.anchorCalls()).toBe(1)
+    boxes.anchor = { top: 200, left: 40, width: 24, height: 36 }
+    expect(() => fireEvent.scroll(window)).not.toThrow()
+    expect(counter.anchorCalls()).toBe(2)
+    expect(screen.getByTestId('list-panel').style.top).toBe('240px')
+  })
+
+  it('re-measures without throwing when a scroll event targets the window, in card mode', () => {
+    setViewport(800, 600)
+    const boxes = {
+      anchor: { top: 100, left: 40, width: 24, height: 36 },
+      panel: { top: 0, left: 0, width: 224, height: 250 },
+    }
+    const counter = mockBoxes(boxes)
+    render(<Probe open onDismiss={vi.fn()} />)
+
+    expect(counter.anchorCalls()).toBe(1)
+    boxes.anchor = { top: 200, left: 40, width: 24, height: 36 }
+    expect(() => fireEvent.scroll(window)).not.toThrow()
+    expect(counter.anchorCalls()).toBe(2)
+    expect(screen.getByTestId('popover-panel').style.top).toBe('244px')
+  })
+
+  it('observes the anchor in list mode and re-measures when it resizes', () => {
+    setViewport(800, 600)
+    const boxes = { anchor: { top: 100, left: 40, width: 24, height: 36 } }
+    mockListBoxes(boxes)
+
+    const callbacks: ResizeObserverCallback[] = []
+    const observed: Element[] = []
+    class FakeResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback)
+      }
+      observe = (element: Element) => {
+        observed.push(element)
+      }
+      unobserve = () => {}
+      disconnect = () => {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+
+    render(<ListProbe open onDismiss={vi.fn()} />)
+
+    const anchor = screen.getByTestId('list-anchor')
+    expect(callbacks).toHaveLength(1)
+    expect(observed).toEqual([anchor])
+    expect(screen.getByTestId('list-panel').style.top).toBe('140px')
+
+    boxes.anchor = { top: 200, left: 40, width: 24, height: 36 }
+    act(() => callbacks[0]([], {} as ResizeObserver))
+
+    expect(screen.getByTestId('list-panel').style.top).toBe('240px')
+  })
+
+  it('handles Escape, return focus and outside clicks in list mode', () => {
+    const first = render(<ListFocusHost />)
+    const anchor = screen.getByTestId('list-anchor')
+    anchor.focus()
+    expect(document.activeElement).toBe(anchor)
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(document.activeElement).toBe(screen.getByTestId('other'))
+    expect(screen.queryByTestId('list-panel')).toBeNull()
+    expect(screen.getByTestId('list-positioned').textContent).toBe('false')
+    first.unmount()
+
+    const second = render(<ListFocusHost />)
+    expect(screen.getByTestId('list-panel')).toBeTruthy()
+
+    fireEvent.mouseDown(document.body)
+
+    expect(screen.queryByTestId('list-panel')).toBeNull()
+    expect(screen.getByTestId('list-positioned').textContent).toBe('false')
+    second.unmount()
   })
 })
 
