@@ -97,6 +97,8 @@ export default function PromptPresetSection({
 
   const missingName = !!editingPreset && !editingPreset.name.trim()
   const missingPrompt = !!editingPreset && !editingPreset.systemPrompt.trim()
+  const customPresets = presets.filter((item) => !item.builtin)
+  const sortEnabled = customPresets.length > 1
 
   return (
     <Card>
@@ -242,9 +244,8 @@ export default function PromptPresetSection({
 
         <div className="space-y-2">
           {presets.map((preset) => {
-            const customPresets = presets.filter((item) => !item.builtin)
             const customIndex = customPresets.findIndex((item) => item.id === preset.id)
-            const canMove = !preset.builtin && customPresets.length > 1
+            const canMove = !preset.builtin && sortEnabled
             const presetName = promptPresetDisplayName(preset)
             return (
               <div
@@ -261,7 +262,20 @@ export default function PromptPresetSection({
                     {canMove && (
                       <DragHandle
                         {...presetSortable.handleProps(customIndex, t('promptPreset.drag', { name: presetName }))}
+                        data-testid="preset-drag-handle"
                         onClick={(event) => event.stopPropagation()}
+                        className="-ml-1 text-muted-foreground/60"
+                      />
+                    )}
+                    {/* Built-in rows cannot be dragged, but once a handle column exists they
+                        reserve the same slot so radio circles and names line up. Geometry mirrors
+                        DragHandle: p-1 shell around the 14px icon, box-content keeps padding
+                        outside the icon size. */}
+                    {!canMove && sortEnabled && (
+                      <div
+                        aria-hidden="true"
+                        data-testid="preset-drag-placeholder"
+                        className="-ml-1 box-content h-3.5 w-3.5 shrink-0 p-1"
                       />
                     )}
                     <div
