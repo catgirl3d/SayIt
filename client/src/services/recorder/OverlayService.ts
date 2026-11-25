@@ -456,7 +456,10 @@ export class OverlayService {
       // If a higher-priority warning (e.g. muted microphone) replaced it meanwhile, do not reclaim it.
       if (this.activeWarning !== text) return
       this.activeWarning = ''
-      this.publishListeningWarning('', 'warn')
+      // The recording warning must not switch a later presentation back to listening.
+      if (this.currentState === 'listening') {
+        this.publishListeningWarning('', 'warn')
+      }
     }, 4000)
   }
 
