@@ -56,6 +56,7 @@ Sections are ordered by version, newest first.
 - A recording whose processing timed out now shows "Recognition took too long" as its reason in History. The entry used to have no reason and looked like a plain "No speech detected".
 - Starting a new recording within 15 seconds of a processing timeout no longer discards the timed-out recording. It used to be lost without a card or a History entry; it is now kept in History for retry.
 - Pressing Esc while a dropdown is open inside a settings dialog (the AI provider and cloud recognition service editors) now closes only the dropdown. Before, it closed the whole dialog and discarded the unsaved changes.
+- AI presets: drag handles are now always visible in the presets list, and built-in rows line up with custom rows when custom presets can be reordered.
 
 #### Recordings
 - Recording commands now accept only local absolute paths to `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside, including UNC, device, verbatim, or relative paths, is reported as missing, and deleting it does nothing.
