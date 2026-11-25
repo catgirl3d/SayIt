@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, within } from 'storybook/test'
+import { expect, userEvent, within } from 'storybook/test'
 import { setAiEnabled } from '@/stores/aiEnabled'
 import { getBuiltinPromptPresets, type PromptPreset } from '@/services/store'
 import { BUILTIN_APP_RULES } from '@/services/personalization/defaults'
@@ -63,6 +63,41 @@ export const ConfiguredRules: Story = {
     presets,
     rules,
     ...callbacks,
+  },
+}
+
+export const CollapsedByDefault: Story = {
+  args: {
+    presets,
+    rules,
+    ...callbacks,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const switchFor = (name: string) => {
+      const card = canvas.getByText(name, { selector: 'p' }).closest('div.group')
+      if (!card) throw new Error(`Rule card not found: ${name}`)
+      return within(card as HTMLElement).getByRole('switch')
+    }
+
+    // VS Code is enabled in the fixture and used to auto-expand on load.
+    await expect(canvas.queryAllByText('Extra prompt')).toHaveLength(0)
+
+    // Enabling a rule must not expand it.
+    await userEvent.click(switchFor('Teams'))
+    await expect(canvas.queryAllByText('Extra prompt')).toHaveLength(0)
+
+    // Clicking the header expands the rule.
+    await userEvent.click(canvas.getByText('VS Code', { selector: 'p' }))
+    expect(await canvas.findByText('Extra prompt')).toBeVisible()
+
+    // Disabling a rule must not collapse it either.
+    await userEvent.click(switchFor('VS Code'))
+    await expect(canvas.getAllByText('Extra prompt')).toHaveLength(1)
+
+    // The header is the only way to collapse it again.
+    await userEvent.click(canvas.getByText('VS Code', { selector: 'p' }))
+    await expect(canvas.queryByText('Extra prompt')).not.toBeInTheDocument()
   },
 }
 
