@@ -1599,6 +1599,7 @@
   "recorder.noTranscript": "Speech recognition returned no text",
   "recorder.emptyAfterProcessing": "Recognition returned text, but text processing removed everything. Check your replacement rules.",
   "runtimeConfig.emptyServerUrl": "The server address can't be empty",
+  "runtimeConfig.legacyServerBlocked": "This address belongs to the former SayIt trial server, which this fork does not run or control. Enter your own server address.",
   "runtimeConfig.serverNotConfigured": "The server address isn't set. Set it in Settings → {section}.",
   "userScene.development": "Development",
   "userScene.communication": "Messaging",

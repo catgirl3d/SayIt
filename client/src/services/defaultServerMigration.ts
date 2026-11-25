@@ -1,4 +1,5 @@
 import { storeGet } from '@/services/bridge'
+import { isLegacyTrialServerUrl } from '@/services/legacyServer'
 import {
   discardBackendBaseUrlForSession,
   getBackendBaseUrl,
@@ -11,22 +12,11 @@ export type DefaultServerMigration = 'none' | 'choose'
 
 const MIGRATION_DONE_KEY = 'migration.builtinServerRemoved'
 
-// Earlier builds prefilled this address in the server settings, and "Save and test" stored
-// it explicitly, so until this one-time migration is complete a saved address on this host
-// means the old built-in default rather than the user's own server. This constant is needed
-// only for that migration and can be removed once updates from versions before v0.3.2 are
-// no longer supported.
-const LEGACY_TRIAL_SERVER_HOST = 'sayitapp.site'
-
-/** Whether a stored URL points at the legacy prefilled server host or one of its subdomains. */
-function isLegacyTrialServerUrl(url: string): boolean {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase()
-    return hostname === LEGACY_TRIAL_SERVER_HOST || hostname.endsWith(`.${LEGACY_TRIAL_SERVER_HOST}`)
-  } catch {
-    return false
-  }
-}
+// Earlier builds prefilled the upstream trial address in the server settings, and "Save and
+// test" stored it explicitly. The fork never runs that server, so a saved address on the
+// legacy host is removed at every start, not only during the one-time migration that the
+// completion flag records. The flag says the mode migration has run; it never re-enables
+// the legacy host.
 
 /**
  * Record that the one-time default-server migration has run. The choice dialog is shown
@@ -44,32 +34,62 @@ export async function completeDefaultServerMigration(): Promise<void> {
 /**
  * Decide what to do with users who relied on the old built-in default server.
  *
- * The migration runs once: a stored flag short-circuits it before any address or mode is
- * touched, so an address the user enters later is never mistaken for the old default. On
- * the first run, a stored address on the legacy trial host is removed because older builds
- * saved the prefilled address as if the user had chosen it.
+ * Every start reads the completion flag and the saved address first: a saved address on
+ * the legacy trial host is removed even after the migration completed, because this fork
+ * must never contact that server. If the flag cannot be read, an active legacy address is
+ * dropped and the error propagates so startup fails closed. If the saved address cannot be
+ * read, an active legacy address is dropped; after completion the migration finishes quietly,
+ * before completion the error propagates, and a valid own server is never dropped.
  *
- * These users never touched the mode switcher, so their stored workMode is absent while
- * the saved or built-in server address is still present: keep them on server mode
- * silently. If neither a mode nor an address is available, ask them to choose one. The
+ * When removal succeeds and the migration already ran, the session continues without
+ * writing any setting. If removal fails, the active address is dropped for this session:
+ * a completed migration finishes quietly and leaves its flag unchanged, while an unfinished
+ * one keeps the flag unwritten and asks for a work mode unless local or cloud_api is
+ * already saved.
+ *
+ * On the first run, these users never touched the mode switcher, so their stored workMode is
+ * absent while the saved or built-in server address is still present: keep them on server
+ * mode silently. If neither a mode nor an address is available, ask them to choose one. The
  * flag is written only after the migration finishes without a pending choice; if the
- * choice dialog is still due, it appears again on the next launch. If deleting the saved
- * legacy address fails, the active address is dropped for this session and the dialog is
- * shown without writing the flag, so the next launch retries the deletion.
+ * choice dialog is still due, it appears again on the next launch.
  */
 export async function resolveDefaultServerMigration(): Promise<DefaultServerMigration> {
-  if ((await storeGet(MIGRATION_DONE_KEY)) === true) return 'none'
+  let migrationDone: boolean
+  try {
+    migrationDone = (await storeGet(MIGRATION_DONE_KEY)) === true
+  } catch (error) {
+    console.error('[defaultServerMigration] Failed to read the migration flag:', error)
+    if (isLegacyTrialServerUrl(getBackendBaseUrl())) {
+      await discardBackendBaseUrlForSession()
+    }
+    throw error
+  }
 
-  const storedUrl = await getStoredBackendBaseUrl()
+  let storedUrl: string
+  try {
+    storedUrl = await getStoredBackendBaseUrl()
+  } catch (error) {
+    console.error('[defaultServerMigration] Failed to read the saved server address:', error)
+    if (isLegacyTrialServerUrl(getBackendBaseUrl())) {
+      await discardBackendBaseUrlForSession()
+    }
+    if (!migrationDone) throw error
+    return 'none'
+  }
+
   if (isLegacyTrialServerUrl(storedUrl)) {
     try {
       await resetBackendBaseUrl()
     } catch (error) {
       console.error('[defaultServerMigration] Failed to remove the legacy server address:', error)
       await discardBackendBaseUrlForSession()
-      return 'choose'
+      if (migrationDone) return 'none'
+      const rawWorkMode = await storeGet('workMode')
+      return rawWorkMode === 'local' || rawWorkMode === 'cloud_api' ? 'none' : 'choose'
     }
   }
+
+  if (migrationDone) return 'none'
 
   const result = await resolveLegacyDefaultServerMigration()
   if (result === 'none') await completeDefaultServerMigration()
@@ -77,8 +97,9 @@ export async function resolveDefaultServerMigration(): Promise<DefaultServerMigr
 }
 
 /**
- * Startup wrapper: any migration failure must fail closed by showing the mode dialog,
- * because an active legacy address may still be in use for this session.
+ * Startup wrapper: an unexpected migration failure must fail closed by showing the mode
+ * dialog. A failed legacy-address deletion is already contained by dropping the active
+ * address for this session and is handled inside resolveDefaultServerMigration.
  */
 export async function needsWorkModeChoiceAtStartup(): Promise<boolean> {
   try {
