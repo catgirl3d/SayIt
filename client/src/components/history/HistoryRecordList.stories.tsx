@@ -156,6 +156,7 @@ export const DownloadSuccess: Story = {
     await userEvent.click(canvas.getByRole('button', { name: t('record.details') }))
     await userEvent.click(await canvas.findByRole('button', { name: t('record.downloadAudio') }))
     await expect(await canvas.findByText(t('record.savedTo', { path: 'C:\\Users\\Storybook\\Downloads\\sayit-demo.wav' }))).toBeTruthy()
+    await expect(canvasElement.querySelector('.success-check')).not.toBeNull()
   },
 }
 
@@ -176,6 +177,8 @@ export const DownloadAlreadyExists: Story = {
     await userEvent.click(canvas.getByRole('button', { name: t('record.details') }))
     await userEvent.click(await canvas.findByRole('button', { name: t('record.downloadAudio') }))
     await expect(await canvas.findByText(t('record.downloadAlreadyExists'), { exact: false })).toBeTruthy()
+    await expect(canvasElement.querySelector('.lucide-x')).not.toBeNull()
+    await expect(canvasElement.querySelector('.success-check')).toBeNull()
   },
 }
 

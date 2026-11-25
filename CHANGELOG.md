@@ -5,13 +5,23 @@ Sections are ordered by version, newest first.
 
 ## v0.3.2 (unreleased)
 
+### Added
+#### Desktop Client
+- The overlay waveform has a new **Custom** theme in Settings → Appearance: pick a color from the presets or with the color picker, as one color or a two-color gradient. The colors are included in the settings export. Colors too dark for the black overlay are brightened, and the settings page shows the brightened color.
+
+#### Hotwords
+- Built-in hotword categories now accept your own terms. An add field appears under each enabled built-in category, the terms follow that category's switch, survive restarts, and are included in the hotword export. Reset is now a small icon that asks for a second click and only appears while the list differs from the defaults.
+
 ### Changed
 #### Desktop Client
 - SayIt no longer ships with a built-in server. Earlier builds sent speech, announcement requests and recognition corrections to the upstream author's trial server (`sayitapp.site`) by default, which this fork does not run or control. Fresh installs now start in Local mode, and the welcome guide has a new step to choose and set up Local recognition (including the model download), Cloud API, or your own server; its test step now works in any mode once that mode is ready.
 - If you used the default server, or saved any address on its domain in the server settings, SayIt removes that address and asks you once after the update to choose Local or Cloud API, then opens Voice engine settings to finish the setup; dictation may not work until you choose. If you had entered your own server address, SayIt keeps Server mode and nothing changes. Any server address can still be entered in Settings → Voice engine.
-- Without a server address, announcements and recognition-correction submissions are turned off and SayIt sends no requests to a SayIt server. This includes Local and Cloud API modes, which used to fetch announcements from the trial server. In the server settings, "Restore default" becomes "Clear address" when the build has no default address.
+- Without a server address, announcements and recognition-correction submissions are turned off and SayIt sends no requests to a SayIt server. This includes Local and Cloud API modes, which used to fetch announcements from the trial server. In the server settings, "Restore default" becomes "Clear address" when the build has no default address. A saved address on the former trial server's domain is removed at every launch, and that domain can no longer be saved in the settings.
 - The Nunito font used by the title bar, the welcome guide and the About page is now bundled with the app instead of being fetched from Google Fonts. The interface keeps its font offline, and starting the main window no longer sends a request to Google. The Content Security Policy no longer lists Google Fonts origins either.
 - Settings now dim AI-dependent controls when AI processing is off and explain why. Hotword injection and context awareness keep their saved choice but are disabled; presets and per-app rules stay editable; the AI providers page explains that saved services are not used for automatic processing while keeping them editable and testable. In Server mode, the note makes clear that a service chosen for selected-text editing can still be used.
+- Selection highlights now slide between options in radio groups, the sidebar and the History All/Favorites filter, dialogs fade in and out, and the "copied" check mark draws itself. In the overlay, the pill eases to its new width while its content crossfades, and the processing bar no longer sits full and frozen when processing takes longer than estimated. Recording warnings breathe instead of flashing.
+- Appearance has a new **Interface animations** switch that turns these animations off; loading spinners keep spinning. SayIt no longer follows the system reduce-motion setting (Windows "Animation effects"): this switch is the one control for interface animations.
+- **Per-app prompt rules start collapsed**: on the AI processing page they no longer expand when the page opens or when a rule's switch is turned on or off; click a rule's header to expand it.
 
 ### Fixed
 #### Server
@@ -47,6 +57,8 @@ Sections are ordered by version, newest first.
 - The hidden recording overlay no longer keeps animating while SayIt sits in the tray. From launch until the first dictation, the overlay's waiting dots kept running in the hidden window and used about 15% of a CPU core in a measurement (about 3.5% in the overlay and 12% in the graphics process). Animations now pause while the overlay is hidden and resume when it appears.
 - A recording whose processing timed out now shows "Recognition took too long" as its reason in History. The entry used to have no reason and looked like a plain "No speech detected".
 - Starting a new recording within 15 seconds of a processing timeout no longer discards the timed-out recording. It used to be lost without a card or a History entry; it is now kept in History for retry.
+- Pressing Esc while a dropdown is open inside a settings dialog (the AI provider and cloud recognition service editors) now closes only the dropdown. Before, it closed the whole dialog and discarded the unsaved changes.
+- AI presets: drag handles are now always visible in the presets list, and built-in rows line up with custom rows when custom presets can be reordered.
 
 #### Recordings
 - Recording commands now accept only local absolute paths to `.wav` files directly inside the app's audio folder. A crafted recording id or a history path can no longer create, read, or delete files outside that folder; a path outside, including UNC, device, verbatim, or relative paths, is reported as missing, and deleting it does nothing.

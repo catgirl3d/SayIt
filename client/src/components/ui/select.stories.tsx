@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { useState } from 'react'
 import { expect, userEvent, within } from 'storybook/test'
 import { Select } from './select'
+import { Modal } from './modal'
 
 const meta = {
   title: 'ui/select',
@@ -156,4 +157,74 @@ export const LongLabel: Story = {
       />
     </div>
   ),
+}
+
+/** A short list at the window bottom opens upward and sits directly on the trigger. */
+export const OpensUpwardNearBottom: Story = {
+  parameters: { layout: 'fullscreen' },
+  render: () => (
+    <div className="fixed inset-x-0 bottom-6 px-6">
+      <Select
+        value=""
+        placeholder="Pick a model"
+        options={[
+          { value: 'alpha', label: 'Alpha' },
+          { value: 'beta', label: 'Beta' },
+        ]}
+        onChange={() => undefined}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = within(canvasElement.ownerDocument.body)
+
+    await userEvent.click(canvas.getByRole('button'))
+    await expect(await body.findByRole('button', { name: 'Alpha' })).toBeVisible()
+    await expect(body.getByRole('button', { name: 'Beta' })).toBeVisible()
+  },
+}
+
+function InsideModalDemo() {
+  const [open, setOpen] = useState(true)
+  return (
+    <div className="w-72">
+      {!open && <p className="text-sm text-muted-foreground">Dialog closed</p>}
+      {open && (
+        <Modal title="Recognition provider" onClose={() => setOpen(false)}>
+          <div className="space-y-2">
+            <label id="modal-provider-label" className="block text-sm font-medium">Provider</label>
+            <Select
+              labelledBy="modal-provider-label"
+              value=""
+              placeholder="Choose a provider"
+              options={[
+                { value: 'deepgram', label: 'Deepgram' },
+                { value: 'whisper', label: 'Whisper' },
+              ]}
+              onChange={() => undefined}
+            />
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+export const InsideModal: Story = {
+  render: () => <InsideModalDemo />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body)
+    const trigger = body.getByRole('button', { name: 'Provider' })
+
+    await userEvent.click(trigger)
+    await expect(body.getByRole('button', { name: 'Deepgram' })).toBeVisible()
+
+    await userEvent.keyboard('{Escape}')
+
+    await expect(body.queryByRole('button', { name: 'Deepgram' })).toBeNull()
+    await expect(body.getByRole('dialog')).toBeVisible()
+    await expect(trigger).toHaveFocus()
+    await expect(body.queryByText('Dialog closed')).toBeNull()
+  },
 }

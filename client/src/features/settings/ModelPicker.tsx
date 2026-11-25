@@ -16,16 +16,11 @@
 // The list is a body portal; focus never leaves the input, so rows and sort buttons swallow
 // mousedown instead of taking focus.
 //
-// Escape routing note: the parent Modal closes on Escape via a document-level
-// **capture** listener (components/ui/modal.tsx), which runs before any React
-// synthetic handler (portals dispatch at the portal container). To keep Escape
-// closing only this dropdown, a native window-capture listener is installed while
-// the panel is open: it consumes the event before it can reach the document
-// listener. See the escape lifecycle effect below.
+// Escape routing note: Escape is handled by usePopover. Its window-capture listener runs before
+// the parent Modal's document-capture listener (components/ui/modal.tsx) and participates in the
+// shared popover layer stack, so Escape closes only this list and returns focus to the input.
 
 import {
-  useCallback,
-  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -37,15 +32,15 @@ import {
 import { createPortal } from 'react-dom'
 import { ChevronDown, Crown, Plus, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
+import { usePopover } from '@/hooks/usePopover'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
 import type { RemoteModel } from './aiProviderCatalog'
 
 export type ModelSort = 'name' | 'priceAsc' | 'priceDesc'
 
-/** Room the list wants below the field before it considers opening above; the list never grows past the cap. */
-const PREFERRED_LIST_HEIGHT = 320
-const MAX_LIST_HEIGHT = 360
+// Room the list wants below the field before it considers opening above; the list never grows past the cap.
+const LIST_PLACEMENT = { kind: 'list', preferredSpace: 320, maxHeight: 360 } as const
 
 /** The display name shown for a model: its trimmed name, or the id as fallback. */
 function displayName(model: RemoteModel): string {
@@ -188,13 +183,8 @@ export function ModelPicker({
   const [activeIndex, setActiveIndex] = useState(0)
   /** Plain mode: the text is the current model, so it only filters the list once the user edits it. */
   const [typedSinceOpen, setTypedSinceOpen] = useState(false)
-  /** A list that opens downwards is placed by `top`, one that opens upwards by `bottom`, so it hugs the field at any height. */
-  const [dropdownStyle, setDropdownStyle] = useState<
-    { top: number | undefined; bottom: number | undefined; left: number; width: number; maxHeight: number } | null
-  >(null)
   const fieldRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   /** Attached only to the keyboard-highlighted row, so the effect below can find it. */
   const activeRowRef = useRef<HTMLButtonElement | null>(null)
@@ -212,67 +202,23 @@ export function ModelPicker({
   const optionCount = filtered.length + (customId ? 1 : 0)
   const highlightIndex = optionCount === 0 ? -1 : Math.min(activeIndex, optionCount - 1)
   const panelOpen = isOpen && hasCatalog
-  const panelVisible = panelOpen && dropdownStyle !== null
-
-  const updatePosition = useCallback(() => {
-    const el = anchorRef?.current ?? fieldRef.current
-    if (!el) return
-
-    const rect = el.getBoundingClientRect()
-    const spaceBelow = window.innerHeight - rect.bottom - 8
-    const spaceAbove = rect.top - 8
-    // Below is preferred; the list flips above the field when below cannot show a comfortable list
-    // and above has more room.
-    const openUpwards = spaceBelow < PREFERRED_LIST_HEIGHT && spaceAbove > spaceBelow
-
-    const maxHeight = Math.min(MAX_LIST_HEIGHT, Math.max(120, openUpwards ? spaceAbove : spaceBelow))
-
-    setDropdownStyle({
-      top: openUpwards ? undefined : rect.bottom + 4,
-      bottom: openUpwards ? window.innerHeight - rect.top + 4 : undefined,
-      left: rect.left,
-      width: rect.width,
-      maxHeight,
-    })
-  }, [anchorRef])
-
-  // The chip count is a dependency because chips wrap: a taller field moves the panel's anchor.
-  useLayoutEffect(() => {
-    if (panelOpen) {
-      updatePosition()
-      const handleScrollOrResize = () => updatePosition()
-      window.addEventListener('resize', handleScrollOrResize)
-      window.addEventListener('scroll', handleScrollOrResize, true)
-      return () => {
-        window.removeEventListener('resize', handleScrollOrResize)
-        window.removeEventListener('scroll', handleScrollOrResize, true)
-      }
-    }
-    setDropdownStyle(null)
-  }, [panelOpen, updatePosition, value.length])
-
-  // Escape reaches this dropdown through a window-capture listener because the parent
-  // Modal answers Escape on `document` in the capture phase, before any React handler.
-  // Consuming the event here closes only the panel and keeps focus in the input.
-  useLayoutEffect(() => {
-    if (!panelOpen) return
-    const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.stopPropagation()
-      event.preventDefault()
-      setIsOpen(false)
-      inputRef.current?.focus({ preventScroll: true })
-    }
-    window.addEventListener('keydown', onWindowKeyDown, true)
-    return () => window.removeEventListener('keydown', onWindowKeyDown, true)
-  }, [panelOpen])
+  // triggerRef is the field alone: the anchor may be a wider row, and a mousedown on that row
+  // outside the field must still close the list.
+  const { panelRef, panelStyle, positioned } = usePopover({
+    open: panelOpen,
+    onDismiss: () => setIsOpen(false),
+    anchorRef: anchorRef ?? fieldRef,
+    triggerRef: fieldRef,
+    returnFocusRef: inputRef,
+    placement: LIST_PLACEMENT,
+  })
+  const panelVisible = panelOpen && positioned
 
   // Keeps the highlighted row inside the scrolled list: centered when the panel opens (so the
   // chosen model is visible at once), revealed with the least movement afterwards. The list is
   // scrolled by hand instead of scrollIntoView because that would also scroll the page behind the
-  // dialog. Depends on the panel's visibility flag, not on dropdownStyle: that object is replaced on
-  // every scroll event (the scroll listener is a capture one, so it also fires for this list) and
-  // would drag the list back while the user scrolls it.
+  // dialog. Depends on the panel's visibility flag, not on panelStyle: that object is replaced on
+  // every re-measure and would drag the list back to the highlighted row.
   useLayoutEffect(() => {
     const list = listRef.current
     const row = activeRowRef.current
@@ -288,17 +234,6 @@ export function ModelPicker({
       list.scrollTop = rowBottom - list.clientHeight
     }
   }, [panelVisible, highlightIndex, filtered])
-
-  useEffect(() => {
-    if (!panelOpen) return
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node
-      if (fieldRef.current?.contains(target) || panelRef.current?.contains(target)) return
-      setIsOpen(false)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [panelOpen])
 
   /** Opens the list; `centerOnChosen` puts the keyboard highlight (and the scroll) on the first chosen row. */
   function openPanel(centerOnChosen: boolean) {
@@ -408,17 +343,11 @@ export function ModelPicker({
   const keepInputFocus = (event: { preventDefault: () => void }) => event.preventDefault()
   const rowId = (index: number) => `${listId}-row-${index}`
 
-  const dropdown = panelOpen && dropdownStyle ? createPortal(
+  const dropdown = panelOpen && positioned ? createPortal(
     <div
       ref={panelRef}
       className="fixed z-[9999] flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-xl"
-      style={{
-        top: dropdownStyle.top === undefined ? undefined : `${dropdownStyle.top}px`,
-        bottom: dropdownStyle.bottom === undefined ? undefined : `${dropdownStyle.bottom}px`,
-        left: `${dropdownStyle.left}px`,
-        width: `${dropdownStyle.width}px`,
-        maxHeight: `${dropdownStyle.maxHeight}px`,
-      }}
+      style={panelStyle}
     >
       <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-2 text-xs">
         <span className="text-muted-foreground">{t('ai.modelSortLabel')}</span>

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import en from '@/i18n/locales/en.json'
 
 const bridge = vi.hoisted(() => ({
   waitForBackendTlsReady: vi.fn(),
@@ -162,6 +163,22 @@ describe('runtime backend configuration', () => {
     expect(runtimeConfig.getBackendBaseUrl()).toBe('https://retried.example')
   })
 
+  it.each([
+    'https://sayitapp.site',
+    'https:sayitapp.site',
+    '//sayitapp.site',
+  ])('rejects the former trial server address %s before writing or publishing it', async (url) => {
+    const runtimeConfig = await loadRuntimeConfig()
+    const initialUrl = runtimeConfig.getBackendBaseUrl()
+
+    await expect(runtimeConfig.setBackendBaseUrl(url)).rejects.toThrow(
+      en['runtimeConfig.legacyServerBlocked'],
+    )
+
+    expect(bridge.storeSetBackendUrl).not.toHaveBeenCalled()
+    expect(runtimeConfig.getBackendBaseUrl()).toBe(initialUrl)
+  })
+
   it('serializes saves and preserves each operation result while writes are pending', async () => {
     const runtimeConfig = await loadRuntimeConfig()
     const initialUrl = runtimeConfig.getBackendBaseUrl()
@@ -295,6 +312,38 @@ describe('runtime backend configuration', () => {
     await expect(saving).resolves.toBe('https://saved.example')
     await expect(reading).resolves.toBe('https://saved.example')
     expect(bridge.storeGet).toHaveBeenCalledExactlyOnceWith('backendBaseUrl')
+  })
+
+  it.each(['https://sayitapp.site', 'https:sayitapp.site'])(
+    'does not activate a legacy trial server address from the environment: %s',
+    async (legacyUrl) => {
+      const runtimeConfig = await initializeWithSavedUrl(null, () => {
+        vi.stubEnv('VITE_BACKEND_BASE_URL', legacyUrl)
+        vi.stubEnv('VITE_WS_URL', '')
+      })
+
+      expect(runtimeConfig.getDefaultBackendBaseUrl()).toBe('')
+      expect(runtimeConfig.getBackendBaseUrl()).toBe('')
+      expect(runtimeConfig.getWSUrl()).toBe('')
+    },
+  )
+
+  it('does not use a legacy trial server WebSocket environment URL', async () => {
+    const runtimeConfig = await initializeWithSavedUrl(null, () => {
+      vi.stubEnv('VITE_WS_URL', 'wss://sayitapp.site/ws/transcribe')
+    })
+
+    expect(runtimeConfig.getBackendBaseUrl()).toBe('')
+    expect(runtimeConfig.getWSUrl()).toBe('')
+  })
+
+  it('falls back to the active backend URL when the WebSocket override is a legacy address', async () => {
+    const runtimeConfig = await initializeWithSavedUrl(null, () => {
+      vi.stubEnv('VITE_BACKEND_BASE_URL', 'https://server.example')
+      vi.stubEnv('VITE_WS_URL', 'wss://sayitapp.site/ws/transcribe')
+    })
+
+    expect(runtimeConfig.getWSUrl()).toBe('wss://server.example/ws/transcribe')
   })
 
   it('maps a saved HTTP own-server URL to its WebSocket endpoint', async () => {

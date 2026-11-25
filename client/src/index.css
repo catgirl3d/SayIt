@@ -161,7 +161,130 @@
 
 }
 
-/* The surface enters on its own and the content root is not remounted, which avoids a flash of opacity over the whole layer. */
+/* Selected background slider (useSlidingIndicator.ts). The script writes position and size
+   directly; this only controls "how it moves". Starts transparent so it is not visible at 0,0
+   before the script has measured the selected item. The margin reset is for space-y-* containers:
+   that utility adds margin-top to siblings, which would push the absolutely positioned slider
+   down by 4px. */
+.sliding-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  margin: 0 !important;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    transform 300ms cubic-bezier(0.32, 0.72, 0, 1),
+    width 300ms cubic-bezier(0.32, 0.72, 0, 1),
+    height 300ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 150ms ease-out;
+}
+
+/* Dialog enter/exit (ui/modal.tsx). Enter: the backdrop fades in over 160ms, the panel scales up
+   from 97% over 220ms and floats slightly into place. Exit 140ms only fades and shrinks a little,
+   faster than the entrance: closing a dialog means the user has already decided, so they should
+   not wait. The exit runs on the layer put back after unmount, see useExitFade in modal.tsx. */
+@keyframes modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes modal-backdrop-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-panel-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.modal-backdrop-enter {
+  animation: modal-backdrop-in 160ms ease-out both;
+}
+
+.modal-panel-enter {
+  animation: modal-panel-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.modal-backdrop-exit {
+  animation: modal-backdrop-out 140ms ease-in both;
+}
+
+.modal-panel-exit {
+  animation: modal-panel-out 140ms ease-in both;
+}
+
+/* Success check (ui/success-check.tsx): drawn from the short stroke while giving a small pop.
+   Lucide's Check path is "M20 6 9 17l-5-5", starting at the top right, so a negative dashoffset
+   makes the stroke grow from the path's end (the short left side) — that is the direction a
+   handwritten check mark is drawn in. The path is about 22.6 long; use 24. */
+@keyframes success-check-draw {
+  from {
+    stroke-dashoffset: -24;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes success-check-pop {
+  0% {
+    transform: scale(0.7);
+  }
+
+  60% {
+    transform: scale(1.12);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.success-check {
+  animation: success-check-pop 320ms cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+.success-check path,
+.success-check polyline {
+  stroke-dasharray: 24;
+  animation: success-check-draw 280ms cubic-bezier(0.65, 0, 0.35, 1) 40ms both;
+}
+
+/* The surface enters on its own; the content root is keyed and does remount when its kind
+   changes, so a single opacity animation over the whole layer would flash both together. */
 @keyframes overlay-pill-surface-enter {
   from {
     opacity: 0.82;
@@ -261,7 +384,144 @@
   clip-path: inset(0);
 }
 
-/* Text cursor of the streaming subtitles: only the opacity changes, with no scaling or movement, a soft typewriter bar */
+/* When the pill swaps content (recording → processing → notice), the new content crossfades in:
+   opacity plus a 2px rise while the pill width eases (pillMorph.ts). No blur or scale — either one
+   smears or resizes the 12px text mid-fade. The 50ms delay lets the width move first: you see the
+   shape changing, then the text, which reads as "the same pill changed" rather than "a different
+   pill". */
+@keyframes overlay-pill-content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.overlay-pill-content-enter {
+  /* The delay is written by pillMorph.ts as --pill-content-delay, depending on widening/narrowing */
+  animation: overlay-pill-content-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) var(--pill-content-delay, 50ms) both;
+}
+
+/* Recording → processing: the last waveform frame stays at natural size. Each bar eases down to a
+   thin 3px line over 140ms while the row holds full opacity for the first 35% of its 180ms and
+   then fades out over the remaining 117ms. The processing content crossfades with it (default
+   delay), so the pill is never empty. --from-h is each bar's height when the snapshot was taken. */
+@keyframes overlay-wave-collapse-row {
+  0% {
+    opacity: 1;
+  }
+
+  35% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes overlay-wave-collapse-bar {
+  from {
+    height: var(--from-h, 3px);
+  }
+
+  to {
+    height: 3px;
+  }
+}
+
+.overlay-wave-collapse {
+  animation: overlay-wave-collapse-row 180ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.overlay-wave-collapse-bar {
+  animation: overlay-wave-collapse-bar 140ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* Processing progress bar. Its duration is **estimated** from the recording length; when the
+   estimate was too short it used to stop full and look frozen. Now it has three parts:
+   ① within the estimate it reaches 86%; ② afterwards it creeps very slowly towards 99% (a nested
+   second scaleX; multiplied: 0.86 × 1.15); ③ at the same time a sheen sweeps across to say
+   "still working". Both scaleX layers have their origin at the left, so they simply multiply. */
+@keyframes overlay-progress-estimate {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(0.86);
+  }
+}
+
+@keyframes overlay-progress-creep {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(1.15);
+  }
+}
+
+@keyframes overlay-progress-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.overlay-progress-estimate {
+  transform-origin: left center;
+  animation: overlay-progress-estimate var(--estimate, 3s) cubic-bezier(0.25, 0.6, 0.3, 1) both;
+}
+
+.overlay-progress-creep {
+  transform-origin: left center;
+  animation: overlay-progress-creep 45s cubic-bezier(0.1, 0.6, 0.3, 1) var(--estimate, 3s) both;
+}
+
+.overlay-progress-sheen {
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: translateX(-100%);
+  animation: overlay-progress-sheen 1.6s ease-in-out var(--estimate, 3s) infinite;
+}
+
+/* Recording warnings (too quiet, microphone muted). They used to use Tailwind's animate-pulse:
+   appearing already bright and then flashing between 50% opacity looked anxious on the small black
+   pill. Now they crossfade in with the same delay as other swapped pill content and then only
+   breathe with a smaller, slower change. The last-10-seconds countdown is not a warning: it is
+   already on screen and only uses the breathing animation. */
+@keyframes overlay-attention-breathe {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.62;
+  }
+}
+
+.overlay-attention {
+  animation:
+    overlay-pill-content-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) var(--pill-content-delay, 50ms) both,
+    overlay-attention-breathe 2.4s ease-in-out 700ms infinite;
+}
+
+.overlay-breathe {
+  animation: overlay-attention-breathe 2.4s ease-in-out infinite;
+}
+
+/* Streaming subtitle caret: only opacity changes, no scaling or movement — a soft typewriter bar */
 @keyframes caret-blink {
 
   0%,
@@ -272,47 +532,6 @@
   70%,
   100% {
     opacity: 0.25;
-  }
-}
-
-/* Overlay waiting pulse animation */
-@keyframes pulse-slide {
-  0% {
-    transform: translateX(-100%);
-  }
-
-  50% {
-    transform: translateX(200%);
-  }
-
-  100% {
-    transform: translateX(-100%);
-  }
-}
-
-/* Progress bar animation */
-@keyframes progress-slide {
-  0% {
-    transform: translateX(-100%);
-  }
-
-  50% {
-    transform: translateX(250%);
-  }
-
-  100% {
-    transform: translateX(-100%);
-  }
-}
-
-/* Progress bar fill animation - from left to right */
-@keyframes progress-fill {
-  0% {
-    transform: scaleX(0);
-  }
-
-  100% {
-    transform: scaleX(1);
   }
 }
 
@@ -382,14 +601,57 @@
   }
 }
 
-/* prefers-reduced-motion: respect the user's system setting */
-@media (prefers-reduced-motion: reduce) {
+/* In-app "Interface animations" switch (Appearance, lib/motion.ts). It turns off only the
+ * interface motion listed here; loading spinners and other animations keep running. JS-driven
+ * motion (pill width, modal exit, processing bar, waveform snapshot) checks motionAllowed(). The
+ * waveform snapshot is hidden rather than frozen: without its fade it would stay on screen. */
+html[data-motion="off"] .overlay-wave-collapse {
+  display: none;
+}
 
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+html[data-motion="off"] .sliding-indicator,
+html[data-motion="off"] .modal-backdrop-enter,
+html[data-motion="off"] .modal-panel-enter,
+html[data-motion="off"] .success-check,
+html[data-motion="off"] .success-check path,
+html[data-motion="off"] .success-check polyline,
+html[data-motion="off"] .overlay-pill-content-enter,
+html[data-motion="off"] .overlay-attention,
+html[data-motion="off"] .overlay-breathe {
+  animation: none !important;
+  transition: none !important;
+}
+
+/*
+ * Color picker for the custom wave (react-colorful, ColorPopover in CustomWaveEditor.tsx).
+ * The component ships with 200px squares, large radii and thick white handles. Here the picker
+ * follows the panel width, uses the same corner radius as the cards, and has thinner handles with
+ * a shadow so they stay visible in the dark theme as well.
+ */
+.sayit-colorful .react-colorful {
+  width: 100%;
+  height: 148px;
+}
+
+.sayit-colorful .react-colorful__saturation {
+  border-radius: 6px 6px 0 0;
+  border-bottom: 0;
+}
+
+.sayit-colorful .react-colorful__hue {
+  height: 12px;
+  margin-top: 10px;
+  border-radius: 999px;
+}
+
+.sayit-colorful .react-colorful__last-control {
+  border-radius: 999px;
+}
+
+.sayit-colorful .react-colorful__saturation-pointer,
+.sayit-colorful .react-colorful__hue-pointer {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }

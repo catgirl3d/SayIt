@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect } from 'storybook/test'
 import { Button } from './button'
 import { Modal } from './modal'
 
@@ -36,6 +37,11 @@ function ModalExample() {
 export const Light: Story = {
   globals: { theme: 'light', locale: 'en' },
   render: () => <ModalExample />,
+  play: async () => {
+    // The portal layer carries the entrance classes that animate it in.
+    await expect(document.querySelector('.modal-backdrop-enter')).not.toBeNull()
+    await expect(document.querySelector('.modal-panel-enter')).not.toBeNull()
+  },
 }
 
 export const Dark: Story = {

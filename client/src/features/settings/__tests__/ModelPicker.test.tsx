@@ -712,6 +712,28 @@ describe('ModelPicker list placement', () => {
 
     expect(panelOf().style.bottom).toBe('204px')
   })
+
+  it('opens above once the room below drops under the preferred space', () => {
+    placeField(460)
+    renderPicker([{ id: 'a' }])
+
+    // Below: 700 - 496 - 8 = 196 < 320, above: 452. The panel is pinned by its bottom edge,
+    // 700 - 460 + 4 = 244px up from the window bottom.
+    expect(panelOf().style.bottom).toBe('244px')
+    expect(panelOf().style.top).toBe('')
+    expect(panelOf().style.maxHeight).toBe('360px')
+  })
+
+  it('keeps the viewport margin below when the list opens downwards', () => {
+    placeField(100)
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 400 })
+    renderPicker([{ id: 'a' }])
+
+    // Below: 400 - 136 - 8 = 256 < 320, above: 92. Neither is comfortable, so the larger side is
+    // used; the cap keeps the 8px margin at the window bottom.
+    expect(panelOf().style.top).toBe('140px')
+    expect(panelOf().style.maxHeight).toBe('256px')
+  })
 })
 
 describe('ModelPicker closing', () => {
@@ -738,6 +760,52 @@ describe('ModelPicker closing', () => {
     } finally {
       document.removeEventListener('keydown', modalListener, true)
     }
+  })
+
+  it('does not swallow Escape when the catalog disappears while the list is open', () => {
+    const picker = (models: RemoteModel[]) => (
+      <ModelPicker
+        models={models}
+        value={[]}
+        multiple
+        inputValue=""
+        onInputChange={vi.fn()}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+        inputId="model-field"
+        placeholder="Pick a model"
+      />
+    )
+    // Stands in for the Modal's document-capture listener, which must still see the Escape.
+    const modalListener = vi.fn()
+    document.addEventListener('keydown', modalListener, true)
+    try {
+      const { rerender } = render(picker([{ id: 'vendor/alpha', name: 'Friendly Alpha' }]))
+      const input = screen.getByPlaceholderText('Pick a model')
+      fireEvent.click(input)
+      expect(screen.getByRole('listbox')).toBeTruthy()
+
+      // The panel unmounts with the catalog while the picker's own open flag stays true: the hook
+      // must follow the panel, not that flag, or its window-capture listener would outlive the panel.
+      rerender(picker([]))
+      expect(screen.queryByRole('listbox')).toBeNull()
+
+      fireEvent.keyDown(input, { key: 'Escape' })
+
+      expect(modalListener).toHaveBeenCalledTimes(1)
+      expect((modalListener.mock.calls[0][0] as KeyboardEvent).defaultPrevented).toBe(false)
+    } finally {
+      document.removeEventListener('keydown', modalListener, true)
+    }
+  })
+
+  it('closes on a mousedown on the anchor row outside the field', () => {
+    renderPicker([{ id: 'a' }], { anchored: true })
+    expect(screen.getByRole('listbox')).toBeTruthy()
+
+    fireEvent.mouseDown(screen.getByTestId('row'))
+
+    expect(screen.queryByRole('listbox')).toBeNull()
   })
 
   it('closes on a mousedown outside and on Tab, but not on a mousedown inside the list', () => {

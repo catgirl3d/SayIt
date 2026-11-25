@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BUILTIN_SET_ACTIVE_KEY,
+  BUILTIN_SET_EXTRA_WORDS_KEY,
   BUILTIN_SET_WORDS_KEY,
   BUILTIN_SETS,
   CUSTOM_THEME_ACTIVE_KEY,
@@ -76,5 +77,31 @@ describe('loadActiveHotwords', () => {
     expect(catalog.customThemeActive).toEqual({ theme_a: true })
     expect(catalog.activeWords).toEqual(['GPT', ...BUILTIN_SETS.code.words, 'SayIt fork'])
     await expect(loadActiveHotwords()).resolves.toEqual(catalog.activeWords)
+  })
+
+  it('merges user extras into categories but only composes extras from active sets', async () => {
+    mocks.settings = {
+      [BUILTIN_SET_WORDS_KEY]: { ai: ['GPT'], code: ['Git'] },
+      [BUILTIN_SET_EXTRA_WORDS_KEY]: { ai: ['My Assistant'], code: ['My Code Term'] },
+      [BUILTIN_SET_ACTIVE_KEY]: { ai: true, code: false },
+    }
+
+    const catalog = await loadHotwordCatalog()
+
+    expect(catalog.builtinSetWords.ai).toEqual(['GPT', 'My Assistant'])
+    expect(catalog.builtinSetWords.code).toEqual(['Git', 'My Code Term'])
+    expect(catalog.activeWords).toEqual(['GPT', 'My Assistant'])
+  })
+
+  it('restores current defaults before applying extras when the saved default map is missing', async () => {
+    mocks.settings = {
+      [BUILTIN_SET_EXTRA_WORDS_KEY]: { ai: ['My Assistant'] },
+      [BUILTIN_SET_ACTIVE_KEY]: { ai: true },
+    }
+
+    const catalog = await loadHotwordCatalog()
+
+    expect(catalog.builtinSetWords.ai).toEqual([...BUILTIN_SETS.ai.words, 'My Assistant'])
+    expect(catalog.activeWords).toEqual([...BUILTIN_SETS.ai.words, 'My Assistant'])
   })
 })

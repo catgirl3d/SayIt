@@ -119,12 +119,39 @@ const cases: Array<{
     writesFlag: true,
   },
   {
-    name: 'completed: legacy host is left alone when the flag is set',
+    name: 'completed: a legacy host is removed even when the flag is set',
     values: { onboardingVersion: '1.0.0', workMode: null, [FLAG_KEY]: true },
     url: '',
     storedUrl: `${LEGACY_URL}/`,
     expected: 'none',
+    resets: true,
+    writesFlag: false,
+  },
+  {
+    name: 'completed: a non-legacy address is left alone when the flag is set',
+    values: { onboardingVersion: '1.0.0', workMode: 'server', [FLAG_KEY]: true },
+    url: 'https://server.example',
+    storedUrl: 'https://server.example',
+    expected: 'none',
     resets: false,
+    writesFlag: false,
+  },
+  {
+    name: 'completed: a protocol-relative legacy host is still removed',
+    values: { onboardingVersion: '1.0.0', workMode: null, [FLAG_KEY]: true },
+    url: '',
+    storedUrl: '//sayitapp.site',
+    expected: 'none',
+    resets: true,
+    writesFlag: false,
+  },
+  {
+    name: 'completed: a scheme-colon legacy host is still removed',
+    values: { onboardingVersion: '1.0.0', workMode: null, [FLAG_KEY]: true },
+    url: '',
+    storedUrl: 'https:sayitapp.site',
+    expected: 'none',
+    resets: true,
     writesFlag: false,
   },
   {
@@ -297,9 +324,113 @@ describe('default server migration', () => {
     await expect(resolveDefaultServerMigration()).resolves.toBe('choose')
 
     expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
-    expect(getBackendBaseUrl()).toBe('')
     expect(settingWrites(FLAG_KEY)).toEqual([])
     expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to remove the legacy server address:', failure)
+  })
+
+  it('retries a legacy address removal after a completed migration and keeps quiet when it still fails', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: 'local', [FLAG_KEY]: true })
+    getStoredBackendBaseUrl.mockResolvedValue(LEGACY_URL)
+    getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+    const failure = new Error('database delete failed')
+    resetBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(resolveDefaultServerMigration()).resolves.toBe('none')
+
+    expect(resetBackendBaseUrl).toHaveBeenCalledOnce()
+    expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+    expect(settingWrites(FLAG_KEY)).toEqual([])
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to remove the legacy server address:', failure)
+  })
+
+  it('drops an active legacy address when the saved address cannot be read', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: 'local', [FLAG_KEY]: true })
+    getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+    const failure = new Error('database read failed')
+    getStoredBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(resolveDefaultServerMigration()).resolves.toBe('none')
+
+    expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+    expect(settingWrites(FLAG_KEY)).toEqual([])
+    expect(settingWrites('workMode')).toEqual([])
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to read the saved server address:', failure)
+  })
+
+  it('keeps an active own server when the saved address cannot be read', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: 'server', [FLAG_KEY]: true })
+    getBackendBaseUrl.mockReturnValue('https://server.example')
+    const failure = new Error('database read failed')
+    getStoredBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(resolveDefaultServerMigration()).resolves.toBe('none')
+
+    expect(discardBackendBaseUrlForSession).not.toHaveBeenCalled()
+    expect(settingWrites(FLAG_KEY)).toEqual([])
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to read the saved server address:', failure)
+  })
+
+  it('fails closed when the migration flag cannot be read and drops an active legacy address', async () => {
+    getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+    const failure = new Error('database read failed')
+    bridge.storeGet.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(needsWorkModeChoiceAtStartup()).resolves.toBe(true)
+
+    expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+    expect(setSetting).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to read the migration flag:', failure)
+  })
+
+  it.each(['local', 'cloud_api'])(
+    'keeps an already chosen %s mode when deleting the legacy address fails on the first run',
+    async (workMode) => {
+      seed({ onboardingVersion: '1.0.0', workMode })
+      getStoredBackendBaseUrl.mockResolvedValue(LEGACY_URL)
+      getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+      const failure = new Error('database delete failed')
+      resetBackendBaseUrl.mockRejectedValueOnce(failure)
+      const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+      await expect(resolveDefaultServerMigration()).resolves.toBe('none')
+
+      expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+      expect(setSetting).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to remove the legacy server address:', failure)
+    },
+  )
+
+  it('asks for a work mode when deleting the legacy address fails in server mode', async () => {
+    seed({ onboardingVersion: '1.0.0', workMode: 'server' })
+    getStoredBackendBaseUrl.mockResolvedValue(LEGACY_URL)
+    getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+    const failure = new Error('database delete failed')
+    resetBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(resolveDefaultServerMigration()).resolves.toBe('choose')
+
+    expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+    expect(setSetting).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to remove the legacy server address:', failure)
+  })
+
+  it('fails closed when the saved address cannot be read before the migration completed', async () => {
+    getBackendBaseUrl.mockReturnValue(LEGACY_URL)
+    const failure = new Error('database read failed')
+    getStoredBackendBaseUrl.mockRejectedValueOnce(failure)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(needsWorkModeChoiceAtStartup()).resolves.toBe(true)
+
+    expect(discardBackendBaseUrlForSession).toHaveBeenCalledOnce()
+    expect(settingWrites(FLAG_KEY)).toEqual([])
+    expect(log).toHaveBeenCalledWith('[defaultServerMigration] Failed to read the saved server address:', failure)
+    expect(log).toHaveBeenCalledWith('[bootstrap] resolveDefaultServerMigration error:', failure)
   })
 
   it('asks for a work mode when migration resolution fails', async () => {

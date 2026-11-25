@@ -1,5 +1,6 @@
 export type RecorderState = 'idle' | 'recording' | 'processing'
 import { t } from '@/i18n'
+import type { CustomWaveColors, OverlayWaveTheme } from '@/lib/overlayWaveColors'
 
 /** Caption data the subtitle session hands to the overlay; transport shape (state, locale) belongs to OverlayService. */
 export interface SubtitleOverlayPayload {
@@ -14,7 +15,7 @@ export interface SubtitleOverlayPayload {
   subtitleSource: string
 }
 
-export type OverlayWaveTheme = 'black-white' | 'black-blue' | 'black-rainbow'
+export type { CustomWaveColors, OverlayWaveTheme }
 
 export type FailureRecovery = 'unknown' | 'history' | 'none'
 
@@ -26,7 +27,9 @@ export interface FailureOverlayPayload {
   cardToken: number
 }
 
-export type OverlayWidthPreset = 'short' | 'medium' | 'long'
+export const OVERLAY_WIDTH_PRESET_VALUES = ['short', 'medium', 'long'] as const
+
+export type OverlayWidthPreset = (typeof OVERLAY_WIDTH_PRESET_VALUES)[number]
 
 export interface OverlayWidthConfig {
   barCount: number
@@ -39,9 +42,27 @@ export const OVERLAY_WIDTH_PRESETS: Record<OverlayWidthPreset, OverlayWidthConfi
   long: { barCount: 24, windowWidth: 360 },
 }
 
+export function isOverlayWidthPreset(value: unknown): value is OverlayWidthPreset {
+  return typeof value === 'string' && OVERLAY_WIDTH_PRESET_VALUES.includes(value as OverlayWidthPreset)
+}
+
 export interface OverlayCommonPayload {
   theme: OverlayWaveTheme
+  /**
+   * Custom wave colors. Sent whatever the active theme is, so every payload built by `getCommonPayload()`
+   * is self-contained: the native side replaces the latest overlay payload as a whole and re-emits it
+   * (`emit_latest` in window/mod.rs, e.g. after the overlay webview is recreated), so a re-emit must not
+   * depend on a field that only an earlier payload carried. Subtitle payloads skip `getCommonPayload()`
+   * and carry no theme; they draw no theme colors. It is three short strings, so the cost is negligible.
+   */
+  customWave: CustomWaveColors
   showDuration: boolean
+  /**
+   * Whether interface animations are enabled. Required because the overlay is a separate React
+   * root and cannot read the main window's state; every common payload carries it. Subtitle
+   * payloads are a separate shape and do not use the animated pill.
+   */
+  animationsEnabled: boolean
   baseWidth?: number
   barCount?: number
   /**

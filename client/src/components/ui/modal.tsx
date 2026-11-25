@@ -7,13 +7,53 @@
 // the only keyboard way to close it was to Tab to "Cancel" (a backdrop click needs a mouse).
 // The semantics are fixed here, once.
 
-import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
+import { motionAllowed } from '@/lib/motion'
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+const EXIT_MS = 140
+
+/**
+ * Fade out on close.
+ *
+ * Callers unmount the dialog (`{open && <Modal …/>}`) from many places (Esc, the backdrop, the close
+ * button, Cancel/OK inside the children), so the exit cannot be played before unmounting without
+ * touching every call site. Instead, once React has removed the layer, the same detached node is put
+ * back for EXIT_MS with the exit classes, inert and hidden from assistive tech, and then removed.
+ * React no longer owns the node at that point, so nothing renders into it again.
+ *
+ * The check runs one microtask after the layout cleanup: a real unmount has removed the node by
+ * then, while StrictMode's simulated unmount in development leaves it connected (no exit).
+ * Reinsertion can reset scroll positions, so they are read while the node is still attached and
+ * restored after. A layer with no layout box (zero width: nothing on screen, e.g. jsdom) is skipped.
+ */
+function useExitFade(rootRef: RefObject<HTMLDivElement>) {
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    return () => {
+      if (!root || root.offsetWidth === 0 || !motionAllowed()) return
+      const scrolled = Array.from(root.querySelectorAll<HTMLElement>('*'))
+        .filter((el) => el.scrollTop > 0)
+        .map((el) => [el, el.scrollTop] as const)
+      queueMicrotask(() => {
+        if (root.isConnected) return
+        root.classList.replace('modal-backdrop-enter', 'modal-backdrop-exit')
+        root.querySelector('.modal-panel-enter')?.classList.replace('modal-panel-enter', 'modal-panel-exit')
+        root.setAttribute('aria-hidden', 'true')
+        root.setAttribute('inert', '')
+        root.style.pointerEvents = 'none'
+        document.body.appendChild(root)
+        for (const [el, top] of scrolled) el.scrollTop = top
+        window.setTimeout(() => root.remove(), EXIT_MS + 40)
+      })
+    }
+  }, [rootRef])
+}
 
 // Open modals, bottom to top. Only the topmost one answers to Esc and Tab. Every modal listens on
 // `document`, and stopPropagation does not keep a second listener on the same node from running,
@@ -56,10 +96,13 @@ export function Modal({
 }: ModalProps) {
   const t = useT()
   const panelRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2, 8)}`).current
   const descriptionId = `${titleId}-description`
   const stackToken = useRef(Symbol('modal')).current
   const sectioned = icon != null || description != null || footer != null
+
+  useExitFade(rootRef)
 
   const requestClose = useCallback(() => {
     if (!locked) onClose()
@@ -147,11 +190,12 @@ export function Modal({
 
   return createPortal(
     <div
+      ref={rootRef}
       // Frosted backdrop, the one shared style for every modal layer (the installing overlay and
       // the import-complete notice use it too): the page behind is blurred rather than plainly
       // dimmed. --background is near-black in the dark theme, so the layer still reads dark there;
       // do not go back to fixed black — it cannot produce this look in the light themes.
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+      className="modal-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
       onMouseDown={(e) => { pressStartedInPanel.current = e.target !== e.currentTarget }}
       onClick={() => { if (!pressStartedInPanel.current) requestClose() }}
     >
@@ -164,7 +208,7 @@ export function Modal({
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          'relative max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] rounded-xl border bg-card shadow-xl',
+          'modal-panel-enter relative max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] rounded-xl border bg-card shadow-xl',
           sectioned ? 'flex flex-col overflow-hidden' : 'overflow-y-auto p-6',
           panelClassName,
         )}

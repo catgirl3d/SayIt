@@ -12,3 +12,9 @@
 # file as modified while `git diff` is empty.
 *.toml text eol=lf
 *.rs text eol=lf
+
+# tauri-build regenerates the permission schemas on every cargo build and
+# writes them with LF. With core.autocrlf=true the checkout puts CRLF into the
+# worktree, so each build leaves the index stat cache stale and `git status`
+# reports a phantom modification of this file pair while `git diff` is empty.
+client/src-tauri/gen/schemas/*.json text eol=lf

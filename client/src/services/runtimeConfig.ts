@@ -1,4 +1,5 @@
 import * as bridge from './bridge'
+import { isLegacyTrialServerUrl } from './legacyServer'
 import { t } from '@/i18n'
 
 declare const __SAYIT_DEFAULT_SERVER_URL__: string
@@ -31,13 +32,15 @@ function normalizeUrl(value: string | null | undefined): string {
 function resolveBuiltinDefaultBaseUrl(): string {
   const env = getEnv()
   const value = normalizeUrl(env.VITE_BACKEND_BASE_URL)
-  if (value) return value
-  return trimSlash(BUILTIN_DEFAULT_SERVER_URL)
+  if (value && !isLegacyTrialServerUrl(value)) return value
+  const builtin = trimSlash(BUILTIN_DEFAULT_SERVER_URL)
+  return isLegacyTrialServerUrl(builtin) ? '' : builtin
 }
 
 function resolveEnvOverrideBaseUrl(): string {
   const env = getEnv()
-  return normalizeUrl(env.VITE_BACKEND_BASE_URL)
+  const value = normalizeUrl(env.VITE_BACKEND_BASE_URL)
+  return isLegacyTrialServerUrl(value) ? '' : value
 }
 
 let backendBaseUrl = resolveBuiltinDefaultBaseUrl()
@@ -121,6 +124,9 @@ export async function setBackendBaseUrl(value: string): Promise<string> {
   if (!normalized) {
     throw new Error(t('runtimeConfig.emptyServerUrl'))
   }
+  if (isLegacyTrialServerUrl(normalized)) {
+    throw new Error(t('runtimeConfig.legacyServerBlocked'))
+  }
   return enqueue(async () => {
     await bridge.storeSetBackendUrl(normalized)
     backendBaseUrl = normalized
@@ -161,7 +167,7 @@ export async function discardBackendBaseUrlForSession(): Promise<void> {
 export function getWSUrl(): string {
   const env = getEnv()
   const explicit = normalizeUrl(env.VITE_WS_URL)
-  if (explicit) return explicit
+  if (explicit && !isLegacyTrialServerUrl(explicit)) return explicit
 
   const base = getBackendBaseUrl()
   if (!base) return ''

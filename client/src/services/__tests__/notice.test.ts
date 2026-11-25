@@ -1,19 +1,36 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getBackendBaseUrl = vi.hoisted(() => vi.fn())
+const getSetting = vi.hoisted(() => vi.fn())
+const setSetting = vi.hoisted(() => vi.fn())
 vi.mock('../runtimeConfig', () => ({ getBackendBaseUrl }))
+vi.mock('../store', () => ({ getSetting, setSetting }))
 
 import { fetchActiveNotice, normalizeRemoteNotice } from '../notice'
 
 const base = { id: 'notice-1', level: 'info' as const }
 
-describe('notice loading without a configured server', () => {
+const legacyUrls = [
+  'https://sayitapp.site',
+  'https://www.sayitapp.site',
+  'https://SayItApp.Site',
+  'https://sayitapp.site.',
+  '//sayitapp.site',
+  'https:sayitapp.site',
+]
+
+describe('notice loading', () => {
+  beforeEach(() => {
+    globalThis.localStorage?.removeItem('__devNotice')
+    getSetting.mockReset().mockResolvedValue([])
+  })
+
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.clearAllMocks()
   })
 
-  it('returns null without fetching', async () => {
+  it('returns null without fetching when no server address is configured', async () => {
     getBackendBaseUrl.mockReturnValue('')
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
@@ -21,6 +38,57 @@ describe('notice loading without a configured server', () => {
     await expect(fetchActiveNotice('0.0.0')).resolves.toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  it.each(legacyUrls)('does not contact the former trial server at %s', async (url) => {
+    getBackendBaseUrl.mockReturnValue(url)
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await expect(fetchActiveNotice('0.0.0')).resolves.toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it.each(['not a url', 'ftp://server.example', '//server.example'])(
+    'does not fetch for an invalid, relative, or non-HTTP address %s',
+    async (url) => {
+      getBackendBaseUrl.mockReturnValue(url)
+      const fetchSpy = vi.fn()
+      vi.stubGlobal('fetch', fetchSpy)
+
+      await expect(fetchActiveNotice('0.0.0')).resolves.toBeNull()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['https://server.example', 'http://server.example'])(
+    'fetches a notice from %s without following redirects',
+    async (baseUrl) => {
+      getBackendBaseUrl.mockReturnValue(baseUrl)
+      const payload = {
+        ...base,
+        title: 'Legacy title',
+        body: 'Maintenance tonight',
+        translations: { en: { title: 'Maintenance notice' } },
+      }
+      const fetchSpy = vi.fn(async (_input: string, _init?: RequestInit) => ({
+        ok: true,
+        json: async () => payload,
+      }))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      const notice = await fetchActiveNotice('0.0.0', 'en')
+
+      expect(notice).toMatchObject({
+        id: 'notice-1',
+        level: 'info',
+        title: 'Maintenance notice',
+        body: 'Maintenance tonight',
+      })
+      expect(fetchSpy).toHaveBeenCalledOnce()
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe(`${baseUrl}/api/notice`)
+      expect(fetchSpy.mock.calls[0]?.[1]?.redirect).toBe('error')
+    },
+  )
 })
 
 describe('normalizeRemoteNotice', () => {

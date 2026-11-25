@@ -1,5 +1,6 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import { useSlidingIndicator } from '@/components/ui/useSlidingIndicator'
 import {
   ChevronRight,
   Home,
@@ -94,9 +95,11 @@ function NavItem({
       end={to === '/'}
       className={({ isActive }) =>
         cn(
-          'flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors',
+          // The selected background is drawn by the group's sliding indicator (see NavGroup);
+          // relative z-[1] keeps the text above it.
+          'relative z-[1] flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors',
           isActive
-            ? 'bg-sidebar-item-active font-medium text-sidebar-text-active'
+            ? 'font-medium text-sidebar-text-active'
             : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
         )
       }
@@ -105,6 +108,26 @@ function NavItem({
       <span className="truncate">{label}</span>
       {indicator ?? (alpha && <AlphaBadge />)}
     </NavLink>
+  )
+}
+
+/**
+ * One sidebar navigation group with its own sliding selection background.
+ *
+ * Each group owns an indicator because the active page is always in exactly one group: a group
+ * without it fades out, and coming back makes the background appear in place instead of sliding
+ * across the section headings. The indicator is the last child so `space-y-*` does not add a top
+ * margin to the first real entry.
+ */
+function NavGroup({ children, className = 'space-y-1', id }: { children: ReactNode; className?: string; id?: string }) {
+  const { pathname } = useLocation()
+  const groupRef = useRef<HTMLDivElement>(null)
+  const indicatorRef = useSlidingIndicator(groupRef, pathname, { activeSelector: '[aria-current="page"]' })
+  return (
+    <div id={id} ref={groupRef} className={cn('relative', className)}>
+      {children}
+      <span ref={indicatorRef} aria-hidden className="sliding-indicator rounded-lg bg-sidebar-item-active" />
+    </div>
   )
 }
 
@@ -151,11 +174,11 @@ function SettingsSection() {
         <ChevronRight aria-hidden className={cn('ml-auto h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')} />
       </button>
       {open && (
-        <div id={settingsItemsId} className="space-y-1">
+        <NavGroup id={settingsItemsId}>
           {systemNavItems.map(({ to, icon, labelKey }) => (
             <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
           ))}
-        </div>
+        </NavGroup>
       )}
     </div>
   )
@@ -180,8 +203,8 @@ function IconOnlyNavItem({
         aria-label={label}
         className={({ isActive }) =>
           cn(
-            'flex items-center justify-center rounded-lg p-2 transition-colors',
-            isActive ? 'bg-sidebar-item-active text-sidebar-text-active' : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
+            'relative z-[1] flex items-center justify-center rounded-lg p-2 transition-colors',
+            isActive ? 'text-sidebar-text-active' : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
           )
         }
       >
@@ -208,7 +231,7 @@ function FooterIcons() {
 
   return (
     <div className="flex items-center justify-between">
-      <div className="flex items-center gap-1">
+      <NavGroup className="flex items-center gap-1">
         {footerNavItems.map(({ to, icon, labelKey }) => {
           const highlight = updateAvailable && to === '/about'
           return (
@@ -221,7 +244,7 @@ function FooterIcons() {
             />
           )
         })}
-      </div>
+      </NavGroup>
       <ModeIndicator />
     </div>
   )
@@ -301,16 +324,18 @@ export default function Sidebar() {
           <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
             {t('nav.section.workspace')}
           </div>
-          {workspaceNavItems.map(({ to, icon, labelKey, alpha }) => (
-            <NavItem
-              key={to}
-              to={to}
-              icon={icon}
-              label={t(labelKey)}
-              alpha={alpha}
-              indicator={to === '/system-audio' ? systemAudioIndicator : undefined}
-            />
-          ))}
+          <NavGroup>
+            {workspaceNavItems.map(({ to, icon, labelKey, alpha }) => (
+              <NavItem
+                key={to}
+                to={to}
+                icon={icon}
+                label={t(labelKey)}
+                alpha={alpha}
+                indicator={to === '/system-audio' ? systemAudioIndicator : undefined}
+              />
+            ))}
+          </NavGroup>
         </div>
 
         {/* Voice & AI */}
@@ -318,9 +343,11 @@ export default function Sidebar() {
           <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
             {t('nav.section.ai')}
           </div>
-          {aiNavItems.map(({ to, icon, labelKey }) => (
-            <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
-          ))}
+          <NavGroup>
+            {aiNavItems.map(({ to, icon, labelKey }) => (
+              <NavItem key={to} to={to} icon={icon} label={t(labelKey)} />
+            ))}
+          </NavGroup>
         </div>
 
         {/* System Settings */}

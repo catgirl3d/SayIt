@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setLocale, t } from '@/i18n'
 import { clearRuntimeEvents, getRuntimeEvents } from '@/services/debugLog'
@@ -145,13 +145,13 @@ describe('history recording downloads', () => {
     const timestamp = new Date(2026, 9, 25, 10, 11, 12).getTime()
     const audioFilePath = 'C:\\recordings\\one.wav'
     const item = record({ timestamp, audioFilePath })
-    render(<HistoryRecordList records={[item]} onDelete={() => undefined} />)
+    const { container } = render(<HistoryRecordList records={[item]} onDelete={() => undefined} />)
     fireEvent.click(screen.getByRole('button', { name: t('record.details') }))
-    return { item, audioFilePath }
+    return { item, audioFilePath, container }
   }
 
   it('copies the recording directly with the generated flat filename', async () => {
-    const { item, audioFilePath } = renderDownloadRecord()
+    const { item, audioFilePath, container } = renderDownloadRecord()
     const savedPath = 'C:\\Users\\Storybook\\Downloads\\sayit_20261025_101112.wav'
     invokeMock.mockResolvedValueOnce(savedPath)
 
@@ -165,6 +165,8 @@ describe('history recording downloads', () => {
     expect(invokeMock.mock.calls.some(([command]) => command === 'save_audio_to_downloads')).toBe(false)
     expect(item).toEqual(expect.objectContaining({ audioFilePath }))
     expect(await screen.findByText(t('record.savedTo', { path: savedPath }))).toBeTruthy()
+    expect(container.querySelector('.success-check')).not.toBeNull()
+    expect(container.querySelector('.lucide-download')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: t('record.openFolder') }))
     expect(invokeMock).toHaveBeenCalledWith('reveal_file_in_folder', { filePath: savedPath })
     expect(screen.queryByRole('alert')).toBeNull()
@@ -177,16 +179,57 @@ describe('history recording downloads', () => {
     ['unreadable', 'record.downloadUnreadable'],
   ] as const)('shows a localized message for %s and leaves the record unchanged', async (errorCode, key) => {
     invokeMock.mockRejectedValueOnce(errorCode)
-    const { item, audioFilePath } = renderDownloadRecord()
+    const { item, audioFilePath, container } = renderDownloadRecord()
     const before = { ...item }
 
     fireEvent.click(await screen.findByRole('button', { name: t('record.downloadAudio') }))
 
     expect(await screen.findByText(t(key), { exact: false })).toBeTruthy()
     expect(item).toEqual(before)
+    // A failure replaces the success check with the destructive X.
+    expect(container.querySelector('.success-check')).toBeNull()
+    expect(container.querySelector('.lucide-x')).not.toBeNull()
     expect(invokeMock).toHaveBeenCalledWith('save_recording_to_downloads', {
       filePath: audioFilePath,
       fileName: 'sayit_20261025_101112.wav',
     })
+  })
+
+  it('remounts the download icon when the success state resets', async () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = renderDownloadRecord()
+
+      fireEvent.click(screen.getByRole('button', { name: t('record.downloadAudio') }))
+      await act(async () => { await Promise.resolve() })
+
+      expect(container.querySelector('.success-check')).not.toBeNull()
+      expect(container.querySelector('.lucide-download')).toBeNull()
+
+      act(() => { vi.advanceTimersByTime(5000) })
+
+      expect(container.querySelector('.success-check')).toBeNull()
+      expect(container.querySelector('.lucide-download')).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('history copy success', () => {
+  beforeEach(() => {
+    setLocale('en')
+    invokeMock.mockReset().mockResolvedValue(undefined)
+  })
+
+  afterEach(() => setLocale('en'))
+
+  it('mounts the success check after copying a record', async () => {
+    const { container } = render(<HistoryRecordList records={[record()]} onDelete={() => undefined} />)
+
+    fireEvent.click(screen.getByRole('button', { name: t('record.copy') }))
+
+    await waitFor(() => expect(container.querySelector('.success-check')).not.toBeNull())
+    expect(container.querySelector('.lucide-copy')).toBeNull()
   })
 })

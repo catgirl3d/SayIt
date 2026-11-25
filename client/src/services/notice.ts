@@ -8,6 +8,7 @@
 //   - 链接只允许 https，且用系统浏览器打开，绝不导航 WebView 自身。
 
 import { getBackendBaseUrl } from './runtimeConfig'
+import { isLegacyTrialServerUrl } from './legacyServer'
 import { getSetting, setSetting } from './store'
 import { getLocale, type Locale } from '@/i18n'
 
@@ -117,9 +118,9 @@ function withinTimeWindow(notice: RemoteNotice, now = Date.now()): boolean {
 }
 
 async function loadRaw(): Promise<unknown> {
-  // 开发预览：dev 环境下可在控制台执行
+  // Development preview: in a dev build, run this in the console:
   //   localStorage.setItem('__devNotice', JSON.stringify({ id:'t1', level:'warning', title:'Test notice', body:'Content…', linkUrl:'https://server.example', linkLabel:'Open website' }))
-  // 刷新即可看到 banner 效果，无需后端。清除：localStorage.removeItem('__devNotice')
+  // Refresh to see the banner without a backend. Clear it with localStorage.removeItem('__devNotice').
   if (import.meta.env.DEV) {
     try {
       const dev = localStorage.getItem('__devNotice')
@@ -131,9 +132,24 @@ async function loadRaw(): Promise<unknown> {
 
   const baseUrl = getBackendBaseUrl()
   if (!baseUrl) return null
+
+  // Reject relative or malformed values before fetch resolves them against the page origin.
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+
+  // This fork does not run the former upstream trial server, so announcements from it are ignored.
+  if (isLegacyTrialServerUrl(baseUrl)) return null
+
   const resp = await fetch(`${baseUrl}/api/notice`, {
     cache: 'no-store',
     signal: AbortSignal.timeout(8000),
+    // A redirect could carry a permitted own server to the upstream host, so never follow one.
+    redirect: 'error',
   })
   if (!resp.ok) return null
   return await resp.json()
