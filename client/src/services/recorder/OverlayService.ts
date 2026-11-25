@@ -84,6 +84,8 @@ export class OverlayService {
   /** Whether streaming live display is on for this recording: when true the bubble is shown from the very start (placeholder) and the window is never resized mid-recording. */
   private streamingActive = false
   private currentState: OverlayVisualState = 'waiting'
+  /** Cache of the AI eligibility flag from the last thinking presentation, reused by state re-publishes. */
+  private currentThinkingAi = false
   private activeMicSourceHint: MicSourceHint | null = null
   private micSourceHintHideId: ReturnType<typeof setTimeout> | null = null
   private micSourceHintGeneration = 0
@@ -284,6 +286,7 @@ export class OverlayService {
   private beginPresentation(state: OverlayVisualState) {
     this.overlayGeneration++
     this.currentState = state
+    this.currentThinkingAi = false
     this.activeCardToken = 0
     this.failurePayload = null
     this.clearFallbackHideTimer()
@@ -387,6 +390,7 @@ export class OverlayService {
   private publishLiveListening(extra: Record<string, unknown> = {}, state: OverlayVisualState = 'listening') {
     void bridge.updateOverlay({
       state,
+      ...(state === 'thinking' && this.currentThinkingAi ? { thinkingAi: true } : {}),
       ...extra,
       elapsedSec: clampSec(this.getElapsedSec()),
       ...(this.activeWarning ? { warning: this.activeWarning } : {}),
@@ -410,12 +414,20 @@ export class OverlayService {
     })
   }
 
-  showThinking(elapsedSec: number, token = 0) {
+  /**
+   * @param options.ai Whether this run is set up to use AI, based on the eligibility frozen when
+   *   it started (AI on and the recording at or above the start-time minimum), not the live
+   *   toggle: a recording shorter than the minimum keeps the plain "Processing" label. This
+   *   reflects the run's setup, not a guarantee that a separate AI call happens.
+   */
+  showThinking(elapsedSec: number, token = 0, options: { ai?: boolean } = {}) {
     this.currentState = 'thinking'
+    this.currentThinkingAi = options.ai === true
     // PTT Lab reuses the thinking animation but has no real recording run; token=0 only displays and never swallows the global Esc.
     this.setEscapeMode(token > 0 ? 'cancel_processing' : 'off', token)
     void bridge.updateOverlay({
       state: 'thinking',
+      ...(options.ai && { thinkingAi: true }),
       elapsedSec: clampSec(elapsedSec),
       ...this.getMicSourceHintPayload(),
       ...this.getCommonPayload(),
@@ -553,6 +565,7 @@ export class OverlayService {
   hide() {
     this.overlayGeneration++
     this.currentState = 'waiting'
+    this.currentThinkingAi = false
     this.activeCardToken = 0
     this.failurePayload = null
     this.clearMicSourceHint()

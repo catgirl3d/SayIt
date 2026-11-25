@@ -494,6 +494,26 @@
   animation: overlay-progress-sheen 1.6s ease-in-out var(--estimate, 3s) infinite;
 }
 
+/* Sparkle pulse only; the pill keeps its progress animation and the user's wave theme.
+   The in-app motion switch suppresses the animation. */
+@keyframes overlay-ai-sparkle {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+
+  50% {
+    opacity: 0.55;
+    transform: scale(0.8) rotate(18deg);
+  }
+}
+
+.overlay-ai-sparkle {
+  transform-origin: center;
+  animation: overlay-ai-sparkle 1.8s ease-in-out infinite;
+}
+
 /* Recording warnings (too quiet, microphone muted). They used to use Tailwind's animate-pulse:
    appearing already bright and then flashing between 50% opacity looked anxious on the small black
    pill. Now they crossfade in with the same delay as other swapped pill content and then only
@@ -616,6 +636,7 @@ html[data-motion="off"] .success-check,
 html[data-motion="off"] .success-check path,
 html[data-motion="off"] .success-check polyline,
 html[data-motion="off"] .overlay-pill-content-enter,
+html[data-motion="off"] .overlay-ai-sparkle,
 html[data-motion="off"] .overlay-attention,
 html[data-motion="off"] .overlay-breathe {
   animation: none !important;

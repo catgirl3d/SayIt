@@ -166,6 +166,7 @@ type WriteRunHistoryResult =
 export interface RecorderOrchestratorTestSeam {
   state: RecorderState
   activeRunId: number
+  activeRunAiConfig: { aiEnabled: boolean; aiMinDurationSec: number } | null
   audioSentSamples: number
   wallTimeAtStopSec: number
   recordedChunks: ArrayBuffer[]
@@ -207,6 +208,8 @@ export class RecorderOrchestrator {
   private runSequence = 0
   private activeRunId = 0
   private activeRunMode: WorkMode | null = null
+  /** AI settings frozen when this run started; see the snapshot assignment in startRecordingInner. */
+  private activeRunAiConfig: { aiEnabled: boolean; aiMinDurationSec: number } | null = null
 
   private recordStartPerf = 0
   private audioSentSamples = 0
@@ -358,6 +361,8 @@ export class RecorderOrchestrator {
       set state(value) { recorder.state = value },
       get activeRunId() { return recorder.activeRunId },
       set activeRunId(value) { recorder.activeRunId = value },
+      get activeRunAiConfig() { return recorder.activeRunAiConfig },
+      set activeRunAiConfig(value) { recorder.activeRunAiConfig = value },
       get audioSentSamples() { return recorder.audioSentSamples },
       set audioSentSamples(value) { recorder.audioSentSamples = value },
       get wallTimeAtStopSec() { return recorder.wallTimeAtStopSec },
@@ -449,6 +454,7 @@ export class RecorderOrchestrator {
     if (this.activeRunId === runId) {
       this.activeRunId = 0
       this.activeRunMode = null
+      this.activeRunAiConfig = null
       this.processingCancelable = false
     }
   }
@@ -1034,6 +1040,7 @@ export class RecorderOrchestrator {
     this.restoreSystemMuteIfNeeded()
     this.startRecordingLock = false
     this.activeRunMode = null
+    this.activeRunAiConfig = null
     this.pendingStopWhileStarting = false
     this.captureAcceptingAudio = false
     this.activeCapture = null
@@ -2051,12 +2058,19 @@ export class RecorderOrchestrator {
       }, (MAX_RECORDING_SEC - RECORDING_COUNTDOWN_SEC) * 1000)
     }
 
+    // This run keeps the AI settings it started with: changing them mid-recording must not
+    // change what this run does or what the overlay says.
+    const runAi = {
+      aiEnabled: this.cachedAiEnabled,
+      aiMinDurationSec: this.cachedAiMinDurationSec,
+    }
+    this.activeRunAiConfig = runAi
     const promptOpts = this.currentPromptResolution
       ? {
         runId,
-        systemPrompt: this.cachedAiEnabled ? this.currentPromptResolution.systemPrompt : undefined,
-        disableAi: !this.cachedAiEnabled,
-        aiMinDurationSec: this.cachedAiMinDurationSec,
+        systemPrompt: runAi.aiEnabled ? this.currentPromptResolution.systemPrompt : undefined,
+        disableAi: !runAi.aiEnabled,
+        aiMinDurationSec: runAi.aiMinDurationSec,
         clientMeta: this.cachedClientRuntimeInfo,
         appContext: activeAppContext,
         textContext,
@@ -2067,8 +2081,8 @@ export class RecorderOrchestrator {
       }
       : {
         runId,
-        disableAi: !this.cachedAiEnabled,
-        aiMinDurationSec: this.cachedAiMinDurationSec,
+        disableAi: !runAi.aiEnabled,
+        aiMinDurationSec: runAi.aiMinDurationSec,
         clientMeta: this.cachedClientRuntimeInfo,
         appContext: activeAppContext,
         textContext,
@@ -2510,14 +2524,23 @@ export class RecorderOrchestrator {
       return
     }
 
-    // 短语音门槛只能等到这里才判断：时长要录完才知道。audioDur 用的是边发边累计的
-    // 已发送采样数（不是本地攒下来的音频），所以不影响上传，服务器模式照旧流式。
+    // The short-speech threshold can only be decided here because the duration is known only
+    // after the recording ends. audioDur counts samples already sent while recording (not audio
+    // buffered locally), so it does not affect the upload: Server mode still streams as before.
     //
-    // 本地/云 API 模式的 AI 是 Provider 在 ASR 之后自己另发的一次请求，它们在那时用
-    // 同一个时长自行判断；这里这份只给服务器模式用 —— 服务端的 AI 紧跟 ASR 执行，
-    // 客户端插不进中间，只能把结论随 stop 一起送过去。
-    const skipAiForShortSpeech = this.cachedAiMinDurationSec > 0
-      && audioDur < this.cachedAiMinDurationSec
+    // Local and Cloud API providers decide AI in their own post-ASR request, using the threshold
+    // frozen in their start options. This stop flag is for Server mode, whose AI runs immediately
+    // after ASR and leaves no client-side gap, so the conclusion travels with stop. The overlay
+    // indicator uses the same start-frozen settings: changing the AI toggle or threshold mid-run
+    // must not change what this run does or what the overlay says.
+    // Production cannot stop without a start (the state guard above), so this neutral fallback
+    // is only for a seam/test-driven stop.
+    const runAi = this.activeRunAiConfig ?? { aiEnabled: false, aiMinDurationSec: 0 }
+    const skipAiForShortSpeech = runAi.aiMinDurationSec > 0
+      && audioDur < runAi.aiMinDurationSec
+    // The overlay reflects this run's start-frozen AI setup (AI on and at/above the start-time
+    // minimum), not the live settings.
+    const aiEligibleForThisRun = runAi.aiEnabled && !skipAiForShortSpeech
 
     this.provider.stop({
       pttHoldMs,
@@ -2534,7 +2557,7 @@ export class RecorderOrchestrator {
     addRuntimeEvent('info', 'recorder', 'Stop sent', {
       audioSec: audioDur,
       pttHoldMs: Math.round(pttHoldMs),
-      aiMinDurationSec: this.cachedAiMinDurationSec || undefined,
+      aiMinDurationSec: runAi.aiMinDurationSec || undefined,
       skipAiForShortSpeech: skipAiForShortSpeech || undefined,
     })
 
@@ -2550,7 +2573,7 @@ export class RecorderOrchestrator {
       audioSec: audioDur,
       timeoutMs: processingTimeoutMs,
     })
-    this.overlayService.showThinking(audioDur, runId)
+    this.overlayService.showThinking(audioDur, runId, { ai: aiEligibleForThisRun })
     this.processingTimeoutId = setTimeout(() => {
       if (this.state !== 'processing' || !this.isRunCurrent(runId)) return
       if (this.textInsertionInFlight) {
