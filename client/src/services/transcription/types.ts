@@ -207,6 +207,9 @@ export interface TranscriptionProvider {
    */
   acceptsTextContext?(): boolean
 
+  /** Whether this run is expected to have an AI stage when it starts. False is known impossible; undefined is unknown. */
+  runAiExpected?(): boolean | undefined
+
   /**
    * Whether `StartOptions.leadingContextMs` can be honored for the next run: the recognizer drops the words inside
    * the context. Absent or false means the caller must submit the plain piece. A provider may answer from its last
