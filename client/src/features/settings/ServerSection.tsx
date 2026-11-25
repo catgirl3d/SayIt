@@ -12,6 +12,7 @@ import {
   resetBackendBaseUrl,
   setBackendBaseUrl as persistBackendBaseUrl,
 } from '@/services/runtimeConfig'
+import { isLegacyTrialServerUrl } from '@/services/legacyServer'
 import { reconnectProvider } from '@/services/recorder'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 import { setEngineDraftDirty } from '@/stores/engineDraft'
@@ -124,6 +125,10 @@ export default function ServerSection({ speechLanguage }: { speechLanguage: Spee
         tone: 'warning',
         message: t('server.urlInvalid'),
       })
+      return
+    }
+    if (isLegacyTrialServerUrl(normalized)) {
+      setResult({ tone: 'warning', message: t('runtimeConfig.legacyServerBlocked') })
       return
     }
 
