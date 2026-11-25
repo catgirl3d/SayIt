@@ -211,6 +211,12 @@ export const DEFAULTS: Record<string, unknown> = {
   // does ASR and the client calls the current AI profile.
   'server.aiSource': 'managed', // Options: 'managed' | 'custom'
 
+  // ── Interface motion ──
+  // Off disables the interface motion (overlay pill, waveform snapshot and processing bar,
+  // dialog enter/exit, sliding selection highlights, success check). Loading spinners keep
+  // running, and the OS reduce-motion setting is not consulted. Options: true | false
+  'ui.animations': true,
+
   // ── Overlay window ──
   overlayWaveTheme: DEFAULT_WAVE_THEME, // Options: 'black-rainbow' | 'black-blue' | 'black-white' | 'custom'
   // Colors used when overlayWaveTheme is 'custom': { mode: 'solid' | 'gradient', from: '#rrggbb', to: '#rrggbb' }.

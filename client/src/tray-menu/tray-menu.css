@@ -132,14 +132,3 @@ body {
 .tray-menu-quit:focus-visible .tray-menu-leading {
   color: hsl(var(--destructive-strong));
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .tray-menu-item {
-    transition: none;
-  }
-
-  .tray-menu-switch,
-  .tray-menu-switch-thumb {
-    transition: none;
-  }
-}

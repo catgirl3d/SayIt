@@ -1,6 +1,7 @@
 import * as bridge from '../services/bridge'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, MicVocal, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Copy, MicVocal, X } from 'lucide-react'
+import { SuccessCheck } from '@/components/ui/success-check'
 import { isLocale, setLocale } from '@/i18n'
 import { useT } from '@/i18n/useT'
 import { addRuntimeEvent } from '../services/debugLog'
@@ -18,6 +19,8 @@ import {
   type CustomWaveColors,
   type OverlayWaveTheme,
 } from '@/lib/overlayWaveColors'
+import { setMotionEnabled, useMotionAllowed } from '@/lib/motion'
+import { usePillMorph } from './pillMorph'
 
 type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast' | 'subtitles'
 type RecordingVisualPhase = 'preparing' | 'listening'
@@ -285,11 +288,17 @@ export default function Overlay() {
   // them and overlay-hidden pauses them again.
   const [animationsPaused, setAnimationsPaused] = useState(true)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const pillRef = useRef<HTMLDivElement | null>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const preparingPaintFrameRef = useRef<number | null>(null)
   const pendingListeningVisualRef = useRef(false)
   const elapsedSecRef = useRef(0)
   const shownIdRef = useRef(0)
+  // Whether the overlay document currently shows a state (a payload with a non-zero show id was
+  // received and no overlay-hidden has cleared it). A new show while already visible is a content
+  // change inside the same visible window, so it must morph instead of replaying the surface
+  // entrance; a show after overlay-hidden starts a fresh presentation.
+  const overlayVisibleRef = useRef(false)
 
   // 根据录音时长计算预估处理时间（秒）
   const calculateThinkingDuration = (recordingSec: number): number => {
@@ -333,12 +342,22 @@ export default function Overlay() {
 
     const handleOverlayState = (data: unknown) => {
       const payload = data as OverlayPayload
+      // The overlay is its own document, so the in-app switch travels with the payload. Update the
+      // module/attribute before the state changes below are rendered.
+      if (typeof payload.animationsEnabled === 'boolean') setMotionEnabled(payload.animationsEnabled)
       // A late update for an already hidden show arrives with show id 0 and must not wake the
       // hidden page; with id 0 the window is shown only for the interactive fallback card.
       if (payload._overlayShowId !== 0 || payload.state === 'fallback') setAnimationsPaused(false)
       if (typeof payload._overlayShowId === 'number') {
         shownIdRef.current = payload._overlayShowId
-        setPresentationId(payload._overlayShowId)
+        if (payload._overlayShowId !== 0) {
+          // Keep the current presentationId while the window is already visible: a toast or error
+          // presented after processing has a new show id, but the pill is already on screen and
+          // must morph rather than re-enter. The new id still goes into shownIdRef so the matching
+          // overlay-hidden is accepted later.
+          if (!overlayVisibleRef.current) setPresentationId(payload._overlayShowId)
+          overlayVisibleRef.current = true
+        }
       }
       // 语言先落地再渲染本帧：悬浮窗没有自己的初始化时机，语言只能随 payload 来。
       // setLocale 对同值是空操作，所以每帧都调也不会造成额外重渲染。
@@ -470,6 +489,7 @@ export default function Overlay() {
       const showId = (data as { showId?: unknown } | null)?.showId
       // A hide for an earlier show can arrive after the next show's state; ignore it.
       if (typeof showId === 'number' && showId !== shownIdRef.current) return
+      overlayVisibleRef.current = false
       setAnimationsPaused(true)
     }
 
@@ -551,6 +571,76 @@ export default function Overlay() {
   const timerColor = inCountdown
     ? (urgent ? '#fb923c' : '#fbbf24')
     : themeTimerColor
+
+  // Identifier for "the pill shows a different kind of content". waiting/listening share one:
+  // per-frame recording refreshes are not a content change, and the expansion between them is
+  // handled by clip-path. Notices include their text, so two different notices in a row morph too.
+  // A warning appearing/disappearing and the countdown starting make the waveform give up bars
+  // (see barBudget), so the width changes; they belong to the width key, while the recording
+  // content itself is not remounted and contentKey stays the same.
+  const pillContentKey = recordingPhase ? 'recording' : state === 'thinking' ? 'thinking' : null
+  const pillMorphKey = recordingPhase
+    ? `recording:${warningTone}:${warning}:${inCountdown ? 1 : 0}`
+    : state === 'toast'
+      ? `toast:${toastTone}:${toastText}`
+      : state === 'error'
+        ? `error:${errorMessage}`
+        : state
+  const { animateContent: animatePillContent, enteredFrom: pillEnteredFrom } = usePillMorph(
+    pillRef,
+    pillMorphKey,
+    presentationId,
+    pillContentKey ?? pillMorphKey,
+  )
+
+  // "Waveform collapses into the progress bar" needs the last waveform frame before the recording
+  // ended. By the time the recording state is left, bars are already reset to 3, so record them
+  // frame by frame during recording. A muted-microphone alert draws red text instead of the
+  // waveform, so there is nothing to collapse in that case.
+  const waveSnapshotRef = useRef<{ heights: number[]; colors: string[] } | null>(null)
+  // The snapshot is consumed once, when the thinking state starts. Without this gate a later
+  // re-render (for example when animations are switched back on mid-processing) could mount the
+  // collapse row late and replay it over the already running progress bar.
+  const collapseSnapshotRef = useRef<{ heights: number[]; colors: string[] } | null>(null)
+  const collapseCapturedRef = useRef(false)
+  const collapsePresentationRef = useRef(presentationId)
+  if (collapsePresentationRef.current !== presentationId) {
+    // A new show: any snapshot belongs to the previous presentation.
+    collapsePresentationRef.current = presentationId
+    collapseSnapshotRef.current = null
+    collapseCapturedRef.current = false
+  }
+  if (visuallyListening) {
+    waveSnapshotRef.current = warning && warningTone === 'error'
+      ? null
+      : { heights: visibleBars, colors: palette }
+  } else if (state === 'waiting') {
+    // Clear it when a new recording starts. Otherwise press-and-release (before any waveform was
+    // drawn) would replay the previous recording's snapshot when processing begins.
+    waveSnapshotRef.current = null
+  }
+  const motion = useMotionAllowed()
+  if (state === 'thinking') {
+    if (!collapseCapturedRef.current) {
+      collapseCapturedRef.current = true
+      const frame = waveSnapshotRef.current
+      collapseSnapshotRef.current = motion && pillEnteredFrom === 'recording' && frame !== null
+        ? { heights: frame.heights, colors: frame.colors }
+        : null
+    }
+  } else {
+    // Leaving thinking (or being outside it) resets the one-shot gate, so the next thinking state
+    // captures its own frame. Keeping the gate across a visible toast and a following recording
+    // would reuse the previous recording's snapshot forever because a visible present keeps the
+    // same presentationId.
+    collapseCapturedRef.current = false
+    collapseSnapshotRef.current = null
+  }
+  // With interface animations off the snapshot is never captured: its bars would jump to the end
+  // state and the row would vanish at once, which looks worse than not showing it. Once captured
+  // (or skipped), the decision is final for this thinking state.
+  const waveSnapshot = collapseSnapshotRef.current
+  const showWaveCollapse = state === 'thinking' && waveSnapshot !== null
 
   const handleCopyFallback = async () => {
     if (!fallbackText) return
@@ -638,7 +728,7 @@ export default function Overlay() {
                   : 'border-white/10 bg-white/10 text-white/90 hover:bg-white/20'
                   }`}
               >
-                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied ? <SuccessCheck className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               </button>
               <button
                 type="button"
@@ -739,6 +829,7 @@ export default function Overlay() {
               传到波形上（bars 的 min-w-0），胶囊本身始终保持完整的胶囊形状。
               用 100vw 而不是 max-w-full：父层宽度也是按内容算的，撑不出约束。 */}
           <div
+            ref={pillRef}
             className={`relative flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}`}
             style={{ minHeight: '38px' }}
           >
@@ -751,6 +842,40 @@ export default function Overlay() {
                 borderColor: 'var(--overlay-border)',
               }}
             />
+            {/* Last waveform frame, kept at natural size while it settles: each bar eases down to
+                a thin line and the whole row fades out (overlay-wave-collapse in index.css). Kept
+                **outside** the processing content: that layer has its own entrance animation and
+                would fade this one together with it. left 16px = the pill's px-4, aligned with the
+                waveform and progress bar start; once faded it stays in the DOM transparent, which
+                is harmless. */}
+            {showWaveCollapse && waveSnapshot && (
+              <div
+                aria-hidden
+                className="overlay-wave-collapse pointer-events-none absolute z-[1] flex items-center gap-[2px]"
+                style={{
+                  left: '16px',
+                  top: '50%',
+                  height: '20px',
+                  marginTop: '-10px',
+                }}
+              >
+                {waveSnapshot.heights.map((height, index) => {
+                  const clampedHeight = Math.min(18, Math.max(3, height))
+                  return (
+                    <span
+                      key={index}
+                      className="overlay-wave-collapse-bar block w-[2.5px] rounded-full"
+                      style={{
+                        backgroundColor: waveSnapshot.colors[index],
+                        height: `${clampedHeight}px`,
+                        opacity: 0.7 + (clampedHeight / 18) * 0.3,
+                        '--from-h': `${clampedHeight}px`,
+                      } as CSSProperties}
+                    />
+                  )
+                })}
+              </div>
+            )}
             {recordingPhase ? (
               <div
                 className="overlay-recording-stage relative z-[1] min-w-0"
@@ -770,10 +895,13 @@ export default function Overlay() {
                   aria-hidden={recordingVisualPhase !== 'listening'}
                 >
                   {warning && warningTone === 'error' ? (
-                    // 静音高警：波形此时是平的、无意义，直接在胶囊里居中显示红字，
-                    // 既更醒目、也避免波形+长文字撑破固定宽度把胶囊圆角裁掉。
+                    // Muted-microphone alert: the waveform is flat and meaningless here, so show
+                    // the red text centered inside the pill. It is more noticeable and also avoids
+                    // a long warning plus the waveform breaking the fixed width and clipping the
+                    // pill's rounded corners.
                     <div
-                      className="flex items-center whitespace-nowrap px-1 text-xs font-semibold text-red-500 animate-pulse"
+                      key={warning}
+                      className="overlay-attention flex items-center whitespace-nowrap px-1 text-xs font-semibold text-red-500"
                       style={{ height: '20px' }}
                     >
                       {warning}
@@ -801,18 +929,20 @@ export default function Overlay() {
                           )
                         })}
                       </div>
-                      {/* 计时**不再**被警告顶掉：警告是一闪而过的提示，计时是持续状态。
-                          以前条件里带 !warning，导致 4 分钟提示一出现，剩下一整分钟都看不到秒数。 */}
+                      {/* The timer is **no longer** pushed out by a warning: a warning is a
+                          fleeting notice, the timer is an ongoing state. The condition used to
+                          include !warning, so when the 4-minute hint appeared the seconds stayed
+                          hidden for the whole remaining minute. */}
                       {showDuration && (
                         <span
-                          className={`ml-1.5 shrink-0 whitespace-nowrap text-right font-mono tabular-nums text-xs${inCountdown ? ' font-semibold' : ''}${urgent ? ' animate-pulse' : ''}`}
+                          className={`ml-1.5 shrink-0 whitespace-nowrap text-right font-mono tabular-nums text-xs${inCountdown ? ' font-semibold' : ''}${urgent ? ' overlay-breathe' : ''}`}
                           style={{ color: timerColor }}
                         >
                           {timerText}
                         </span>
                       )}
                       {warning && (
-                        <span className="ml-2 shrink-0 whitespace-nowrap text-xs text-amber-400 animate-pulse">
+                        <span key={warning} className="overlay-attention ml-2 shrink-0 whitespace-nowrap text-xs text-amber-400">
                           {warning}
                         </span>
                       )}
@@ -821,27 +951,51 @@ export default function Overlay() {
                 </div>
               </div>
             ) : (
-              <div className="relative z-[1] flex min-w-0 items-center" style={{ color: 'var(--overlay-text)' }}>
+              // key gives each kind of content its own mount so the entrance animation replays when
+              // the content changes within one show. A new show is animated by the surface entrance
+              // instead; the content itself does not replay there.
+              <div
+                key={pillContentKey ?? pillMorphKey}
+                className={`relative z-[1] flex min-w-0 items-center${animatePillContent ? ' overlay-pill-content-enter' : ''}`}
+                style={{ color: 'var(--overlay-text)' }}
+              >
                 {state === 'thinking' && (
                   <div className="flex items-center gap-2">
-                    <div className="relative h-1 w-12 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="absolute left-0 top-0 h-full rounded-full"
-                        style={{
-                          backgroundColor: thinkingColor,
-                          width: '100%',
-                          transformOrigin: 'left',
-                          animation: `progress-fill ${thinkingDuration}s cubic-bezier(0.4, 0, 0.2, 1) forwards`,
-                        }}
-                      />
+                    {/* Three-stage progress (estimate → creep → sheen); the animation definitions
+                        and the reasoning are in index.css under overlay-progress-*. --estimate is
+                        the estimated duration, and both later stages start their delay from it. */}
+                    <div
+                      className="relative h-1 w-12 overflow-hidden rounded-full bg-white/10"
+                      style={{ '--estimate': `${thinkingDuration}s` } as CSSProperties}
+                    >
+                      {motion ? (
+                        <>
+                          <div className="overlay-progress-estimate absolute inset-0">
+                            <div
+                              className="overlay-progress-creep absolute inset-0 rounded-full"
+                              style={{ backgroundColor: thinkingColor }}
+                            />
+                          </div>
+                          <div className="overlay-progress-sheen absolute inset-y-0 left-0 rounded-full" aria-hidden />
+                        </>
+                      ) : (
+                        // With animations off the bar must still say "processing" without moving:
+                        // a static estimate line, no creep and no sheen.
+                        <div
+                          className="overlay-progress-static h-full w-[86%] rounded-full"
+                          style={{ backgroundColor: thinkingColor }}
+                        />
+                      )}
                     </div>
                     <span className="text-xs whitespace-nowrap" style={{ color: thinkingColor }}>{t('overlay.processing')}</span>
-                    {/* 这里**故意**不写「Esc 取消」。Esc 取消的能力照常生效（原生钩子 +
-                        escape-action，与本组件无关），只是这行提示不该出现在悬浮窗上：
-                        悬浮窗是贴在光标附近、每次口述都会闪一下的东西，越安静越好，而
-                        「按 Esc 能取消」是知道一次就一直知道的事实，不需要每次复述。
-                        这件事已在 设置 → 键盘快捷键 的说明里静态交代（见 GeneralSettingsPage）。
-                        要加回来之前先想清楚：它每次处理都出现，收益只有第一次。 */}
+                    {/* "Esc to cancel" is **deliberately** not written here. Esc cancel still
+                        works (native hook + escape-action, unrelated to this component); this
+                        hint simply does not belong on the overlay: the overlay sits near the
+                        caret and flashes on every dictation, so quieter is better, and "Esc can
+                        cancel" is a fact you learn once. It is explained statically in
+                        Settings → Keyboard shortcuts (see GeneralSettingsPage). Think before
+                        adding it back: it would appear on every processing step, but helps only
+                        the first time. */}
                   </div>
                 )}
 

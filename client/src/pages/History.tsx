@@ -32,6 +32,7 @@ import { Download, Search, Check, FolderOpen, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { Tooltip } from '@/components/ui/tooltip'
+import { useSlidingIndicator } from '@/components/ui/useSlidingIndicator'
 import { Feedback } from '@/components/ui/feedback'
 import HistoryRecordList from '@/components/history/HistoryRecordList'
 import { exportHistory } from '@/services/exports'
@@ -430,6 +431,8 @@ export default function History() {
   const [keyword, setKeyword] = useState('')
   const [debouncedKeyword, setDebouncedKeyword] = useState('')
   const [favoriteOnly, setFavoriteOnly] = useState(false)
+  const filterGroupRef = useRef<HTMLDivElement>(null)
+  const filterIndicatorRef = useSlidingIndicator(filterGroupRef, favoriteOnly, { activeSelector: '[aria-pressed="true"]' })
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
   const [totalCount, setTotalCount] = useState(0)
   const [exportResult, setExportResult] = useState<{ filePath: string | null; canceled: boolean } | null>(null)
@@ -647,21 +650,26 @@ export default function History() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">{t('history.title')}</h1>
-          <div className="flex gap-1 rounded-lg border border-border p-0.5">
+          {/* The selected background is a sliding indicator (useSlidingIndicator); the buttons do not
+              paint it themselves. aria-pressed is both the screen-reader state and the indicator target. */}
+          <div ref={filterGroupRef} className="relative flex gap-1 rounded-lg border border-border p-0.5">
+            <span ref={filterIndicatorRef} aria-hidden className="sliding-indicator rounded-md bg-accent" />
             <button
               type="button"
+              aria-pressed={!favoriteOnly}
               onClick={() => setFavoriteOnly(false)}
               className={cn(
-                'rounded-md px-3 py-1 text-xs transition-colors',
-                !favoriteOnly ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+                'relative rounded-md px-3 py-1 text-xs transition-colors',
+                !favoriteOnly ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
               )}
             >{t('history.filterAll')}</button>
             <button
               type="button"
+              aria-pressed={favoriteOnly}
               onClick={() => setFavoriteOnly(true)}
               className={cn(
-                'rounded-md px-3 py-1 text-xs transition-colors',
-                favoriteOnly ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+                'relative rounded-md px-3 py-1 text-xs transition-colors',
+                favoriteOnly ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
               )}
             >{t('history.filterFavorites')}</button>
           </div>

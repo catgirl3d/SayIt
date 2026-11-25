@@ -57,6 +57,12 @@ export interface OverlayCommonPayload {
    */
   customWave: CustomWaveColors
   showDuration: boolean
+  /**
+   * Whether interface animations are enabled. Required because the overlay is a separate React
+   * root and cannot read the main window's state; every common payload carries it. Subtitle
+   * payloads are a separate shape and do not use the animated pill.
+   */
+  animationsEnabled: boolean
   baseWidth?: number
   barCount?: number
   /**

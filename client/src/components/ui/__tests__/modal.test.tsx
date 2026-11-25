@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Modal } from '../modal'
 
 function renderModal(onClose = vi.fn()) {
@@ -137,5 +137,63 @@ describe('Modal layout', () => {
 
     render(<Modal title="Plain" onClose={vi.fn()}>body</Modal>)
     expect(screen.getByRole('dialog').hasAttribute('aria-describedby')).toBe(false)
+  })
+})
+
+describe('Modal exit fade', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    delete document.documentElement.dataset.motion
+  })
+
+  function giveLayoutBox() {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(100)
+  }
+
+  it('puts the removed layer back with the exit classes and removes it after the fade', async () => {
+    vi.useFakeTimers()
+    giveLayoutBox()
+    const { unmount } = render(<Modal title="Closing" description="Closing description" onClose={vi.fn()}>body</Modal>)
+    const layer = document.body.querySelector<HTMLElement>('.modal-backdrop-enter')
+    expect(layer).not.toBeNull()
+
+    unmount()
+    await act(async () => {})
+
+    expect(layer?.isConnected).toBe(true)
+    expect(layer?.classList.contains('modal-backdrop-exit')).toBe(true)
+    expect(layer?.classList.contains('modal-backdrop-enter')).toBe(false)
+    expect(layer?.querySelector('.modal-panel-exit')).not.toBeNull()
+    expect(layer?.querySelector('.modal-panel-enter')).toBeNull()
+    expect(layer?.getAttribute('aria-hidden')).toBe('true')
+    expect(layer?.hasAttribute('inert')).toBe(true)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(layer?.isConnected).toBe(false)
+  })
+
+  it('does not fade when the in-app animations switch is off', async () => {
+    giveLayoutBox()
+    document.documentElement.dataset.motion = 'off'
+    const { unmount } = render(<Modal title="Closing" onClose={vi.fn()}>body</Modal>)
+
+    unmount()
+    await act(async () => {})
+
+    expect(document.body.querySelector('.modal-backdrop-exit')).toBeNull()
+  })
+
+  it('does not fade a layer that has no layout box', async () => {
+    const { unmount } = render(<Modal title="Closing" onClose={vi.fn()}>body</Modal>)
+
+    unmount()
+    await act(async () => {})
+
+    expect(document.body.querySelector('.modal-backdrop-exit')).toBeNull()
   })
 })
