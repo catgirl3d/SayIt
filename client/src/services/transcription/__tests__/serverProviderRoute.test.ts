@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   sendStop: vi.fn(),
   sendAudio: vi.fn(),
   disconnect: vi.fn(),
+  isConnected: vi.fn(() => true),
   supportsTextContext: vi.fn(() => false),
   polishWithClientAi: vi.fn(),
   addRuntimeEvent: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('../../websocket', () => ({
   sendStop: (...args: unknown[]) => mocks.sendStop(...args),
   sendAudio: (...args: unknown[]) => mocks.sendAudio(...args),
   disconnect: (...args: unknown[]) => mocks.disconnect(...args),
-  isConnected: () => true,
+  isConnected: () => mocks.isConnected(),
   supportsTextContext: () => mocks.supportsTextContext(),
 }))
 vi.mock('../serverAiSource', () => ({
@@ -78,6 +79,7 @@ describe('ServerProvider AI route snapshots', () => {
     mocks.sendStop.mockReset().mockReturnValue(true)
     mocks.sendAudio.mockReset()
     mocks.disconnect.mockReset()
+    mocks.isConnected.mockReset().mockReturnValue(true)
     mocks.supportsTextContext.mockReset().mockReturnValue(false)
     mocks.polishWithClientAi.mockReset()
     mocks.addRuntimeEvent.mockReset()
@@ -148,6 +150,96 @@ describe('ServerProvider AI route snapshots', () => {
     wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: serverLlm })
 
     expect(onReady).toHaveBeenCalledWith({ connectionId: 'connection-1', asr: true, llm: expectedLlm })
+  })
+
+  it.each([
+    { name: 'reports false when the managed server has no LLM', serverLlm: false, expected: false },
+    { name: 'reports true when the managed server has an LLM', serverLlm: true, expected: true },
+    { name: 'reports unknown before the server sends ready', serverLlm: undefined, expected: undefined },
+  ])('$name', async ({ serverLlm, expected }) => {
+    const provider = new ServerProvider()
+    await provider.connect({})
+    if (serverLlm !== undefined) {
+      wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: serverLlm })
+    }
+
+    expect(provider.start(startOptions)).toBe(true)
+    expect(provider.runAiExpected()).toBe(expected)
+  })
+
+  it.each([
+    { name: 'changes from unavailable to available', first: false, second: true },
+    { name: 'changes from available to unavailable', first: true, second: false },
+  ])('uses each ready capability for its own run on the same open connection ($name)', async ({ first, second }) => {
+    const provider = new ServerProvider()
+
+    await provider.connect({})
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: first })
+    expect(provider.start({ ...startOptions, runId: 1 })).toBe(true)
+    expect(provider.runAiExpected()).toBe(first)
+
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: second })
+    expect(provider.start({ ...startOptions, runId: 2 })).toBe(true)
+    expect(provider.runAiExpected()).toBe(second)
+  })
+
+  it('expects AI for a custom client route even when the server reports llm=false', async () => {
+    mocks.storedSource = 'custom'
+    mocks.runtimeSource = 'custom'
+    const provider = new ServerProvider()
+
+    await provider.connect({})
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: false })
+
+    expect(provider.start(startOptions)).toBe(true)
+    expect(provider.runAiExpected()).toBe(true)
+  })
+
+  it('expects AI for a selection-edit client route even when the server reports llm=false', async () => {
+    const provider = new ServerProvider()
+
+    await provider.connect({})
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: false })
+
+    expect(provider.start({
+      ...startOptions,
+      selectionAiConfig: {
+        provider: 'openai', apiUrl: 'https://api.openai.com/v1', apiKey: 'sk-edit', model: 'gpt-edit',
+        reasoningEffort: '', serviceTier: '',
+      },
+    })).toBe(true)
+    expect(provider.runAiExpected()).toBe(true)
+  })
+
+  it('keeps the known capability on an open socket and clears it for a new socket without ready', async () => {
+    const provider = new ServerProvider()
+
+    await provider.connect({})
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: false })
+    expect(provider.start(startOptions)).toBe(true)
+    expect(provider.runAiExpected()).toBe(false)
+
+    await provider.connect({})
+    expect(provider.start({ ...startOptions, runId: 2 })).toBe(true)
+    expect(provider.runAiExpected()).toBe(false)
+
+    mocks.isConnected.mockReturnValue(false)
+    await provider.connect({})
+    expect(provider.start({ ...startOptions, runId: 3 })).toBe(true)
+    expect(provider.runAiExpected()).toBeUndefined()
+  })
+
+  it('clears the capability when an automatic reconnect starts before the new ready', async () => {
+    const provider = new ServerProvider()
+
+    await provider.connect({})
+    wireCallbacks?.onReady?.({ connectionId: 'connection-1', asr: true, llm: false })
+    expect(provider.start(startOptions)).toBe(true)
+    expect(provider.runAiExpected()).toBe(false)
+
+    wireCallbacks?.onStateChange?.('connecting')
+    expect(provider.start({ ...startOptions, runId: 2 })).toBe(true)
+    expect(provider.runAiExpected()).toBeUndefined()
   })
 
   it('keeps reporting managed readiness on reconnect after a selection-edit run', async () => {

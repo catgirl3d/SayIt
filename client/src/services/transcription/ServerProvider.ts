@@ -46,6 +46,7 @@ export class ServerProvider implements TranscriptionProvider {
   private sourceRoute: AiPolishRoute = 'server_managed'
   // Captured in start() for the active run, including the selection-edit override.
   private runRoute: AiPolishRoute = 'server_managed'
+  private serverLlmAvailable: boolean | undefined
   private customAiReady = false
   private customFinalPending = false
   private serverDonePending = false
@@ -67,11 +68,14 @@ export class ServerProvider implements TranscriptionProvider {
       model: customModel,
     }).complete
 
+    if (!ws.isConnected()) this.serverLlmAvailable = undefined
     await ws.connect({
       onStateChange: (state) => {
+        if (state === 'connecting') this.serverLlmAvailable = undefined
         callbacks.onStateChange?.(state)
       },
       onReady: (data) => {
+        this.serverLlmAvailable = data.llm
         callbacks.onReady?.({
           connectionId: data.connectionId,
           asr: data.asr,
@@ -154,6 +158,10 @@ export class ServerProvider implements TranscriptionProvider {
     // A custom AI is called by this client with the context as a plain user-message section. The managed server
     // AI gets it over the wire; a legacy server only gets a compatibility capsule written for selection editing.
     return this.routeForSource(getRuntimeServerAiSource()) === 'client' || ws.supportsTextContext()
+  }
+
+  runAiExpected(): boolean | undefined {
+    return this.runRoute === 'client' ? true : this.serverLlmAvailable
   }
 
   start(opts: StartOptions): boolean {

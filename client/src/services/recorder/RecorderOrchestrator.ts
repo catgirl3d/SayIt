@@ -166,7 +166,7 @@ type WriteRunHistoryResult =
 export interface RecorderOrchestratorTestSeam {
   state: RecorderState
   activeRunId: number
-  activeRunAiConfig: { aiEnabled: boolean; aiMinDurationSec: number } | null
+  activeRunAiConfig: { aiEnabled: boolean; aiMinDurationSec: number; providerAiExpected?: boolean } | null
   audioSentSamples: number
   wallTimeAtStopSec: number
   recordedChunks: ArrayBuffer[]
@@ -209,7 +209,7 @@ export class RecorderOrchestrator {
   private activeRunId = 0
   private activeRunMode: WorkMode | null = null
   /** AI settings frozen when this run started; see the snapshot assignment in startRecordingInner. */
-  private activeRunAiConfig: { aiEnabled: boolean; aiMinDurationSec: number } | null = null
+  private activeRunAiConfig: { aiEnabled: boolean; aiMinDurationSec: number; providerAiExpected?: boolean } | null = null
 
   private recordStartPerf = 0
   private audioSentSamples = 0
@@ -2204,6 +2204,13 @@ export class RecorderOrchestrator {
       if (!started) {
         throw new Error('sendStart failed')
       }
+      if (this.activeRunAiConfig) {
+        // Freeze the provider-reported AI capability after its route is frozen for this run.
+        this.activeRunAiConfig = {
+          ...this.activeRunAiConfig,
+          providerAiExpected: provider.runAiExpected?.(),
+        }
+      }
       this.captureAcceptingAudio = true
       addRuntimeEvent('info', 'recorder', 'Start sent; audio capture beginning')
 
@@ -2540,7 +2547,7 @@ export class RecorderOrchestrator {
       && audioDur < runAi.aiMinDurationSec
     // The overlay reflects this run's start-frozen AI setup (AI on and at/above the start-time
     // minimum), not the live settings.
-    const aiEligibleForThisRun = runAi.aiEnabled && !skipAiForShortSpeech
+    const aiEligibleForThisRun = runAi.aiEnabled && !skipAiForShortSpeech && runAi.providerAiExpected !== false
 
     this.provider.stop({
       pttHoldMs,

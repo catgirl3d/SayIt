@@ -418,7 +418,9 @@ export class OverlayService {
    * @param options.ai Whether this run is set up to use AI, based on the eligibility frozen when
    *   it started (AI on and the recording at or above the start-time minimum), not the live
    *   toggle: a recording shorter than the minimum keeps the plain "Processing" label. This
-   *   reflects the run's setup, not a guarantee that a separate AI call happens.
+   *   reflects the run's setup, not a guarantee that a separate AI call happens. Built-in ASR
+   *   cleanup (Qwen Omni) counts as AI processing even inside recognition; a server-managed run
+   *   whose server reports no AI capability keeps the plain "Processing" label.
    */
   showThinking(elapsedSec: number, token = 0, options: { ai?: boolean } = {}) {
     this.currentState = 'thinking'
