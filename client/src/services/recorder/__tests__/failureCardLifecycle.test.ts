@@ -89,7 +89,7 @@ import * as textPostProcess from '@/services/textPostProcess'
 import { RecorderOrchestrator, type RecorderOrchestratorTestSeam } from '../RecorderOrchestrator'
 import { OverlayService } from '../OverlayService'
 import * as OverlayModule from '@/overlay/Overlay'
-import { switchProvider, type TranscriptionCallbacks, type FinalResult } from '@/services/transcription'
+import { switchProvider, type TranscriptionCallbacks, type FinalResult, type WorkMode } from '@/services/transcription'
 import { dismissOverlayCard, onOverlayCardDismissed } from '@/services/bridge'
 
 function deferred<T = void>() {
@@ -230,16 +230,23 @@ async function enterTimeoutGrace(recorder: RecorderOrchestrator, runId: number, 
   return callbacksFor(recorder)
 }
 
-async function startRealRecording(recorder: RecorderOrchestrator) {
+async function startRealRecording(
+  recorder: RecorderOrchestrator,
+  mode: WorkMode = 'cloud_api',
+  providerAiExpected?: boolean,
+) {
   vi.stubGlobal('document', { activeElement: null, documentElement: { lang: '' } })
   vi.stubGlobal('HTMLElement', class { })
-  const provider = await switchProvider('cloud_api')
+  const provider = await switchProvider(mode)
   vi.spyOn(provider, 'isReady').mockReturnValue(true)
   vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+  const runAiExpected = mode === 'server'
+    ? vi.spyOn(provider, 'runAiExpected').mockReturnValue(providerAiExpected)
+    : undefined
   const start = vi.spyOn(provider, 'start').mockReturnValue(true)
   const seam = recorder.testSeam()
   await seam.startRecording()
-  return { start, runId: seam.activeRunId }
+  return { provider, start, runAiExpected, runId: seam.activeRunId }
 }
 
 async function cancelRealRecording(recorder: RecorderOrchestrator, runId: number) {
@@ -1430,6 +1437,17 @@ describe('overlay AI processing gate', () => {
     return stop
   }
 
+  function prepareRealStopPath(recorder: RecorderOrchestrator, runId: number, durationSec = 1) {
+    const seam = recorder.testSeam()
+    seam.state = 'recording'
+    seam.activeRunId = runId
+    seam.audioSentSamples = Math.round(durationSec * 16_000)
+    seam.wallTimeAtStopSec = durationSec
+    seam.recordedChunks = [new ArrayBuffer(Math.round(durationSec * 32_000))]
+    seam.recordStartPerf = performance.now() - durationSec * 1_000
+    seam.cachedProbeResult = { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
+  }
+
   it.each([
     { name: 'AI is off', aiEnabled: false, minDurationSec: 3, durationSec: 4, aiProcessed: false, stopDisableAi: false },
     { name: 'the recording is below the minimum', aiEnabled: true, minDurationSec: 3, durationSec: 1, aiProcessed: false, stopDisableAi: true },
@@ -1508,6 +1526,69 @@ describe('overlay AI processing gate', () => {
     const payload = latestPayload('update_overlay_state')
     expect(payload?.state).toBe('thinking')
     expect(payload?.thinkingAi).toBe(true)
+  })
+
+  it.each([
+    { name: 'server reports AI unavailable', providerAiExpected: false, aiProcessed: false },
+    { name: 'server reports AI available', providerAiExpected: true, aiProcessed: true },
+    { name: 'server capability is unknown', providerAiExpected: undefined, aiProcessed: true },
+  ])('$name: the server run keeps the overlay gate consistent', async ({ providerAiExpected, aiProcessed }) => {
+    configureRealPromptFixture()
+    harness.settings.set('aiMinDurationSec', 0)
+    const recorder = new RecorderOrchestrator()
+    await recorder.refreshRuntimeSettings()
+    const recording = await startRealRecording(recorder, 'server', providerAiExpected)
+    const stop = vi.spyOn(recording.provider, 'stop').mockReturnValue(true)
+    prepareRealStopPath(recorder, recording.runId)
+
+    await recorder.testSeam().stopRecording()
+
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(stop.mock.calls[0]?.[0]?.disableAi).toBeUndefined()
+    const payload = latestPayload('update_overlay_state')
+    expect(payload?.state).toBe('thinking')
+    if (aiProcessed) {
+      expect(payload?.thinkingAi).toBe(true)
+    } else {
+      expect(payload).not.toHaveProperty('thinkingAi')
+    }
+  })
+
+  it('freezes the provider AI expectation after server start', async () => {
+    configureRealPromptFixture()
+    harness.settings.set('aiMinDurationSec', 0)
+    const recorder = new RecorderOrchestrator()
+    await recorder.refreshRuntimeSettings()
+    const recording = await startRealRecording(recorder, 'server', false)
+    const stop = vi.spyOn(recording.provider, 'stop').mockReturnValue(true)
+    recording.runAiExpected?.mockReturnValue(true)
+    prepareRealStopPath(recorder, recording.runId)
+
+    await recorder.testSeam().stopRecording()
+
+    expect(recording.runAiExpected).toHaveBeenCalledTimes(1)
+    expect(recording.runAiExpected!.mock.invocationCallOrder[0]).toBeGreaterThan(recording.start.mock.invocationCallOrder[0])
+    const firstPayload = latestPayload('update_overlay_state')
+    expect(firstPayload?.state).toBe('thinking')
+    expect(firstPayload).not.toHaveProperty('thinkingAi')
+
+    const callbacks = callbacksFor(recorder)
+    callbacks.onASR?.({ text: 'recognized words', asrMs: 12, durationSec: 1 })
+    callbacks.onDone?.()
+    expect(recorder.getState()).toBe('idle')
+
+    const secondRecording = await startRealRecording(recorder, 'server', true)
+    expect(secondRecording.provider).toBe(recording.provider)
+    expect(secondRecording.runId).not.toBe(recording.runId)
+    prepareRealStopPath(recorder, secondRecording.runId)
+    stop.mockClear()
+
+    await recorder.testSeam().stopRecording()
+
+    expect(stop).toHaveBeenCalledTimes(1)
+    const secondPayload = latestPayload('update_overlay_state')
+    expect(secondPayload?.state).toBe('thinking')
+    expect(secondPayload?.thinkingAi).toBe(true)
   })
 })
 
