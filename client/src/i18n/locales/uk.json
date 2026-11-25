@@ -535,6 +535,8 @@
   "mic.boostZoneRisk": "Ризик спотворень",
   "appearance.title": "Вигляд",
   "appearance.appTheme": "Тема застосунку",
+  "appearance.animations": "Анімації інтерфейсу",
+  "appearance.animationsDesc": "Вимкніть, щоб прибрати анімації інтерфейсу: ковзання виділення, появу й зникнення діалогів, позначку «скопійовано» та переходи оверлея. Індикатори завантаження й надалі обертаються.",
   "appearance.themeBrightness": "Яскравість теми",
   "appearance.themeLight": "Світлі теми",
   "appearance.themeDark": "Темні теми",

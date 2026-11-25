@@ -32,6 +32,7 @@ const SETTINGS_EXPORT_KEYS = [
   'overlayShowDuration',
   'overlayWaveTheme',
   'overlayWaveCustom',
+  'overlayWidth',
   'selectedMic',
   'shortcutHandsFree',
   'shortcutToggleAi',
@@ -39,6 +40,7 @@ const SETTINGS_EXPORT_KEYS = [
   'shortcutPTT',
   'shortcutPTTCombo',
   'styleProfile',
+  'ui.animations',
 ] as const
 
 interface SaveResult {

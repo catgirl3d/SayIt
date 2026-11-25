@@ -8,7 +8,8 @@
 //    dividers, not one box per row.
 // 3. Hierarchy comes from type size, color and whitespace; colors use theme tokens only, never raw
 //    color scales.
-// 4. The entrance animation reuses animate-fade-in-scale from index.css.
+// 4. The entrance animation belongs to the shared Modal (modal-panel-enter); the panel styling here
+//    must not add an entrance class of its own.
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
@@ -59,7 +60,7 @@ function DialogShell({
     <Modal
       {...modalProps}
       showCloseButton
-      panelClassName={`animate-fade-in-scale max-h-[82vh] rounded-2xl shadow-2xl ${width}`}
+      panelClassName={`max-h-[82vh] rounded-2xl shadow-2xl ${width}`}
     />
   )
 }

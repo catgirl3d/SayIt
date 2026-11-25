@@ -223,6 +223,16 @@ describe('overlay listening payload settings', () => {
     expect(updates[1].data.customWave).toEqual({ mode: 'solid', from: '#a3e635', to: '#000000' })
   })
 
+  it('sends the interface animations setting with every payload', async () => {
+    savedSettings = { 'ui.animations': false }
+    const overlay = new OverlayService(() => 0)
+    await overlay.refreshSettings()
+    overlay.pushListeningBars([3], true)
+
+    expect(overlay.getCommonPayload().animationsEnabled).toBe(false)
+    expect(updates[0].data.animationsEnabled).toBe(false)
+  })
+
   it('uses every declared width preset and falls back to long for an unknown saved width', async () => {
     for (const preset of OVERLAY_WIDTH_PRESET_VALUES) {
       savedSettings = { overlayWidth: preset }

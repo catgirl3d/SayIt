@@ -1,4 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
+import { t } from '@/i18n'
+import { getTauriJournal } from '@/storybook/tauriMock'
 import type { HistoryRecord } from '@/services/store'
 import History from './History'
 
@@ -65,6 +68,14 @@ const settings = {
   dismissedNoticeIds: [],
 }
 
+function hasFavoriteOnlyHistoryCall(): boolean {
+  return getTauriJournal().calls.some(({ command, args }) => {
+    if (command !== 'history_list') return false
+    const query = (args as { query?: { favoriteOnly?: boolean } } | undefined)?.query
+    return query?.favoriteOnly === true
+  })
+}
+
 const meta = {
   title: 'pages/History',
   component: History,
@@ -82,6 +93,17 @@ export const WithRecords: Story = {
       },
       settings,
     },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+
+    const favorites = canvas.getByRole('button', { name: t('history.filterFavorites') })
+    await userEvent.click(favorites)
+
+    await expect(favorites).toHaveAttribute('aria-pressed', 'true')
+    await expect(canvas.getByRole('button', { name: t('history.filterAll') })).toHaveAttribute('aria-pressed', 'false')
+    // The filter is not only painted: the list reloads with favoriteOnly=true.
+    await waitFor(() => expect(hasFavoriteOnlyHistoryCall()).toBe(true))
   },
 }
 

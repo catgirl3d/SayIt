@@ -43,6 +43,13 @@ function navEntryTag(markup: string, href: string) {
   return markup.slice(markup.lastIndexOf('<a ', hrefStart), markup.indexOf('>', hrefStart) + 1)
 }
 
+/** The settings group block: its links contain no nested divs, so the first closing div ends it. */
+function settingsGroupMarkup(markup: string) {
+  const start = markup.indexOf('id="sidebar-settings-items"')
+  expect(start).toBeGreaterThan(-1)
+  return markup.slice(start, markup.indexOf('</div>', start))
+}
+
 function withSessionState<T>(state: 'listening' | 'paused', render: () => T): T {
   const spy = vi.spyOn(systemAudioSession, 'getSnapshot').mockReturnValue({ ...systemAudioSession.getSnapshot(), state })
   try {
@@ -68,7 +75,9 @@ describe('sidebar settings group', () => {
     expect(markup).toContain('aria-expanded="true"')
     for (const href of settingsRoutes) expect(markup, href).toContain(`href="${href}"`)
     expect(navEntryTag(markup, '/audio')).toContain('aria-current="page"')
-    expect(navEntryTag(markup, '/audio')).toContain('bg-sidebar-item-active')
+    // The selected background is drawn by the group's sliding indicator, not by the link itself.
+    expect(navEntryTag(markup, '/audio')).not.toContain('bg-sidebar-item-active')
+    expect(settingsGroupMarkup(markup)).toContain('sliding-indicator')
     expect(navEntryTag(markup, '/shortcuts')).not.toContain('aria-current')
   })
 })

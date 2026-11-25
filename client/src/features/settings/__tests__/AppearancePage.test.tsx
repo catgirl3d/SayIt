@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -44,6 +44,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  delete document.documentElement.dataset.motion
 })
 
 describe('AppearancePage custom wave saving', () => {
@@ -100,5 +101,39 @@ describe('AppearancePage custom wave saving', () => {
       from: '#aabbcc',
       to: '#f472b6',
     })
+  })
+})
+
+describe('AppearancePage interface animations', () => {
+  it('persists the switch and updates the document motion attribute', async () => {
+    render(<AppearancePage />)
+
+    const toggle = await screen.findByRole('switch', { name: 'Interface animations' })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(mocks.setSetting).toHaveBeenCalledWith('ui.animations', false))
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(document.documentElement.dataset.motion).toBe('off')
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(mocks.setSetting).toHaveBeenCalledWith('ui.animations', true))
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    expect(document.documentElement.dataset.motion).toBe('on')
+  })
+
+  it('applies a saved animations=false on mount when no attribute is set yet', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      if (key === 'ui.animations') return false
+      return fallback
+    })
+
+    render(<AppearancePage />)
+
+    const toggle = await screen.findByRole('switch', { name: 'Interface animations' })
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'))
+    expect(document.documentElement.dataset.motion).toBe('off')
   })
 })

@@ -68,6 +68,7 @@ export class OverlayService {
   private theme: OverlayWaveTheme = DEFAULT_WAVE_THEME
   private customWave: CustomWaveColors = DEFAULT_CUSTOM_WAVE
   private showDuration = true
+  private animationsEnabled = true
   private readySoundEnabled = true
   private widthPreset: OverlayWidthPreset = 'medium'
   private lastFrameAt = 0
@@ -96,6 +97,7 @@ export class OverlayService {
     this.theme = normalizeWaveTheme(await getSetting('overlayWaveTheme', DEFAULT_WAVE_THEME))
     this.customWave = normalizeCustomWave(await getSetting('overlayWaveCustom', DEFAULT_CUSTOM_WAVE))
     this.showDuration = Boolean(await getSetting('overlayShowDuration', true))
+    this.animationsEnabled = Boolean(await getSetting('ui.animations', true))
     this.readySoundEnabled = Boolean(await getSetting('readySoundEnabled', true))
     this.widthPreset = normalizeWidthPreset(await getSetting('overlayWidth', 'medium'))
   }
@@ -229,6 +231,7 @@ export class OverlayService {
       theme: this.theme,
       customWave: this.customWave,
       showDuration: this.showDuration,
+      animationsEnabled: this.animationsEnabled,
       baseWidth: cfg.windowWidth,
       barCount: cfg.barCount,
       // Sent on every call: the overlay window may be created for the first time after a

@@ -7,7 +7,7 @@ import AppearancePage from './AppearancePage'
 const TOO_DARK_HINT = en['appearance.wave.brightened']
 
 /** True when the page wrote `value` under `key` through the store_set command; the journal records the invoke arguments. */
-function storeSetCalled(key: string, value: string): boolean {
+function storeSetCalled(key: string, value: unknown): boolean {
   return getTauriJournal().calls.some(({ command, args }) => {
     if (command !== 'store_set' || typeof args !== 'object' || args === null || !('key' in args)) return false
     return args.key === key && args.value === value
@@ -24,6 +24,7 @@ const meta = {
         streamingDisplayEnabled: true,
         overlayWaveTheme: 'black-blue',
         overlayWidth: 'long',
+        'ui.animations': true,
       },
     },
   },
@@ -33,6 +34,32 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const Configured: Story = {}
+
+export const ToggleAnimations: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const toggle = await canvas.findByRole('switch', { name: 'Interface animations' })
+
+    try {
+      await expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+      await userEvent.click(toggle)
+
+      await expect(toggle).toHaveAttribute('aria-checked', 'false')
+      await expect(document.documentElement.dataset.motion).toBe('off')
+      await waitFor(() => expect(storeSetCalled('ui.animations', false)).toBe(true))
+
+      await userEvent.click(toggle)
+
+      await expect(toggle).toHaveAttribute('aria-checked', 'true')
+      await expect(document.documentElement.dataset.motion).not.toBe('off')
+      await waitFor(() => expect(storeSetCalled('ui.animations', true)).toBe(true))
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
+  },
+}
 
 export const CustomWave: Story = {
   parameters: {

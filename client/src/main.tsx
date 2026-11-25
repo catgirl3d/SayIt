@@ -11,6 +11,8 @@ import { initRuntimeConfig } from './services/runtimeConfig'
 import { initProviderFromStore } from './services/transcription'
 import { initLanguage, initLocaleDefaults } from './stores/language'
 import { initSpeechInputLanguageMigration } from './services/speechInputLanguage'
+import { getSetting } from './services/store'
+import { setMotionEnabled } from './lib/motion'
 
 window.addEventListener('error', (event) => {
   addRuntimeEvent('error', 'window', event.message || 'Uncaught error', {
@@ -55,6 +57,13 @@ async function bootstrap() {
     }
   } else {
     console.error('[bootstrap] initProviderFromStore skipped: runtime config is not ready')
+  }
+  try {
+    // Set the motion attribute before the first render so no surface animates in when the user
+    // has turned interface animations off.
+    setMotionEnabled(await getSetting('ui.animations', true))
+  } catch (e) {
+    console.error('[bootstrap] init motion preference error:', e)
   }
   try {
     void startWebviewKeyboardFallback()

@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { themeList } from '@/themes'
 import { switchTheme, getActiveThemeId } from '@/stores/theme'
 import { getSetting, setSetting } from '@/services/store'
+import { setMotionEnabled } from '@/lib/motion'
 import { refreshOverlaySettings, setStreamingDisplayCache } from '@/services/recorder'
 import { isOverlayWidthPreset, OVERLAY_WIDTH_PRESETS, type OverlayWidthPreset } from '@/services/recorder/types'
 import {
@@ -183,6 +184,7 @@ export default function AppearancePage() {
   const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
   const customWaveSaveRef = useRef<{ timer: ReturnType<typeof setTimeout>; value: CustomWaveColors } | null>(null)
   const [overlayShowDuration, setOverlayShowDuration] = useState(true)
+  const [animationsEnabled, setAnimationsEnabled] = useState(true)
   const [overlayWidth, setOverlayWidth] = useState<OverlayWidthPreset>('medium')
   const [streamingDisplay, setStreamingDisplay] = useState(false)
   // Until the saved values have been read, the controls are hidden and carry no transition:
@@ -220,12 +222,13 @@ export default function AppearancePage() {
     //     values are still the defaults" first.
     let cancelled = false
     void (async () => {
-      const [showDuration, streaming, waveTheme, waveCustom, width] = await Promise.all([
+      const [showDuration, streaming, waveTheme, waveCustom, width, animations] = await Promise.all([
         getSetting('overlayShowDuration', true).catch(() => true),
         getSetting('streamingDisplayEnabled', false).catch(() => false),
         getSetting('overlayWaveTheme', DEFAULT_WAVE_THEME).catch(() => DEFAULT_WAVE_THEME),
         getSetting<unknown>('overlayWaveCustom', DEFAULT_CUSTOM_WAVE).catch(() => DEFAULT_CUSTOM_WAVE),
         getSetting('overlayWidth', 'medium').catch(() => 'medium'),
+        getSetting('ui.animations', true).catch(() => true),
       ])
       if (cancelled) return
       setOverlayShowDuration(Boolean(showDuration))
@@ -233,6 +236,11 @@ export default function AppearancePage() {
       setOverlayWaveTheme(normalizeWaveTheme(waveTheme))
       setCustomWave(normalizeCustomWave(waveCustom))
       if (isOverlayWidthPreset(width)) setOverlayWidth(width)
+      setAnimationsEnabled(Boolean(animations))
+      // The main window bootstrap has already applied the saved value. Only fill in the attribute
+      // when nothing set it yet (Storybook or another page mounted without bootstrap); never
+      // overwrite a value that bootstrap or a user toggle already applied.
+      if (!document.documentElement.dataset.motion) setMotionEnabled(Boolean(animations))
       setReady(true)
       requestAnimationFrame(() => requestAnimationFrame(() => {
         if (!cancelled) setAnimate(true)
@@ -296,6 +304,14 @@ export default function AppearancePage() {
     await refreshOverlaySettings()
   }
 
+  const handleToggleAnimations = async () => {
+    const next = !animationsEnabled
+    setAnimationsEnabled(next)
+    setMotionEnabled(next)
+    await setSetting('ui.animations', next)
+    await refreshOverlaySettings()
+  }
+
   const handleOverlayWidthChange = async (preset: OverlayWidthPreset) => {
     setOverlayWidth(preset)
     await setSetting('overlayWidth', preset)
@@ -323,6 +339,24 @@ export default function AppearancePage() {
               onChange={(themeId) => void handleThemeChange(themeId)}
               labelledBy="app-theme-heading"
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 id="interface-animations-heading" className="text-lg font-semibold">{t('appearance.animations')}</h2>
+                <p className="text-xs text-muted-foreground">{t('appearance.animationsDesc')}</p>
+              </div>
+              <Switch
+                checked={animationsEnabled}
+                onChange={() => void handleToggleAnimations()}
+                labelledBy="interface-animations-heading"
+                noAnimation={!animate}
+                hidden={!ready}
+              />
+            </div>
           </CardContent>
         </Card>
 
