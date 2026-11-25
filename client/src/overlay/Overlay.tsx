@@ -1,6 +1,6 @@
 import * as bridge from '../services/bridge'
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Copy, MicVocal, X } from 'lucide-react'
+import { Copy, MicVocal, Sparkles, X } from 'lucide-react'
 import { SuccessCheck } from '@/components/ui/success-check'
 import { isLocale, setLocale } from '@/i18n'
 import { useT } from '@/i18n/useT'
@@ -32,6 +32,8 @@ type OverlayPayload =
       state?: OverlayState
       bars?: number[]
       elapsedSec?: number
+      /** True when this run's start-frozen AI setup is eligible (AI on and at/above the start-time minimum), not the live toggle. */
+      thinkingAi?: boolean
       fallbackText?: string
       fallbackReason?: string
       errorMessage?: string
@@ -279,6 +281,7 @@ export default function Overlay() {
   const [subtitleLiveRecognition, setSubtitleLiveRecognition] = useState(false)
   const [copied, setCopied] = useState(false)
   const [thinkingDuration, setThinkingDuration] = useState(0)
+  const [thinkingAi, setThinkingAi] = useState(false)
   const [warning, setWarning] = useState('')
   const [warningTone, setWarningTone] = useState<'warn' | 'error'>('warn')
   const [micSourceMode, setMicSourceMode] = useState<'auto' | 'fixed' | null>(null)
@@ -380,6 +383,9 @@ export default function Overlay() {
           pendingListeningVisualRef.current = false
         }
         setState(payload.state)
+        // Every state presentation decides the flag: a full thinking update without the field
+        // means the run is not AI-processed, and leaving thinking clears it.
+        setThinkingAi(payload.state === 'thinking' && payload.thinkingAi === true)
         if (payload.state !== 'listening') {
           setBars((prev) => Array(prev.length).fill(3))
           // 离开录音状态即清空实时文字气泡
@@ -581,11 +587,13 @@ export default function Overlay() {
   const pillContentKey = recordingPhase ? 'recording' : state === 'thinking' ? 'thinking' : null
   const pillMorphKey = recordingPhase
     ? `recording:${warningTone}:${warning}:${inCountdown ? 1 : 0}`
-    : state === 'toast'
-      ? `toast:${toastTone}:${toastText}`
-      : state === 'error'
-        ? `error:${errorMessage}`
-        : state
+    : state === 'thinking'
+      ? `thinking:${thinkingAi ? 'ai' : ''}`
+      : state === 'toast'
+        ? `toast:${toastTone}:${toastText}`
+        : state === 'error'
+          ? `error:${errorMessage}`
+          : state
   const { animateContent: animatePillContent, enteredFrom: pillEnteredFrom } = usePillMorph(
     pillRef,
     pillMorphKey,
@@ -987,7 +995,13 @@ export default function Overlay() {
                         />
                       )}
                     </div>
-                    <span className="text-xs whitespace-nowrap" style={{ color: thinkingColor }}>{t('overlay.processing')}</span>
+                    {/* The sparkle pulses; the pill keeps its progress animation and the user's wave theme. */}
+                    <span className="flex items-center gap-1 text-xs whitespace-nowrap" style={{ color: thinkingColor }}>
+                      {thinkingAi && (
+                        <Sparkles aria-hidden className="overlay-ai-sparkle h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
+                      )}
+                      {t(thinkingAi ? 'overlay.processingAi' : 'overlay.processing')}
+                    </span>
                     {/* "Esc to cancel" is **deliberately** not written here. Esc cancel still
                         works (native hook + escape-action, unrelated to this component); this
                         hint simply does not belong on the overlay: the overlay sits near the

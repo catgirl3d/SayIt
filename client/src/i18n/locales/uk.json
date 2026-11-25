@@ -227,6 +227,7 @@
   "overlay.liveCaption": "Наживо",
   "overlay.listening": "Слухаю…",
   "overlay.processing": "Обробка…",
+  "overlay.processingAi": "AI-обробка…",
   "overlay.genericError": "Щось пішло не так",
   "overlay.warnLowVolume": "Говоріть ближче до мікрофона",
   "overlay.warnNoSignal": "Звук не виявлено",

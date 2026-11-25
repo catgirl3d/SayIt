@@ -96,6 +96,40 @@ export const ProcessingProgress: Story = {
     await expect(document.querySelector('.overlay-progress-creep')).not.toBeNull()
     await expect(document.querySelector('.overlay-progress-sheen')).not.toBeNull()
     await expect(document.querySelector('.overlay-progress-static')).toBeNull()
+    await expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
+  },
+}
+
+export const ProcessingAi: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilListening()
+    await emitState({ state: 'thinking', ...SHOW, thinkingAi: true, elapsedSec: 10 })
+
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
+    })
+    await expect(document.querySelector('.overlay-ai-sparkle')?.getAttribute('aria-hidden')).toBe('true')
+    await expect(document.querySelector('.overlay-pill-content-enter')?.textContent).toBe('AI processing')
+  },
+}
+
+export const ProcessingAiCleared: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilListening()
+    await emitState({ state: 'thinking', ...SHOW, thinkingAi: true, elapsedSec: 10 })
+
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
+    })
+
+    // Omitting the flag on a full thinking update means this run is not AI-processed.
+    await emitState({ state: 'thinking', ...SHOW, elapsedSec: 10 })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
+      expect(document.querySelector('.overlay-pill-content-enter')?.textContent).toBe('Processing')
+    })
   },
 }
 
@@ -113,6 +147,28 @@ export const AnimationsOff: Story = {
       await expect(document.querySelector('.overlay-progress-estimate')).toBeNull()
       await expect(document.querySelector('.overlay-progress-creep')).toBeNull()
       await expect(document.querySelector('.overlay-progress-sheen')).toBeNull()
+      await expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
+  },
+}
+
+export const ProcessingAiAnimationsOff: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    try {
+      await waitUntilListening(false)
+      await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, thinkingAi: true, elapsedSec: 10 })
+
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-progress-static')).not.toBeNull()
+      })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
+        expect(document.querySelector('.overlay-ai-sparkle')?.parentElement?.textContent).toBe('AI processing')
+      })
     } finally {
       // The smoke suite runs stories in one document; never leave motion off for the next one.
       document.documentElement.dataset.motion = 'on'

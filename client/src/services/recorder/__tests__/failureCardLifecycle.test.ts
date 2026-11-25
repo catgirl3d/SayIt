@@ -119,6 +119,12 @@ function prepareRun(
   const seam = recorder.testSeam()
   seam.state = state
   seam.activeRunId = runId
+  if (seam.activeRunAiConfig === null) {
+    seam.activeRunAiConfig = {
+      aiEnabled: Boolean(harness.settings.get('aiEnabled')),
+      aiMinDurationSec: Math.max(0, Number(harness.settings.get('aiMinDurationSec')) || 0),
+    }
+  }
   seam.audioSentSamples = Math.round(audioDurationSec * 16_000)
   seam.wallTimeAtStopSec = audioDurationSec
   seam.recordedChunks = [new ArrayBuffer(Math.round(audioDurationSec * 32_000))]
@@ -1410,6 +1416,98 @@ describe('recorder failure cards', () => {
       audioFilePath: 'history/recording.wav',
       isEmpty: true,
     })
+  })
+})
+
+describe('overlay AI processing gate', () => {
+  async function prepareStopPath(recorder: RecorderOrchestrator, runId: number, durationSec: number) {
+    const provider = await switchProvider('cloud_api')
+    const stop = vi.spyOn(provider, 'stop').mockReturnValue(true)
+    prepareRun(recorder, runId, durationSec, 'recording')
+    const seam = recorder.testSeam()
+    seam.recordStartPerf = performance.now() - durationSec * 1_000
+    seam.cachedProbeResult = { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
+    return stop
+  }
+
+  it.each([
+    { name: 'AI is off', aiEnabled: false, minDurationSec: 3, durationSec: 4, aiProcessed: false, stopDisableAi: false },
+    { name: 'the recording is below the minimum', aiEnabled: true, minDurationSec: 3, durationSec: 1, aiProcessed: false, stopDisableAi: true },
+    { name: 'the recording is at the minimum', aiEnabled: true, minDurationSec: 3, durationSec: 3, aiProcessed: true, stopDisableAi: false },
+  ])('$name: the thinking payload reflects whether this run is AI-processed', async ({
+    aiEnabled,
+    minDurationSec,
+    durationSec,
+    aiProcessed,
+    stopDisableAi,
+  }) => {
+    harness.settings.set('aiEnabled', aiEnabled)
+    harness.settings.set('aiMinDurationSec', minDurationSec)
+    const recorder = new RecorderOrchestrator()
+    await recorder.refreshRuntimeSettings()
+    const stop = await prepareStopPath(recorder, 401, durationSec)
+    await recorder.testSeam().stopRecording()
+
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(stop.mock.calls[0]?.[0]?.disableAi).toBe(stopDisableAi ? true : undefined)
+    const payload = latestPayload('update_overlay_state')
+    expect(payload?.state).toBe('thinking')
+    if (aiProcessed) {
+      expect(payload?.thinkingAi).toBe(true)
+    } else {
+      expect(payload).not.toHaveProperty('thinkingAi')
+    }
+  })
+
+  it('keeps the start-frozen AI setting when the toggle changes mid-recording', async () => {
+    harness.settings.set('aiEnabled', true)
+    harness.settings.set('aiMinDurationSec', 0)
+    const recorder = new RecorderOrchestrator()
+    await recorder.refreshRuntimeSettings()
+    const stop = await prepareStopPath(recorder, 402, 3)
+
+    harness.settings.set('aiEnabled', false)
+    await recorder.refreshRuntimeSettings()
+    await recorder.testSeam().stopRecording()
+
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(stop.mock.calls[0]?.[0]?.disableAi).toBeUndefined()
+    const payload = latestPayload('update_overlay_state')
+    expect(payload?.state).toBe('thinking')
+    expect(payload?.thinkingAi).toBe(true)
+  })
+
+  it('freezes AI settings at the real start and keeps them through a mid-run change', async () => {
+    configureRealPromptFixture()
+    harness.settings.set('aiMinDurationSec', 0)
+    const recorder = new RecorderOrchestrator()
+    await recorder.refreshRuntimeSettings()
+    const { start } = await startRealRecording(recorder)
+
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+      disableAi: false,
+      aiMinDurationSec: 0,
+    }))
+
+    harness.settings.set('aiEnabled', false)
+    harness.settings.set('aiMinDurationSec', 10)
+    await recorder.refreshRuntimeSettings()
+
+    const provider = await switchProvider('cloud_api')
+    const stop = vi.spyOn(provider, 'stop').mockReturnValue(true)
+    const seam = recorder.testSeam()
+    seam.audioSentSamples = 3 * 16_000
+    seam.wallTimeAtStopSec = 3
+    seam.recordedChunks = [new ArrayBuffer(3 * 32_000)]
+    seam.recordStartPerf = performance.now() - 3_000
+    seam.cachedProbeResult = { editable: true, hwnd: '0x1', process: 'Editor', detail: 'editable' }
+    await seam.stopRecording()
+
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(stop.mock.calls[0]?.[0]?.disableAi).toBeUndefined()
+    const payload = latestPayload('update_overlay_state')
+    expect(payload?.state).toBe('thinking')
+    expect(payload?.thinkingAi).toBe(true)
   })
 })
 
