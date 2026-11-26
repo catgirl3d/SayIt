@@ -5,6 +5,7 @@ import type { ActiveAppContext } from '@/types/appContext'
 import type { PromptResolution, UserStats } from '@/services/personalization/types'
 import type { PromptPreset } from '@/services/store'
 import type { ProbeResult } from '../PasteService'
+import { OVERLAY_EXIT_HIDE_DELAY_MS } from '../OverlayService'
 
 type RecordingContextFixture = {
   appContext: ActiveAppContext | null
@@ -706,6 +707,8 @@ describe('recorder failure cards', () => {
     await vi.advanceTimersByTimeAsync(4_999)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(1)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(1)
   })
 
@@ -749,6 +752,8 @@ describe('recorder failure cards', () => {
     await vi.advanceTimersByTimeAsync(3_999)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(1)
+    expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(harness.invoke.mock.calls.filter(([command]) => command === 'hide_overlay')).toHaveLength(1)
   })
 

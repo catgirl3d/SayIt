@@ -1,5 +1,5 @@
 import * as bridge from '../services/bridge'
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Copy, MicVocal, Sparkles, X } from 'lucide-react'
 import { SuccessCheck } from '@/components/ui/success-check'
 import { isLocale, setLocale } from '@/i18n'
@@ -24,6 +24,98 @@ import { usePillMorph } from './pillMorph'
 
 type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast' | 'subtitles'
 type RecordingVisualPhase = 'preparing' | 'listening'
+
+/** The last visible recording row, frozen for the close into the processing circle. */
+interface RecordingRowSnapshot {
+  heights: number[]
+  colors: string[]
+  timerText: string
+  timerColor: string
+  inCountdown: boolean
+  urgent: boolean
+  showDuration: boolean
+  warning: string
+  warningTone: 'warn' | 'error'
+  /** Width of the live row's box at the last listening frame. */
+  width: number
+}
+
+/**
+ * One recording row for both the live pill and the frozen copy that closes with it. Rendering the
+ * same markup on both sides keeps their boxes identical: the bars container may give way
+ * (min-w-0 + overflow-hidden) exactly as it did while recording. `frozen` only adds the collapse
+ * animation and each bar's starting height.
+ */
+function RecordingRowView({
+  heights,
+  colors,
+  timerText,
+  timerColor,
+  inCountdown,
+  urgent,
+  showDuration,
+  warning,
+  warningTone,
+  frozen = false,
+}: Omit<RecordingRowSnapshot, 'width'> & { frozen?: boolean }) {
+  // Muted-microphone alert: the waveform is flat and meaningless here, so show the red text
+  // centered inside the pill. It is more noticeable and also avoids a long warning plus the
+  // waveform breaking the fixed width and clipping the pill's rounded corners.
+  if (warning && warningTone === 'error') {
+    return (
+      <div
+        key={warning}
+        className="overlay-attention flex items-center whitespace-nowrap px-1 text-xs font-semibold text-red-500"
+        style={{ height: '20px' }}
+      >
+        {warning}
+      </div>
+    )
+  }
+  return (
+    <>
+      {/* When text needs room, draw **fewer bars** instead of letting overflow cut the waveform in
+          half: a half-clipped bar looks broken, while fewer bars look intentional (see barBudget).
+          min-w-0 stays as the fallback: if the text is unusually long, clip the waveform rather
+          than wrap the line. */}
+      <div className="overlay-recording-bars flex min-w-0 items-center gap-[2px] overflow-hidden" style={{ height: '20px' }}>
+        {heights.map((height, index) => {
+          const clampedHeight = Math.min(18, Math.max(3, height))
+          return (
+            <span
+              key={index}
+              className={`block w-[2.5px] rounded-full${frozen ? ' overlay-wave-collapse-bar' : ''}`}
+              style={{
+                backgroundColor: colors[index],
+                height: `${clampedHeight}px`,
+                opacity: 0.7 + (clampedHeight / 18) * 0.3,
+                boxShadow: 'none',
+                transition: 'height 50ms ease-out, opacity 50ms ease-out',
+                ...(frozen ? { '--from-h': `${clampedHeight}px` } : null),
+              } as CSSProperties}
+            />
+          )
+        })}
+      </div>
+      {/* The timer is **no longer** pushed out by a warning: a warning is a fleeting notice, the
+          timer is an ongoing state. The condition used to include !warning, so when the 4-minute
+          hint appeared the seconds stayed hidden for the whole remaining minute. */}
+      {showDuration && (
+        <span
+          className={`ml-1.5 shrink-0 whitespace-nowrap text-right font-mono tabular-nums text-xs${inCountdown ? ' font-semibold' : ''}${urgent ? ' overlay-breathe' : ''}`}
+          style={{ color: timerColor }}
+        >
+          {timerText}
+        </span>
+      )}
+      {warning && (
+        <span key={warning} className="overlay-attention ml-2 shrink-0 whitespace-nowrap text-xs text-amber-400">
+          {warning}
+        </span>
+      )}
+    </>
+  )
+}
 type OverlayPayload =
   /** UI language, sent by the main window with every update (see OverlayCommonPayload.locale). */
   Partial<OverlayCommonPayload> &
@@ -47,6 +139,8 @@ type OverlayPayload =
       streamingText?: string
       micSourceMode?: 'auto' | 'fixed' | null
       micSourceLabel?: string
+      /** Set on the final update of a show: the page plays the closing animation before the native hide. */
+      exit?: boolean
       _overlayShowId?: number
       _overlayGeneration?: number
       _overlayProbe?: boolean
@@ -262,6 +356,7 @@ export default function Overlay() {
   const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
   const [showDuration, setShowDuration] = useState(true)
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
+  const [recordingWidth, setRecordingWidth] = useState(352)
   const [presentationId, setPresentationId] = useState(0)
   const [presentationEntrance, setPresentationEntrance] = useState<'circle' | 'pill'>('pill')
   const [fallbackText, setFallbackText] = useState('')
@@ -297,6 +392,7 @@ export default function Overlay() {
   // tap, "Processing" after a dictation). Render nothing while hidden; the waking payload renders the
   // new state in the same commit.
   const [overlayBlank, setOverlayBlank] = useState(false)
+  const [exiting, setExiting] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const pillRef = useRef<HTMLDivElement | null>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -395,6 +491,9 @@ export default function Overlay() {
       // The overlay is its own document, so the in-app switch travels with the payload. Update the
       // module/attribute before the state changes below are rendered.
       if (typeof payload.animationsEnabled === 'boolean') setMotionEnabled(payload.animationsEnabled)
+      // Any state payload without the flag clears the exit: a waiting during the exit must start
+      // the normal circle entrance instead of staying in the closing animation.
+      if (payload.state) setExiting(payload.exit === true)
       // A late update for an already hidden show arrives with show id 0 and must not wake the
       // hidden page; with id 0 the window is shown only for the interactive fallback card.
       if (payload._overlayShowId !== 0 || payload.state === 'fallback') {
@@ -469,6 +568,7 @@ export default function Overlay() {
         setCustomWave((prev) => (sameCustomWave(prev, next) ? prev : next))
       }
       if (typeof payload.barCount === 'number' && payload.barCount > 0) setBarCount(payload.barCount)
+      if (typeof payload.recordingWidth === 'number' && payload.recordingWidth > 0) setRecordingWidth(payload.recordingWidth)
       if (typeof payload.fallbackText === 'string') setFallbackText(payload.fallbackText)
       if (typeof payload.failureTitle === 'string') setFailureTitle(payload.failureTitle)
       if (typeof payload.failureDetail === 'string') setFailureDetail(payload.failureDetail)
@@ -551,6 +651,7 @@ export default function Overlay() {
       overlayVisibleRef.current = false
       setAnimationsPaused(true)
       setOverlayBlank(true)
+      setExiting(false)
     }
 
     void bridge.listen<unknown>('overlay-state', (event) => handleOverlayState(event.payload))
@@ -638,11 +739,16 @@ export default function Overlay() {
   // A warning appearing/disappearing and the countdown starting make the waveform give up bars
   // (see barBudget), so the width changes; they belong to the width key, while the recording
   // content itself is not remounted and contentKey stays the same.
+  const motion = useMotionAllowed()
+  const noticeState = state === 'toast' || state === 'error'
+  const pillKind = recordingPhase ? 'recording' : state === 'thinking' ? 'thinking' : noticeState ? 'notice' : null
   const pillContentKey = recordingPhase ? 'recording' : state === 'thinking' ? 'thinking' : null
   const pillMorphKey = recordingPhase
     ? `recording:${warningTone}:${warning}:${inCountdown ? 1 : 0}`
     : state === 'thinking'
-      ? `thinking:${thinkingAi ? 'ai' : ''}`
+      // The processing circle has the same width for dots and sparkle; a changed AI flag must not
+      // restart the ring, so it is not part of the width key either.
+      ? 'thinking'
       : state === 'toast'
         ? `toast:${toastTone}:${toastText}`
         : state === 'error'
@@ -653,56 +759,119 @@ export default function Overlay() {
     pillMorphKey,
     presentationId,
     pillContentKey ?? pillMorphKey,
+    { kind: pillKind, recordingWasPreparing: recordingVisualPhase === 'preparing' },
   )
 
-  // "Waveform collapses into the progress bar" needs the last waveform frame before the recording
-  // ended. By the time the recording state is left, bars are already reset to 3, so record them
-  // frame by frame during recording. A muted-microphone alert draws red text instead of the
-  // waveform, so there is nothing to collapse in that case.
-  const waveSnapshotRef = useRef<{ heights: number[]; colors: string[] } | null>(null)
+  // "The pill closes into the processing circle" needs the whole last recording row before the
+  // recording state is left: by then bars are reset to 3 and the timer/warning are already part
+  // of the next state. Record the rendered row (bars after barBudget, timer, warning) frame by
+  // frame while listening, then freeze one copy when thinking starts.
+  const recordingRowRef = useRef<RecordingRowSnapshot | null>(null)
+  const recordingRowElementRef = useRef<HTMLDivElement | null>(null)
   // The snapshot is consumed once, when the thinking state starts. Without this gate a later
   // re-render (for example when animations are switched back on mid-processing) could mount the
-  // collapse row late and replay it over the already running progress bar.
-  const collapseSnapshotRef = useRef<{ heights: number[]; colors: string[] } | null>(null)
-  const collapseCapturedRef = useRef(false)
-  const collapsePresentationRef = useRef(presentationId)
-  if (collapsePresentationRef.current !== presentationId) {
+  // frozen row late and replay the close over the already running ring.
+  const frozenRowRef = useRef<RecordingRowSnapshot | null>(null)
+  const frozenCapturedRef = useRef(false)
+  const frozenPresentationRef = useRef(presentationId)
+  if (frozenPresentationRef.current !== presentationId) {
     // A new show: any snapshot belongs to the previous presentation.
-    collapsePresentationRef.current = presentationId
-    collapseSnapshotRef.current = null
-    collapseCapturedRef.current = false
+    frozenPresentationRef.current = presentationId
+    frozenRowRef.current = null
+    frozenCapturedRef.current = false
   }
   if (visuallyListening) {
-    waveSnapshotRef.current = warning && warningTone === 'error'
-      ? null
-      : { heights: visibleBars, colors: palette }
+    recordingRowRef.current = {
+      heights: visibleBars,
+      colors: palette,
+      timerText,
+      timerColor,
+      inCountdown,
+      urgent,
+      showDuration,
+      warning,
+      warningTone,
+      // The ref still points at the previous commit's live row; the layout effect below corrects
+      // this to the exact box of the frame that is about to be painted.
+      width: recordingRowElementRef.current?.getBoundingClientRect().width ?? 0,
+    }
   } else if (state === 'waiting') {
     // Clear it when a new recording starts. Otherwise press-and-release (before any waveform was
-    // drawn) would replay the previous recording's snapshot when processing begins.
-    waveSnapshotRef.current = null
+    // drawn) would replay the previous recording's row when processing begins.
+    recordingRowRef.current = null
   }
-  const motion = useMotionAllowed()
   if (state === 'thinking') {
-    if (!collapseCapturedRef.current) {
-      collapseCapturedRef.current = true
-      const frame = waveSnapshotRef.current
-      collapseSnapshotRef.current = motion && pillEnteredFrom === 'recording' && frame !== null
-        ? { heights: frame.heights, colors: frame.colors }
+    if (!frozenCapturedRef.current) {
+      frozenCapturedRef.current = true
+      frozenRowRef.current = motion && pillEnteredFrom === 'recording' && recordingRowRef.current !== null
+        ? recordingRowRef.current
         : null
     }
   } else {
     // Leaving thinking (or being outside it) resets the one-shot gate, so the next thinking state
-    // captures its own frame. Keeping the gate across a visible toast and a following recording
-    // would reuse the previous recording's snapshot forever because a visible present keeps the
-    // same presentationId.
-    collapseCapturedRef.current = false
-    collapseSnapshotRef.current = null
+    // captures its own row. Keeping the gate across a visible notice and a following recording
+    // would reuse the previous recording's row forever because a visible present keeps the same
+    // presentationId.
+    frozenCapturedRef.current = false
+    frozenRowRef.current = null
   }
-  // With interface animations off the snapshot is never captured: its bars would jump to the end
-  // state and the row would vanish at once, which looks worse than not showing it. Once captured
-  // (or skipped), the decision is final for this thinking state.
-  const waveSnapshot = collapseSnapshotRef.current
-  const showWaveCollapse = state === 'thinking' && waveSnapshot !== null
+  // The live row can be squeezed by the recording cap (warning plus countdown); the frozen copy
+  // must use the exact box it had on the last painted frame, or its timer would shift on the
+  // first processing frame.
+  useLayoutEffect(() => {
+    if (!visuallyListening) return
+    const width = recordingRowElementRef.current?.getBoundingClientRect().width
+    if (recordingRowRef.current && typeof width === 'number' && width > 0) {
+      recordingRowRef.current.width = width
+    }
+  })
+  // With interface animations off the row is never frozen: the circle is shown at once, and a
+  // frozen row would jump to its end state. Once captured (or skipped), the decision is final for
+  // this thinking state.
+  const frozenRecordingRow = state === 'thinking' ? frozenRowRef.current : null
+
+  // A notice that follows a 38px circle stretches out of it: processing, or the recording
+  // entrance circle when the start fails. A notice after listening grows from the full pill.
+  const noticeFromCircle = noticeState
+    && pillEnteredFrom !== null
+    && (pillEnteredFrom === 'thinking'
+      || (pillEnteredFrom === 'recording' && recordingVisualPhase === 'preparing'))
+  // With interface animations off the leaving circle and the preparing ghost have no fade, so
+  // they must not be rendered over a notice at all.
+  const showThinkingCircle = state === 'thinking'
+    || (motion && noticeFromCircle && pillEnteredFrom === 'thinking')
+  const showPreparingGhost = motion && noticeFromCircle && pillEnteredFrom === 'recording'
+  // Keep the entry source through the notice ghost: re-evaluating it on the notice frame would
+  // re-run the waiting-path ring fade while the circle is already fading out.
+  const thinkingEntryRef = useRef<'listening' | 'waiting'>('waiting')
+  if (state === 'thinking') {
+    thinkingEntryRef.current = recordingVisualPhase === 'listening' ? 'listening' : 'waiting'
+  }
+  const thinkingEntryClass = thinkingEntryRef.current === 'listening'
+    ? ' overlay-thinking-circle-from-listening'
+    : ' overlay-thinking-circle-from-waiting'
+  // Switching animations back on mid-processing must not replay the ring: keep the circle static
+  // for this processing state if it started with animations off. The flag survives into the
+  // notice ghost so removing it cannot restart the enter/ring animations either.
+  const thinkingMotionRef = useRef(false)
+  const thinkingMotionCapturedRef = useRef(false)
+  if (state === 'thinking') {
+    if (!thinkingMotionCapturedRef.current) {
+      thinkingMotionCapturedRef.current = true
+      thinkingMotionRef.current = motion
+    }
+  } else if (!noticeState) {
+    thinkingMotionCapturedRef.current = false
+  }
+  const thinkingStatic = showThinkingCircle && !thinkingMotionRef.current
+  // The glyph must stay as it was while the circle fades into a notice: a non-thinking payload
+  // clears `thinkingAi`, so keep the last processing value for the ghost instead of swapping the
+  // sparkle for the dots on the first notice frame.
+  const thinkingAiRef = useRef(false)
+  if (state === 'thinking') thinkingAiRef.current = thinkingAi
+  const circleThinkingAi = state === 'thinking' ? thinkingAi : thinkingAiRef.current
+  const exitThinking = motion && exiting && state === 'thinking'
+  const exitNotice = motion && exiting && noticeState
 
   const handleCopyFallback = async () => {
     if (!fallbackText) return
@@ -817,7 +986,7 @@ export default function Overlay() {
         >
           {showMicSourceHint && (
             <div
-              className="pointer-events-none flex min-w-0 max-w-[calc(100vw-16px)] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full border px-3 py-1.5 font-normal"
+              className="pointer-events-none flex min-w-0 max-w-[464px] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full border px-3 py-1.5 font-normal"
               style={{
                 background: 'rgba(11, 11, 12, 0.94)',
                 color: 'var(--overlay-text)',
@@ -882,21 +1051,22 @@ export default function Overlay() {
               />
             </div>
           )}
-          {/* The pill: the window width is fixed by the waveform bar count, so wrapping must be disabled here.
+          {/* The recording pill's width is fixed by the waveform bar count, so wrapping must be disabled here.
               Otherwise, with more text (for example "28s left" plus "Move closer to the microphone" at the same
               time), it would break into two lines and burst the rounded corners. When content overflows, the
               **waveform** gives way (see min-w-0 + overflow-hidden on the bars container below) and the text stays
               whole: the text is information, the waveform is only decoration. */}
           {/* max-w is the other half of this: the root container is justify-center, so once the pill content gets
               wider it overflows to both sides and is cut off by the window, looking like a rounded rectangle with
-              both ends sliced flat. With a width cap, the squeeze is passed on to the waveform (min-w-0 on the
-              bars), and the pill itself always keeps its full capsule shape. 100vw rather than max-w-full: the
-              parent's width is also content-sized, so it cannot provide the constraint. */}
+              both ends sliced flat. Recording keeps the preset cap from the payload (passed as inline maxWidth);
+              notices use the full 592px frame, and the squeeze is passed on to the waveform (min-w-0 on the bars),
+              so the pill itself always keeps its full capsule shape. 100vw rather than max-w-full: the parent's
+              width is also content-sized, so it cannot provide the constraint. */}
           <div
             ref={pillRef}
             key={presentationId}
-            className={`relative flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}${presentationEntrance === 'circle' ? ' overlay-pill-enter-circle' : ''}`}
-            style={{ minHeight: '38px' }}
+            className={`relative flex max-w-[calc(100vw-8px)] items-center justify-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}${presentationEntrance === 'circle' ? ' overlay-pill-enter-circle' : ''}${state === 'thinking' ? ' overlay-pill-thinking' : ''}${noticeFromCircle ? ' overlay-pill-notice-from-circle' : ''}${exitThinking ? ' overlay-pill-exit-thinking' : ''}${exitNotice ? ' overlay-pill-exit-notice' : ''}`}
+            style={recordingPhase ? { minHeight: '38px', maxWidth: `${recordingWidth}px` } : { minHeight: '38px' }}
           >
             <span
               aria-hidden
@@ -906,38 +1076,32 @@ export default function Overlay() {
                 borderColor: 'var(--overlay-border)',
               }}
             />
-            {/* Last waveform frame, kept at natural size while it settles: each bar eases down to
-                a thin line and the whole row fades out (overlay-wave-collapse in index.css). Kept
-                **outside** the processing content: that layer has its own entrance animation and
-                would fade this one together with it. left 16px = the pill's px-4, aligned with the
-                waveform and progress bar start; once faded it stays in the DOM transparent, which
-                is harmless. */}
-            {showWaveCollapse && waveSnapshot && (
+            {/* The last recording row, frozen at the exact box it had on the last painted frame
+                and centred over the pill, so the shrinking pill clips it from both sides without
+                the timer shifting. It is the same component as the live row, so a squeezed bars
+                container and the muted-microphone alert keep their layout. Each bar eases down to
+                a thin line while the whole row fades (overlay-wave-collapse in index.css). */}
+            {frozenRecordingRow && (
               <div
                 aria-hidden
-                className="overlay-wave-collapse pointer-events-none absolute z-[1] flex items-center gap-[2px]"
+                className="overlay-wave-collapse pointer-events-none absolute left-1/2 top-1/2 z-[1] flex -translate-x-1/2 -translate-y-1/2 items-center"
                 style={{
-                  left: '16px',
-                  top: '50%',
+                  width: frozenRecordingRow.width > 0 ? `${frozenRecordingRow.width}px` : undefined,
                   height: '20px',
-                  marginTop: '-10px',
                 }}
               >
-                {waveSnapshot.heights.map((height, index) => {
-                  const clampedHeight = Math.min(18, Math.max(3, height))
-                  return (
-                    <span
-                      key={index}
-                      className="overlay-wave-collapse-bar block w-[2.5px] rounded-full"
-                      style={{
-                        backgroundColor: waveSnapshot.colors[index],
-                        height: `${clampedHeight}px`,
-                        opacity: 0.7 + (clampedHeight / 18) * 0.3,
-                        '--from-h': `${clampedHeight}px`,
-                      } as CSSProperties}
-                    />
-                  )
-                })}
+                <RecordingRowView
+                  heights={frozenRecordingRow.heights}
+                  colors={frozenRecordingRow.colors}
+                  timerText={frozenRecordingRow.timerText}
+                  timerColor={frozenRecordingRow.timerColor}
+                  inCountdown={frozenRecordingRow.inCountdown}
+                  urgent={frozenRecordingRow.urgent}
+                  showDuration={frozenRecordingRow.showDuration}
+                  warning={frozenRecordingRow.warning}
+                  warningTone={frozenRecordingRow.warningTone}
+                  frozen
+                />
               </div>
             )}
             {recordingPhase ? (
@@ -955,140 +1119,129 @@ export default function Overlay() {
                   ))}
                 </div>
                 <div
+                  ref={recordingRowElementRef}
                   className="overlay-recording-content flex min-w-0 items-center"
                   aria-hidden={recordingVisualPhase !== 'listening'}
                 >
-                  {warning && warningTone === 'error' ? (
-                    // Muted-microphone alert: the waveform is flat and meaningless here, so show
-                    // the red text centered inside the pill. It is more noticeable and also avoids
-                    // a long warning plus the waveform breaking the fixed width and clipping the
-                    // pill's rounded corners.
-                    <div
-                      key={warning}
-                      className="overlay-attention flex items-center whitespace-nowrap px-1 text-xs font-semibold text-red-500"
-                      style={{ height: '20px' }}
-                    >
-                      {warning}
-                    </div>
-                  ) : (
-                    <>
-                      {/* 有文字要占位时**少画几根**，而不是让 overflow 把波形裁一半 —— 裁出来的
-                          半根条子看着像坏了。少画是"看起来就是这么设计的"。
-                          min-w-0 仍然留着兜底：万一文字特别长，宁可裁波形也不折行。 */}
-                      <div className="flex min-w-0 items-center gap-[2px] overflow-hidden" style={{ height: '20px' }}>
-                        {visibleBars.map((height, index) => {
-                          const color = palette[index]
-                          return (
-                            <div
-                              key={index}
-                              className="w-[2.5px] rounded-full"
-                              style={{
-                                backgroundColor: color,
-                                boxShadow: 'none',
-                                height: `${Math.min(18, Math.max(3, height))}px`,
-                                opacity: 0.7 + (Math.min(18, height) / 18) * 0.3,
-                                transition: 'height 50ms ease-out, opacity 50ms ease-out',
-                              }}
-                            />
-                          )
-                        })}
-                      </div>
-                      {/* The timer is **no longer** pushed out by a warning: a warning is a
-                          fleeting notice, the timer is an ongoing state. The condition used to
-                          include !warning, so when the 4-minute hint appeared the seconds stayed
-                          hidden for the whole remaining minute. */}
-                      {showDuration && (
-                        <span
-                          className={`ml-1.5 shrink-0 whitespace-nowrap text-right font-mono tabular-nums text-xs${inCountdown ? ' font-semibold' : ''}${urgent ? ' overlay-breathe' : ''}`}
-                          style={{ color: timerColor }}
-                        >
-                          {timerText}
-                        </span>
-                      )}
-                      {warning && (
-                        <span key={warning} className="overlay-attention ml-2 shrink-0 whitespace-nowrap text-xs text-amber-400">
-                          {warning}
-                        </span>
-                      )}
-                    </>
-                  )}
+                  <RecordingRowView
+                    heights={visibleBars}
+                    colors={palette}
+                    timerText={timerText}
+                    timerColor={timerColor}
+                    inCountdown={inCountdown}
+                    urgent={urgent}
+                    showDuration={showDuration}
+                    warning={warning}
+                    warningTone={warningTone}
+                  />
                 </div>
               </div>
             ) : (
-              // key gives each kind of content its own mount so the entrance animation replays when
-              // the content changes within one show. A new show is animated by the surface entrance
-              // instead; the content itself does not replay there.
-              <div
-                key={pillContentKey ?? pillMorphKey}
-                className={`relative z-[1] flex min-w-0 items-center${animatePillContent ? ' overlay-pill-content-enter' : ''}`}
-                style={{ color: 'var(--overlay-text)' }}
-              >
-                {state === 'thinking' && (
-                  <div className="flex items-center gap-2">
-                    {/* Three-stage progress (estimate → creep → sheen); the animation definitions
-                        and the reasoning are in index.css under overlay-progress-*. --estimate is
-                        the estimated duration, and both later stages start their delay from it. */}
-                    <div
-                      className="relative h-1 w-12 overflow-hidden rounded-full bg-white/10"
-                      style={{ '--estimate': `${thinkingDuration}s` } as CSSProperties}
-                    >
-                      {motion ? (
-                        <>
-                          <div className="overlay-progress-estimate absolute inset-0">
-                            <div
-                              className="overlay-progress-creep absolute inset-0 rounded-full"
-                              style={{ backgroundColor: thinkingColor }}
-                            />
+              <>
+                {/* The processing circle: a progress ring over the pill outline plus the same dots
+                    the recording entrance uses (or the sparkle for AI). During a notice that grows
+                    out of this circle it stays mounted for 100 ms and fades, so the glyph never
+                    disappears in one frame. The hidden label keeps the state readable and is used
+                    by the overlay tests; the visible label is intentionally gone. */}
+                {showThinkingCircle && (
+                  <div
+                    className={`overlay-thinking-circle pointer-events-none absolute inset-0 z-[2]${thinkingEntryClass}${state === 'thinking' ? '' : ' overlay-thinking-circle-leave'}${thinkingStatic ? ' overlay-thinking-static' : ''}`}
+                    aria-hidden={state !== 'thinking'}
+                  >
+                    <div className="overlay-thinking-circle-enter absolute inset-0">
+                      <div className="overlay-thinking-ring-layer absolute inset-0">
+                        <svg
+                          className="overlay-thinking-ring-progress absolute inset-0 h-full w-full"
+                          viewBox="0 0 38 38"
+                          fill="none"
+                          aria-hidden
+                          style={{ '--estimate': `${thinkingDuration}s` } as CSSProperties}
+                        >
+                          <circle
+                            className="overlay-thinking-ring"
+                            cx="19"
+                            cy="19"
+                            r="18.2"
+                            pathLength={100}
+                            strokeDasharray="100"
+                            stroke={thinkingColor}
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                            transform="rotate(-90 19 19)"
+                          />
+                        </svg>
+                      </div>
+                      <div className="overlay-thinking-glyph absolute inset-0 flex items-center justify-center" aria-hidden>
+                        {circleThinkingAi ? (
+                          <Sparkles aria-hidden className="overlay-ai-sparkle h-3.5 w-3.5" strokeWidth={2.2} />
+                        ) : (
+                          <div className="flex items-center gap-[3px]">
+                            {[0, 1, 2].map((index) => (
+                              <span
+                                key={index}
+                                className="overlay-preparing-dot rounded-full"
+                                style={{ animationDelay: `${index * 110}ms` }}
+                              />
+                            ))}
                           </div>
-                          <div className="overlay-progress-sheen absolute inset-y-0 left-0 rounded-full" aria-hidden />
-                        </>
-                      ) : (
-                        // With animations off the bar must still say "processing" without moving:
-                        // a static estimate line, no creep and no sheen.
-                        <div
-                          className="overlay-progress-static h-full w-[86%] rounded-full"
-                          style={{ backgroundColor: thinkingColor }}
-                        />
+                        )}
+                      </div>
+                      <span className="sr-only">{t(circleThinkingAi ? 'overlay.processingAi' : 'overlay.processing')}</span>
+                    </div>
+                  </div>
+                )}
+                {showPreparingGhost && (
+                  <div className="overlay-preparing-ghost pointer-events-none absolute inset-0 z-[2] flex items-center justify-center" aria-hidden>
+                    {[0, 1, 2].map((index) => (
+                      <span
+                        key={index}
+                        className="overlay-preparing-dot rounded-full"
+                        style={{ animationDelay: `${index * 110}ms` }}
+                      />
+                    ))}
+                  </div>
+                )}
+                {state !== 'thinking' && (
+                  // key gives each kind of content its own mount so the entrance animation replays
+                  // when the content changes within one show. A new show is animated by the surface
+                  // entrance instead; the content itself does not replay there. The wrapper keeps
+                  // its settled width and is centred, so the width ease reveals it from the middle
+                  // and `truncate` never re-evaluates mid-morph.
+                  <div
+                    key={pillContentKey ?? pillMorphKey}
+                    className={`overlay-notice-content relative z-[1] flex max-w-[calc(100vw-40px)] shrink-0 items-center justify-center${noticeFromCircle ? ' overlay-notice-from-circle' : ''}`}
+                  >
+                    <div
+                      className={`flex min-w-0 items-center${animatePillContent ? ' overlay-pill-content-enter' : ''}`}
+                      style={{
+                        color: 'var(--overlay-text)',
+                        '--pill-content-delay': noticeFromCircle ? '100ms' : '0ms',
+                        '--pill-content-duration': noticeFromCircle ? '160ms' : '200ms',
+                      } as CSSProperties}
+                    >
+                      {state === 'error' && (
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate whitespace-nowrap text-xs text-red-400" title={errorMessage || t('overlay.genericError')}>
+                            {errorMessage || t('overlay.genericError')}
+                          </span>
+                        </div>
+                      )}
+
+                      {state === 'toast' && (
+                        <div className="flex min-w-0 items-center gap-2">
+                          {toastTone === 'warn' ? (
+                            <span className="truncate whitespace-nowrap text-xs text-amber-400" title={toastText}>{toastText}</span>
+                          ) : (
+                            <span className="truncate whitespace-nowrap text-xs" style={{ color: 'var(--overlay-text)' }} title={toastText}>
+                              {toastText}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
-                    {/* The sparkle pulses; the pill keeps its progress animation and the user's wave theme. */}
-                    <span className="flex items-center gap-1 text-xs whitespace-nowrap" style={{ color: thinkingColor }}>
-                      {thinkingAi && (
-                        <Sparkles aria-hidden className="overlay-ai-sparkle h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
-                      )}
-                      {t(thinkingAi ? 'overlay.processingAi' : 'overlay.processing')}
-                    </span>
-                    {/* "Esc to cancel" is **deliberately** not written here. Esc cancel still
-                        works (native hook + escape-action, unrelated to this component); this
-                        hint simply does not belong on the overlay: the overlay sits near the
-                        caret and flashes on every dictation, so quieter is better, and "Esc can
-                        cancel" is a fact you learn once. It is explained statically in
-                        Settings → Keyboard shortcuts (see GeneralSettingsPage). Think before
-                        adding it back: it would appear on every processing step, but helps only
-                        the first time. */}
                   </div>
                 )}
-
-                {state === 'error' && (
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate whitespace-nowrap text-xs text-red-400" title={errorMessage || t('overlay.genericError')}>
-                      {errorMessage || t('overlay.genericError')}
-                    </span>
-                  </div>
-                )}
-
-                {state === 'toast' && (
-                  <div className="flex min-w-0 items-center gap-2">
-                    {toastTone === 'warn' ? (
-                      <span className="truncate whitespace-nowrap text-xs text-amber-400" title={toastText}>{toastText}</span>
-                    ) : (
-                      <span className="truncate whitespace-nowrap text-xs" style={{ color: 'var(--overlay-text)' }} title={toastText}>
-                        {toastText}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
+              </>
             )}
           </div>
         </div>

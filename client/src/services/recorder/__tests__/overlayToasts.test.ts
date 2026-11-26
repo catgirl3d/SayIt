@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale, t } from '@/i18n'
-import { OVERLAY_TOAST_WINDOW_WIDTH, OverlayService } from '../OverlayService'
+import { OVERLAY_EXIT_HIDE_DELAY_MS, OVERLAY_WINDOW_WIDTH, OverlayService } from '../OverlayService'
 
 function payloads(command: 'present_overlay' | 'update_overlay_state') {
   return native.invoke.mock.calls
@@ -56,6 +56,9 @@ describe('overlay toasts', () => {
     await vi.advanceTimersByTimeAsync(1599)
     expect(hideCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(1)
+    expect(hideCount()).toBe(0)
+    expect(latestPayload('update_overlay_state')).toMatchObject({ state: 'toast', exit: true })
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(hideCount()).toBe(1)
   })
 
@@ -65,6 +68,8 @@ describe('overlay toasts', () => {
     overlay.showCanceled()
 
     await vi.advanceTimersByTimeAsync(900)
+    expect(hideCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(hideCount()).toBe(1)
 
     await vi.advanceTimersByTimeAsync(5000)
@@ -100,6 +105,9 @@ describe('overlay toasts', () => {
     await vi.advanceTimersByTimeAsync(3999)
     expect(hideCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(1)
+    expect(hideCount()).toBe(0)
+    expect(latestPayload('update_overlay_state')).toMatchObject({ state: 'toast', exit: true })
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(hideCount()).toBe(1)
   })
 
@@ -143,23 +151,42 @@ describe('overlay toasts', () => {
     })
   })
 
-  it('requests the expanded 600px base width for toasts to prevent clipping long notices', () => {
+  it('uses one fixed window width for every base presentation', () => {
+    const overlay = new OverlayService(() => 0)
+    overlay.showWaiting()
+    overlay.startListeningTicker()
+    overlay.showThinking(10)
+    overlay.showPresetSwitched('Fast')
+    overlay.showError('Audio capture failed')
+
+    const basePayloads = [
+      ...payloads('present_overlay'),
+      ...payloads('update_overlay_state'),
+    ]
+    expect(basePayloads.length).toBeGreaterThanOrEqual(5)
+    for (const payload of basePayloads) {
+      expect(payload.baseWidth).toBe(OVERLAY_WINDOW_WIDTH)
+      expect(typeof payload.recordingWidth).toBe('number')
+    }
+  })
+
+  it('uses the fixed window width for toast notices', () => {
     const overlay = new OverlayService(() => 0)
     overlay.showAiCleanupFailed('provider_error')
 
     expect(latestPayload('present_overlay')).toMatchObject({
       state: 'toast',
-      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
+      baseWidth: OVERLAY_WINDOW_WIDTH,
     })
   })
 
-  it('requests the expanded 600px base width for error notices', () => {
+  it('uses the fixed window width for error notices', () => {
     const overlay = new OverlayService(() => 0)
     overlay.showError('Audio capture failed')
 
     expect(latestPayload('present_overlay')).toMatchObject({
       state: 'error',
-      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
+      baseWidth: OVERLAY_WINDOW_WIDTH,
       errorMessage: 'Audio capture failed',
     })
   })

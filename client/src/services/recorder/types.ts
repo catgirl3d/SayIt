@@ -63,7 +63,13 @@ export interface OverlayCommonPayload {
    * payloads are a separate shape and do not use the animated pill.
    */
   animationsEnabled: boolean
+  /** Fixed width of the transparent overlay window; the visible pill is narrower. */
   baseWidth?: number
+  /**
+   * Visible width cap for the recording pill: the preset window width minus the window's 8px
+   * side margin. Applied only while recording (waiting or listening); notices use the frame.
+   */
+  recordingWidth?: number
   barCount?: number
   /**
    * 界面语言，随每次 overlay 更新一起下发。

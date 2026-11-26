@@ -202,4 +202,18 @@ describe('overlay recording entrance', () => {
     expect(surface?.classList.contains('overlay-pill-surface-enter')).toBe(true)
     expect(surface?.parentElement?.classList.contains('overlay-pill-enter-circle')).toBe(false)
   })
+
+  it('caps the recording pill at the preset width and leaves notices uncapped', async () => {
+    const root = await renderOverlay()
+    emitState({ state: 'waiting', ...showId(6), recordingWidth: 352 })
+
+    const pill = root.querySelector<HTMLElement>('.overlay-pill-recording-waiting')
+    expect(pill?.style.maxWidth).toBe('352px')
+
+    emitState({ state: 'toast', ...showId(6), toastText: 'Text inserted', toastTone: 'info', recordingWidth: 352 })
+
+    const toastPill = root.querySelector<HTMLElement>('.overlay-pill-surface')?.parentElement
+    expect(toastPill).toBe(pill)
+    expect(toastPill?.style.maxWidth).toBe('')
+  })
 })

@@ -52,14 +52,21 @@ function Harness({
   contentKey,
   presentationId = 1,
   width,
+  kind,
+  recordingWasPreparing = false,
 }: {
   morphKey: string
   contentKey?: string
   presentationId?: number
   width: number
+  kind?: 'recording' | 'thinking' | 'notice' | null
+  recordingWasPreparing?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
-  const { animateContent, enteredFrom } = usePillMorph(ref, morphKey, presentationId, contentKey)
+  const { animateContent, enteredFrom } = usePillMorph(ref, morphKey, presentationId, contentKey, {
+    kind,
+    recordingWasPreparing,
+  })
   return (
     <div
       ref={ref}
@@ -78,23 +85,46 @@ afterEach(() => {
 })
 
 describe('usePillMorph', () => {
-  it('eases the width and enters new content after a key change within one show', () => {
+  it('closes to the processing circle over 300 ms after a visible recording', () => {
     installAnimationMock()
     installWidth()
-    const { getByTestId, rerender } = render(<Harness morphKey="recording" width={40} />)
+    const { getByTestId, rerender } = render(<Harness morphKey="recording" kind="recording" width={40} />)
     const pill = getByTestId('pill')
 
     expect(animations).toHaveLength(0)
     expect(pill.dataset.animate).toBe('false')
 
-    rerender(<Harness morphKey="thinking" width={60} />)
+    rerender(<Harness morphKey="thinking" kind="thinking" width={38} />)
 
     expect(animations).toHaveLength(1)
-    expect(animations[0].keyframes).toEqual([{ width: '40px' }, { width: '60px' }])
-    expect(String(animations[0].options.easing)).toMatch(/^cubic-bezier\(/)
+    expect(animations[0].keyframes).toEqual([{ width: '40px' }, { width: '38px' }])
+    expect(animations[0].options.duration).toBe(300)
+    expect(animations[0].options.easing).toBe('cubic-bezier(0.5, 0, 0.2, 1)')
     expect(pill.dataset.animate).toBe('true')
     expect(pill.dataset.from).toBe('recording')
-    expect(pill.style.getPropertyValue('--pill-content-delay')).toBe('150ms')
+    expect(pill.style.getPropertyValue('--pill-content-delay')).toBe('')
+  })
+
+  it('does not close the width when processing starts from the waiting circle', () => {
+    installAnimationMock()
+    installWidth()
+    const { rerender } = render(
+      <Harness morphKey="recording" kind="recording" recordingWasPreparing width={40} />,
+    )
+
+    rerender(<Harness morphKey="thinking" kind="thinking" recordingWasPreparing width={38} />)
+
+    expect(animations).toHaveLength(0)
+  })
+
+  it('lets the mask, not the width, stretch a notice out of a circle', () => {
+    installAnimationMock()
+    installWidth()
+    const { rerender } = render(<Harness morphKey="thinking" kind="thinking" width={38} />)
+
+    rerender(<Harness morphKey="toast:info:Text inserted" kind="notice" width={300} />)
+
+    expect(animations).toHaveLength(0)
   })
 
   it('keeps the content mounted when only contentKey changes', () => {
@@ -140,34 +170,31 @@ describe('usePillMorph', () => {
     }
   })
 
-  it('removes the widened content delay when the next morph narrows', () => {
+  it('keeps the 280 ms ease for notice-to-notice morphs and never sets a content delay', () => {
     installAnimationMock()
     installWidth()
-    const { getByTestId, rerender } = render(<Harness morphKey="recording" width={40} />)
+    const { getByTestId, rerender } = render(<Harness morphKey="toast:info:First" kind="notice" width={60} />)
     const pill = getByTestId('pill')
 
-    rerender(<Harness morphKey="thinking" width={60} />)
-    expect(pill.style.getPropertyValue('--pill-content-delay')).toBe('150ms')
-    // Let the widening finish; the narrowing starts from the settled 60px width.
-    animations[0].playState = 'idle'
+    rerender(<Harness morphKey="toast:info:Second" kind="notice" width={40} />)
 
-    rerender(<Harness morphKey="toast" width={40} />)
+    expect(animations).toHaveLength(1)
+    expect(animations[0].options.duration).toBe(280)
     expect(pill.style.getPropertyValue('--pill-content-delay')).toBe('')
-    expect(animations).toHaveLength(2)
   })
 
   it('does not throw when the element cannot animate', () => {
     installWidth()
     delete (Element.prototype as { animate?: unknown }).animate
-    const { getByTestId, rerender } = render(<Harness morphKey="recording" width={40} />)
+    const { getByTestId, rerender } = render(<Harness morphKey="recording" kind="recording" width={40} />)
     const pill = getByTestId('pill')
 
-    rerender(<Harness morphKey="thinking" width={60} />)
+    rerender(<Harness morphKey="thinking" kind="thinking" width={38} />)
 
     expect(animations).toHaveLength(0)
     expect(pill.dataset.animate).toBe('true')
     expect(pill.dataset.from).toBe('recording')
-    expect(pill.style.getPropertyValue('--pill-content-delay')).toBe('150ms')
+    expect(pill.style.getPropertyValue('--pill-content-delay')).toBe('')
   })
 
   it('interrupts from the width currently on screen instead of the old target', () => {
