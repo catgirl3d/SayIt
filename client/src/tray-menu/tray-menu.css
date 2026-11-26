@@ -82,40 +82,6 @@ body {
   color: hsl(var(--primary));
 }
 
-.tray-menu-switch {
-  position: relative;
-  box-sizing: border-box;
-  width: 28px;
-  height: 16px;
-  border-radius: 999px;
-  transition: background-color 120ms ease;
-}
-
-.tray-menu-switch.is-on {
-  background: hsl(var(--primary));
-}
-
-.tray-menu-switch.is-off {
-  background: hsl(var(--muted));
-}
-
-.tray-menu-switch-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: hsl(var(--card));
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
-  transform: translateX(0);
-  transition: transform 120ms ease;
-}
-
-.tray-menu-switch.is-on .tray-menu-switch-thumb {
-  transform: translateX(12px);
-}
-
 .tray-menu-divider {
   height: 1px;
   margin: 3px 7px;
