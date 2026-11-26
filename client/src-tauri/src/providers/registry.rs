@@ -528,6 +528,7 @@ mod tests {
                 "OpenRouter transcription is missing the API Key",
             ),
             ("deepgram", "Deepgram ASR is missing the API Key"),
+            ("qwen_realtime", "Qwen realtime ASR is missing the API Key"),
         ] {
             let result = test_asr_connection(asr_config(provider, "")).await.unwrap();
 

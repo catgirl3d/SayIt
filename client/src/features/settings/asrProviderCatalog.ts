@@ -547,10 +547,7 @@ export function buildAsrProviderConfig(
         ? { ...extra, keyterms_enabled: true }
         // Buffered realtime requests need the same WorkspaceId and language as the stream.
         : profile.provider === 'qwen_realtime'
-          ? {
-            ...(profile.workspaceId?.trim() ? { workspaceId: profile.workspaceId.trim() } : {}),
-            ...(language === 'auto' ? {} : { language }),
-          }
+          ? { ...extra, ...(profile.workspaceId?.trim() ? { workspaceId: profile.workspaceId.trim() } : {}) }
           : extra,
   }
 }

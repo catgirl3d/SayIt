@@ -79,11 +79,18 @@ describe('cloud ASR language capabilities', () => {
     expect(resolveCloudAsrLanguageRequest('deepgram', 'en')).toBe('en')
     expect(resolveCloudAsrLanguageRequest('deepgram', 'zh')).toBe('zh')
     expect(resolveCloudAsrLanguageRequest('deepgram', 'auto')).toBeUndefined()
-    for (const provider of ['doubao_v2', 'qwen', 'qwen_realtime', 'qwen_omni_plus']) {
+    for (const provider of ['doubao_v2', 'qwen', 'qwen_omni_plus']) {
       for (const language of ['auto', 'ru', 'uk', 'en', 'zh'] as const) {
         expect(resolveCloudAsrLanguageRequest(provider, language)).toBeUndefined()
       }
     }
+  })
+
+  it('passes qwen_realtime language through the shared extra builder and omits auto', () => {
+    expect(resolveCloudAsrLanguageRequest('qwen_realtime', 'uk')).toBe('uk')
+    expect(resolveCloudAsrLanguageRequest('qwen_realtime', 'auto')).toBeUndefined()
+    expect(buildCloudAsrExtra('qwen_realtime', 'uk')).toEqual({ language: 'uk' })
+    expect(buildCloudAsrExtra('qwen_realtime', 'auto')).toBeUndefined()
   })
 
   it('reports provider-supported explicit languages', () => {
@@ -226,7 +233,7 @@ describe('buildCloudAsrExtra', () => {
   })
 
   it('providers without explicit language support get no extra payload', () => {
-    for (const provider of ['doubao_v2', 'qwen', 'qwen_realtime']) {
+    for (const provider of ['doubao_v2', 'qwen']) {
       for (const language of ['auto', 'ru', 'uk', 'en', 'zh'] as const) {
         expect(buildCloudAsrExtra(provider, language)).toBeUndefined()
       }

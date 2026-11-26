@@ -140,6 +140,7 @@ export function resolveCloudAsrLanguageRequest(provider: string, language: Speec
   // Nova-3 recognizes every SayIt language explicitly (ru, uk, en, zh); only
   // "auto" falls through to its multilingual code-switching mode.
   if (provider === 'deepgram') return language === 'auto' ? undefined : language
+  if (provider === 'qwen_realtime') return language === 'auto' ? undefined : language
   return undefined
 }
 
@@ -204,8 +205,10 @@ export function resolveBadgeLanguage(
 
 /**
  * Build the `extra` payload for a cloud ASR request. Omni providers carry the
- * resolved model ID plus system-prompt instructions; explicit-language providers
- * (Groq, MiMo, Deepgram) carry the language code; every other provider needs no payload.
+ * resolved model ID plus system-prompt instructions. OpenAI, Gemini, OpenRouter,
+ * custom endpoints, Groq and Deepgram carry a model and/or a language; MiMo and
+ * Qwen realtime carry the language when one is set. Providers without any of
+ * these fields need no payload.
  */
 export function buildCloudAsrExtra(
   provider: string,
