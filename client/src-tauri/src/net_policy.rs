@@ -173,6 +173,7 @@ impl PolicySnapshot {
     }
 }
 
+#[cfg(test)]
 pub fn cert_error_allowed(
     saved_backend_url: Option<&str>,
     protected_host: Option<&str>,
@@ -282,6 +283,7 @@ impl TlsPolicyState {
         self.0.initial_snapshot.clone()
     }
 
+    #[cfg(test)]
     pub fn allows_request(&self, request_uri: &str) -> bool {
         self.0
             .snapshot

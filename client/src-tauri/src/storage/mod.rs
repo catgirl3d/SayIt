@@ -1,5 +1,5 @@
 use rusqlite::{
-    Connection, DatabaseName, OpenFlags, OptionalExtension, Result as SqlResult, params,
+    Connection, DatabaseName, OpenFlags, Result as SqlResult, params,
 };
 use serde_json::Value;
 use std::fs;
@@ -1283,6 +1283,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::OptionalExtension;
 
     fn test_db_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sayit-{name}-{}.db", uuid::Uuid::new_v4()))
