@@ -1089,3 +1089,20 @@ mod local_preload_tests {
         assert!(!preload(&json!(null), &json!("true"), &json!("1.0.0")));
     }
 }
+
+#[cfg(test)]
+mod browser_args_fingerprint_tests {
+    use super::{browser_args_fingerprint, net_policy};
+
+    #[test]
+    fn legacy_browser_args_fingerprint_matches_field_logs() {
+        assert_eq!(
+            browser_args_fingerprint(net_policy::LEGACY_WEBVIEW2_BROWSER_ARGS),
+            "65b8595454e41c50"
+        );
+        assert_eq!(
+            browser_args_fingerprint(net_policy::DEFAULT_WEBVIEW2_BROWSER_ARGS),
+            "65d528c5d5fd2796"
+        );
+    }
+}

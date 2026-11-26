@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -17,6 +18,21 @@ use tokio::sync::{oneshot, watch};
 /// main.rs instead (an explicit Allow becomes a persistent grant and restores device
 /// enumeration).
 pub const DEFAULT_WEBVIEW2_BROWSER_ARGS: &str = "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
+
+/// Exact browser arguments set by every fork release before v0.4.0 (v0.1.8 through v0.3.1).
+///
+/// Those releases exported this value into their own process environment. The in-app update
+/// watchdog, the NSIS installer it starts and the exe relaunched afterwards inherit the old
+/// process environment, so the first start of a later version sees this value as inherited.
+/// It is compared byte-for-byte (no trimming, case folding or whitespace normalization) and is
+/// never honored: only this exact string from our own releases is replaced with the app
+/// defaults.
+///
+/// Upstream builds are not on the fork's update channel: their updater reads its manifest
+/// from their own backend and cannot install a fork build. Values only they used, such as an
+/// older variant that also carried --auto-accept-camera-and-microphone-capture, are
+/// deliberately not recognized.
+pub const LEGACY_WEBVIEW2_BROWSER_ARGS: &str = "--ignore-certificate-errors --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
 pub const BACKEND_BASE_URL_KEY: &str = "backendBaseUrl";
 
 const CERTIFICATE_CACHE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -28,15 +44,58 @@ const CERTIFICATE_CACHE_TIMEOUT: Duration = Duration::from_secs(15);
 /// sides of the app agree on which host is the built-in default.
 const BUILTIN_DEFAULT_SERVER_URL: &str = env!("SAYIT_BUILTIN_DEFAULT_SERVER_URL");
 
+/// Whether this startup resolved browser arguments that the app itself injected (the app
+/// defaults or the replaced legacy value) instead of ones inherited from the user's
+/// environment. This is a startup provenance decision, not a live environment check: main.rs
+/// writes the resolved value back with `set_var`, so re-reading the variable later cannot
+/// recover where the value came from.
+static BROWSER_ARGS_INJECTED: AtomicBool = AtomicBool::new(false);
+
+fn resolve_browser_args(
+    inherited: Option<&std::ffi::OsStr>,
+) -> Result<(&'static str, String), String> {
+    let Some(value) = inherited else {
+        return Ok(("app-default", DEFAULT_WEBVIEW2_BROWSER_ARGS.to_owned()));
+    };
+    let value = value
+        .to_str()
+        .ok_or_else(|| "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS is not valid Unicode".to_owned())?;
+    if value == LEGACY_WEBVIEW2_BROWSER_ARGS {
+        return Ok(("legacy-self", DEFAULT_WEBVIEW2_BROWSER_ARGS.to_owned()));
+    }
+    // Our own defaults come back through app.restart() and through the previous version's
+    // updater; treating them as injected lets remove_injected_browser_args scrub them before
+    // the next update. A user who set exactly these flags loses nothing: the child recomputes
+    // the same defaults.
+    if value == DEFAULT_WEBVIEW2_BROWSER_ARGS {
+        return Ok(("self-default", DEFAULT_WEBVIEW2_BROWSER_ARGS.to_owned()));
+    }
+    validate_inherited_browser_args(value).map(|value| ("inherited", value))
+}
+
 pub fn browser_args_from_environment() -> Result<(&'static str, String), String> {
-    match std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
-        None => Ok(("app-default", DEFAULT_WEBVIEW2_BROWSER_ARGS.to_owned())),
-        Some(value) => {
-            let value = value.to_str().ok_or_else(|| {
-                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS is not valid Unicode".to_owned()
-            })?;
-            validate_inherited_browser_args(value).map(|_| ("inherited", value.to_owned()))
+    let resolved =
+        resolve_browser_args(std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").as_deref());
+    // Record the provenance once at startup: main.rs writes the resolved value back into the
+    // environment, so later callers cannot tell it apart from an inherited value.
+    if let Ok((source, _)) = &resolved {
+        if *source != "inherited" {
+            BROWSER_ARGS_INJECTED.store(true, Ordering::Relaxed);
         }
+    }
+    resolved
+}
+
+pub fn remove_injected_browser_args(command: &mut std::process::Command) {
+    remove_browser_args_if_injected(command, BROWSER_ARGS_INJECTED.load(Ordering::Relaxed));
+}
+
+fn remove_browser_args_if_injected(command: &mut std::process::Command, injected: bool) {
+    // Drop the value only when this app classified it as its own (app defaults, our own
+    // defaults passed back, or the legacy value); any other inherited value is the user's
+    // and reaches the child unchanged.
+    if injected {
+        command.env_remove("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
     }
 }
 
@@ -930,5 +989,101 @@ mod tests {
         let harmless =
             "--proxy-server=\"http://127.0.0.1:8080\" --disable-background-timer-throttling";
         assert_eq!(validate_inherited_browser_args(harmless).unwrap(), harmless);
+    }
+
+    #[test]
+    fn legacy_browser_args_are_replaced_with_app_defaults() {
+        let (source, value) =
+            resolve_browser_args(Some(std::ffi::OsStr::new(LEGACY_WEBVIEW2_BROWSER_ARGS))).unwrap();
+        assert_eq!(source, "legacy-self");
+        assert_eq!(value, DEFAULT_WEBVIEW2_BROWSER_ARGS);
+        assert!(!value.contains("ignore-certificate-errors"));
+    }
+
+    #[test]
+    fn own_default_browser_args_resolve_as_self_default() {
+        assert_eq!(
+            resolve_browser_args(Some(std::ffi::OsStr::new(DEFAULT_WEBVIEW2_BROWSER_ARGS))),
+            Ok::<_, String>(("self-default", DEFAULT_WEBVIEW2_BROWSER_ARGS.to_owned()))
+        );
+    }
+
+    #[test]
+    fn legacy_browser_args_constant_matches_shipped_releases() {
+        assert_eq!(
+            LEGACY_WEBVIEW2_BROWSER_ARGS,
+            "--ignore-certificate-errors --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling"
+        );
+        assert_eq!(LEGACY_WEBVIEW2_BROWSER_ARGS.len(), 139);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn modified_legacy_browser_args_are_still_rejected() {
+        for modified in [
+            format!("{LEGACY_WEBVIEW2_BROWSER_ARGS} --enable-logging"),
+            format!(" {LEGACY_WEBVIEW2_BROWSER_ARGS}"),
+            format!("{LEGACY_WEBVIEW2_BROWSER_ARGS} "),
+            LEGACY_WEBVIEW2_BROWSER_ARGS.replacen(
+                "--ignore-certificate-errors",
+                "--IGNORE-CERTIFICATE-ERRORS",
+                1,
+            ),
+            "--ignore-certificate-errors".to_owned(),
+        ] {
+            assert!(
+                resolve_browser_args(Some(std::ffi::OsStr::new(&modified))).is_err(),
+                "modified legacy args were accepted: {modified:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn absent_browser_args_use_app_defaults() {
+        assert_eq!(
+            resolve_browser_args(None),
+            Ok(("app-default", DEFAULT_WEBVIEW2_BROWSER_ARGS.to_owned()))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn harmless_inherited_browser_args_are_kept() {
+        let harmless = "--proxy-server=\"http://127.0.0.1:8080\"";
+        assert_eq!(
+            resolve_browser_args(Some(std::ffi::OsStr::new(harmless))),
+            Ok(("inherited", harmless.to_owned()))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn non_unicode_browser_args_are_rejected() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        let value = OsString::from_wide(&[0xD800]);
+        assert!(resolve_browser_args(Some(value.as_os_str())).is_err());
+    }
+
+    #[test]
+    fn injected_browser_args_are_removed_for_child_processes() {
+        let key = std::ffi::OsStr::new("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+
+        let mut injected = std::process::Command::new("cmd");
+        remove_browser_args_if_injected(&mut injected, true);
+        assert!(
+            injected
+                .get_envs()
+                .any(|(name, value)| name == key && value.is_none()),
+            "an injected browser args variable must be removed from the child environment"
+        );
+
+        let mut inherited = std::process::Command::new("cmd");
+        remove_browser_args_if_injected(&mut inherited, false);
+        assert!(
+            !inherited.get_envs().any(|(name, _)| name == key),
+            "a command without injected browser args must stay untouched"
+        );
     }
 }

@@ -1019,9 +1019,14 @@ fn spawn_installer(installer_path: &str) -> Result<(), String> {
     std::fs::write(&script_path, script)
         .map_err(|e| format!("Failed to write the update restart script: {}", e))?;
 
-    Command::new("cmd")
+    let mut command = Command::new("cmd");
+    command
         .args(["/C", &script_path.to_string_lossy()])
-        .creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(CREATE_NO_WINDOW);
+    // The watchdog must not inherit browser flags this app injected itself; otherwise the
+    // next release would classify them as user-provided inherited arguments.
+    crate::net_policy::remove_injected_browser_args(&mut command);
+    command
         .spawn()
         .map_err(|e| format!("Failed to start the installer watchdog: {}", e))?;
     Ok(())
