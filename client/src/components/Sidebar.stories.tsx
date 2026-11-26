@@ -30,9 +30,10 @@ export const HistoryActive: Story = {
     // The settings group stays folded until it is opened.
     await expect(canvas.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-expanded', 'false')
     for (const page of settingsPages) await expect(canvas.queryByRole('link', { name: page })).toBeNull()
-    // The active entry is marked for the group's sliding indicator, not painted by the link.
-    await expect(canvas.getByRole('link', { name: 'History' })).not.toHaveClass('bg-sidebar-item-active')
-    await expect(canvasElement.querySelector('.sliding-indicator')).not.toBeNull()
+    // The active link owns its background and accent bar.
+    const historyLink = canvas.getByRole('link', { name: 'History' })
+    await expect(historyLink).toHaveClass('bg-sidebar-item-active')
+    await expect(historyLink.querySelector('.sidebar-active-bar')).not.toBeNull()
   },
 }
 
@@ -47,10 +48,13 @@ export const AudioSettingsActive: Story = {
     await expect(canvas.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-expanded', 'true')
     await expect(canvas.getByRole('link', { name: 'Audio & Mic' })).toHaveAttribute('aria-current', 'page')
     for (const page of settingsPages) await expect(canvas.getByRole('link', { name: page })).toBeVisible()
-    // The group owns a sliding indicator for its selected entry.
-    const settingsGroup = canvasElement.querySelector('#sidebar-settings-items')
-    await expect(settingsGroup).not.toBeNull()
-    await expect(settingsGroup?.querySelector('.sliding-indicator')).not.toBeNull()
+    // The selected link owns its background and accent bar; inactive links own neither.
+    const audioLink = canvas.getByRole('link', { name: 'Audio & Mic' })
+    await expect(audioLink).toHaveClass('bg-sidebar-item-active')
+    await expect(audioLink.querySelector('.sidebar-active-bar')).not.toBeNull()
+    const shortcutsLink = canvas.getByRole('link', { name: 'Shortcuts' })
+    await expect(shortcutsLink).not.toHaveClass('bg-sidebar-item-active')
+    await expect(shortcutsLink.querySelector('.sidebar-active-bar')).toBeNull()
   },
 }
 

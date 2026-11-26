@@ -181,6 +181,54 @@
     opacity 150ms ease-out;
 }
 
+/* Directional page transition on route change (App.tsx). */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--page-enter-y, 6px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-enter {
+  animation: page-enter 550ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.page-enter[data-direction="up"] {
+  --page-enter-y: -8px;
+}
+
+.page-enter[data-direction="down"] {
+  --page-enter-y: 8px;
+}
+
+.page-enter[data-direction="none"] {
+  --page-enter-y: 0px;
+}
+
+/* Sidebar active accent bar (Sidebar.tsx): scales in cleanly from center instead of sliding
+   across rows. */
+@keyframes sidebar-active-bar-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.35);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.sidebar-active-bar {
+  transform-origin: center;
+  animation: sidebar-active-bar-in 220ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
 /* Dialog enter/exit (ui/modal.tsx). Enter: the backdrop fades in over 160ms, the panel scales up
    from 97% over 220ms and floats slightly into place. Exit 140ms only fades and shrinks a little,
    faster than the entrance: closing a dialog means the user has already decided, so they should
@@ -833,6 +881,9 @@ html[data-motion="off"] .overlay-wave-collapse {
 }
 
 html[data-motion="off"] .sliding-indicator,
+html[data-motion="off"] .sidebar-active-bar,
+html[data-motion="off"] .sidebar-nav-item,
+html[data-motion="off"] .page-enter,
 html[data-motion="off"] .modal-backdrop-enter,
 html[data-motion="off"] .modal-panel-enter,
 html[data-motion="off"] .success-check,

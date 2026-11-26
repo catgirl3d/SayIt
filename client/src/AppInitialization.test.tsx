@@ -28,7 +28,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-vi.mock('./components/Sidebar', () => ({ default: () => null }))
+vi.mock('./components/Sidebar', () => ({ default: () => null, SIDEBAR_ROUTE_ORDER: [] }))
 vi.mock('./components/TitleBar', () => ({ default: () => null }))
 vi.mock('./components/WelcomeGuide', () => ({ default: () => null }))
 vi.mock('./pages/Home', () => ({ default: () => null }))
