@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   ChevronRight,
   Home,
@@ -266,6 +266,9 @@ const statusConfig = {
   error: { icon: ServerOff, color: 'text-destructive', labelKey: 'connection.error' },
 } as const satisfies Record<string, { icon: typeof Server; color: string; labelKey: TranslationKey }>
 
+const modeIndicatorLinkClassName =
+  'sidebar-nav-item flex items-center justify-center rounded-lg p-2 transition-colors duration-200 ease-out hover:bg-sidebar-item-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+
 /**
  * Engine status indicator at the bottom-left of the sidebar.
  *
@@ -282,11 +285,16 @@ function ModeIndicator() {
 
   if (mode === 'server') {
     const { icon: StatusIcon, color, labelKey } = statusConfig[status]
+    const tip = t('mode.tooltipDetail', { mode: t('mode.server'), detail: t(labelKey) })
     return (
-      <Tooltip content={t('mode.tooltipDetail', { mode: t('mode.server'), detail: t(labelKey) })}>
-        <div className="flex items-center justify-center rounded-lg p-2">
+      <Tooltip content={tip}>
+        <Link
+          to="/voice-engine"
+          aria-label={`${t('nav.voiceEngine')} — ${tip}`}
+          className={modeIndicatorLinkClassName}
+        >
           <StatusIcon className={cn('h-4 w-4', color)} />
-        </div>
+        </Link>
       </Tooltip>
     )
   }
@@ -300,9 +308,13 @@ function ModeIndicator() {
 
   return (
     <Tooltip content={tip}>
-      <div className="flex items-center justify-center rounded-lg p-2">
+      <Link
+        to="/voice-engine"
+        aria-label={`${t('nav.voiceEngine')} — ${tip}`}
+        className={modeIndicatorLinkClassName}
+      >
         <Icon className={cn('h-4 w-4', notReady ? 'text-warning' : 'text-sidebar-text')} />
-      </div>
+      </Link>
     </Tooltip>
   )
 }

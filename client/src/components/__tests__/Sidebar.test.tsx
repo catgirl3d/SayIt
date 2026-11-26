@@ -117,3 +117,15 @@ describe('sidebar alpha marker', () => {
     expect(entry).not.toContain('sr-only">Alpha<')
   })
 })
+
+describe('sidebar mode indicator', () => {
+  it('links the current local mode to Voice engine without active-link state', () => {
+    const markup = renderSidebar('/voice-engine')
+    const footerTags = (markup.match(/<a\b[^>]*>/g) ?? [])
+      .filter((tag) => tag.includes('aria-label="Voice engine — Local mode"'))
+
+    expect(footerTags).toHaveLength(1)
+    expect(footerTags[0]).toContain('href="/voice-engine"')
+    expect(footerTags[0]).not.toContain('aria-current')
+  })
+})

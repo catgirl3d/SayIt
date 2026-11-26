@@ -37,6 +37,28 @@ export const HistoryActive: Story = {
   },
 }
 
+export const HistoryModeIndicatorNavigation: Story = {
+  parameters: {
+    router: { initialEntries: ['/history'] },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = within(canvasElement.ownerDocument.body)
+    const footerLink = await canvas.findByRole('link', { name: /^Voice engine — / })
+    const voiceEngineLink = canvas.getByRole('link', { name: /^Voice engine$/ })
+
+    await expect(footerLink).toBeVisible()
+    await expect(voiceEngineLink).not.toHaveAttribute('aria-current')
+
+    await userEvent.hover(footerLink)
+    await expect(await body.findByText(/^Server mode · /)).toBeVisible()
+
+    await userEvent.click(footerLink)
+    await waitFor(() => expect(voiceEngineLink).toHaveAttribute('aria-current', 'page'))
+    await expect(footerLink).not.toHaveAttribute('aria-current')
+  },
+}
+
 export const AudioSettingsActive: Story = {
   parameters: {
     router: { initialEntries: ['/audio'] },
