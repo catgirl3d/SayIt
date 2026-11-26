@@ -312,19 +312,47 @@
   }
 }
 
-.overlay-pill-surface {
-  clip-path: inset(0 round 9999px);
-  transition: clip-path 280ms cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: clip-path;
-}
-
 .overlay-pill-surface-enter {
   animation: overlay-pill-surface-enter 120ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: center;
 }
 
+/* Recording start: the pill begins as a 38px circle (its own height) and stretches to its natural
+   width once listening is shown. The surface narrows through its own left/right insets instead of a
+   clip-path, so its 1px outline stays whole at the rounded ends. The recording content has its own
+   clip that moves by the same amount with the same timing: calc(50% - 3px) of the content box equals
+   calc(50% - 19px) of the pill, because the content sits inside the pill's 16px side padding. The
+   waveform is therefore always revealed 16px inside the surface edge, the same gap as in the settled
+   pill, and never runs into the rounded ends. The transitions are declared on the listening state
+   only: entering waiting snaps to the circle instead of playing the stretch backwards. */
 .overlay-pill-recording-waiting .overlay-pill-surface {
-  clip-path: inset(0 calc(50% - 24px) 0 calc(50% - 24px) round 9999px);
+  left: calc(50% - 19px);
+  right: calc(50% - 19px);
+}
+
+.overlay-pill-recording-listening .overlay-pill-surface {
+  transition:
+    left 380ms cubic-bezier(0.5, 0, 0.2, 1),
+    right 380ms cubic-bezier(0.5, 0, 0.2, 1);
+}
+
+/* A recording presentation enters as the whole circle (surface and preparing dots together);
+   other presentations keep the surface-only entrance above. */
+@keyframes overlay-pill-enter-circle {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.overlay-pill-enter-circle {
+  animation: overlay-pill-enter-circle 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: center;
 }
 
 .overlay-recording-stage {
@@ -367,11 +395,10 @@
 
 .overlay-recording-content {
   opacity: 0;
-  clip-path: inset(0 calc(50% - 24px) 0 calc(50% - 24px));
-  transition:
-    opacity 180ms ease-out 35ms,
-    clip-path 280ms cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: clip-path, opacity;
+}
+
+.overlay-pill-recording-waiting .overlay-recording-content {
+  clip-path: inset(0 calc(50% - 3px) 0 calc(50% - 3px));
 }
 
 .overlay-pill-recording-listening .overlay-preparing-indicator {
@@ -382,6 +409,9 @@
 .overlay-pill-recording-listening .overlay-recording-content {
   opacity: 1;
   clip-path: inset(0);
+  transition:
+    opacity 140ms ease-out,
+    clip-path 380ms cubic-bezier(0.5, 0, 0.2, 1);
 }
 
 /* When the pill swaps content (recording → processing → notice), the new content crossfades in:
@@ -622,9 +652,10 @@
 }
 
 /* In-app "Interface animations" switch (Appearance, lib/motion.ts). It turns off only the
- * interface motion listed here; loading spinners and other animations keep running. JS-driven
- * motion (pill width, modal exit, processing bar, waveform snapshot) checks motionAllowed(). The
- * waveform snapshot is hidden rather than frozen: without its fade it would stay on screen. */
+ * interface motion listed here, including the recording start circle and its stretch; loading
+ * spinners and other animations keep running. JS-driven motion (pill width, modal exit, processing
+ * bar, waveform snapshot) checks motionAllowed(). The waveform snapshot is hidden rather than
+ * frozen: without its fade it would stay on screen. */
 html[data-motion="off"] .overlay-wave-collapse {
   display: none;
 }
@@ -638,9 +669,19 @@ html[data-motion="off"] .success-check polyline,
 html[data-motion="off"] .overlay-pill-content-enter,
 html[data-motion="off"] .overlay-ai-sparkle,
 html[data-motion="off"] .overlay-attention,
+html[data-motion="off"] .overlay-pill-enter-circle,
+html[data-motion="off"] .overlay-pill-recording-listening .overlay-pill-surface,
+html[data-motion="off"] .overlay-recording-content,
+html[data-motion="off"] .overlay-preparing-indicator,
 html[data-motion="off"] .overlay-breathe {
   animation: none !important;
   transition: none !important;
+}
+
+/* With interface animations off a recording starts at full width: no circle and no stretch. */
+html[data-motion="off"] .overlay-pill-recording-waiting .overlay-pill-surface {
+  left: 0;
+  right: 0;
 }
 
 /*

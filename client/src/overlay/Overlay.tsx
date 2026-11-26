@@ -19,7 +19,7 @@ import {
   type CustomWaveColors,
   type OverlayWaveTheme,
 } from '@/lib/overlayWaveColors'
-import { setMotionEnabled, useMotionAllowed } from '@/lib/motion'
+import { motionAllowed, setMotionEnabled, useMotionAllowed } from '@/lib/motion'
 import { usePillMorph } from './pillMorph'
 
 type OverlayState = 'waiting' | 'listening' | 'thinking' | 'fallback' | 'failure' | 'error' | 'toast' | 'subtitles'
@@ -53,6 +53,7 @@ type OverlayPayload =
     }
 
 const DEFAULT_BAR_COUNT = 24
+const MIN_PREPARING_VISUAL_MS = 160
 const IDLE_BARS = Array(DEFAULT_BAR_COUNT).fill(3)
 const SUBTITLE_STATUS_CLASS = 'mb-2 text-[11px] font-medium tracking-wide'
 const LIVE_STATUS_CLASS = 'max-h-[48px] overflow-hidden break-words text-[11px] font-medium leading-4 tracking-wide line-clamp-3 [@media(max-height:299px)_and_(min-height:255px)]:max-h-[32px] [@media(max-height:299px)_and_(min-height:255px)]:line-clamp-2 [@media(max-height:254px)]:max-h-[12px] [@media(max-height:254px)]:leading-3 [@media(max-height:254px)]:line-clamp-1'
@@ -262,6 +263,7 @@ export default function Overlay() {
   const [showDuration, setShowDuration] = useState(true)
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
   const [presentationId, setPresentationId] = useState(0)
+  const [presentationEntrance, setPresentationEntrance] = useState<'circle' | 'pill'>('pill')
   const [fallbackText, setFallbackText] = useState('')
   const [failureTitle, setFailureTitle] = useState('')
   const [failureDetail, setFailureDetail] = useState('')
@@ -290,17 +292,28 @@ export default function Overlay() {
   // CSS animations would keep running in the tray. Start paused; any overlay-state payload resumes
   // them and overlay-hidden pauses them again.
   const [animationsPaused, setAnimationsPaused] = useState(true)
+  // WebView2 keeps compositing the hidden overlay, and native present shows the window before the new
+  // state renders, so the next show would open on this show's last frame (the waveform after a short
+  // tap, "Processing" after a dictation). Render nothing while hidden; the waking payload renders the
+  // new state in the same commit.
+  const [overlayBlank, setOverlayBlank] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const pillRef = useRef<HTMLDivElement | null>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const preparingPaintFrameRef = useRef<number | null>(null)
+  const preparingHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingListeningVisualRef = useRef(false)
+  // Whether listening may replace the preparing circle on screen. It stays open until a waiting
+  // closes it; a listening that arrives while it is closed is deferred.
+  const preparingGateOpenRef = useRef(true)
+  const preparingShowIdRef = useRef<number | null>(null)
   const elapsedSecRef = useRef(0)
   const shownIdRef = useRef(0)
   // Whether the overlay document currently shows a state (a payload with a non-zero show id was
   // received and no overlay-hidden has cleared it). A new show while already visible is a content
   // change inside the same visible window, so it must morph instead of replaying the surface
-  // entrance; a show after overlay-hidden starts a fresh presentation.
+  // entrance, except for a recording attempt (waiting), which always starts its own presentation
+  // with the circle entrance; a show after overlay-hidden starts a fresh presentation.
   const overlayVisibleRef = useRef(false)
 
   // 根据录音时长计算预估处理时间（秒）
@@ -320,27 +333,61 @@ export default function Overlay() {
     let removeOverlayListener: (() => void) | null = null
     let removeHiddenListener: (() => void) | null = null
 
-    const cancelPreparingPaint = () => {
+    const cancelPreparingGate = () => {
       if (preparingPaintFrameRef.current !== null) {
         cancelAnimationFrame(preparingPaintFrameRef.current)
         preparingPaintFrameRef.current = null
       }
+      if (preparingHoldTimerRef.current !== null) {
+        clearTimeout(preparingHoldTimerRef.current)
+        preparingHoldTimerRef.current = null
+      }
+      pendingListeningVisualRef.current = false
+      preparingGateOpenRef.current = true
+      preparingShowIdRef.current = null
     }
 
-    const beginPreparingVisual = () => {
-      cancelPreparingPaint()
+    const openPreparingGate = () => {
+      preparingGateOpenRef.current = true
+      if (disposed || !pendingListeningVisualRef.current) return
       pendingListeningVisualRef.current = false
+      setRecordingVisualPhase('listening')
+    }
+
+    const beginPreparingVisual = (showId: number | undefined) => {
+      // A repeated waiting for the same show (for example a republished microphone hint) must not
+      // restart the hold.
+      if (preparingShowIdRef.current !== null && preparingShowIdRef.current === showId) return
+      cancelPreparingGate()
+      preparingShowIdRef.current = showId ?? null
+      preparingGateOpenRef.current = false
       setRecordingVisualPhase('preparing')
-      // listening 可能在 WebView 的首帧之前就到达。跨两个 rAF 才放行视觉切换，
-      // 保证准备胶囊至少真正绘制一帧；只延后视觉形变，不延后录音采集。
-      preparingPaintFrameRef.current = requestAnimationFrame(() => {
-        preparingPaintFrameRef.current = requestAnimationFrame(() => {
-          preparingPaintFrameRef.current = null
-          if (disposed || !pendingListeningVisualRef.current) return
-          pendingListeningVisualRef.current = false
-          setRecordingVisualPhase('listening')
-        })
-      })
+      const holdMs = motionAllowed() ? MIN_PREPARING_VISUAL_MS : 0
+      const startedAt = performance.now()
+      let framesLeft = 2
+      // listening can arrive before the WebView's first frame. Allow the visual switch only after two rAFs,
+      // so the preparing circle is actually painted for at least one frame; this delays only the visual
+      // morph, not audio capture. With animations on, the circle also stays for at least
+      // MIN_PREPARING_VISUAL_MS: listening usually arrives ~15 ms after waiting, and a circle that
+      // stretches after one or two frames reads as a jerk rather than an entrance.
+      const waitForPaint = () => {
+        framesLeft -= 1
+        if (framesLeft > 0) {
+          preparingPaintFrameRef.current = requestAnimationFrame(waitForPaint)
+          return
+        }
+        preparingPaintFrameRef.current = null
+        const remaining = holdMs - (performance.now() - startedAt)
+        if (remaining <= 0) {
+          openPreparingGate()
+          return
+        }
+        preparingHoldTimerRef.current = setTimeout(() => {
+          preparingHoldTimerRef.current = null
+          openPreparingGate()
+        }, remaining)
+      }
+      preparingPaintFrameRef.current = requestAnimationFrame(waitForPaint)
     }
 
     const handleOverlayState = (data: unknown) => {
@@ -350,15 +397,22 @@ export default function Overlay() {
       if (typeof payload.animationsEnabled === 'boolean') setMotionEnabled(payload.animationsEnabled)
       // A late update for an already hidden show arrives with show id 0 and must not wake the
       // hidden page; with id 0 the window is shown only for the interactive fallback card.
-      if (payload._overlayShowId !== 0 || payload.state === 'fallback') setAnimationsPaused(false)
+      if (payload._overlayShowId !== 0 || payload.state === 'fallback') {
+        setAnimationsPaused(false)
+        setOverlayBlank(false)
+      }
       if (typeof payload._overlayShowId === 'number') {
         shownIdRef.current = payload._overlayShowId
         if (payload._overlayShowId !== 0) {
           // Keep the current presentationId while the window is already visible: a toast or error
           // presented after processing has a new show id, but the pill is already on screen and
           // must morph rather than re-enter. The new id still goes into shownIdRef so the matching
-          // overlay-hidden is accepted later.
-          if (!overlayVisibleRef.current) setPresentationId(payload._overlayShowId)
+          // overlay-hidden is accepted later. A recording attempt (waiting) is the exception: each
+          // one starts its own presentation with the circle entrance, even while visible.
+          if (!overlayVisibleRef.current || payload.state === 'waiting') {
+            setPresentationId(payload._overlayShowId)
+            setPresentationEntrance(payload.state === 'waiting' ? 'circle' : 'pill')
+          }
           overlayVisibleRef.current = true
         }
       }
@@ -371,16 +425,15 @@ export default function Overlay() {
 
       if (payload.state) {
         if (payload.state === 'waiting') {
-          beginPreparingVisual()
+          beginPreparingVisual(payload._overlayShowId)
         } else if (payload.state === 'listening') {
-          if (preparingPaintFrameRef.current !== null) {
+          if (!preparingGateOpenRef.current) {
             pendingListeningVisualRef.current = true
           } else {
             setRecordingVisualPhase('listening')
           }
         } else {
-          cancelPreparingPaint()
-          pendingListeningVisualRef.current = false
+          cancelPreparingGate()
         }
         setState(payload.state)
         // Every state presentation decides the flag: a full thinking update without the field
@@ -497,6 +550,7 @@ export default function Overlay() {
       if (typeof showId === 'number' && showId !== shownIdRef.current) return
       overlayVisibleRef.current = false
       setAnimationsPaused(true)
+      setOverlayBlank(true)
     }
 
     void bridge.listen<unknown>('overlay-state', (event) => handleOverlayState(event.payload))
@@ -520,8 +574,7 @@ export default function Overlay() {
 
     return () => {
       disposed = true
-      cancelPreparingPaint()
-      pendingListeningVisualRef.current = false
+      cancelPreparingGate()
       removeOverlayListener?.()
       removeHiddenListener?.()
       if (hideTimerRef.current) {
@@ -580,7 +633,8 @@ export default function Overlay() {
 
   // Identifier for "the pill shows a different kind of content". waiting/listening share one:
   // per-frame recording refreshes are not a content change, and the expansion between them is
-  // handled by clip-path. Notices include their text, so two different notices in a row morph too.
+  // handled by the surface insets and the content clip (overlay-pill-recording-* in index.css).
+  // Notices include their text, so two different notices in a row morph too.
   // A warning appearing/disappearing and the countdown starting make the waveform give up bars
   // (see barBudget), so the width changes; they belong to the width key, while the recording
   // content itself is not remounted and contentKey stays the same.
@@ -683,7 +737,7 @@ export default function Overlay() {
       data-overlay-animations-paused={animationsPaused ? '' : undefined}
       className="pointer-events-none flex h-full items-end justify-center pb-4"
     >
-      {state === 'failure' ? (
+      {!overlayBlank && (state === 'failure' ? (
         <OverlayFailureCard
           title={failureTitle}
           detail={failureDetail}
@@ -828,23 +882,25 @@ export default function Overlay() {
               />
             </div>
           )}
-          {/* 胶囊：窗口宽度按波形条数固定，所以这里必须禁止换行 —— 否则文字一多
-              （如「剩余 28s」+「请靠近麦克风」同时出现）就会折成两行，把圆角撑破。
-              超出时让**波形**让位（见下方 bars 容器的 min-w-0 + overflow-hidden），
-              文字保持完整：文字是信息，波形只是陪衬。 */}
-          {/* max-w 是配套的另一半：根容器是 justify-center，胶囊内容一宽就向两侧溢出、
-              被窗口裁掉，看着像"两端被切平的圆角矩形"。给了宽度上限，压缩压力才会
-              传到波形上（bars 的 min-w-0），胶囊本身始终保持完整的胶囊形状。
-              用 100vw 而不是 max-w-full：父层宽度也是按内容算的，撑不出约束。 */}
+          {/* The pill: the window width is fixed by the waveform bar count, so wrapping must be disabled here.
+              Otherwise, with more text (for example "28s left" plus "Move closer to the microphone" at the same
+              time), it would break into two lines and burst the rounded corners. When content overflows, the
+              **waveform** gives way (see min-w-0 + overflow-hidden on the bars container below) and the text stays
+              whole: the text is information, the waveform is only decoration. */}
+          {/* max-w is the other half of this: the root container is justify-center, so once the pill content gets
+              wider it overflows to both sides and is cut off by the window, looking like a rounded rectangle with
+              both ends sliced flat. With a width cap, the squeeze is passed on to the waveform (min-w-0 on the
+              bars), and the pill itself always keeps its full capsule shape. 100vw rather than max-w-full: the
+              parent's width is also content-sized, so it cannot provide the constraint. */}
           <div
             ref={pillRef}
-            className={`relative flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}`}
+            key={presentationId}
+            className={`relative flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}${presentationEntrance === 'circle' ? ' overlay-pill-enter-circle' : ''}`}
             style={{ minHeight: '38px' }}
           >
             <span
-              key={presentationId}
               aria-hidden
-              className="overlay-pill-surface overlay-pill-surface-enter absolute inset-0 rounded-full border"
+              className={`overlay-pill-surface absolute inset-0 rounded-full border${presentationEntrance === 'pill' ? ' overlay-pill-surface-enter' : ''}`}
               style={{
                 background: 'var(--overlay-bg)',
                 borderColor: 'var(--overlay-border)',
@@ -1036,7 +1092,7 @@ export default function Overlay() {
             )}
           </div>
         </div>
-      )}
+      ))}
     </div>
   )
 }
