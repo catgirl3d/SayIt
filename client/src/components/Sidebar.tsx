@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { useSlidingIndicator } from '@/components/ui/useSlidingIndicator'
 import {
   ChevronRight,
   Home,
@@ -75,6 +74,14 @@ const footerNavItems = [
   { to: '/about', icon: Info, labelKey: 'nav.about' },
 ] as const satisfies readonly NavItemDef[]
 
+/** Visual top-to-bottom route order in the sidebar, used for directional page transitions. */
+export const SIDEBAR_ROUTE_ORDER: readonly string[] = [
+  ...workspaceNavItems,
+  ...aiNavItems,
+  ...systemNavItems,
+  ...footerNavItems,
+].map((item) => item.to)
+
 function NavItem({
   to,
   icon: Icon,
@@ -95,38 +102,35 @@ function NavItem({
       end={to === '/'}
       className={({ isActive }) =>
         cn(
-          // The selected background is drawn by the group's sliding indicator (see NavGroup);
-          // relative z-[1] keeps the text above it.
-          'relative z-[1] flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors',
+          'sidebar-nav-item relative flex items-center gap-2.5 rounded-lg py-1.5 pl-3 pr-2.5 text-xs transition-colors duration-200 ease-out',
           isActive
-            ? 'font-medium text-sidebar-text-active'
+            ? 'bg-sidebar-item-active font-medium text-sidebar-text-active'
             : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
         )
       }
     >
-      <Icon className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">{label}</span>
-      {indicator ?? (alpha && <AlphaBadge />)}
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span
+              aria-hidden
+              className="sidebar-active-bar absolute bottom-1.5 left-[3px] top-1.5 w-[3px] rounded-sm bg-primary"
+            />
+          )}
+          <Icon className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+          {indicator ?? (alpha && <AlphaBadge />)}
+        </>
+      )}
     </NavLink>
   )
 }
 
-/**
- * One sidebar navigation group with its own sliding selection background.
- *
- * Each group owns an indicator because the active page is always in exactly one group: a group
- * without it fades out, and coming back makes the background appear in place instead of sliding
- * across the section headings. The indicator is the last child so `space-y-*` does not add a top
- * margin to the first real entry.
- */
+/** One sidebar navigation group container. */
 function NavGroup({ children, className = 'space-y-1', id }: { children: ReactNode; className?: string; id?: string }) {
-  const { pathname } = useLocation()
-  const groupRef = useRef<HTMLDivElement>(null)
-  const indicatorRef = useSlidingIndicator(groupRef, pathname, { activeSelector: '[aria-current="page"]' })
   return (
-    <div id={id} ref={groupRef} className={cn('relative', className)}>
+    <div id={id} className={className}>
       {children}
-      <span ref={indicatorRef} aria-hidden className="sliding-indicator rounded-lg bg-sidebar-item-active" />
     </div>
   )
 }
@@ -203,8 +207,8 @@ function IconOnlyNavItem({
         aria-label={label}
         className={({ isActive }) =>
           cn(
-            'relative z-[1] flex items-center justify-center rounded-lg p-2 transition-colors',
-            isActive ? 'text-sidebar-text-active' : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
+            'sidebar-nav-item flex items-center justify-center rounded-lg p-2 transition-colors duration-200 ease-out',
+            isActive ? 'bg-sidebar-item-active text-sidebar-text-active' : 'text-sidebar-text hover:bg-sidebar-item-hover hover:text-sidebar-text-active',
           )
         }
       >

@@ -75,10 +75,13 @@ describe('sidebar settings group', () => {
     expect(markup).toContain('aria-expanded="true"')
     for (const href of settingsRoutes) expect(markup, href).toContain(`href="${href}"`)
     expect(navEntryTag(markup, '/audio')).toContain('aria-current="page"')
-    // The selected background is drawn by the group's sliding indicator, not by the link itself.
-    expect(navEntryTag(markup, '/audio')).not.toContain('bg-sidebar-item-active')
-    expect(settingsGroupMarkup(markup)).toContain('sliding-indicator')
+    // The selected link owns its background and accent bar.
+    expect(navEntryTag(markup, '/audio')).toContain('bg-sidebar-item-active')
+    expect(navEntry(markup, '/audio')).toContain('sidebar-active-bar')
+    expect(settingsGroupMarkup(markup)).not.toContain('sliding-indicator')
     expect(navEntryTag(markup, '/shortcuts')).not.toContain('aria-current')
+    expect(navEntryTag(markup, '/shortcuts')).not.toContain('bg-sidebar-item-active')
+    expect(navEntry(markup, '/shortcuts')).not.toContain('sidebar-active-bar')
   })
 })
 

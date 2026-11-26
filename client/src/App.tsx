@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { listen } from '@tauri-apps/api/event'
-import Sidebar from './components/Sidebar'
+import Sidebar, { SIDEBAR_ROUTE_ORDER } from './components/Sidebar'
 import TitleBar from './components/TitleBar'
 import WelcomeGuide from './components/WelcomeGuide'
 import WorkModeMigrationDialog from './components/WorkModeMigrationDialog'
@@ -39,12 +39,29 @@ interface AppProps {
   needsWorkModeChoice: boolean
 }
 
+function resolvePageDirection(fromPathname: string | null, toPathname: string): 'up' | 'down' | 'none' {
+  if (!fromPathname || fromPathname === toPathname) return 'none'
+  const fromIdx = SIDEBAR_ROUTE_ORDER.indexOf(fromPathname)
+  const toIdx = SIDEBAR_ROUTE_ORDER.indexOf(toPathname)
+  if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return 'none'
+  return toIdx > fromIdx ? 'down' : 'up'
+}
+
 export default function App({ runtimeConfigReady, needsWorkModeChoice }: AppProps) {
   const [showWelcome, setShowWelcome] = useState(false)
   const [workModeChoicePending, setWorkModeChoicePending] = useState(needsWorkModeChoice)
   // 首次挂载时先不渲染主界面，等 onboarding 检查完成再决定，避免"闪一下主页再进向导"
   const [onboardingChecked, setOnboardingChecked] = useState(false)
+  const location = useLocation()
   const navigate = useNavigate()
+  const [routeTransition, setRouteTransition] = useState<{ pathname: string; fromPathname: string | null }>({
+    pathname: location.pathname,
+    fromPathname: null,
+  })
+  if (routeTransition.pathname !== location.pathname) {
+    setRouteTransition({ pathname: location.pathname, fromPathname: routeTransition.pathname })
+  }
+  const pageDirection = resolvePageDirection(routeTransition.fromPathname, routeTransition.pathname)
 
   // Initialize and clean up only once per mount/unmount; readiness is fixed at bootstrap.
   useEffect(() => {
@@ -115,27 +132,29 @@ export default function App({ runtimeConfigReady, needsWorkModeChoice }: AppProp
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-y-auto bg-background p-8">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/files" element={<FileTranscription />} />
-            <Route path="/system-audio" element={<SystemAudio />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/favorites" element={<Navigate to="/history" replace />} />
-            <Route path="/hotwords" element={<Dictionary />} />
-            <Route path="/dictionary" element={<Navigate to="/hotwords" replace />} />
-            <Route path="/voice-engine" element={<VoiceEnginePage />} />
-            <Route path="/ai-instructions" element={<AIInstructionsPage />} />
-            <Route path="/ai-service" element={<AIServicePage />} />
-            <Route path="/audio" element={<AudioSettingsPage />} />
-            <Route path="/shortcuts" element={<ShortcutsSettingsPage />} />
-            <Route path="/general" element={<GeneralSettingsPage />} />
-            <Route path="/settings" element={<Navigate to="/general" replace />} />
-            <Route path="/appearance" element={<AppearancePage />} />
-            <Route path="/usage" element={<PersonalizationPage />} />
-            <Route path="/personalization" element={<Navigate to="/usage" replace />} />
-            <Route path="/diagnostics" element={<DiagnosticsPage />} />
-            <Route path="/about" element={<About />} />
-          </Routes>
+          <div key={location.pathname} data-direction={pageDirection} className="page-enter">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/files" element={<FileTranscription />} />
+              <Route path="/system-audio" element={<SystemAudio />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/favorites" element={<Navigate to="/history" replace />} />
+              <Route path="/hotwords" element={<Dictionary />} />
+              <Route path="/dictionary" element={<Navigate to="/hotwords" replace />} />
+              <Route path="/voice-engine" element={<VoiceEnginePage />} />
+              <Route path="/ai-instructions" element={<AIInstructionsPage />} />
+              <Route path="/ai-service" element={<AIServicePage />} />
+              <Route path="/audio" element={<AudioSettingsPage />} />
+              <Route path="/shortcuts" element={<ShortcutsSettingsPage />} />
+              <Route path="/general" element={<GeneralSettingsPage />} />
+              <Route path="/settings" element={<Navigate to="/general" replace />} />
+              <Route path="/appearance" element={<AppearancePage />} />
+              <Route path="/usage" element={<PersonalizationPage />} />
+              <Route path="/personalization" element={<Navigate to="/usage" replace />} />
+              <Route path="/diagnostics" element={<DiagnosticsPage />} />
+              <Route path="/about" element={<About />} />
+            </Routes>
+          </div>
         </main>
       </div>
       {showWelcome && <WelcomeGuide onComplete={handleWelcomeComplete} />}
