@@ -203,6 +203,25 @@ describe('overlay recording entrance', () => {
     expect(surface?.parentElement?.classList.contains('overlay-pill-enter-circle')).toBe(false)
   })
 
+  it('does not replay the surface entrance for a toast when interface animations are off', async () => {
+    const root = await renderOverlay()
+    emitListening(5)
+    emitHidden(5)
+
+    emitState({
+      state: 'toast',
+      ...showId(6),
+      animationsEnabled: false,
+      toastText: 'Text inserted',
+      toastTone: 'info',
+    })
+
+    expect(document.documentElement.dataset.motion).toBe('off')
+    const surface = root.querySelector('.overlay-pill-surface')
+    expect(surface).not.toBeNull()
+    expect(surface?.classList.contains('overlay-pill-surface-enter')).toBe(false)
+  })
+
   it('caps the recording pill at the preset width and leaves notices uncapped', async () => {
     const root = await renderOverlay()
     emitState({ state: 'waiting', ...showId(6), recordingWidth: 352 })

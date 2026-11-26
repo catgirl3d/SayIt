@@ -1070,7 +1070,7 @@ export default function Overlay() {
           >
             <span
               aria-hidden
-              className={`overlay-pill-surface absolute inset-0 rounded-full border${presentationEntrance === 'pill' ? ' overlay-pill-surface-enter' : ''}`}
+              className={`overlay-pill-surface absolute inset-0 rounded-full border${motion && presentationEntrance === 'pill' ? ' overlay-pill-surface-enter' : ''}`}
               style={{
                 background: 'var(--overlay-bg)',
                 borderColor: 'var(--overlay-border)',
