@@ -36,10 +36,13 @@
 - Frontend commands (`npm test`, `npx tsc --noEmit`) are cheap; batch them freely. The one-command-per-invocation rule applies to cargo/npm-install-scale builds only.
 
 ## 7. CI Checks (GitHub Actions)
-- `ci-frontend.yml` runs lint, i18n check, release-script tests, vitest, and build for `client/**` changes (excluding `client/src-tauri/**`).
-- `ci-rust.yml` runs `cargo fmt --all --check`, an advisory `cargo clippy`, and `cargo test --locked` for `client/src-tauri/**`, `rust-toolchain.toml`, and `rustfmt.toml` changes, on the toolchain pinned in `rust-toolchain.toml` (1.97.1) with `rustfmt.toml` pinning style edition 2024.
+- The frontend check list is defined once in `client/package.json` as `npm run ci`; CI and local runs use the same command. Do not duplicate the step list in more places.
+- `ci-frontend.yml` runs `npm run ci` for `client/**` changes excluding `client/src-tauri/**`, with `client/src-tauri/tauri.conf.json` re-included (the frontend build reads the app version from it), plus `.github/workflows/ci-frontend.yml` itself.
+- `ci-rust.yml` runs `cargo fmt --all --check`, `cargo test --locked`, and an advisory `cargo clippy` for changes to `client/src-tauri/**`, `rust-toolchain.toml`, `rustfmt.toml`, `.github/actions/install-vulkan-sdk/**`, `.github/workflows/ci-rust.yml`, and `client/src/services/defaults.ts` (a Rust test includes that file), on the toolchain pinned in `rust-toolchain.toml` (1.97.1) with `rustfmt.toml` pinning style edition 2024.
 - The Rust gate is formatting-enforced: run `cargo fmt --all` in `client/src-tauri` before committing Rust changes. After applying upstream port patches, format the touched files before committing — ported upstream code arrives unformatted.
 - `cargo clippy` runs with `continue-on-error` as a baseline measurement; do not treat its result as a merge gate until a baseline decision is made.
+- Before a PR, from the repo root run `npm --prefix client run ci` (after a clean checkout or a lockfile change, run `npm --prefix client ci` first).
+- For Rust changes, run `cargo fmt --all --check` in `client/src-tauri` locally; the full `cargo test --locked` runs in Windows CI (full local Rust builds are too heavy on this workstation) and can be run locally when needed.
 
 ## 8. Never Commit Plans or Working Notes
 - NEVER commit plan documents, drafts, internal reviews, or working notes (e.g. `docs/*PLAN*.md`, follow-ups, design notes) to this repository — not in normal commits, PRs, or history rewrites.
