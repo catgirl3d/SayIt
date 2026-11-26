@@ -18,7 +18,8 @@
     "check:release-versions": "node scripts/check-release-versions.mjs",
     "lint": "eslint src --ext .ts,.tsx",
     "format": "prettier --write src",
-    "i18n:check": "node scripts/check-i18n.mjs --strict"
+    "i18n:check": "node scripts/check-i18n.mjs --strict",
+    "ci": "npm run lint && npm run i18n:check && npm run test:scripts && npm run storybook:typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
