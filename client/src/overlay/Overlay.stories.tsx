@@ -39,11 +39,15 @@ async function emitState(payload: Record<string, unknown>) {
   await emit('overlay-state', payload)
 }
 
-async function waitUntilListening(animationsEnabled = true) {
+async function waitUntilReady() {
   // overlay_ready is sent after the state listener is registered.
   await waitFor(() => {
     expect(getTauriJournal().calls.some(({ command }) => command === 'overlay_ready')).toBe(true)
   })
+}
+
+async function waitUntilListening(animationsEnabled = true) {
+  await waitUntilReady()
   await emitState({
     state: 'listening',
     ...SHOW,
@@ -173,5 +177,62 @@ export const ProcessingAiAnimationsOff: Story = {
       // The smoke suite runs stories in one document; never leave motion off for the next one.
       document.documentElement.dataset.motion = 'on'
     }
+  },
+}
+
+export const RecordingStart: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilReady()
+    await emitState({ state: 'waiting', ...SHOW })
+
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-recording-waiting')).not.toBeNull()
+    })
+    await expect(document.querySelector('.overlay-pill-enter-circle')).not.toBeNull()
+
+    await emitState({ state: 'listening', ...SHOW, bars: BARS, barCount: BARS.length })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-recording-listening')).not.toBeNull()
+    })
+  },
+}
+
+export const RecordingStartAnimationsOff: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    try {
+      await waitUntilReady()
+      await emitState({ state: 'waiting', ...SHOW, animationsEnabled: false })
+
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-recording-waiting')).not.toBeNull()
+      })
+      await expect(document.querySelector('.overlay-pill-enter-circle')).not.toBeNull()
+
+      await emitState({ state: 'listening', ...SHOW, animationsEnabled: false, bars: BARS, barCount: BARS.length })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-recording-listening')).not.toBeNull()
+      })
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
+  },
+}
+
+export const HiddenBetweenShows: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilListening()
+    await emit('overlay-hidden', { showId: 1 })
+    await waitFor(() => {
+      expect(document.querySelector('[data-overlay-content]')).toBeNull()
+    })
+
+    await emitState({ state: 'waiting', ...SHOW, _overlayShowId: 2 })
+    await waitFor(() => {
+      expect(document.querySelector('[data-overlay-content]')).not.toBeNull()
+    })
   },
 }

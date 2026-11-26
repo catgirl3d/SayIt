@@ -23,6 +23,7 @@ Sections are ordered by version, newest first.
 - Selection highlights now slide between options in radio groups, the sidebar and the History All/Favorites filter, dialogs fade in and out, and the "copied" check mark draws itself. In the overlay, the pill eases to its new width while its content crossfades, and the processing bar no longer sits full and frozen when processing takes longer than estimated. Recording warnings breathe instead of flashing.
 - Appearance has a new **Interface animations** switch that turns these animations off; loading spinners keep spinning. SayIt no longer follows the system reduce-motion setting (Windows "Animation effects"): this switch is the one control for interface animations.
 - **Per-app prompt rules start collapsed**: on the AI processing page they no longer expand when the page opens or when a rule's switch is turned on or off; click a rule's header to expand it.
+- When a recording starts, the overlay now fades in as a small circle that smoothly stretches into the pill with its outline intact, instead of popping in and snapping open. It no longer flashes the previous recording's pill or the processing label first. With Interface animations off, the pill appears at full width right away.
 
 ### Fixed
 #### Server
