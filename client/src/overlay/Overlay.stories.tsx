@@ -91,15 +91,16 @@ export const ProcessingProgress: Story = {
     await emitState({ state: 'thinking', ...SHOW, elapsedSec: 10 })
 
     await waitFor(() => {
-      expect(document.querySelector('.overlay-pill-content-enter')).not.toBeNull()
-    })
-    await waitFor(() => {
       expect(document.querySelector('.overlay-wave-collapse')).not.toBeNull()
     })
-    await expect(document.querySelector('.overlay-progress-estimate')).not.toBeNull()
-    await expect(document.querySelector('.overlay-progress-creep')).not.toBeNull()
-    await expect(document.querySelector('.overlay-progress-sheen')).not.toBeNull()
-    await expect(document.querySelector('.overlay-progress-static')).toBeNull()
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
+    })
+    await expect(document.querySelector('.overlay-thinking-ring-progress')).not.toBeNull()
+    await expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
+    await expect(document.querySelector('.sr-only')?.textContent).toBe('Processing')
+    await expect(document.querySelector('.overlay-progress-estimate')).toBeNull()
+    await expect(document.querySelector('.overlay-progress-sheen')).toBeNull()
     await expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
   },
 }
@@ -114,7 +115,7 @@ export const ProcessingAi: Story = {
       expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
     })
     await expect(document.querySelector('.overlay-ai-sparkle')?.getAttribute('aria-hidden')).toBe('true')
-    await expect(document.querySelector('.overlay-pill-content-enter')?.textContent).toBe('AI processing')
+    await expect(document.querySelector('.sr-only')?.textContent).toBe('AI processing')
   },
 }
 
@@ -132,7 +133,7 @@ export const ProcessingAiCleared: Story = {
     await emitState({ state: 'thinking', ...SHOW, elapsedSec: 10 })
     await waitFor(() => {
       expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
-      expect(document.querySelector('.overlay-pill-content-enter')?.textContent).toBe('Processing')
+      expect(document.querySelector('.sr-only')?.textContent).toBe('Processing')
     })
   },
 }
@@ -145,8 +146,10 @@ export const AnimationsOff: Story = {
       await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, elapsedSec: 10 })
 
       await waitFor(() => {
-        expect(document.querySelector('.overlay-progress-static')).not.toBeNull()
+        expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
       })
+      await expect(document.querySelector('.overlay-thinking-ring-progress')).not.toBeNull()
+      await expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
       await expect(document.querySelector('.overlay-wave-collapse')).toBeNull()
       await expect(document.querySelector('.overlay-progress-estimate')).toBeNull()
       await expect(document.querySelector('.overlay-progress-creep')).toBeNull()
@@ -167,11 +170,11 @@ export const ProcessingAiAnimationsOff: Story = {
       await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, thinkingAi: true, elapsedSec: 10 })
 
       await waitFor(() => {
-        expect(document.querySelector('.overlay-progress-static')).not.toBeNull()
+        expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
       })
       await waitFor(() => {
         expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
-        expect(document.querySelector('.overlay-ai-sparkle')?.parentElement?.textContent).toBe('AI processing')
+        expect(document.querySelector('.sr-only')?.textContent).toBe('AI processing')
       })
     } finally {
       // The smoke suite runs stories in one document; never leave motion off for the next one.
@@ -195,6 +198,83 @@ export const RecordingStart: Story = {
     await waitFor(() => {
       expect(document.querySelector('.overlay-pill-recording-listening')).not.toBeNull()
     })
+  },
+}
+
+export const ProcessingToNoSpeech: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilListening()
+    await emitState({ state: 'thinking', ...SHOW, elapsedSec: 10 })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
+    })
+
+    await emitState({ state: 'toast', ...SHOW, toastText: 'No speech detected', toastTone: 'warn' })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-notice-from-circle')).not.toBeNull()
+    })
+    await expect(document.querySelector('.overlay-pill-thinking')).toBeNull()
+    await expect(document.querySelector('.overlay-thinking-circle-leave')).not.toBeNull()
+    await expect(document.querySelector('.overlay-notice-from-circle')?.textContent).toContain('No speech detected')
+  },
+}
+
+export const ProcessingToNoSpeechAnimationsOff: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    try {
+      await waitUntilListening(false)
+      await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, elapsedSec: 10 })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
+      })
+
+      await emitState({ state: 'toast', ...SHOW, animationsEnabled: false, toastText: 'No speech detected', toastTone: 'warn' })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-notice-from-circle')).not.toBeNull()
+      })
+      await expect(document.querySelector('.overlay-thinking-circle')).toBeNull()
+      await expect(document.querySelector('.overlay-preparing-ghost')).toBeNull()
+      await expect(document.querySelector('.overlay-notice-content')?.textContent).toContain('No speech detected')
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
+  },
+}
+
+export const ProcessingExit: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilListening()
+    await emitState({ state: 'thinking', ...SHOW, elapsedSec: 10 })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
+    })
+
+    await emitState({ state: 'thinking', ...SHOW, elapsedSec: 10, exit: true })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-exit-thinking')).not.toBeNull()
+    })
+  },
+}
+
+export const StartFailedFromCircle: Story = {
+  render: () => <Stage />,
+  play: async () => {
+    await waitUntilReady()
+    await emitState({ state: 'waiting', ...SHOW })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-recording-waiting')).not.toBeNull()
+    })
+
+    await emitState({ state: 'error', ...SHOW, errorMessage: 'Recording could not start' })
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-pill-notice-from-circle')).not.toBeNull()
+    })
+    await expect(document.querySelector('.overlay-pill-recording-waiting')).toBeNull()
+    await expect(document.querySelector('.overlay-pill-exit-notice')).toBeNull()
   },
 }
 

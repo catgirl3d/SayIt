@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }))
 vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale, t } from '@/i18n'
-import { OVERLAY_WINDOW_WIDTH, OverlayService } from '../OverlayService'
+import { OVERLAY_EXIT_HIDE_DELAY_MS, OVERLAY_WINDOW_WIDTH, OverlayService } from '../OverlayService'
 
 function payloads(command: 'present_overlay' | 'update_overlay_state') {
   return native.invoke.mock.calls
@@ -56,6 +56,9 @@ describe('overlay toasts', () => {
     await vi.advanceTimersByTimeAsync(1599)
     expect(hideCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(1)
+    expect(hideCount()).toBe(0)
+    expect(latestPayload('update_overlay_state')).toMatchObject({ state: 'toast', exit: true })
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(hideCount()).toBe(1)
   })
 
@@ -65,6 +68,8 @@ describe('overlay toasts', () => {
     overlay.showCanceled()
 
     await vi.advanceTimersByTimeAsync(900)
+    expect(hideCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(hideCount()).toBe(1)
 
     await vi.advanceTimersByTimeAsync(5000)
@@ -100,6 +105,9 @@ describe('overlay toasts', () => {
     await vi.advanceTimersByTimeAsync(3999)
     expect(hideCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(1)
+    expect(hideCount()).toBe(0)
+    expect(latestPayload('update_overlay_state')).toMatchObject({ state: 'toast', exit: true })
+    await vi.advanceTimersByTimeAsync(OVERLAY_EXIT_HIDE_DELAY_MS)
     expect(hideCount()).toBe(1)
   })
 

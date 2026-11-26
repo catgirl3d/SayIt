@@ -43,6 +43,15 @@ const MIC_SOURCE_HINT_DURATION_MS = 3000
 const READY_SOUND_IDLE_SUSPEND_MS = 5000
 
 /**
+ * How long the page keeps the overlay on screen after `hide()` flags the exit animation.
+ *
+ * Must cover the longest CSS exit in index.css: a notice folds for 240 ms and its circle pops at
+ * 220 ms for 160 ms (380 ms total); thinking completes its ring for 150 ms and pops for 180 ms
+ * (330 ms). Keep this in sync with those durations.
+ */
+export const OVERLAY_EXIT_HIDE_DELAY_MS = 400
+
+/**
  * Width of the transparent, click-through overlay window for every Base presentation
  * (recording, processing, notices).
  *
@@ -95,6 +104,9 @@ export class OverlayService {
   private overlayGeneration = 0
   private activeCardToken = 0
   private failurePayload: (FailureOverlayPayload & { warning?: string }) | null = null
+  /** Pending animated-exit native hide; any presentation cancels it. */
+  private deferredHideId: ReturnType<typeof setTimeout> | null = null
+  private deferredHideResolve: (() => void) | null = null
 
   constructor(private readonly getElapsedSec: () => number) { }
 
@@ -251,6 +263,8 @@ export class OverlayService {
   }
 
   showSubtitles(payload: SubtitleOverlayPayload): Promise<number> {
+    // A subtitle presentation keeps the window on screen; it must win over a pending exit.
+    this.cancelDeferredHide()
     return bridge.presentOverlay({ state: 'subtitles', ...payload, locale: getLocale() })
   }
 
@@ -287,7 +301,26 @@ export class OverlayService {
     this.activeMicSourceHint = null
   }
 
+  /**
+   * Cancel a pending animated exit.
+   *
+   * A presentation keeps the window on screen, so its exit never reaches the native hide and the
+   * old promise resolves here. A superseding `hide()` passes `resolveNow = false`, takes the
+   * resolver and settles it after its own native hide instead.
+   */
+  private cancelDeferredHide(resolveNow = true): (() => void) | null {
+    if (this.deferredHideId) {
+      clearTimeout(this.deferredHideId)
+      this.deferredHideId = null
+    }
+    const resolve = this.deferredHideResolve
+    this.deferredHideResolve = null
+    if (resolveNow) resolve?.()
+    return resolve
+  }
+
   private beginPresentation(state: OverlayVisualState) {
+    this.cancelDeferredHide()
     this.overlayGeneration++
     this.currentState = state
     this.currentThinkingAi = false
@@ -571,7 +604,22 @@ export class OverlayService {
     }
   }
 
-  hide() {
+  /**
+   * Hide the overlay.
+   *
+   * With interface animations on, hiding from processing or a notice first publishes an exit
+   * update and keeps the window up for `OVERLAY_EXIT_HIDE_DELAY_MS` so the page can play the
+   * closing animation. Every other hide is immediate. Any presentation (including subtitles)
+   * cancels a pending exit; a second hide while it is pending hides at once. Updates do not
+   * cancel it: a stray update after `hide()` must not keep the overlay on screen. The returned
+   * promise resolves only after the native hide.
+   */
+  hide(options: { animate?: boolean } = {}) {
+    const stateBefore = this.currentState
+    const thinkingAiBefore = this.currentThinkingAi
+    const hadPendingExit = this.deferredHideId !== null
+    const supersededHideResolve = this.cancelDeferredHide(false)
+
     this.overlayGeneration++
     this.currentState = 'waiting'
     this.currentThinkingAi = false
@@ -580,7 +628,38 @@ export class OverlayService {
     this.clearMicSourceHint()
     this.clearFallbackHideTimer()
     this.setEscapeMode('off', 0)
-    return bridge.hideOverlay()
+
+    const animateExit = options.animate !== false
+      && !hadPendingExit
+      && this.animationsEnabled
+      && (stateBefore === 'thinking' || stateBefore === 'toast' || stateBefore === 'error')
+    if (!animateExit) {
+      const nativeHide = bridge.hideOverlay()
+      // A hide that superseded a pending exit must not resolve the earlier caller before the
+      // native hide it now shares has settled.
+      if (supersededHideResolve) void nativeHide.finally(() => supersededHideResolve())
+      return nativeHide
+    }
+
+    // Keep the state (and the thinking flag) in the exit update: a stateless payload would let
+    // the native layout shrink an expanded window mid-show, and a replay would lose the state.
+    // Toast and error text stay on the page because the fields are omitted.
+    void bridge.updateOverlay({
+      state: stateBefore,
+      ...(stateBefore === 'thinking' && thinkingAiBefore ? { thinkingAi: true } : {}),
+      exit: true,
+      ...this.getCommonPayload(),
+    }).catch(() => { /* The native hide below still closes the window */ })
+
+    return new Promise<void>((resolve) => {
+      this.deferredHideResolve = resolve
+      this.deferredHideId = setTimeout(() => {
+        this.deferredHideId = null
+        const finish = this.deferredHideResolve
+        this.deferredHideResolve = null
+        void bridge.hideOverlay().finally(() => finish?.())
+      }, OVERLAY_EXIT_HIDE_DELAY_MS)
+    })
   }
 
   /** Present a short-lived toast card and auto-hide it after `durationMs`.
@@ -669,6 +748,7 @@ export class OverlayService {
   dispose() {
     this.stopListeningTicker()
     this.resetStreamingText()
-    this.hide()
+    // Teardown must not wait for an exit animation.
+    this.hide({ animate: false })
   }
 }

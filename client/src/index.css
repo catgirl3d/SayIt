@@ -416,9 +416,9 @@
 
 /* When the pill swaps content (recording → processing → notice), the new content crossfades in:
    opacity plus a 2px rise while the pill width eases (pillMorph.ts). No blur or scale — either one
-   smears or resizes the 12px text mid-fade. The 50ms delay lets the width move first: you see the
-   shape changing, then the text, which reads as "the same pill changed" rather than "a different
-   pill". */
+   smears or resizes the 12px text mid-fade. Ordinary morphs start at once: the new text is laid out
+   at its settled width, so there is no empty phase. A notice growing out of the processing circle
+   delays it by 100 ms (set inline) so the ring fades first. */
 @keyframes overlay-pill-content-enter {
   from {
     opacity: 0;
@@ -432,14 +432,14 @@
 }
 
 .overlay-pill-content-enter {
-  /* The delay is written by pillMorph.ts as --pill-content-delay, depending on widening/narrowing */
-  animation: overlay-pill-content-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) var(--pill-content-delay, 50ms) both;
+  animation: overlay-pill-content-enter var(--pill-content-duration, 200ms) cubic-bezier(0.16, 1, 0.3, 1) var(--pill-content-delay, 0ms) both;
 }
 
 /* Recording → processing: the last waveform frame stays at natural size. Each bar eases down to a
    thin 3px line over 140ms while the row holds full opacity for the first 35% of its 180ms and
-   then fades out over the remaining 117ms. The processing content crossfades with it (default
-   delay), so the pill is never empty. --from-h is each bar's height when the snapshot was taken. */
+   then fades out over the remaining 117ms. After a visible recording the circle content is hidden
+   until the 300ms close ends, so the pill is intentionally empty for the last ~120ms; the frozen
+   row is not crossfaded into the circle. --from-h is each bar's height when the snapshot was taken. */
 @keyframes overlay-wave-collapse-row {
   0% {
     opacity: 1;
@@ -472,56 +472,228 @@
   animation: overlay-wave-collapse-bar 140ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
-/* Processing progress bar. Its duration is **estimated** from the recording length; when the
-   estimate was too short it used to stop full and look frozen. Now it has three parts:
-   ① within the estimate it reaches 86%; ② afterwards it creeps very slowly towards 99% (a nested
-   second scaleX; multiplied: 0.86 × 1.15); ③ at the same time a sheen sweeps across to say
-   "still working". Both scaleX layers have their origin at the left, so they simply multiply. */
-@keyframes overlay-progress-estimate {
+/* The processing circle. The ring is drawn over the pill's 1px outline: it starts at 12 o'clock
+   and runs clockwise. Two registered numbers multiply into the stroke offset, so the first stage
+   reaches 86% within the estimated duration and the second creeps to 99% (0.86 × 1.15) over 45 s;
+   there is no sheen anymore. Registering them as <number> makes the custom properties
+   interpolable, which is what animates the ring. */
+@property --overlay-ring-estimate {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+@property --overlay-ring-creep {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
+
+@keyframes overlay-ring-estimate {
   from {
-    transform: scaleX(0);
+    --overlay-ring-estimate: 0;
   }
 
   to {
-    transform: scaleX(0.86);
+    --overlay-ring-estimate: 0.86;
   }
 }
 
-@keyframes overlay-progress-creep {
+@keyframes overlay-ring-creep {
   from {
-    transform: scaleX(1);
+    --overlay-ring-creep: 1;
   }
 
   to {
-    transform: scaleX(1.15);
+    --overlay-ring-creep: 1.15;
   }
 }
 
-@keyframes overlay-progress-sheen {
+.overlay-thinking-ring-progress {
+  --overlay-ring-estimate: 0;
+  --overlay-ring-creep: 1;
+  animation:
+    overlay-ring-estimate var(--estimate, 3s) cubic-bezier(0.25, 0.6, 0.3, 1) both,
+    overlay-ring-creep 45s cubic-bezier(0.1, 0.6, 0.3, 1) var(--estimate, 3s) both;
+}
+
+.overlay-thinking-ring {
+  stroke-dasharray: 100;
+  stroke-dashoffset: calc(100 - var(--overlay-ring-estimate) * var(--overlay-ring-creep) * 100);
+}
+
+/* Processing started with Interface animations off: keep the circle static even if the switch is
+   turned back on mid-processing, so the ring is not replayed from the beginning. */
+.overlay-thinking-static .overlay-thinking-circle-enter,
+.overlay-thinking-static .overlay-thinking-ring-layer,
+.overlay-thinking-static .overlay-thinking-ring-progress,
+.overlay-thinking-static .overlay-ai-sparkle,
+.overlay-thinking-static .overlay-preparing-dot {
+  animation: none !important;
+}
+
+.overlay-thinking-static .overlay-thinking-ring-progress {
+  --overlay-ring-estimate: 0.86;
+  --overlay-ring-creep: 1;
+}
+
+/* Entering processing: the circle content fades in. After a visible recording it waits until the
+   300ms pill close ends (the ring's progress still runs from t = 0); from the waiting circle the
+   dots are already on screen, so only the ring fades in. */
+@keyframes overlay-thinking-circle-enter {
   from {
-    transform: translateX(-100%);
+    opacity: 0;
   }
 
   to {
-    transform: translateX(250%);
+    opacity: 1;
   }
 }
 
-.overlay-progress-estimate {
-  transform-origin: left center;
-  animation: overlay-progress-estimate var(--estimate, 3s) cubic-bezier(0.25, 0.6, 0.3, 1) both;
+/* After a visible recording the pill first closes for 300 ms; the circle content stays invisible
+   until the close ends, then fades in. The ring's progress still starts at t = 0 inside the hidden
+   layer, because it reflects elapsed time. */
+.overlay-thinking-circle-from-listening .overlay-thinking-circle-enter {
+  animation: overlay-thinking-circle-enter 140ms ease-out 300ms both;
 }
 
-.overlay-progress-creep {
-  transform-origin: left center;
-  animation: overlay-progress-creep 45s cubic-bezier(0.1, 0.6, 0.3, 1) var(--estimate, 3s) both;
+/* From the waiting circle the dots are already on screen: the glyph appears at once and only the
+   ring fades in, so there is no unmount-and-fade blink. */
+.overlay-thinking-circle-from-waiting .overlay-thinking-circle-enter {
+  animation: none;
 }
 
-.overlay-progress-sheen {
-  width: 40%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
-  transform: translateX(-100%);
-  animation: overlay-progress-sheen 1.6s ease-in-out var(--estimate, 3s) infinite;
+.overlay-thinking-circle-from-waiting .overlay-thinking-ring-layer {
+  animation: overlay-thinking-circle-enter 140ms ease-out both;
+}
+
+/* Leaving the circle for a notice: the ring and glyph fade instead of vanishing in one frame. */
+@keyframes overlay-thinking-circle-leave {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+.overlay-thinking-circle-leave,
+.overlay-preparing-ghost {
+  animation: overlay-thinking-circle-leave 100ms ease-out both;
+}
+
+/* The processing circle is exactly the pill's height. */
+.overlay-pill-thinking {
+  width: 38px;
+}
+
+/* A notice that grows out of a circle: the surface insets and the content clip expand together,
+   so the text stays 16px inside the visible edge and is revealed from the middle. The pill box
+   already has the notice's settled width; only the mask moves. */
+@keyframes overlay-notice-surface-stretch {
+  from {
+    left: calc(50% - 19px);
+    right: calc(50% - 19px);
+  }
+
+  to {
+    left: 0;
+    right: 0;
+  }
+}
+
+.overlay-pill-notice-from-circle .overlay-pill-surface {
+  animation: overlay-notice-surface-stretch 380ms cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+
+@keyframes overlay-notice-content-reveal {
+  from {
+    clip-path: inset(0 calc(50% - 3px) 0 calc(50% - 3px));
+  }
+
+  to {
+    clip-path: inset(0);
+  }
+}
+
+.overlay-notice-from-circle {
+  animation: overlay-notice-content-reveal 380ms cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+
+/* Exit. Thinking completes its ring for 150 ms, then the circle pops out; a notice folds into a
+   circle for 240 ms, fades its text over the first 120 ms, and its circle pops at 220 ms. The
+   longest path is 380 ms, inside OVERLAY_EXIT_HIDE_DELAY_MS (see OverlayService.ts). */
+@keyframes overlay-pill-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@keyframes overlay-ring-complete {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.overlay-pill-exit-thinking {
+  animation: overlay-pill-pop-out 180ms cubic-bezier(0.4, 0, 1, 1) 150ms both;
+  transform-origin: center;
+}
+
+.overlay-pill-exit-thinking .overlay-thinking-ring {
+  animation: overlay-ring-complete 150ms ease-out both;
+}
+
+.overlay-pill-exit-notice {
+  animation: overlay-pill-pop-out 160ms cubic-bezier(0.4, 0, 1, 1) 220ms both;
+  transform-origin: center;
+}
+
+@keyframes overlay-notice-surface-fold {
+  from {
+    left: 0;
+    right: 0;
+  }
+
+  to {
+    left: calc(50% - 19px);
+    right: calc(50% - 19px);
+  }
+}
+
+.overlay-pill-exit-notice .overlay-pill-surface {
+  animation: overlay-notice-surface-fold 240ms cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+
+@keyframes overlay-notice-content-fold {
+  from {
+    clip-path: inset(0);
+  }
+
+  to {
+    clip-path: inset(0 calc(50% - 3px) 0 calc(50% - 3px));
+  }
+}
+
+.overlay-pill-exit-notice .overlay-notice-content {
+  animation: overlay-notice-content-fold 240ms cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+
+@keyframes overlay-notice-text-exit {
+  to {
+    opacity: 0;
+  }
+}
+
+.overlay-pill-exit-notice .overlay-notice-content > div {
+  animation: overlay-notice-text-exit 120ms ease-out both;
 }
 
 /* Sparkle pulse only; the pill keeps its progress animation and the user's wave theme.
@@ -563,7 +735,7 @@
 
 .overlay-attention {
   animation:
-    overlay-pill-content-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) var(--pill-content-delay, 50ms) both,
+    overlay-pill-content-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) var(--pill-content-delay, 0ms) both,
     overlay-attention-breathe 2.4s ease-in-out 700ms infinite;
 }
 
@@ -673,9 +845,29 @@ html[data-motion="off"] .overlay-pill-enter-circle,
 html[data-motion="off"] .overlay-pill-recording-listening .overlay-pill-surface,
 html[data-motion="off"] .overlay-recording-content,
 html[data-motion="off"] .overlay-preparing-indicator,
+html[data-motion="off"] .overlay-preparing-dot,
+html[data-motion="off"] .overlay-thinking-circle-enter,
+html[data-motion="off"] .overlay-thinking-ring-layer,
+html[data-motion="off"] .overlay-thinking-circle-leave,
+html[data-motion="off"] .overlay-preparing-ghost,
+html[data-motion="off"] .overlay-thinking-ring-progress,
+html[data-motion="off"] .overlay-thinking-ring,
+html[data-motion="off"] .overlay-pill-notice-from-circle .overlay-pill-surface,
+html[data-motion="off"] .overlay-notice-from-circle,
+html[data-motion="off"] .overlay-pill-exit-thinking,
+html[data-motion="off"] .overlay-pill-exit-notice,
+html[data-motion="off"] .overlay-pill-exit-notice .overlay-pill-surface,
+html[data-motion="off"] .overlay-pill-exit-notice .overlay-notice-content,
+html[data-motion="off"] .overlay-pill-exit-notice .overlay-notice-content > div,
 html[data-motion="off"] .overlay-breathe {
   animation: none !important;
   transition: none !important;
+}
+
+/* With interface animations off the processing ring is static at the first stage's 86%. */
+html[data-motion="off"] .overlay-thinking-ring-progress {
+  --overlay-ring-estimate: 0.86;
+  --overlay-ring-creep: 1;
 }
 
 /* With interface animations off a recording starts at full width: no circle and no stretch. */
