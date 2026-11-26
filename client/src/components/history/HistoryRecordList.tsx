@@ -396,10 +396,13 @@ function HistoryItem({
             </Tooltip>
           </div>
 
-          {/* 展开动画：grid 0fr→1fr，200ms ease-out。中途试过实测高度 + 自定义曲线 +
-              内容淡入位移，叠得越多反而越碎，已经撤掉，别再往上加。 */}
+          {/* Expand animation: grid rows 0fr→1fr, 200ms ease-out. A measured height, a custom
+              curve and a content fade with a slide were tried along the way; each extra layer made
+              it choppier, so they were removed. Do not stack more on top. The in-app "Interface
+              animations" switch turns it off through .history-record-expand in index.css; the
+              system reduce-motion setting no longer does. */}
           <div
-            className="col-span-2 grid grid-cols-subgrid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none"
+            className="history-record-expand col-span-2 grid grid-cols-subgrid transition-[grid-template-rows] duration-200 ease-out"
             style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
             aria-hidden={!open}
           >
