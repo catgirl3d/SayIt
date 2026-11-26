@@ -1,6 +1,4 @@
-use rusqlite::{
-    Connection, DatabaseName, OpenFlags, Result as SqlResult, params,
-};
+use rusqlite::{Connection, DatabaseName, OpenFlags, Result as SqlResult, params};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
