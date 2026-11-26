@@ -42,7 +42,7 @@ env:
 
 jobs:
   rust:
-    name: Format, clippy baseline, tests
+    name: Format, tests, clippy baseline (advisory)
     runs-on: windows-2022
     timeout-minutes: 90
 
@@ -81,12 +81,13 @@ jobs:
           cargo --version
           cmake --version
 
+      - name: Run tests
+        run: cargo test --locked
+
       # Advisory baseline: the crate inherits substantial upstream code and this
       # step exists to measure clippy findings, not to block merges yet. Replace
       # continue-on-error with a hard gate only after a baseline decision.
       - name: Clippy baseline (advisory)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: cargo clippy --locked --all-targets -- -D warnings
-
-      - name: Run tests
-        run: cargo test --locked
