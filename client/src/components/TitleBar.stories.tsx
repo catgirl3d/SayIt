@@ -1,5 +1,6 @@
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { setAiEnabled } from '@/stores/aiEnabled'
 import TitleBar from './TitleBar'
 
 const windowCommands = {
@@ -27,6 +28,12 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+function getAiToggleTrack(toggle: HTMLElement) {
+  const track = toggle.querySelector('span.relative')
+  if (!(track instanceof HTMLElement)) throw new Error('Title bar AI toggle track not found')
+  return track
+}
+
 export const Default: Story = {}
 
 export const WindowControls: Story = {
@@ -48,5 +55,41 @@ export const WindowControls: Story = {
 
     await userEvent.click(controls[2])
     await waitFor(() => expect(windowCommands.close).toHaveBeenCalledWith({ label: 'main' }))
+  },
+}
+
+export const AiCleanupOff: Story = {
+  globals: { theme: 'dark', locale: 'en' },
+  play: async ({ canvasElement }) => {
+    try {
+      await setAiEnabled(false)
+      const canvas = within(canvasElement)
+      const toggle = await canvas.findByRole('switch', { name: /ai processing/i, checked: false })
+      const track = getAiToggleTrack(toggle)
+      await waitFor(() => expect(track).not.toHaveStyle({ visibility: 'hidden' }))
+      await expect(toggle).toHaveAttribute('aria-checked', 'false')
+      await expect(track).toHaveClass('bg-muted', 'dark:bg-muted-foreground/35')
+    } finally {
+      await setAiEnabled(false)
+    }
+  },
+}
+
+export const AiCleanupOn: Story = {
+  globals: { theme: 'dark', locale: 'en' },
+  play: async ({ canvasElement }) => {
+    try {
+      await setAiEnabled(false)
+      const canvas = within(canvasElement)
+      const toggle = await canvas.findByRole('switch', { name: /ai processing/i, checked: false })
+      const track = getAiToggleTrack(toggle)
+      await waitFor(() => expect(track).not.toHaveStyle({ visibility: 'hidden' }))
+
+      await userEvent.click(toggle)
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
+      await waitFor(() => expect(track).toHaveClass('bg-primary'))
+    } finally {
+      await setAiEnabled(false)
+    }
   },
 }
