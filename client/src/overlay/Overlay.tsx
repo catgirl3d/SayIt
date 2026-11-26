@@ -262,6 +262,7 @@ export default function Overlay() {
   const [customWave, setCustomWave] = useState<CustomWaveColors>(DEFAULT_CUSTOM_WAVE)
   const [showDuration, setShowDuration] = useState(true)
   const [barCount, setBarCount] = useState(DEFAULT_BAR_COUNT)
+  const [recordingWidth, setRecordingWidth] = useState(352)
   const [presentationId, setPresentationId] = useState(0)
   const [presentationEntrance, setPresentationEntrance] = useState<'circle' | 'pill'>('pill')
   const [fallbackText, setFallbackText] = useState('')
@@ -469,6 +470,7 @@ export default function Overlay() {
         setCustomWave((prev) => (sameCustomWave(prev, next) ? prev : next))
       }
       if (typeof payload.barCount === 'number' && payload.barCount > 0) setBarCount(payload.barCount)
+      if (typeof payload.recordingWidth === 'number' && payload.recordingWidth > 0) setRecordingWidth(payload.recordingWidth)
       if (typeof payload.fallbackText === 'string') setFallbackText(payload.fallbackText)
       if (typeof payload.failureTitle === 'string') setFailureTitle(payload.failureTitle)
       if (typeof payload.failureDetail === 'string') setFailureDetail(payload.failureDetail)
@@ -817,7 +819,7 @@ export default function Overlay() {
         >
           {showMicSourceHint && (
             <div
-              className="pointer-events-none flex min-w-0 max-w-[calc(100vw-16px)] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full border px-3 py-1.5 font-normal"
+              className="pointer-events-none flex min-w-0 max-w-[464px] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full border px-3 py-1.5 font-normal"
               style={{
                 background: 'rgba(11, 11, 12, 0.94)',
                 color: 'var(--overlay-text)',
@@ -896,7 +898,7 @@ export default function Overlay() {
             ref={pillRef}
             key={presentationId}
             className={`relative flex max-w-[calc(100vw-8px)] items-center overflow-hidden whitespace-nowrap rounded-full px-4 py-2${recordingPhase && recordingVisualPhase === 'preparing' ? ' overlay-pill-recording-waiting' : ''}${recordingPhase && recordingVisualPhase === 'listening' ? ' overlay-pill-recording-listening' : ''}${presentationEntrance === 'circle' ? ' overlay-pill-enter-circle' : ''}`}
-            style={{ minHeight: '38px' }}
+            style={recordingPhase ? { minHeight: '38px', maxWidth: `${recordingWidth}px` } : { minHeight: '38px' }}
           >
             <span
               aria-hidden

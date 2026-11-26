@@ -43,15 +43,18 @@ const MIC_SOURCE_HINT_DURATION_MS = 3000
 const READY_SOUND_IDLE_SUSPEND_MS = 5000
 
 /**
- * Window width assigned to toast and single-line error notices.
+ * Width of the transparent, click-through overlay window for every Base presentation
+ * (recording, processing, notices).
  *
- * Recording waveforms take a fixed width according to `OverlayWidthPreset` (200-360px),
- * but toasts carry localized diagnostic messages (e.g. AI cleanup failure reasons) that
- * need up to ~550px. The native overlay clamps `baseWidth` at 600px without layout changes.
- * The transparent overlay window centers the pill horizontally, and the pill itself hugs
- * its content (`fit-content`), so shorter toasts remain compact.
+ * The window is a fixed frame; the visible pill inside it is what changes width. One width for
+ * the whole show keeps the pill centred and prevents the window from jumping sideways when a
+ * notice replaces processing or when a new recording starts while a notice is shown. Recording
+ * keeps its own narrower cap (`recordingWidth` in the common payload, the preset width minus the
+ * window's 8px side margin); notices use the frame up to 592px. The native overlay clamps
+ * `baseWidth` at 600px without layout changes, and the pill itself hugs its content, so shorter
+ * notices remain compact inside the fixed frame.
  */
-export const OVERLAY_TOAST_WINDOW_WIDTH = 600
+export const OVERLAY_WINDOW_WIDTH = 600
 
 const AI_CLEANUP_FAILURE_TOAST_KEYS: Record<AiFailureReason, TranslationKey> = {
   timeout: 'overlay.toastAiCleanupTimeout',
@@ -234,7 +237,8 @@ export class OverlayService {
       customWave: this.customWave,
       showDuration: this.showDuration,
       animationsEnabled: this.animationsEnabled,
-      baseWidth: cfg.windowWidth,
+      baseWidth: OVERLAY_WINDOW_WIDTH,
+      recordingWidth: cfg.windowWidth - 8,
       barCount: cfg.barCount,
       // Sent on every call: the overlay window may be created for the first time after a
       // locale switch, so there is no "send once" moment.
@@ -589,7 +593,6 @@ export class OverlayService {
       toastText: text,
       toastTone: tone,
       ...this.getCommonPayload(),
-      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
     })
     this.fallbackHideId = setTimeout(() => {
       if (generation === this.overlayGeneration) this.hide()
@@ -657,7 +660,6 @@ export class OverlayService {
       state: 'error',
       errorMessage: message,
       ...this.getCommonPayload(),
-      baseWidth: OVERLAY_TOAST_WINDOW_WIDTH,
     })
     this.fallbackHideId = setTimeout(() => {
       if (generation === this.overlayGeneration) this.hide()

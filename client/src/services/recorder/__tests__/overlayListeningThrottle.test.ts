@@ -14,7 +14,7 @@ vi.mock('@/services/debugLog', () => ({ addRuntimeEvent: vi.fn() }))
 
 import { setLocale } from '@/i18n'
 import { DEFAULT_CUSTOM_WAVE, DEFAULT_WAVE_THEME } from '@/lib/overlayWaveColors'
-import { OverlayService } from '../OverlayService'
+import { OVERLAY_WINDOW_WIDTH, OverlayService } from '../OverlayService'
 import { OVERLAY_WIDTH_PRESET_VALUES, OVERLAY_WIDTH_PRESETS } from '../types'
 
 interface RecordedUpdate {
@@ -238,12 +238,18 @@ describe('overlay listening payload settings', () => {
       savedSettings = { overlayWidth: preset }
       const overlay = new OverlayService(() => 0)
       await overlay.refreshSettings()
-      expect(overlay.getCommonPayload().barCount).toBe(OVERLAY_WIDTH_PRESETS[preset].barCount)
+      const common = overlay.getCommonPayload()
+      expect(common.barCount).toBe(OVERLAY_WIDTH_PRESETS[preset].barCount)
+      expect(common.baseWidth).toBe(OVERLAY_WINDOW_WIDTH)
+      expect(common.recordingWidth).toBe(OVERLAY_WIDTH_PRESETS[preset].windowWidth - 8)
     }
 
     savedSettings = { overlayWidth: 'tiny' }
     const fallback = new OverlayService(() => 0)
     await fallback.refreshSettings()
-    expect(fallback.getCommonPayload().barCount).toBe(OVERLAY_WIDTH_PRESETS.long.barCount)
+    const fallbackCommon = fallback.getCommonPayload()
+    expect(fallbackCommon.barCount).toBe(OVERLAY_WIDTH_PRESETS.long.barCount)
+    expect(fallbackCommon.baseWidth).toBe(OVERLAY_WINDOW_WIDTH)
+    expect(fallbackCommon.recordingWidth).toBe(OVERLAY_WIDTH_PRESETS.long.windowWidth - 8)
   })
 })
