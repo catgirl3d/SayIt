@@ -33,7 +33,6 @@ import { getPromptPresets, getSetting, type PromptPreset } from '@/services/stor
 import { getTextReplacements, type TextReplacementRule } from '@/services/textReplacement'
 import { useT } from '@/i18n/useT'
 import { promptPresetDisplayName } from '@/i18n/displayNames'
-import { useMotionAllowed } from '@/lib/motion'
 
 /** Backing tile for the header icon, the dialog's visual anchor. */
 function IconTile({ children, tone = 'default' }: { children: ReactNode; tone?: 'default' | 'warning' }) {
@@ -634,7 +633,6 @@ export function FullImportConfirmDialog({
 /** Import-success notice; the app restarts automatically shortly after. The centered-icon style matches the auto-update dialog. */
 export function ImportDoneDialog() {
   const t = useT()
-  const motion = useMotionAllowed()
   const cardRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
   const descriptionId = useId()
@@ -655,7 +653,7 @@ export function ImportDoneDialog() {
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         tabIndex={-1}
-        className={`${motion ? 'animate-fade-in-scale ' : ''}w-[320px] rounded-2xl border border-border bg-card p-6 text-center shadow-2xl focus:outline-none`}
+        className="animate-fade-in-scale w-[320px] rounded-2xl border border-border bg-card p-6 text-center shadow-2xl focus:outline-none"
       >
         <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-success/10">
           <Check className="h-5 w-5 text-success" strokeWidth={2.5} />

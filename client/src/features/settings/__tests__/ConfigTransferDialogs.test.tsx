@@ -1,13 +1,8 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
-import { setMotionEnabled } from '@/lib/motion'
 import { FullImportConfirmDialog, ImportDoneDialog } from '../ConfigTransferDialogs'
-
-afterEach(() => {
-  delete document.documentElement.dataset.motion
-})
 
 function renderConfirm() {
   const props = {
@@ -79,19 +74,5 @@ describe('ImportDoneDialog', () => {
     render(<ImportDoneDialog />)
 
     expect(document.activeElement).toBe(screen.getByRole('alertdialog'))
-  })
-
-  it('does not use the scale entrance when interface animations are off', () => {
-    setMotionEnabled(false)
-    render(<ImportDoneDialog />)
-
-    expect(screen.getByRole('alertdialog').classList.contains('animate-fade-in-scale')).toBe(false)
-  })
-
-  it('uses the scale entrance when interface animations are on', () => {
-    setMotionEnabled(true)
-    render(<ImportDoneDialog />)
-
-    expect(screen.getByRole('alertdialog').classList.contains('animate-fade-in-scale')).toBe(true)
   })
 })

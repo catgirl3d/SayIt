@@ -141,35 +141,45 @@ export const ProcessingAiCleared: Story = {
 export const AnimationsOff: Story = {
   render: () => <Stage />,
   play: async () => {
-    await waitUntilListening(false)
-    await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, elapsedSec: 10 })
+    try {
+      await waitUntilListening(false)
+      await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, elapsedSec: 10 })
 
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
-    })
-    await expect(document.querySelector('.overlay-thinking-ring-progress')).not.toBeNull()
-    await expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
-    await expect(document.querySelector('.overlay-wave-collapse')).toBeNull()
-    await expect(document.querySelector('.overlay-progress-estimate')).toBeNull()
-    await expect(document.querySelector('.overlay-progress-creep')).toBeNull()
-    await expect(document.querySelector('.overlay-progress-sheen')).toBeNull()
-    await expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
+      })
+      await expect(document.querySelector('.overlay-thinking-ring-progress')).not.toBeNull()
+      await expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
+      await expect(document.querySelector('.overlay-wave-collapse')).toBeNull()
+      await expect(document.querySelector('.overlay-progress-estimate')).toBeNull()
+      await expect(document.querySelector('.overlay-progress-creep')).toBeNull()
+      await expect(document.querySelector('.overlay-progress-sheen')).toBeNull()
+      await expect(document.querySelector('.overlay-ai-sparkle')).toBeNull()
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
   },
 }
 
 export const ProcessingAiAnimationsOff: Story = {
   render: () => <Stage />,
   play: async () => {
-    await waitUntilListening(false)
-    await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, thinkingAi: true, elapsedSec: 10 })
+    try {
+      await waitUntilListening(false)
+      await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, thinkingAi: true, elapsedSec: 10 })
 
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
-    })
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
-      expect(document.querySelector('.sr-only')?.textContent).toBe('AI processing')
-    })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-thinking-ring')).not.toBeNull()
+      })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-ai-sparkle')).not.toBeNull()
+        expect(document.querySelector('.sr-only')?.textContent).toBe('AI processing')
+      })
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
   },
 }
 
@@ -213,19 +223,24 @@ export const ProcessingToNoSpeech: Story = {
 export const ProcessingToNoSpeechAnimationsOff: Story = {
   render: () => <Stage />,
   play: async () => {
-    await waitUntilListening(false)
-    await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, elapsedSec: 10 })
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
-    })
+    try {
+      await waitUntilListening(false)
+      await emitState({ state: 'thinking', ...SHOW, animationsEnabled: false, elapsedSec: 10 })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-thinking')).not.toBeNull()
+      })
 
-    await emitState({ state: 'toast', ...SHOW, animationsEnabled: false, toastText: 'No speech detected', toastTone: 'warn' })
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-pill-notice-from-circle')).not.toBeNull()
-    })
-    await expect(document.querySelector('.overlay-thinking-circle')).toBeNull()
-    await expect(document.querySelector('.overlay-preparing-ghost')).toBeNull()
-    await expect(document.querySelector('.overlay-notice-content')?.textContent).toContain('No speech detected')
+      await emitState({ state: 'toast', ...SHOW, animationsEnabled: false, toastText: 'No speech detected', toastTone: 'warn' })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-notice-from-circle')).not.toBeNull()
+      })
+      await expect(document.querySelector('.overlay-thinking-circle')).toBeNull()
+      await expect(document.querySelector('.overlay-preparing-ghost')).toBeNull()
+      await expect(document.querySelector('.overlay-notice-content')?.textContent).toContain('No speech detected')
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
   },
 }
 
@@ -266,18 +281,23 @@ export const StartFailedFromCircle: Story = {
 export const RecordingStartAnimationsOff: Story = {
   render: () => <Stage />,
   play: async () => {
-    await waitUntilReady()
-    await emitState({ state: 'waiting', ...SHOW, animationsEnabled: false })
+    try {
+      await waitUntilReady()
+      await emitState({ state: 'waiting', ...SHOW, animationsEnabled: false })
 
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-pill-recording-waiting')).not.toBeNull()
-    })
-    await expect(document.querySelector('.overlay-pill-enter-circle')).not.toBeNull()
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-recording-waiting')).not.toBeNull()
+      })
+      await expect(document.querySelector('.overlay-pill-enter-circle')).not.toBeNull()
 
-    await emitState({ state: 'listening', ...SHOW, animationsEnabled: false, bars: BARS, barCount: BARS.length })
-    await waitFor(() => {
-      expect(document.querySelector('.overlay-pill-recording-listening')).not.toBeNull()
-    })
+      await emitState({ state: 'listening', ...SHOW, animationsEnabled: false, bars: BARS, barCount: BARS.length })
+      await waitFor(() => {
+        expect(document.querySelector('.overlay-pill-recording-listening')).not.toBeNull()
+      })
+    } finally {
+      // The smoke suite runs stories in one document; never leave motion off for the next one.
+      document.documentElement.dataset.motion = 'on'
+    }
   },
 }
 

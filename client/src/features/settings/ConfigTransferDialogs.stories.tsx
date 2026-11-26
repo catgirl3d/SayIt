@@ -1,10 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, waitFor, within } from 'storybook/test'
 import type { ConfigImportPreview } from '@/services/backup'
 import type { CustomTheme } from '@/services/hotwords/model'
 import type { PromptPreset } from '@/services/store'
 import type { TextReplacementRule } from '@/services/textReplacement'
-import { setMotionEnabled } from '@/lib/motion'
 import {
   ConfigExportDialog,
   ConfigImportDialog,
@@ -151,21 +149,4 @@ export const ImportCompleted: Story = {
     onExport: () => undefined,
   },
   render: () => <ImportDoneDialog />,
-}
-
-export const ImportCompletedAnimationsOff: Story = {
-  args: {
-    onClose: () => undefined,
-    onExport: () => undefined,
-  },
-  render: () => <ImportDoneDialog />,
-  beforeEach: () => {
-    setMotionEnabled(false)
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement)
-    await waitFor(() => {
-      expect(canvas.getByRole('alertdialog')).not.toHaveClass('animate-fade-in-scale')
-    })
-  },
 }

@@ -3,12 +3,6 @@
 Release history and notable changes for the SayIt fork.
 Sections are ordered by version, newest first.
 
-## v0.4.1 (unreleased)
-
-### Fixed
-#### Desktop Client
-- The "Interface animations" switch now also turns off the fade-in of the overlay and the import-complete notice.
-
 ## v0.4.0 — 2026-11-26
 
 ### Added

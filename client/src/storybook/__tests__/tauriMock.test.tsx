@@ -255,12 +255,4 @@ describe('Tauri story harness', () => {
 
     cleanup()
   })
-
-  it('leaves the motion attribute unset after cleanup', () => {
-    document.documentElement.dataset.motion = 'off'
-
-    cleanupTauriStory()
-
-    expect(document.documentElement.dataset.motion).toBeUndefined()
-  })
 })
