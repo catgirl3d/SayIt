@@ -45,6 +45,11 @@ export default defineConfig({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
+    // The PCM worklet is shared with the web client under server/web, outside this Vite root.
+    // Vite enforces server.fs.allow for ?raw imports, and a custom allow list replaces the default.
+    fs: {
+      allow: [__dirname, path.resolve(__dirname, '..', 'server', 'web')],
+    },
     watch: {
       ignored: ['**/src-tauri/**'],
     },
