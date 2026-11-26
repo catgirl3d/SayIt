@@ -1171,7 +1171,11 @@ export default function Overlay() {
                           />
                         </svg>
                       </div>
-                      <div className="overlay-thinking-glyph absolute inset-0 flex items-center justify-center" aria-hidden>
+                      <div
+                        className="overlay-thinking-glyph absolute inset-0 flex items-center justify-center"
+                        style={{ color: thinkingColor }}
+                        aria-hidden
+                      >
                         {circleThinkingAi ? (
                           <Sparkles aria-hidden className="overlay-ai-sparkle h-3.5 w-3.5" strokeWidth={2.2} />
                         ) : (

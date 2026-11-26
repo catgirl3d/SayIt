@@ -25,6 +25,7 @@ vi.mock('@/services/bridge', async (importOriginal) => {
 
 import Overlay from '../Overlay'
 import { formatRecordingTimer } from '../../services/recorder/types'
+import { DEFAULT_CUSTOM_WAVE, DEFAULT_WAVE_THEME, getWaveThinkingColor } from '../../lib/overlayWaveColors'
 
 function emitState(payload: Record<string, unknown>) {
   const handler = mocks.handlers.get('overlay-state')
@@ -296,6 +297,23 @@ describe('overlay motion', () => {
     emitThinking()
     expect(root.querySelector('.overlay-ai-sparkle')).toBeNull()
     expect(root.querySelector('.sr-only')?.textContent).toBe('Processing')
+  })
+
+  it('colors the AI sparkle with the wave thinking color', async () => {
+    const root = await renderOverlay()
+    emitListening()
+    // The payload carries no theme, so the overlay runs on its defaults.
+    emitThinking(5, { thinkingAi: true })
+
+    const sparkle = root.querySelector('.overlay-ai-sparkle')
+    const glyph = sparkle?.closest<HTMLElement>('.overlay-thinking-glyph')
+    if (!glyph) throw new Error('sparkle glyph container is missing')
+
+    // jsdom normalises inline colors to rgb(), so compare against a parsed probe.
+    const probe = document.createElement('span')
+    probe.style.color = getWaveThinkingColor(DEFAULT_WAVE_THEME, DEFAULT_CUSTOM_WAVE)
+    expect(glyph.style.color).not.toBe('')
+    expect(glyph.style.color).toBe(probe.style.color)
   })
 
   it('does not restart the ring on repeated thinking updates', async () => {
