@@ -40,24 +40,19 @@ export const ToggleAnimations: Story = {
     const canvas = within(canvasElement)
     const toggle = await canvas.findByRole('switch', { name: 'Interface animations' })
 
-    try {
-      await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
 
-      await userEvent.click(toggle)
+    await userEvent.click(toggle)
 
-      await expect(toggle).toHaveAttribute('aria-checked', 'false')
-      await expect(document.documentElement.dataset.motion).toBe('off')
-      await waitFor(() => expect(storeSetCalled('ui.animations', false)).toBe(true))
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await expect(document.documentElement.dataset.motion).toBe('off')
+    await waitFor(() => expect(storeSetCalled('ui.animations', false)).toBe(true))
 
-      await userEvent.click(toggle)
+    await userEvent.click(toggle)
 
-      await expect(toggle).toHaveAttribute('aria-checked', 'true')
-      await expect(document.documentElement.dataset.motion).not.toBe('off')
-      await waitFor(() => expect(storeSetCalled('ui.animations', true)).toBe(true))
-    } finally {
-      // The smoke suite runs stories in one document; never leave motion off for the next one.
-      document.documentElement.dataset.motion = 'on'
-    }
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await expect(document.documentElement.dataset.motion).not.toBe('off')
+    await waitFor(() => expect(storeSetCalled('ui.animations', true)).toBe(true))
   },
 }
 
