@@ -158,6 +158,103 @@ export const OpenCatalog: Story = {
   },
 }
 
+export const EscapeClosesListOnly: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = bodyOf(canvasElement)
+    const field = canvas.getByRole('combobox', { name: 'Model' })
+
+    await userEvent.click(field)
+    await body.findByRole('listbox')
+
+    const loadModels = canvas.getByRole('button', { name: 'Load models' })
+    loadModels.focus()
+    await expect(loadModels).toHaveFocus()
+
+    const modalCapture = fn()
+    const document = canvasElement.ownerDocument
+    document.addEventListener('keydown', modalCapture, true)
+    try {
+      await userEvent.keyboard('{Escape}')
+
+      await waitFor(() => expect(body.queryByRole('listbox')).toBeNull())
+      await expect(field).toHaveFocus()
+      await expect(modalCapture).not.toHaveBeenCalled()
+    } finally {
+      document.removeEventListener('keydown', modalCapture, true)
+    }
+  },
+}
+
+export const AnchorRowPressClosesList: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = bodyOf(canvasElement)
+
+    await userEvent.click(canvas.getByRole('combobox', { name: 'Model' }))
+    await body.findByRole('listbox')
+
+    await userEvent.click(canvas.getByRole('button', { name: 'Load models' }))
+    await waitFor(() => expect(body.queryByRole('listbox')).toBeNull())
+  },
+}
+
+export const OpensUpwardNearBottom: Story = {
+  parameters: { layout: 'fullscreen' },
+  render: (args) => (
+    <div className="fixed inset-x-0 bottom-6 px-6">
+      <ControlledPicker {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = bodyOf(canvasElement)
+    const loadModels = canvas.getByRole('button', { name: 'Load models' })
+    const row = loadModels.parentElement
+    if (!row) throw new Error('Expected the load-models button to be inside the picker anchor row')
+
+    // jsdom has no layout; keep the real viewport height and provide the bottom-aligned row box.
+    const currentRect = row.getBoundingClientRect()
+    const originalDescriptor = Object.getOwnPropertyDescriptor(row, 'getBoundingClientRect')
+    let mockedGeometry = false
+    if (currentRect.width === 0 || currentRect.height === 0) {
+      const viewportHeight = canvasElement.ownerDocument.defaultView?.innerHeight
+      if (viewportHeight === undefined) throw new Error('Expected a viewport for the fullscreen story')
+      const bottom = viewportHeight - 24
+      Object.defineProperty(row, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          x: 24,
+          y: bottom - 36,
+          left: 24,
+          top: bottom - 36,
+          right: 504,
+          bottom,
+          width: 480,
+          height: 36,
+          toJSON: () => ({}),
+        }),
+      })
+      mockedGeometry = true
+    }
+
+    try {
+      await userEvent.click(canvas.getByRole('combobox', { name: 'Model' }))
+      const listbox = await body.findByRole('listbox')
+      const panel = listbox.parentElement
+      if (!panel) throw new Error('Expected the listbox to be inside its portaled panel')
+
+      await expect(panel.style.bottom).not.toBe('')
+      await expect(panel.style.top).toBe('')
+    } finally {
+      if (mockedGeometry) {
+        if (originalDescriptor) Object.defineProperty(row, 'getBoundingClientRect', originalDescriptor)
+        else Reflect.deleteProperty(row, 'getBoundingClientRect')
+      }
+    }
+  },
+}
+
 export const FilterByTyping: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
