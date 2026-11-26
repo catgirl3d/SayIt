@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { AppWindow, Power, Wand2 } from 'lucide-react'
 import { t } from '@/i18n'
 import { useT } from '@/i18n/useT'
+import { SwitchTrack } from '@/components/ui/switch'
 
 type AiStatePayload = { enabled?: boolean }
 
@@ -74,8 +75,8 @@ export default function TrayMenu() {
           <Wand2 size={14} strokeWidth={1.8} />
         </span>
         <span>{t('tray.aiCleanup')}</span>
-        <span className={`tray-menu-switch ${aiEnabled ? 'is-on' : 'is-off'}`} aria-hidden>
-          <span className="tray-menu-switch-thumb" />
+        <span className="tray-menu-switch" aria-hidden>
+          <SwitchTrack size="sm" checked={aiEnabled} />
         </span>
       </button>
 

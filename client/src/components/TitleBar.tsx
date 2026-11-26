@@ -7,6 +7,7 @@ import { useAiEnabled, useAiEnabledReady } from '@/hooks/useAiEnabled'
 import { useActivePreset } from '@/hooks/useActivePreset'
 import { toggleAiEnabled } from '@/stores/aiEnabled'
 import { Tooltip } from '@/components/ui/tooltip'
+import { SwitchTrack } from '@/components/ui/switch'
 import { useT } from '@/i18n/useT'
 import { recordedPromptPresetDisplayName } from '@/i18n/displayNames'
 
@@ -49,9 +50,7 @@ export default function TitleBar() {
             >
               <Wand2 className={aiEnabled ? 'h-3.5 w-3.5 text-primary' : 'h-3.5 w-3.5 text-muted-foreground'} />
               <span className={aiEnabled ? 'text-xs text-foreground' : 'text-xs text-muted-foreground'}>{t('titleBar.aiCleanup')}</span>
-              <span className={`relative h-4 w-7 shrink-0 rounded-full ${animate ? 'transition-colors' : ''} ${aiEnabled ? 'bg-primary' : 'bg-muted'}`} style={ready ? undefined : { visibility: 'hidden' }}>
-                <span className={`absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-card shadow ${animate ? 'transition-transform' : ''} ${aiEnabled ? 'translate-x-3' : ''}`} />
-              </span>
+              <SwitchTrack size="sm" checked={aiEnabled} noAnimation={!animate} hidden={!ready} />
             </button>
           </Tooltip>
         </div>
