@@ -118,7 +118,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-By default the container serves HTTPS on port 8443 with a self-signed certificate that the desktop app does not accept. For the desktop app, set `SAYIT_TLS_ENABLED=false` in `.env` and connect to `http://<server-ip>:8000` on a network you trust, or use a certificate that Windows trusts.
+By default the container serves HTTPS on port 8443 with a self-signed certificate. Enter `https://<server-ip>:8443` in the desktop app: SayIt accepts a self-signed certificate, but only for the server address you saved.
 
 See the [server guide](server/README.md) for configuration (including `config.yaml` overrides), deployment, security, and API details. To run the server on Windows without Docker and connect the desktop app to it, see the [Windows server guide](docs/SERVER_GUIDE.md).
 

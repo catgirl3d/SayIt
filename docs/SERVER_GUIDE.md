@@ -89,7 +89,7 @@ Use an installed SayIt build, or run the client from source as described in the 
    ```
    The second line is expected: GigaAM recognizes Russian regardless of the language chosen in the app.
 
-A server running in Docker serves HTTPS with a self-signed certificate by default, which the desktop app does not trust; the [server README](../server/README.md#4-connect-the-desktop-app) lists the options.
+A server running in Docker serves HTTPS on port 8443 with a self-signed certificate by default; enter `https://<server-host>:8443` for it instead. SayIt accepts a self-signed certificate, but only for the server address you saved.
 
 ---
 
