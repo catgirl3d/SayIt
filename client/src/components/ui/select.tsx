@@ -61,6 +61,13 @@ export interface SelectProps {
   disabled?: boolean
   /** Associates the trigger with a visible label because a button has no htmlFor. */
   labelledBy?: string
+  /**
+   * `field` (default) is a full-width form control. `inline` is a borderless trigger that
+   * flows inside a line of text, such as a heading: it renders a phrasing-content wrapper,
+   * inherits the surrounding font, and keeps the list wide enough for its options even
+   * though the trigger itself is narrow.
+   */
+  variant?: 'field' | 'inline'
 }
 
 interface OptionElementProps {
@@ -72,8 +79,9 @@ interface OptionElementProps {
 const SELECT_LIST_PLACEMENT = { kind: 'list', preferredSpace: 180, maxHeight: 240 } as const
 
 const Select = forwardRef<HTMLButtonElement, SelectProps>(
-  ({ value, onChange, options, children, className, placeholder, disabled = false, labelledBy }, ref) => {
+  ({ value, onChange, options, children, className, placeholder, disabled = false, labelledBy, variant = 'field' }, ref) => {
     const t = useT()
+    const inline = variant === 'inline'
     const [isOpen, setIsOpen] = useState(false)
     const buttonRef = useRef<HTMLButtonElement | null>(null)
     const { panelRef, panelStyle, positioned } = usePopover({
@@ -113,7 +121,12 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
     const dropdown = isOpen && positioned ? createPortal(
       <div
         ref={panelRef}
-        className="fixed z-[9999] rounded-md border border-border bg-popover shadow-xl"
+        // List placement sizes the panel to the trigger. An inline trigger is only as wide as
+        // its label, so a CSS floor (it wins over the inline width) keeps options readable.
+        className={cn(
+          'fixed z-[9999] rounded-md border border-border bg-popover shadow-xl',
+          inline && 'min-w-32',
+        )}
         style={panelStyle}
       >
         <div
@@ -152,8 +165,11 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
       document.body,
     ) : null
 
+    // A heading or paragraph accepts only phrasing content, so the inline wrapper is a span.
+    const Wrapper = inline ? 'span' : 'div'
+
     return (
-      <div className={cn('relative', className)}>
+      <Wrapper className={cn(inline ? 'relative inline-block' : 'relative', className)}>
         <button
           ref={(node) => {
             buttonRef.current = node
@@ -166,14 +182,26 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
           aria-labelledby={labelledBy}
           aria-expanded={isOpen}
           className={cn(
-            'flex h-9 w-full items-center justify-between rounded-md border border-input-border bg-input-bg px-3 text-sm text-foreground transition-colors',
-            'hover:border-muted-foreground/40 focus:border-input-focus-border focus:outline-none focus:ring-2 focus:ring-input-focus-ring/20',
+            inline
+              ? [
+                  // Negative vertical margin cancels the padding, so the hover chip does not
+                  // make the surrounding line taller than its text.
+                  '-my-0.5 inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-foreground transition-colors',
+                  'hover:bg-foreground/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-input-focus-ring/40',
+                  isOpen && 'bg-foreground/15',
+                ]
+              : [
+                  'flex h-9 w-full items-center justify-between rounded-md border border-input-border bg-input-bg px-3 text-sm text-foreground transition-colors',
+                  'hover:border-muted-foreground/40 focus:border-input-focus-border focus:outline-none focus:ring-2 focus:ring-input-focus-ring/20',
+                  isOpen && 'border-input-focus-border ring-2 ring-input-focus-ring/20',
+                ],
             'disabled:cursor-not-allowed disabled:opacity-50',
-            isOpen && 'border-input-focus-border ring-2 ring-input-focus-ring/20',
           )}
         >
+          {/* An inline trigger has no width cap, and overflow clipping would move the label's
+              baseline off the surrounding text, so only the field variant truncates. */}
           <span
-            className={cn('truncate', !selectedOption && 'text-input-placeholder')}
+            className={cn(!inline && 'truncate', !selectedOption && 'text-input-placeholder')}
             title={selectedOption ? optionTitle(selectedOption) : undefined}
           >
             {selectedOption?.label
@@ -182,14 +210,15 @@ const Select = forwardRef<HTMLButtonElement, SelectProps>(
           </span>
           <ChevronDown
             className={cn(
-              'ml-2 h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+              'shrink-0 text-muted-foreground transition-transform',
+              inline ? 'h-3.5 w-3.5' : 'ml-2 h-4 w-4',
               isOpen && 'rotate-180',
             )}
           />
         </button>
 
         {dropdown}
-      </div>
+      </Wrapper>
     )
   },
 )

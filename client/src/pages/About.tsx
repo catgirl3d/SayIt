@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Github, Loader2, CheckCircle } from 'lucide-react'
@@ -11,7 +11,14 @@ import {
   hasAvailableUpdate,
   type AutoUpdateState,
 } from '@/features/update/autoUpdate'
-import { parseReleaseNotes, pickReleaseNotes } from '@/features/update/releaseNotes'
+import {
+  getReleaseNotesHistory,
+  pinReleaseNotesVersion,
+  resolveShownVersion,
+  type PinnedReleaseNotesVersion,
+} from '@/features/update/changelogHistory'
+import { pickReleaseNotes } from '@/features/update/releaseNotes'
+import { ReleaseNotesSection } from '@/features/update/ReleaseNotesSection'
 import appIconOnDark from '@/assets/icon-128.png'
 import appIconOnLight from '@/assets/icon-128-on-light.png'
 import { getLocale, t } from '@/i18n'
@@ -29,6 +36,7 @@ function formatTimestamp(value: number | null | undefined) {
 export default function About() {
   const t = useT()
   const [state, setState] = useState<AutoUpdateState>(getAutoUpdateState)
+  const [picked, setPicked] = useState<PinnedReleaseNotesVersion | null>(null)
 
   useEffect(() => {
     return onAutoUpdateChange(setState)
@@ -45,37 +53,51 @@ export default function About() {
   const hasUpdate = hasAvailableUpdate(state)
   const canInstall = hasUpdate && !downloading && !installing
 
-  // Release notes for the version the manifest describes: the available update when one
-  // exists, otherwise the latest released version. They arrive with the manifest itself,
-  // so the page shows the real changelog section of that release, in the interface
-  // language when the manifest carries a translation (notesLocalized) — with the
-  // English section as the fallback.
+  // Release notes history: the bundled changelogs supply every released version, so the
+  // page keeps working offline. The manifest can override or add the notes of its exact
+  // version; it is display-only here and never changes what the updater offers. Manifest
+  // notes arrive localized by the caller, with the English section as the fallback.
   const locale = useLocale()
+  const latestVersion = versionInfo?.latestVersion ?? null
   const baseNotes = versionInfo?.notes ?? null
   const localizedNotes = versionInfo?.notesLocalized ?? null
-  const notes = useMemo(
+  const manifestNotes = useMemo(
     () => pickReleaseNotes(baseNotes, localizedNotes, locale),
     [baseNotes, localizedNotes, locale],
   )
-  const notesVersion = versionInfo?.latestVersion ?? null
-  const releaseNotes = useMemo(() => (notes ? parseReleaseNotes(notes) : []), [notes])
+  const releaseDate = versionInfo?.releaseDate ?? null
+  const versionHistory = useMemo(
+    () =>
+      getReleaseNotesHistory(
+        locale,
+        latestVersion === null ? null : { version: latestVersion, notes: manifestNotes, releaseDate },
+      ),
+    [locale, latestVersion, manifestNotes, releaseDate],
+  )
 
-  // A long catch-up section (90+ entries) must not stretch the About card to thousands of
-  // pixels, so the block is capped and scrolls. This measures the real overflow and offers
-  // "Show all" only when something is actually hidden; expanding resets when the notes
-  // change (a different version is reported by the manifest).
-  const notesRef = useRef<HTMLDivElement | null>(null)
-  const [notesExpanded, setNotesExpanded] = useState(false)
-  const [notesOverflow, setNotesOverflow] = useState(false)
-  useEffect(() => setNotesExpanded(false), [notes])
-  useEffect(() => {
-    const el = notesRef.current
-    if (!el) {
-      setNotesOverflow(false)
-      return
-    }
-    setNotesOverflow(el.scrollHeight > el.clientHeight + 1)
-  }, [notes, notesExpanded])
+  const displayedHistory = useMemo(
+    () => pinReleaseNotesVersion(versionHistory, picked, locale),
+    [versionHistory, picked, locale],
+  )
+
+  // The shown version is derived, not stored: an offline first render starts at the
+  // installed version when its bundled section exists, otherwise the newest bundled
+  // version. A manifest arriving later moves the default only while nothing is pinned.
+  // A stale pick falls back, and an explicit pick survives a manifest refresh or a
+  // failed check for the rest of the About session (but not a locale change when the
+  // live entry is gone).
+  const shownVersion = resolveShownVersion(
+    picked?.version ?? null,
+    latestVersion,
+    currentVersion,
+    displayedHistory,
+  )
+
+  const handlePickedVersion = (version: string) => {
+    const entry = versionHistory.find((candidate) => candidate.version === version)
+    if (!entry) return
+    setPicked({ ...entry, locale })
+  }
 
   const updateStatusText = (() => {
     if (installing) return t('about.installing')
@@ -189,62 +211,12 @@ export default function About() {
             </div>
           </div>
 
-          {/* This release */}
-          {releaseNotes.length > 0 && notesVersion && (
-            <div className="mt-6">
-              <h3 className="mb-3 text-sm font-medium">
-                {t('about.releaseNotes', { version: notesVersion })}
-              </h3>
-              <div
-                ref={notesRef}
-                className={
-                  notesExpanded
-                    ? 'space-y-1.5'
-                    : 'max-h-72 space-y-1.5 overflow-y-auto pr-1'
-                }
-              >
-                {releaseNotes.map((block, index) => {
-                  if (block.kind === 'heading') {
-                    return (
-                      <div
-                        key={index}
-                        className={
-                          block.level === 3
-                            ? 'pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70'
-                            : 'pt-1 text-xs font-medium text-muted-foreground'
-                        }
-                      >
-                        {block.text}
-                      </div>
-                    )
-                  }
-                  if (block.kind === 'bullet') {
-                    return (
-                      <div key={index} className="flex gap-2 text-sm text-muted-foreground">
-                        <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/50" />
-                        <span>{block.text}</span>
-                      </div>
-                    )
-                  }
-                  return (
-                    <p key={index} className="text-sm text-muted-foreground">
-                      {block.text}
-                    </p>
-                  )
-                })}
-              </div>
-              {(notesOverflow || notesExpanded) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-2 h-7 px-2 text-xs text-muted-foreground"
-                  onClick={() => setNotesExpanded((value) => !value)}
-                >
-                  {notesExpanded ? t('about.collapseNotes') : t('about.showAllNotes')}
-                </Button>
-              )}
-            </div>
-          )}
+          {/* Release notes history */}
+          <ReleaseNotesSection
+            versions={displayedHistory}
+            value={shownVersion ?? ''}
+            onChange={handlePickedVersion}
+          />
         </CardContent>
       </Card>
     </div>
