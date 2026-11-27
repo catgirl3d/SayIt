@@ -17,6 +17,61 @@ export type ReleaseNoteBlock =
   | { kind: 'bullet'; text: string }
   | { kind: 'paragraph'; text: string }
 
+export interface ChangelogSection {
+  version: string
+  /** The rest of the heading line after the version, for example "— 2026-11-26" or "(unreleased)". */
+  suffix: string
+  /** Trimmed Markdown between this version heading and the next one. */
+  body: string
+}
+
+/**
+ * The same rule as the release script (client/scripts/extract-release-notes.mjs):
+ * exactly two hashes, numeric major.minor.patch, and the version must end the token so
+ * malformed headings such as "## v0.2.2.1" or "## v0.2.2-rc1" are not version sections.
+ */
+const VERSION_HEADING = /^## v(\d+\.\d+\.\d+)(?=\s|$)/
+
+/**
+ * Split a changelog into its version sections. Every recognized version heading starts
+ * a new section first, so the body of a draft "(unreleased)" section can never leak into
+ * the released section above or below it. Other "## ..." headings stay inside the body;
+ * the changelog renderer skips them separately.
+ */
+export function scanChangelogSections(markdown: string): ChangelogSection[] {
+  const sections: ChangelogSection[] = []
+  let current: { version: string; suffix: string; lines: string[] } | null = null
+
+  const flush = () => {
+    if (current === null) return
+    sections.push({
+      version: current.version,
+      suffix: current.suffix,
+      body: current.lines.join('\n').trim(),
+    })
+  }
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const match = VERSION_HEADING.exec(line)
+    if (match !== null) {
+      flush()
+      current = {
+        version: match[1],
+        suffix: line.slice(match[0].length).trim(),
+        lines: [],
+      }
+      continue
+    }
+    if (current !== null) current.lines.push(line)
+  }
+  flush()
+  return sections
+}
+
+export function isUnreleasedSection(section: ChangelogSection): boolean {
+  return section.suffix.toLowerCase().includes('(unreleased)')
+}
+
 /**
  * Pick the notes to show for an interface locale: the translated section when the
  * manifest carries one for that locale, otherwise the base (English) notes. A blank

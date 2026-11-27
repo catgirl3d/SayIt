@@ -5,6 +5,10 @@ Sections are ordered by version, newest first.
 
 ## v0.4.1 (unreleased)
 
+### Added
+#### Desktop Client
+- The About page now lets you browse the release notes of earlier versions, including offline.
+
 ### Fixed
 #### Desktop Client
 - The "Interface animations" switch now also turns off the fade-in of the overlay and the import-complete notice.

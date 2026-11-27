@@ -47,8 +47,19 @@ export default defineConfig({
     hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
     // The PCM worklet is shared with the web client under server/web, outside this Vite root.
     // Vite enforces server.fs.allow for ?raw imports, and a custom allow list replaces the default.
+    // The About page also bundles the two root changelogs with ?raw; allow exactly those files,
+    // not the whole repository root. Vite checks a ?raw import under both its clean file path and
+    // its id with the query, so the query form must be listed as well; this still allows only the
+    // two files.
     fs: {
-      allow: [__dirname, path.resolve(__dirname, '..', 'server', 'web')],
+      allow: [
+        __dirname,
+        path.resolve(__dirname, '..', 'server', 'web'),
+        path.resolve(__dirname, '..', 'CHANGELOG.md'),
+        path.resolve(__dirname, '..', 'CHANGELOG.md?raw'),
+        path.resolve(__dirname, '..', 'CHANGELOG.uk.md'),
+        path.resolve(__dirname, '..', 'CHANGELOG.uk.md?raw'),
+      ],
     },
     watch: {
       ignored: ['**/src-tauri/**'],

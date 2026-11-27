@@ -159,6 +159,44 @@ export const LongLabel: Story = {
   ),
 }
 
+function InlineDemo() {
+  const [value, setValue] = useState('0.4.0')
+  return (
+    <h3 className="text-sm font-medium">
+      What's new in{' '}
+      <Select
+        variant="inline"
+        value={value}
+        options={[
+          { value: '0.4.0', label: 'v0.4.0' },
+          { value: '0.3.1', label: 'v0.3.1' },
+          { value: '0.2.2', label: 'v0.2.2' },
+        ]}
+        onChange={setValue}
+      />
+    </h3>
+  )
+}
+
+/** A borderless trigger inside a line of text: the switcher reads as part of the heading. */
+export const Inline: Story = {
+  render: () => <InlineDemo />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = within(canvasElement.ownerDocument.body)
+    const heading = canvas.getByRole('heading', { name: "What's new in v0.4.0" })
+
+    // Valid phrasing content: the wrapper inside the heading is a span, not a div.
+    await expect(heading.querySelector('div')).toBeNull()
+
+    await userEvent.click(within(heading).getByRole('button', { name: 'v0.4.0' }))
+    await userEvent.click(await body.findByRole('button', { name: 'v0.3.1' }))
+
+    await expect(body.queryByRole('button', { name: 'v0.2.2' })).toBeNull()
+    await expect(heading).toHaveAccessibleName("What's new in v0.3.1")
+  },
+}
+
 /** A short list at the window bottom opens upward and sits directly on the trigger. */
 export const OpensUpwardNearBottom: Story = {
   parameters: { layout: 'fullscreen' },
