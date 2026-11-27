@@ -99,6 +99,12 @@ The first build downloads several gigabytes of model weights and builds the imag
 | `https://localhost:8443/healthz` | Health check (Docker default) |
 | `http://localhost:8000/` | HTTP access when `SAYIT_TLS_ENABLED=false` |
 
+### 4. Connect the desktop app
+
+The Docker default serves HTTPS on port 8443 with a self-signed certificate that Windows does not trust, so the desktop app cannot connect to it as is. Either set `SAYIT_TLS_ENABLED=false` in `.env` and connect to `http://<server-ip>:8000` on a network you trust, or mount a certificate that Windows trusts for the server's host name (see the commented `certs` volume in `docker-compose.yml`) and connect to `https://<server-host>:8443`.
+
+The step-by-step connection in the app and troubleshooting are in the [Windows server guide](../docs/SERVER_GUIDE.md#4-connect-the-desktop-app), which also covers running a GigaAM backend natively on Windows.
+
 ## Project Layout
 
 ```
