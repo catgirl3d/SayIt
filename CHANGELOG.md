@@ -1,7 +1,8 @@
 # SayIt Changelog
 
-Release history and notable changes for the SayIt fork.
+Release history and notable changes for SayIt.
 Sections are ordered by version, newest first.
+Ukrainian translation: [CHANGELOG.uk.md](CHANGELOG.uk.md).
 
 ## v0.4.1 (unreleased)
 

@@ -1,7 +1,7 @@
 # Contributing to SayIt
 
-This repository is a maintained fork of SayIt. Focused bug fixes, feature work,
-documentation updates, and translations are welcome.
+SayIt is developed independently. Focused bug fixes, feature work, documentation
+updates, and translations are welcome.
 
 ## Issues
 

@@ -13,14 +13,11 @@ Open-source voice typing for Windows. Press a shortcut and speak—SayIt transcr
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
 [![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/catgirl3d/SayIt/releases/latest)
 [![Latest release](https://badgen.net/github/tag/catgirl3d/SayIt?label=Latest%20release)](https://github.com/catgirl3d/SayIt/releases/latest)
+[![Changelog](https://img.shields.io/badge/changelog-en-blue)](CHANGELOG.md)
 
 **[Download for Windows](https://github.com/catgirl3d/SayIt/releases/latest)**
 
 </div>
-
-## Fork Build
-
-This repository is a maintained fork of [crosswk/SayIt](https://github.com/crosswk/SayIt). Download builds from this repository's [Windows Releases](https://github.com/catgirl3d/SayIt/releases/latest) and see the maintained [fork changelog](CHANGELOG.md) ([Ukrainian translation](CHANGELOG.uk.md)).
 
 **English, Ukrainian, Russian, and Chinese dictation:** built-in AI processing prompts are available in English and Ukrainian. Choose their instruction language separately in AI settings; on a fresh setup it starts out matching the UI language and changes only when you change it. Set the ASR recognition language independently and use a model that supports the language you speak.
 
@@ -155,6 +152,10 @@ uvicorn app.main:app --port 8000 --no-proxy-headers
 Requirements: Python 3.10+ and, for GPU inference, an NVIDIA GPU with CUDA.
 
 Qwen3-ASR depends on vLLM, which does not run natively on Windows, so use Docker or WSL2 there. A GigaAM-only backend runs natively on Windows; the [Windows server guide](docs/SERVER_GUIDE.md) walks through it step by step, including connecting the desktop app.
+
+## About
+
+This version of SayIt is based on [crosswk/SayIt](https://github.com/crosswk/SayIt) and is developed independently.
 
 ## Project layout
 

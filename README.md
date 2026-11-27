@@ -11,14 +11,11 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
 [![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/catgirl3d/SayIt/releases/latest)
 [![Latest release](https://badgen.net/github/tag/catgirl3d/SayIt?label=Latest%20release)](https://github.com/catgirl3d/SayIt/releases/latest)
+[![Changelog](https://img.shields.io/badge/changelog-ukr-blue)](CHANGELOG.uk.md)
 
 **[Завантажити для Windows](https://github.com/catgirl3d/SayIt/releases/latest)**
 
 </div>
-
-## Особливості форку
-
-Цей проєкт — підтримуваний форк [crosswk/SayIt](https://github.com/crosswk/SayIt). Завантажити інсталятор для Windows можна в розділі [Releases](https://github.com/catgirl3d/SayIt/releases/latest), а повний перелік змін та покращень — у [журналі оновлень](CHANGELOG.md); український переклад — [CHANGELOG.uk.md](CHANGELOG.uk.md).
 
 **Мови диктування:** SayIt підтримує англійську, українську, російську та китайську. Вбудовані промпти для AI-обробки доступні англійською та українською; мову промптів можна вибрати в налаштуваннях AI. Під час першого запуску мова промптів береться з мови інтерфейсу, а далі змінюється лише вручну. Мову розпізнавання (ASR) можна вибрати окремо — достатньо обрати модель, що підтримує потрібну мову.
 
@@ -153,6 +150,10 @@ uvicorn app.main:app --port 8000 --no-proxy-headers
 Вимоги: Python 3.10+ та відеокарта NVIDIA з CUDA для запуску моделей на GPU.
 
 Qwen3-ASR залежить від vLLM, який не працює у Windows нативно, тому там використовуйте Docker або WSL2. Бекенд лише з GigaAM запускається у Windows нативно — покроково це описано в [посібнику з сервера для Windows](docs/SERVER_GUIDE.md), разом із підключенням десктопного застосунку.
+
+## Про проєкт
+
+Ця версія SayIt походить від [crosswk/SayIt](https://github.com/crosswk/SayIt) і розвивається незалежно.
 
 ## Структура проєкту
 
