@@ -3,6 +3,7 @@
  */
 
 import * as bridge from './bridge'
+import { concatByteChunks } from '@/lib/bytes'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 
 /**
@@ -30,13 +31,8 @@ export async function saveRecordingAudio(
     })
   }
 
-  // 合并 PCM chunks
-  const merged = new Uint8Array(totalLen)
-  let offset = 0
-  for (const chunk of chunks) {
-    merged.set(new Uint8Array(chunk), offset)
-    offset += chunk.byteLength
-  }
+  // Merge the PCM chunks in arrival order
+  const merged = concatByteChunks(chunks)
 
   // 转 base64 传给 Rust，Rust 侧编码 WAV header 并写入文件
   const pcmBase64 = uint8ArrayToBase64(merged)

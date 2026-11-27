@@ -5,7 +5,7 @@
 // two settings components cannot drift apart.
 
 import { invoke } from '@tauri-apps/api/core'
-import { uint8ArrayToBase64 } from '@/lib/encoding'
+import { base64ToUint8Array, uint8ArrayToBase64 } from '@/lib/encoding'
 import type { SpeechInputLanguage } from '@/services/speechInputLanguage'
 
 /** Canonical WAV header length of the bundled clips (16 kHz mono PCM16). */
@@ -21,7 +21,7 @@ export interface PreparedTestAudio {
 
 export async function prepareTestPcm(language: SpeechInputLanguage): Promise<PreparedTestAudio> {
   const wavB64 = await invoke<string>('get_test_audio_b64', { language })
-  const wavBytes = Uint8Array.from(atob(wavB64), (c) => c.charCodeAt(0))
+  const wavBytes = base64ToUint8Array(wavB64)
   const pcmBytes = wavBytes.slice(WAV_HEADER_BYTES)
   return {
     pcmB64: uint8ArrayToBase64(pcmBytes),

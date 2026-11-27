@@ -97,6 +97,7 @@ let current: DebugSession | null = null
 let runtimeEvents: RuntimeEvent[] = []
 
 import { appendDebugLog } from './bridge'
+import { concatByteChunks } from '@/lib/bytes'
 
 function mirrorToMainLog(payload: unknown) {
   if (!shouldMirrorPayload(payload)) return
@@ -269,17 +270,8 @@ export function clearRuntimeEvents() {
 }
 
 export function getSessionAudioBlob(session: DebugSession): Blob | null {
-  if (session.audioChunks.length === 0) return null
-
-  const totalLen = session.audioChunks.reduce((s, c) => s + c.byteLength, 0)
-  if (totalLen === 0) return null
-
-  const pcm = new Uint8Array(totalLen)
-  let offset = 0
-  for (const chunk of session.audioChunks) {
-    pcm.set(new Uint8Array(chunk), offset)
-    offset += chunk.byteLength
-  }
+  const pcm = concatByteChunks(session.audioChunks)
+  if (pcm.byteLength === 0) return null
 
   const sessionRate = Number(session.sampleRate || DEFAULT_PCM_SAMPLE_RATE)
   const sampleRate = Number.isFinite(sessionRate) && sessionRate >= 8000

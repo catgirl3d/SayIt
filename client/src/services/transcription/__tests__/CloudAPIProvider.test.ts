@@ -37,7 +37,8 @@ vi.mock('../clientAiPolish', async (importOriginal) => ({
 import { CloudAPIProvider } from '../CloudAPIProvider'
 import type { StartOptions } from '../types'
 import { withoutLeadingContext } from '../../subtitleSegmentation'
-import { uint8ArrayToBase64 } from '@/lib/encoding'
+import { concatByteChunks } from '@/lib/bytes'
+import { base64ToUint8Array, uint8ArrayToBase64 } from '@/lib/encoding'
 
 describe('CloudAPIProvider selected-profile snapshots', () => {
   beforeEach(() => {
@@ -190,7 +191,9 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     const done = new Promise<void>((resolve) => { finish = resolve })
     await provider.connect({ onWarning, onFinal, onDone: finish })
     provider.start({ runId: 22, hotwords: ['SayIt'] })
-    provider.sendAudio(new ArrayBuffer(16000))
+    const audio = new Uint8Array(16_000)
+    for (let i = 0; i < audio.length; i++) audio[i] = i & 0xff
+    provider.sendAudio(audio.buffer)
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([command]) => command === 'deepgram_stream_open')).toBe(true))
     await new Promise((resolve) => setTimeout(resolve, 0))
     provider.stop()
@@ -198,11 +201,12 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     expect(onWarning).toHaveBeenCalledExactlyOnceWith('deepgram_keyterm_limit')
     expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ asrText: 'recognized', asrWarning: 'deepgram_keyterm_limit' }))
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_transcribe')).toBe(false)
-    const sentFrames = mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')
-    const sentBytes = sentFrames.reduce((total, [, args]) => (
-      total + atob((args as { pcmB64: string }).pcmB64).length
-    ), 0)
-    expect(sentBytes).toBe(16000)
+    const sentBytes = concatByteChunks(
+      mocks.invoke.mock.calls
+        .filter(([command]) => command === 'deepgram_stream_send')
+        .map(([, args]) => base64ToUint8Array((args as { pcmB64: string }).pcmB64)),
+    )
+    expect(sentBytes).toEqual(audio)
   })
 
   it('does not launch a third attempt when a live keyterm-limit retry fails before stop', async () => {
@@ -1103,15 +1107,11 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'deepgram_stream_send')).toHaveLength(2))
     await session?.close()
 
-    const sentBytes = mocks.invoke.mock.calls
-      .filter(([command]) => command === 'deepgram_stream_send')
-      .map(([, args]) => new Uint8Array(atob((args as { pcmB64: string }).pcmB64).split('').map((char) => char.charCodeAt(0))))
-    const concatenated = new Uint8Array(sentBytes.reduce((sum, bytes) => sum + bytes.length, 0))
-    let offset = 0
-    for (const bytes of sentBytes) {
-      concatenated.set(bytes, offset)
-      offset += bytes.length
-    }
+    const concatenated = concatByteChunks(
+      mocks.invoke.mock.calls
+        .filter(([command]) => command === 'deepgram_stream_send')
+        .map(([, args]) => base64ToUint8Array((args as { pcmB64: string }).pcmB64)),
+    )
     expect(concatenated).toEqual(new Uint8Array([...first, ...second, ...third]))
     expect(maxActiveSends).toBe(1)
     expect(mocks.invoke.mock.calls

@@ -14,6 +14,21 @@ export function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
+ * Decode base64 to bytes with atob semantics: standard base64 with optional padding, ASCII whitespace ignored,
+ * and invalid input throws without the error being swallowed.
+ *
+ * The return annotation is deliberately omitted: inference from `new Uint8Array(binary.length)` keeps the result
+ * ArrayBuffer-backed. Typed-array generic annotations cannot be used because client/package.json supports
+ * TypeScript 5.6.3, where those generics do not exist.
+ */
+export function base64ToUint8Array(base64: string) {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+/**
  * Convert bounded chunks with apply to avoid per-byte string concatenation.
  * Joining the binary chunks before btoa preserves byte-for-byte identical base64 output.
  */

@@ -1,4 +1,5 @@
 import { USER_PROMPT_PREFIX } from '@/services/store'
+import { concatByteChunks } from '@/lib/bytes'
 import { getLocale, t } from '@/i18n'
 import { type DebugMessage, type DebugSession, type RuntimeEvent } from '@/services/debugLog'
 import {
@@ -233,21 +234,10 @@ export function resolveSessionSampleRate(session: DebugSession): number {
 }
 
 export function joinPCMChunks(chunks: ArrayBuffer[]): Int16Array | null {
-  const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
-  const alignedBytes = totalBytes - (totalBytes % 2)
+  const merged = concatByteChunks(chunks)
+  const alignedBytes = merged.byteLength - (merged.byteLength % 2)
   if (alignedBytes <= 0) return null
 
-  const pcmBytes = new Uint8Array(alignedBytes)
-  let offset = 0
-
-  for (const chunk of chunks) {
-    if (offset >= alignedBytes) break
-    const source = new Uint8Array(chunk)
-    const remain = alignedBytes - offset
-    const length = Math.min(source.byteLength, remain)
-    pcmBytes.set(source.subarray(0, length), offset)
-    offset += length
-  }
-
+  const pcmBytes = alignedBytes === merged.byteLength ? merged : merged.slice(0, alignedBytes)
   return new Int16Array(pcmBytes.buffer)
 }
