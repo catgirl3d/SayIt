@@ -13,6 +13,7 @@
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
     "storybook:typecheck": "tsc -p tsconfig.storybook.json",
+    "screenshots:readme": "node scripts/capture-readme-screenshots.mjs",
     "test:scripts": "node --test scripts/generate-update-manifest.test.mjs scripts/check-release-versions.test.mjs scripts/extract-release-notes.test.mjs scripts/fetch-sidecar.test.mjs scripts/check-i18n.test.mjs",
     "ffmpeg:fetch": "node ./scripts/fetch-sidecar.mjs",
     "check:release-versions": "node scripts/check-release-versions.mjs",
