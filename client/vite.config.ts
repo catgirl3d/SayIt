@@ -3,6 +3,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import fs from 'fs'
+import { CHANGELOG_FILES } from './changelogFiles'
 
 const host = process.env.TAURI_DEV_HOST
 // client/src-tauri/build.rs reads the same env var so the Rust TLS policy protects the same host.
@@ -55,10 +56,10 @@ export default defineConfig({
       allow: [
         __dirname,
         path.resolve(__dirname, '..', 'server', 'web'),
-        path.resolve(__dirname, '..', 'CHANGELOG.md'),
-        path.resolve(__dirname, '..', 'CHANGELOG.md?raw'),
-        path.resolve(__dirname, '..', 'CHANGELOG.uk.md'),
-        path.resolve(__dirname, '..', 'CHANGELOG.uk.md?raw'),
+        ...CHANGELOG_FILES.flatMap((name) => {
+          const file = path.resolve(__dirname, '..', name)
+          return [file, `${file}?raw`]
+        }),
       ],
     },
     watch: {

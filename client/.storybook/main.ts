@@ -1,4 +1,5 @@
 import type { StorybookConfig } from '@storybook/react-vite'
+import { CHANGELOG_FILES } from '../changelogFiles'
 
 // ESM-safe file paths from this config's own URL. A Windows file URL pathname starts
 // with "/E:/...", so the leading slash before the drive letter is stripped for Vite.
@@ -7,7 +8,7 @@ function fileUrlPath(url: URL): string {
 }
 
 const repoRoot = new URL('../..', import.meta.url)
-const changelogFiles = ['CHANGELOG.md', 'CHANGELOG.uk.md'].map((name) =>
+const changelogFiles = CHANGELOG_FILES.map((name) =>
   fileUrlPath(new URL(name, repoRoot)),
 )
 
