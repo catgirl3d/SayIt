@@ -9,6 +9,9 @@ Sections are ordered by version, newest first.
 #### Desktop Client
 - The "Interface animations" switch now also turns off the fade-in of the overlay and the import-complete notice.
 
+#### Security
+- After an in-app update from an earlier version, SayIt no longer stops on its first start with an error about `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` and `ignore-certificate-errors`. Earlier versions passed that switch on to the updated app; SayIt now recognizes this leftover and starts with certificate checks on. Any other value with that switch still stops SayIt with the error.
+
 ## v0.4.0 — 2026-11-26
 
 ### Added
