@@ -24,14 +24,6 @@ This repository is a maintained fork of [crosswk/SayIt](https://github.com/cross
 
 **English, Ukrainian, Russian, and Chinese dictation:** built-in AI processing prompts are available in English and Ukrainian. Choose their instruction language separately in AI settings; on a fresh setup it follows the UI language. Set the ASR recognition language independently and use a model that supports the language you speak.
 
-<div align="center">
-
-<img src="docs/images/readme/demo-en.gif" width="820" alt="SayIt in action: pressing the shortcut, speaking, and the cleaned-up text appearing at the cursor">
-
-*Trigger the shortcut, speak, and the cleaned-up text is typed in at your cursor — no window switching.*
-
-</div>
-
 ## Why SayIt?
 
 Typing is often the slowest part of working with AI. SayIt turns speech into text you can use immediately, while keeping the important choices in your hands:
