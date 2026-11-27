@@ -9,12 +9,22 @@ on:
       # The frontend build reads this file through vite.config.ts (__APP_VERSION__),
       # so re-include it after the src-tauri exclusion.
       - 'client/src-tauri/tauri.conf.json'
+      # Inputs read by the frontend bundle or tests.
+      - 'server/web/pcm-processor.js'
+      - 'server/web/pcm-worklet.js'
+      - 'client/src-tauri/src/main.rs'
+      - 'client/src-tauri/capabilities/**'
       - '.github/workflows/ci-frontend.yml'
   pull_request:
     paths:
       - 'client/**'
       - '!client/src-tauri/**'
       - 'client/src-tauri/tauri.conf.json'
+      # Inputs read by the frontend bundle or tests.
+      - 'server/web/pcm-processor.js'
+      - 'server/web/pcm-worklet.js'
+      - 'client/src-tauri/src/main.rs'
+      - 'client/src-tauri/capabilities/**'
       - '.github/workflows/ci-frontend.yml'
   workflow_dispatch: {}
 

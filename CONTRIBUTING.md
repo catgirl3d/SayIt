@@ -17,7 +17,7 @@ Open an issue for bugs, feature proposals, or usability feedback. Include:
 
 ### Client
 
-Requirements: Node.js 18+, Rust 1.75+, CMake 3.20+, and the Vulkan SDK for local
+Requirements: Node.js 24+, Rust 1.75+, CMake 3.20+, and the Vulkan SDK for local
 ASR builds.
 
 ```bash
@@ -47,9 +47,8 @@ uvicorn app.main:app --port 8000 --no-proxy-headers
 - Keep changes focused and update tests for new behavior.
 - Do not include API keys, credentials, private URLs, or user data in commits.
 
-Run the relevant tests and `npm run build` before opening a pull request. The
-current `npm run lint` command requires the project's ESLint configuration to be
-migrated to flat config or ESLint to be pinned to a legacy-compatible version.
+From `client/`, run `npm run ci` before opening a pull request. It runs the same
+checks as frontend CI.
 
 ## Commit Messages
 
