@@ -231,7 +231,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             recommended: true,
             memory_mb: 1050,
             featured: true,
-            languages_label: "40 languages".into(),
+            languages_label: "36 languages".into(),
             quant: "Q4_K_M".into(),
             languages: lang_vec(NEMOTRON_LANGUAGES),
             sources: NEMOTRON_STREAMING_Q4.sources(),

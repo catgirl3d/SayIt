@@ -1298,7 +1298,7 @@
   "localModel.sensevoice.languages": "5 мов (zh, en, ja, ko, yue)",
   "localModel.nemotron.name": "Nemotron 3.5 ASR",
   "localModel.nemotron.description": "Найширше мовне покриття для багатомовного використання",
-  "localModel.nemotron.languages": "40 мов",
+  "localModel.nemotron.languages": "36 мов",
   "localModel.gigaam.name": "GigaAM v3",
   "localModel.gigaam.description": "Найвища точність для російської мови, із вбудованою пунктуацією",
   "localModel.gigaam.languages": "Російська",
