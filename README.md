@@ -10,7 +10,7 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
 [![Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows)](https://github.com/catgirl3d/SayIt/releases/latest)
-[![Latest release](https://img.shields.io/github/v/release/catgirl3d/SayIt?label=release)](https://github.com/catgirl3d/SayIt/releases/latest)
+[![Latest release](https://badgen.net/github/tag/catgirl3d/SayIt?label=Latest%20release)](https://github.com/catgirl3d/SayIt/releases/latest)
 
 **[Завантажити для Windows](https://github.com/catgirl3d/SayIt/releases/latest)**
 
