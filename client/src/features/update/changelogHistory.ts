@@ -44,7 +44,7 @@ const CALENDAR_DATE = /(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/
  * The first YYYY-MM-DD in the text, kept only when it names a real day: a UTC round
  * trip rejects values such as "2026-13-40" that Date would silently roll over.
  */
-export function parseCalendarDate(text: string): string | null {
+function parseCalendarDate(text: string): string | null {
   const match = CALENDAR_DATE.exec(text)
   if (match === null) return null
   const [iso, year, month, day] = match

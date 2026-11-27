@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { useLocale, useT } from '@/i18n/useT'
@@ -23,7 +23,6 @@ const VERSION_SLOT = '\u0000'
 export function ReleaseNotesSection({ versions, value, onChange }: ReleaseNotesSectionProps) {
   const t = useT()
   const locale = useLocale()
-  const headingId = useId()
   const selected = versions.find((entry) => entry.version === value)
   const notesMarkdown = selected?.notes ?? ''
   const notes = useMemo(() => parseReleaseNotes(notesMarkdown), [notesMarkdown])
@@ -74,7 +73,7 @@ export function ReleaseNotesSection({ versions, value, onChange }: ReleaseNotesS
           context from the enclosing heading. Labelling it by the full title would repeat
           the title inside the heading's own accessible name. */}
       <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h3 id={headingId} className="min-w-0 text-sm font-medium">
+        <h3 className="min-w-0 text-sm font-medium">
           {versions.length > 1 ? (
             <>
               {titleBefore}
