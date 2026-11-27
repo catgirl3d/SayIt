@@ -84,6 +84,12 @@ describe('locale 表', () => {
     }
   })
 
+  it('keeps exactly one named version slot in the release notes title', () => {
+    for (const [locale, table] of [['en', en], ['uk', uk]] as const) {
+      expect(table['about.releaseNotes'].match(/\{\w+\}/g), locale).toEqual(['{versionLabel}'])
+    }
+  })
+
   it('active UI locales contain no Chinese glyphs', () => {
     const chineseGlyph = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
     for (const [locale, table] of [['en', en], ['uk', uk]] as const) {

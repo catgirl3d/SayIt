@@ -6,7 +6,7 @@ import { ReleaseNotesSection } from './ReleaseNotesSection'
 import type { ReleaseNotesVersion } from './changelogHistory'
 
 function notesTitle(version: string): string {
-  return t('about.releaseNotes', { version: `v${version}` })
+  return t('about.releaseNotes', { versionLabel: `v${version}` })
 }
 
 // The rendered text follows the interface locale, so plays check the machine-readable

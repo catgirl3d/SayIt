@@ -365,7 +365,7 @@
   "about.installingShort": "Встановлення…",
   "about.checkingShort": "Перевірка…",
   "about.checkUpdate": "Перевірити оновлення",
-  "about.releaseNotes": "Що нового у {version}",
+  "about.releaseNotes": "Що нового у {versionLabel}",
   "about.showAllNotes": "Показати все",
   "about.collapseNotes": "Згорнути",
   "settings.title": "Налаштування",

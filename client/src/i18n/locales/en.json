@@ -365,7 +365,7 @@
   "about.installingShort": "Installing…",
   "about.checkingShort": "Checking…",
   "about.checkUpdate": "Check for updates",
-  "about.releaseNotes": "What's new in {version}",
+  "about.releaseNotes": "What's new in {versionLabel}",
   "about.showAllNotes": "Show all",
   "about.collapseNotes": "Collapse",
   "settings.title": "Settings",

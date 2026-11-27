@@ -61,12 +61,12 @@ export function ReleaseNotesSection({ versions, value, onChange }: ReleaseNotesS
 
   if (!selected) return null
 
-  const title = t('about.releaseNotes', { version: `v${selected.version}` })
+  const title = t('about.releaseNotes', { versionLabel: `v${selected.version}` })
   // The translation decides where the version sits in the title, so the switcher is placed
   // at the placeholder rather than appended after a fixed "What's new in" prefix.
-  const [titleBefore, titleAfter = ''] = t('about.releaseNotes', { version: VERSION_SLOT }).split(
-    VERSION_SLOT,
-  )
+  const [titleBefore, titleAfter = ''] = t('about.releaseNotes', {
+    versionLabel: VERSION_SLOT,
+  }).split(VERSION_SLOT)
 
   return (
     <div className="mt-5 border-t border-border pt-5">
