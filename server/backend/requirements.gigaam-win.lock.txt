@@ -1,8 +1,12 @@
 # Snapshot of the working Windows GigaAM backend environment.
-# Source: server/backend/.venv, pip freeze
+# Source: pip freeze of a fresh Python 3.12 venv installed with the command below,
+# validated with GigaAM v2_rnnt on CUDA 12.6 (NVIDIA GTX 1070, sm_61).
 # This lock is platform-specific and does not replace requirements.txt.
 # GigaAM 0.1.0 has stale dependency upper bounds; install this snapshot with
-# pip install --no-deps -r requirements.gigaam-win.lock.txt
+# pip install --no-deps --extra-index-url https://download.pytorch.org/whl/cu126 -r requirements.gigaam-win.lock.txt
+# The extra index serves the CUDA builds of torch and torchaudio, which PyPI does not host.
+# Requires Python 3.12: the pinned NumPy and SciPy releases need 3.12 or newer,
+# and torch 2.11 fails to import on Python 3.13.8 (inspect.getsource regression).
 # It intentionally describes the GigaAM-only environment, not Qwen/FireRed.
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -44,7 +48,7 @@ setuptools==84.0.0
 soundfile==0.14.0
 starlette==1.6.0
 sympy==1.14.0
-torch==2.13.0
+torch==2.11.0+cu126
 torchaudio==2.11.0+cu126
 tqdm==4.70.0
 typing-inspection==0.4.4
