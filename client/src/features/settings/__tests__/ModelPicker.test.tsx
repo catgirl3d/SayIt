@@ -22,12 +22,12 @@ interface PickerOptions {
 }
 
 /** Stateful host: the picker is fully controlled, so a test needs something that keeps its value and typed text. */
-function renderPicker(models: RemoteModel[], options: PickerOptions = {}) {
+function renderPicker(initialModels: RemoteModel[], options: PickerOptions = {}) {
   const { multiple = true, open = true, disabled = false, anchored = false } = options
   const onAdd = vi.fn()
   const onRemove = vi.fn()
 
-  function Host() {
+  function Host({ models }: { models: RemoteModel[] }) {
     const [value, setValue] = useState(options.value ?? [])
     const [inputValue, setInputValue] = useState(options.text ?? '')
     const rowRef = useRef<HTMLDivElement>(null)
@@ -61,10 +61,10 @@ function renderPicker(models: RemoteModel[], options: PickerOptions = {}) {
     )
   }
 
-  render(<Host />)
+  const { rerender } = render(<Host models={initialModels} />)
   const input = screen.getByLabelText('Model') as HTMLInputElement
   if (open) fireEvent.click(input)
-  return { onAdd, onRemove, input }
+  return { onAdd, onRemove, input, rerender: (models: RemoteModel[]) => rerender(<Host models={models} />) }
 }
 
 const customRowLabel = (typedText: string) => t('ai.modelAddCustom', { model: typedText })
@@ -264,6 +264,78 @@ describe('ModelPicker sorting', () => {
     fireEvent.click(screen.getByRole('button', { name: t('ai.modelSortPriceDesc') }))
 
     expect(visibleNames(candidates)).toEqual(['Five', 'Another', 'One', 'FreeOne', 'Unknown'])
+  })
+})
+
+describe('ModelPicker sort availability', () => {
+  const sortButton = (label: string) => screen.queryByRole('button', { name: label })
+
+  it('renders no sort header when the catalog reports no prices, and keeps name order', () => {
+    renderPicker([
+      { id: 'z-id', name: 'Zeta' },
+      { id: 'a-id', name: 'alpha' },
+      { id: 'm-id', name: 'Mid' },
+    ])
+
+    expect(screen.queryByText(t('ai.modelSortLabel'))).toBeNull()
+    expect(sortButton(t('ai.modelSortName'))).toBeNull()
+    expect(sortButton(t('ai.modelSortPriceAsc'))).toBeNull()
+    expect(sortButton(t('ai.modelSortPriceDesc'))).toBeNull()
+    expect(visibleNames(['alpha', 'Mid', 'Zeta'])).toEqual(['alpha', 'Mid', 'Zeta'])
+  })
+
+  it('hides price sorting when only input prices are reported, although rows may show them', () => {
+    renderPicker([
+      { id: 'b-id', name: 'Beta', input_price_per_million: 1 },
+      { id: 'a-id', name: 'Alpha', input_price_per_million: 2 },
+    ])
+
+    expect(screen.queryByText(t('ai.modelSortLabel'))).toBeNull()
+    expect(sortButton(t('ai.modelSortPriceAsc'))).toBeNull()
+    expect(within(rowByName('Beta')).getByText('$1.00')).toBeTruthy()
+    expect(visibleNames(['Alpha', 'Beta'])).toEqual(['Alpha', 'Beta'])
+  })
+
+  it('keeps the header when filtering leaves only unpriced rows, because availability follows the catalog', () => {
+    const { input } = renderPicker([
+      { id: 'paid', name: 'Paid', output_price_per_million: 2 },
+      { id: 'unpriced', name: 'Unpriced' },
+    ])
+
+    expect(screen.getByText(t('ai.modelSortLabel'))).toBeTruthy()
+    expect(sortButton(t('ai.modelSortPriceAsc'))).toBeTruthy()
+
+    fireEvent.change(input, { target: { value: 'Unpriced' } })
+
+    expect(modelRows('Unpriced')).toHaveLength(1)
+    expect(screen.getByText(t('ai.modelSortLabel'))).toBeTruthy()
+    expect(sortButton(t('ai.modelSortPriceDesc'))).toBeTruthy()
+  })
+
+  it('keeps the preferred direction across a catalog reload and applies it again once prices return', () => {
+    // Names run opposite to prices, so price-ascending order (Zebra first) proves the direction
+    // was re-applied instead of silently falling back to name order (Aardvark first).
+    const priced: RemoteModel[] = [
+      { id: 'aardvark', name: 'Aardvark', output_price_per_million: 9 },
+      { id: 'zebra', name: 'Zebra', output_price_per_million: 1 },
+    ]
+    const unpriced: RemoteModel[] = [
+      { id: 'z-id', name: 'Zeta' },
+      { id: 'a-id', name: 'alpha' },
+    ]
+
+    const { rerender } = renderPicker(priced)
+    fireEvent.click(screen.getByRole('button', { name: t('ai.modelSortPriceAsc') }))
+    expect(visibleNames(['Zebra', 'Aardvark'])).toEqual(['Zebra', 'Aardvark'])
+
+    rerender(unpriced)
+    expect(screen.queryByText(t('ai.modelSortLabel'))).toBeNull()
+    expect(visibleNames(['alpha', 'Zeta'])).toEqual(['alpha', 'Zeta'])
+
+    rerender(priced)
+    expect(screen.getByText(t('ai.modelSortLabel'))).toBeTruthy()
+    expect(screen.getByRole('button', { name: t('ai.modelSortPriceAsc') }).getAttribute('aria-pressed')).toBe('true')
+    expect(visibleNames(['Zebra', 'Aardvark'])).toEqual(['Zebra', 'Aardvark'])
   })
 })
 
@@ -836,7 +908,7 @@ describe('ModelPicker closing', () => {
   })
 
   it('rows and the sort buttons keep the input focused instead of taking focus', () => {
-    renderPicker([{ id: 'vendor/alpha', name: 'Friendly Alpha' }])
+    renderPicker([{ id: 'vendor/alpha', name: 'Friendly Alpha', output_price_per_million: 1 }])
 
     const rowEvent = fireEvent.mouseDown(rowByName('Friendly Alpha'))
     const sortEvent = fireEvent.mouseDown(screen.getByRole('button', { name: t('ai.modelSortPriceAsc') }))

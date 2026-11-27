@@ -179,7 +179,7 @@ export function ModelPicker({
   const t = useT()
   const listId = useId()
   const [isOpen, setIsOpen] = useState(false)
-  const [sort, setSort] = useState<ModelSort>('name')
+  const [preferredSort, setPreferredSort] = useState<ModelSort>('name')
   const [activeIndex, setActiveIndex] = useState(0)
   /** Plain mode: the text is the current model, so it only filters the list once the user edits it. */
   const [typedSinceOpen, setTypedSinceOpen] = useState(false)
@@ -192,9 +192,16 @@ export function ModelPicker({
   const centerActiveRowRef = useRef(false)
 
   const hasCatalog = models.length > 0
+  // Price sorting needs the loaded catalog to carry at least one known output price, because that is
+  // exactly the key compareByPrice sorts by. It is checked against the whole catalog rather than the
+  // filtered rows so the header does not flicker while typing. Until prices arrive, the user's
+  // preferred direction is kept but not applied (effectiveSort), so it comes back if the catalog
+  // reloads with prices in the same mounted picker.
+  const hasPriceSort = models.some((model) => knownPrice(model.output_price_per_million) !== undefined)
+  const effectiveSort: ModelSort = hasPriceSort ? preferredSort : 'name'
   const typed = inputValue.trim()
   const filterText = multiple || typedSinceOpen ? inputValue : ''
-  const filtered = useMemo(() => sortModels(filterModels(models, filterText), sort), [models, filterText, sort])
+  const filtered = useMemo(() => sortModels(filterModels(models, filterText), effectiveSort), [models, filterText, effectiveSort])
   /** The rows to mark as chosen: the chips, or the text of the plain field. */
   const chosen = multiple ? value : typed ? [typed] : []
   /** Tag mode: typed text the catalog does not list (and that is not chosen yet) is offered as a last row. */
@@ -241,7 +248,7 @@ export function ModelPicker({
     setTypedSinceOpen(false)
     if (centerOnChosen) {
       // Rows as they will be listed after the reset above: plain mode lists the whole catalog.
-      const rows = sortModels(filterModels(models, multiple ? inputValue : ''), sort)
+      const rows = sortModels(filterModels(models, multiple ? inputValue : ''), effectiveSort)
       setActiveIndex(Math.max(0, rows.findIndex((model) => chosen.includes(model.id))))
       centerActiveRowRef.current = true
     }
@@ -287,7 +294,7 @@ export function ModelPicker({
     else onAdd(id)
     // The panel stays open for the next pick. Clearing the filter swaps the list for the whole
     // catalog, so the touched row is found again and scrolled to; otherwise the list stays put.
-    setActiveIndex(Math.max(0, sortModels(models, sort).findIndex((model) => model.id === id)))
+    setActiveIndex(Math.max(0, sortModels(models, effectiveSort).findIndex((model) => model.id === id)))
     centerActiveRowRef.current = cleared
   }
 
@@ -349,31 +356,33 @@ export function ModelPicker({
       className="fixed z-[9999] flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-xl"
       style={panelStyle}
     >
-      <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-2 text-xs">
-        <span className="text-muted-foreground">{t('ai.modelSortLabel')}</span>
-        <div className="flex gap-0.5 rounded-md bg-input-bg p-0.5">
-          {([
-            { value: 'name', label: t('ai.modelSortName'), title: undefined },
-            { value: 'priceAsc', label: t('ai.modelSortPriceAsc'), title: t('ai.modelSortPriceTitle') },
-            { value: 'priceDesc', label: t('ai.modelSortPriceDesc'), title: t('ai.modelSortPriceTitle') },
-          ] as const).map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={sort === option.value}
-              title={option.title}
-              onMouseDown={keepInputFocus}
-              onClick={() => { setSort(option.value); setActiveIndex(0) }}
-              className={cn(
-                'h-6 rounded px-2.5 transition-colors',
-                sort === option.value ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {option.label}
-            </button>
-          ))}
+      {hasPriceSort && (
+        <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-2 text-xs">
+          <span className="text-muted-foreground">{t('ai.modelSortLabel')}</span>
+          <div className="flex gap-0.5 rounded-md bg-input-bg p-0.5">
+            {([
+              { value: 'name', label: t('ai.modelSortName'), title: undefined },
+              { value: 'priceAsc', label: t('ai.modelSortPriceAsc'), title: t('ai.modelSortPriceTitle') },
+              { value: 'priceDesc', label: t('ai.modelSortPriceDesc'), title: t('ai.modelSortPriceTitle') },
+            ] as const).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={effectiveSort === option.value}
+                title={option.title}
+                onMouseDown={keepInputFocus}
+                onClick={() => { setPreferredSort(option.value); setActiveIndex(0) }}
+                className={cn(
+                  'h-6 rounded px-2.5 transition-colors',
+                  effectiveSort === option.value ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {optionCount === 0 ? (
         <div className="px-3 py-6 text-center text-sm text-muted-foreground">{t('ai.modelNoMatch')}</div>

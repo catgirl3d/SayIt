@@ -12,6 +12,7 @@ Ukrainian translation: [CHANGELOG.uk.md](CHANGELOG.uk.md).
 
 ### Fixed
 #### Desktop Client
+- In the model picker, the sort bar now appears only when the loaded provider reports output token prices. For providers without prices the list stays in name order instead of offering price buttons that changed nothing.
 - The "Interface animations" switch now also turns off the fade-in of the overlay and the import-complete notice.
 
 #### Security

@@ -158,6 +158,34 @@ export const OpenCatalog: Story = {
   },
 }
 
+/** A catalog with no token prices: the sort bar is hidden and rows stay in name order. */
+const unpricedModels = [
+  { id: 'llama3.2:3b', name: 'Llama 3.2 3B' },
+  { id: 'qwen2.5:7b', name: 'Qwen 2.5 7B' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o mini' },
+] satisfies RemoteModel[]
+
+/** A provider without token prices: no sort header at all, and the rows keep name order. */
+export const CatalogWithoutPrices: Story = {
+  args: { models: unpricedModels, value: [], placeholder: 'Model id' },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const body = bodyOf(canvasElement)
+
+    await userEvent.click(canvas.getByRole('combobox', { name: 'Model' }))
+
+    const listbox = within(await body.findByRole('listbox'))
+    await expect(body.queryByText('Sort by:')).toBeNull()
+    await expect(body.queryByRole('button', { name: 'Price ↑' })).toBeNull()
+    await expect(body.queryByRole('button', { name: 'Price ↓' })).toBeNull()
+
+    const rows = listbox.getAllByRole('option')
+    const names = ['GPT-4o mini', 'Llama 3.2 3B', 'Qwen 2.5 7B']
+    await expect(rows).toHaveLength(names.length)
+    await expect(rows.map((row) => names.find((name) => row.textContent?.includes(name)))).toEqual(names)
+  },
+}
+
 export const EscapeClosesListOnly: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
