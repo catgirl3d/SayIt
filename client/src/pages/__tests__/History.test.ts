@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => mocks.invoke(...args) }))
-vi.mock('@/features/settings/asrProfileStore', () => ({
+vi.mock('@/services/settings/asrProfileStore', () => ({
   loadActiveAsrProfile: (...args: unknown[]) => mocks.loadActiveAsrProfile(...args),
 }))
 vi.mock('@/services/store', () => ({

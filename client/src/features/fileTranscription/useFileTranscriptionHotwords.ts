@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { resolveAsrDispatchProvider } from '@/features/settings/asrProviderCatalog'
+import { resolveAsrDispatchProvider } from '@/services/settings/asrProviderCatalog'
 import { foldHotwordDelivery, type AsrHotwordCapability } from '@/lib/asrModels'
 import { loadAsrHotwordCapabilityMatrix } from '@/services/hotwords/capabilityMatrix'
 import { loadHotwordCatalog, type HotwordCatalog } from '@/services/hotwords/settings'

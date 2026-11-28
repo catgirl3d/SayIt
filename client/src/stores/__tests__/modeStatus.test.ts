@@ -10,8 +10,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: state.invoke }))
 vi.mock('../../services/store', () => ({
   getSetting: vi.fn(async (key: string, fallback: unknown) => state.settings.get(key) ?? fallback),
 }))
-vi.mock('../../features/settings/asrProfileStore', () => ({ loadAsrProfiles: state.loadAsrProfiles }))
-vi.mock('../../features/settings/asrProviderCatalog', () => ({
+vi.mock('@/services/settings/asrProfileStore', () => ({ loadAsrProfiles: state.loadAsrProfiles }))
+vi.mock('@/services/settings/asrProviderCatalog', () => ({
   describeAsrMissing: vi.fn(),
   findAsrProvider: vi.fn(),
   resolveActiveAsrProfile: vi.fn(),
@@ -25,7 +25,7 @@ import {
   describeAsrMissing,
   findAsrProvider,
   resolveActiveAsrProfile,
-} from '../../features/settings/asrProviderCatalog'
+} from '@/services/settings/asrProviderCatalog'
 import { getModeStatus, refreshModeStatus } from '../modeStatus'
 
 function configureLocal(

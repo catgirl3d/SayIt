@@ -16,11 +16,11 @@ vi.mock('@/services/transcription', () => ({ getWorkMode: vi.fn(() => 'cloud_api
 vi.mock('@/services/speechInputLanguage', () => ({
   getSpeechInputLanguage: (...args: unknown[]) => mocks.getSpeechInputLanguage(...args),
 }))
-vi.mock('@/features/settings/asrProfileStore', () => ({ loadActiveAsrProfile: vi.fn() }))
+vi.mock('@/services/settings/asrProfileStore', () => ({ loadActiveAsrProfile: vi.fn() }))
 vi.mock('@/features/settings/DiagnosticsReportPanel', () => ({ default: () => null }))
 
 import * as diagnosticsPage from '../DiagnosticsPage'
-import { emptyAsrProfile } from '../asrProviderCatalog'
+import { emptyAsrProfile } from '@/services/settings/asrProviderCatalog'
 
 const checkCloudAsrHealth = Reflect.get(diagnosticsPage, 'checkCloudAsrHealth') as (
   profile: ReturnType<typeof emptyAsrProfile>,

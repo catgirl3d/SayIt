@@ -19,7 +19,7 @@ import { useSortable, DragHandle } from '@/components/ui/sortable'
 import { t } from '@/i18n'
 import { RichText } from '@/i18n/RichText'
 import { useT } from '@/i18n/useT'
-import { ASR_PROVIDERS, findAsrProvider } from '@/features/settings/asrProviderCatalog'
+import { ASR_PROVIDERS, findAsrProvider } from '@/services/settings/asrProviderCatalog'
 import {
   foldHotwordDelivery,
   hotwordCapabilityNoteKey,

@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { initProviderFromStore } from '@/services/transcription'
 import VoiceEnginePage from './VoiceEnginePage'
-import type { AsrProfile } from './asrProviderCatalog'
+import type { AsrProfile } from '@/services/settings/asrProviderCatalog'
 
 const deepgramProfile = {
   id: 'asr-storybook-deepgram',

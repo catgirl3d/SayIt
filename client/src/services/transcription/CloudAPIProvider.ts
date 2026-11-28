@@ -11,8 +11,8 @@ import {
   resolveAsrRequestMetadata,
   type AsrProviderConfig,
   type AsrProfile,
-} from '@/features/settings/asrProviderCatalog'
-import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
+} from '@/services/settings/asrProviderCatalog'
+import { loadActiveAsrProfile } from '@/services/settings/asrProfileStore'
 import { errorProtocolCode } from '@/lib/errorMessages'
 import { normalizeSpeechInputLanguage } from '../speechInputLanguage'
 import { withoutLeadingContext } from '../subtitleSegmentation'

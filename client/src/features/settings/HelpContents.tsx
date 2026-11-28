@@ -12,7 +12,7 @@ import type { TranslationKey } from '@/i18n'
 import { RichText } from '@/i18n/RichText'
 import { useT } from '@/i18n/useT'
 import { aiProvidersForDisplay } from './aiProviderCatalog'
-import { ASR_PLATFORMS } from './asrProviderCatalog'
+import { ASR_PLATFORMS } from '@/services/settings/asrProviderCatalog'
 import { linkClass } from './formStyles'
 import { HelpSection } from './HelpSection'
 

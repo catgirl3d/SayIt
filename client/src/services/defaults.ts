@@ -140,7 +140,7 @@ export const DEFAULTS: Record<string, unknown> = {
   'cloudAi.profilesMigrated': false,
 
   // ── ASR (cloud API) ──
-  // Allowed values come from ASR_PROVIDERS in features/settings/asrProviderCatalog.ts:
+  // Allowed values come from ASR_PROVIDERS in services/settings/asrProviderCatalog.ts:
   // 'doubao_v2' | 'qwen' | 'qwen_audio_stream' | 'qwen_realtime' | 'qwen_omni_35_*' | 'mimo' | 'groq_whisper'
   'cloudAsr.provider': 'doubao_v2',
   // Runtime mirror of the credentials that are in effect this run. Doubao computes its

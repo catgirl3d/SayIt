@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FileTranscription from '../FileTranscription'
 import { setLocale } from '@/i18n'
-import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { emptyAsrProfile, type AsrProfile } from '@/services/settings/asrProviderCatalog'
 import { BUILTIN_SETS } from '@/services/hotwords/model'
 import { fileTranscriptionService, type FileTranscriptionJobOptions, type FileTranscriptionSnapshot } from '@/services/fileTranscription'
 import { releaseFileTranscription, reserveFileTranscription } from '@/services/recorder'
@@ -79,7 +79,7 @@ vi.mock('@/services/bridge', async (importOriginal) => {
 vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }))
 vi.mock('@tauri-apps/plugin-dialog', () => dialog)
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }))
-vi.mock('@/features/settings/asrProfileStore', () => cloudProfiles)
+vi.mock('@/services/settings/asrProfileStore', () => cloudProfiles)
 
 function renderPage() {
   return render(<MemoryRouter><FileTranscription /></MemoryRouter>)

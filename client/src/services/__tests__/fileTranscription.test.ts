@@ -21,7 +21,7 @@ const storeMocks = vi.hoisted(() => ({
   setSetting: vi.fn(),
 }))
 
-vi.mock('@/features/settings/asrProfileStore', () => ({
+vi.mock('@/services/settings/asrProfileStore', () => ({
   loadAsrProfiles: profileStoreMocks.loadAsrProfiles,
 }))
 

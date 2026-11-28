@@ -52,8 +52,8 @@ import {
   normalizeAsrProfileForSave,
   type AsrCheck,
   type AsrProfile,
-} from './asrProviderCatalog'
-import { loadAsrProfiles, saveAsrProfileChecks, saveAsrProfiles } from './asrProfileStore'
+} from '@/services/settings/asrProviderCatalog'
+import { loadAsrProfiles, saveAsrProfileChecks, saveAsrProfiles } from '@/services/settings/asrProfileStore'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { helpIconClass, inputClass, linkClass } from './formStyles'
 import { ProfileCard } from './ProfileCard'

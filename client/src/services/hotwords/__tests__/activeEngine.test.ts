@@ -6,9 +6,9 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/transcription', () => ({ getWorkMode: mocks.getWorkMode }))
-vi.mock('@/features/settings/asrProfileStore', () => ({ loadActiveAsrProfile: mocks.loadActiveAsrProfile }))
+vi.mock('@/services/settings/asrProfileStore', () => ({ loadActiveAsrProfile: mocks.loadActiveAsrProfile }))
 
-import { findAsrProvider } from '@/features/settings/asrProviderCatalog'
+import { findAsrProvider } from '@/services/settings/asrProviderCatalog'
 import { loadDictationHotwordEngine } from '../activeEngine'
 
 describe('loadDictationHotwordEngine', () => {

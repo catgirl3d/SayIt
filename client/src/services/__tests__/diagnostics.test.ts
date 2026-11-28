@@ -32,7 +32,7 @@ import {
   saveSupportBundle,
 } from '../diagnostics'
 import { AI_PROVIDERS } from '@/features/settings/aiProviderCatalog'
-import { ASR_PROVIDERS } from '@/features/settings/asrProviderCatalog'
+import { ASR_PROVIDERS } from '@/services/settings/asrProviderCatalog'
 
 describe('public diagnostics', () => {
   beforeEach(() => {

@@ -8,14 +8,14 @@ import {
   saveAsrProfileChecks,
   saveAsrProfiles,
   topUpProfiles,
-} from '../asrProfileStore'
+} from '@/services/settings/asrProfileStore'
 import {
   buildAsrProviderConfig,
   emptyAsrProfile,
   normalizeAsrProfileForSave,
   type AsrCheck,
   type AsrProfile,
-} from '../asrProviderCatalog'
+} from '@/services/settings/asrProviderCatalog'
 import en from '@/i18n/locales/en.json'
 import uk from '@/i18n/locales/uk.json'
 

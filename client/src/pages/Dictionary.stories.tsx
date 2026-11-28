@@ -1,7 +1,7 @@
 import { fireEvent, waitFor } from '@testing-library/react'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import Dictionary from './Dictionary'
-import type { AsrProfile } from '@/features/settings/asrProviderCatalog'
+import type { AsrProfile } from '@/services/settings/asrProviderCatalog'
 import { BUILTIN_SETS } from '@/services/hotwords/model'
 import { getSetting } from '@/services/store'
 import { getWorkMode, switchProvider } from '@/services/transcription'

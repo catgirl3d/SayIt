@@ -8,8 +8,8 @@ import {
   buildAsrProviderConfig,
   CUSTOM_ASR_PROVIDER,
   resolveAsrRequestMetadata,
-} from '@/features/settings/asrProviderCatalog'
-import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
+} from '@/services/settings/asrProviderCatalog'
+import { loadActiveAsrProfile } from '@/services/settings/asrProfileStore'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { getWorkMode } from '@/services/transcription'
 import {

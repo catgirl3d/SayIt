@@ -12,12 +12,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { getDefault } from '../services/defaults'
 import { getSetting } from '../services/store'
 import { checkLocalModelInstalled, getSelectedLocalModelId, resolveLocalModelName } from '../services/localModelStatus'
-import { loadAsrProfiles } from '../features/settings/asrProfileStore'
+import { loadAsrProfiles } from '@/services/settings/asrProfileStore'
 import {
   describeAsrMissing,
   findAsrProvider,
   resolveActiveAsrProfile,
-} from '../features/settings/asrProviderCatalog'
+} from '@/services/settings/asrProviderCatalog'
 import { subscribeLocale, t } from '@/i18n'
 import { CUSTOM_ASR_PROVIDER } from '@/lib/asrModels'
 
