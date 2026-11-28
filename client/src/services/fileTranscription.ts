@@ -2,14 +2,14 @@ import * as bridge from './bridge'
 import { getSetting, setSetting } from './store'
 import { getSpeechInputLanguage, normalizeSpeechInputLanguage, type SpeechInputLanguage } from './speechInputLanguage'
 import { checkLocalModelInstalled, getSelectedLocalModelId, type LocalModelIpc } from './localModelStatus'
-import { loadAsrProfiles } from '@/features/settings/asrProfileStore'
+import { loadAsrProfiles } from '@/services/settings/asrProfileStore'
 import {
   buildAsrProviderConfig,
   describeAsrMissing,
   findAsrProvider,
   type AsrProviderConfig,
   type AsrProfile,
-} from '@/features/settings/asrProviderCatalog'
+} from '@/services/settings/asrProviderCatalog'
 import { localModelDisplayName } from '@/i18n/displayNames'
 import { releaseFileTranscription, reserveFileTranscription, setFileTranscriptionAdmissionReady } from './recorder'
 

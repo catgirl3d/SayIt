@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within } from 'storybook/test'
 import CloudAPISection from './CloudAPISection'
-import type { AsrProfile } from './asrProviderCatalog'
+import type { AsrProfile } from '@/services/settings/asrProviderCatalog'
 
 const configuredProfiles = [
   {

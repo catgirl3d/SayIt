@@ -1,5 +1,5 @@
-import { loadActiveAsrProfile } from '@/features/settings/asrProfileStore'
-import { findAsrProvider, resolveAsrDispatchProvider } from '@/features/settings/asrProviderCatalog'
+import { loadActiveAsrProfile } from '@/services/settings/asrProfileStore'
+import { findAsrProvider, resolveAsrDispatchProvider } from '@/services/settings/asrProviderCatalog'
 import { getWorkMode } from '@/services/transcription'
 import type { WorkMode } from '@/services/transcription/types'
 

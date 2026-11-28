@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { buildAsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { buildAsrProviderConfig, type AsrProfile } from '@/services/settings/asrProviderCatalog'
 import { errorProtocolCode } from '@/lib/errorMessages'
 import type { SpeechInputLanguage } from '../speechInputLanguage'
 

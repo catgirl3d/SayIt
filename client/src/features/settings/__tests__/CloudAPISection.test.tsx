@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import CloudAPISection from '../CloudAPISection'
-import { emptyAsrProfile, findAsrProvider } from '../asrProviderCatalog'
+import { emptyAsrProfile, findAsrProvider } from '@/services/settings/asrProviderCatalog'
 
 const storeMocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock('@/services/store', () => ({
   setSetting: storeMocks.setSetting,
 }))
 
-vi.mock('../asrProfileStore', () => ({
+vi.mock('@/services/settings/asrProfileStore', () => ({
   loadAsrProfiles: profileStoreMocks.loadAsrProfiles,
   saveAsrProfiles: profileStoreMocks.saveAsrProfiles,
   saveAsrProfileChecks: profileStoreMocks.saveAsrProfileChecks,

@@ -26,8 +26,8 @@ vi.mock('@/services/transcription', async (importOriginal) => {
   return { ...actual, getWorkMode: vi.fn(() => 'cloud_api') }
 })
 
-vi.mock('@/features/settings/asrProfileStore', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/features/settings/asrProfileStore')>()
+vi.mock('@/services/settings/asrProfileStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/settings/asrProfileStore')>()
   return { ...actual, loadActiveAsrProfile: pageMocks.loadActiveAsrProfile }
 })
 

@@ -33,12 +33,12 @@ vi.mock('@/services/transcription/clientAiPolish', async (importOriginal) => ({
   polishWithClientAi: (...args: unknown[]) => harness.polish(...args),
 }))
 
-import { emptyAsrProfile } from '@/features/settings/asrProviderCatalog'
+import { emptyAsrProfile } from '@/services/settings/asrProviderCatalog'
 import {
   ASR_ACTIVE_PROFILE_KEY,
   loadActiveAsrProfile,
   saveAsrProfiles,
-} from '@/features/settings/asrProfileStore'
+} from '@/services/settings/asrProfileStore'
 import { switchProvider, type WorkMode } from '@/services/transcription'
 import { CloudAPIProvider } from '../CloudAPIProvider'
 import { RecorderOrchestrator } from '@/services/recorder/RecorderOrchestrator'

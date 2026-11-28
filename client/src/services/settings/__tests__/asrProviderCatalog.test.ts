@@ -20,7 +20,7 @@ import {
   providersOfPlatform,
   resolveActiveAsrProfile,
   type AsrProfile,
-} from '../asrProviderCatalog'
+} from '@/services/settings/asrProviderCatalog'
 
 function profile(over: Partial<AsrProfile> = {}): AsrProfile {
   return { ...emptyAsrProfile(), ...over }

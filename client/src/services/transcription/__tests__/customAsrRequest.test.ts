@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { emptyAsrProfile, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { emptyAsrProfile, type AsrProfile } from '@/services/settings/asrProviderCatalog'
 import CloudAPISection from '@/features/settings/CloudAPISection'
 import { describeProviderError } from '@/lib/errorMessages'
 import en from '@/i18n/locales/en.json'

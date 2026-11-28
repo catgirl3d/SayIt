@@ -25,7 +25,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   },
 }))
 vi.mock('@/services/store', () => ({ getSetting: (...args: unknown[]) => mocks.getSetting(...args) }))
-vi.mock('@/features/settings/asrProfileStore', () => ({
+vi.mock('@/services/settings/asrProfileStore', () => ({
   loadActiveAsrProfile: (...args: unknown[]) => mocks.loadActiveAsrProfile(...args),
 }))
 vi.mock('../../debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => mocks.addRuntimeEvent(...args) }))

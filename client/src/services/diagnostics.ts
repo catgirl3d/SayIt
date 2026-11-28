@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getSetting } from './store'
 import { getSpeechInputLanguage } from './speechInputLanguage'
 import { getWorkMode } from './transcription'
-import { buildAsrProviderConfig, type AsrProfile } from '@/features/settings/asrProviderCatalog'
+import { buildAsrProviderConfig, type AsrProfile } from '@/services/settings/asrProviderCatalog'
 import type { DiagnosticOccurrence, DiagnosticsPreview, PublicDiagnosticsEnvironment } from '@/types/appApi'
 
 const WORK_MODES = new Set(['local', 'server', 'cloud_api'])
