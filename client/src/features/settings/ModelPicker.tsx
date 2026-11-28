@@ -35,7 +35,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { usePopover } from '@/hooks/usePopover'
 import { useT } from '@/i18n/useT'
 import { cn } from '@/lib/utils'
-import type { RemoteModel } from './aiProviderCatalog'
+import type { RemoteModel } from '@/services/settings/aiProviderCatalog'
 
 export type ModelSort = 'name' | 'priceAsc' | 'priceDesc'
 

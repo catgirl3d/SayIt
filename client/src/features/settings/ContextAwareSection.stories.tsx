@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 import ContextAwareSection from './ContextAwareSection'
-import type { AiProfile } from './aiProviderCatalog'
+import type { AiProfile } from '@/services/settings/aiProviderCatalog'
 import { CONTEXT_SELECTION_EDIT_PROMPT } from '@/services/contextAware'
 import { setAiEnabled } from '@/stores/aiEnabled'
 import type { UsageSummary } from '@/types/usage'

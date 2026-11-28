@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import { setAiEnabled } from '@/stores/aiEnabled'
 import AIProviderSection from '../AIProviderSection'
-import { blankProfile, type AiProfile } from '../aiProviderCatalog'
+import { blankProfile, type AiProfile } from '@/services/settings/aiProviderCatalog'
 
 const storeMocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock('@/services/store', () => ({
   setSettings: storeMocks.setSettings,
 }))
 
-vi.mock('../aiProfileStore', () => ({
+vi.mock('@/services/settings/aiProfileStore', () => ({
   loadAiProfiles: profileStoreMocks.loadAiProfiles,
   saveAiProfiles: profileStoreMocks.saveAiProfiles,
 }))
@@ -145,7 +145,7 @@ describe('AIProviderSection deletion with the real profile store', () => {
   const third = { ...profile, id: 'p-third', model: 'third-model' }
 
   beforeEach(async () => {
-    const actual = await vi.importActual<typeof import('../aiProfileStore')>('../aiProfileStore')
+    const actual = await vi.importActual<typeof import('@/services/settings/aiProfileStore')>('@/services/settings/aiProfileStore')
     profileStoreMocks.loadAiProfiles.mockReset().mockImplementation(actual.loadAiProfiles)
     profileStoreMocks.saveAiProfiles.mockReset().mockImplementation(actual.saveAiProfiles)
     settings.clear()

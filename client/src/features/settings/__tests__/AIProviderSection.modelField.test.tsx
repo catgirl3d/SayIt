@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import AIProviderSection from '../AIProviderSection'
-import { blankProfile, type AiProfile } from '../aiProviderCatalog'
+import { blankProfile, type AiProfile } from '@/services/settings/aiProviderCatalog'
 
 // The editor's model field: a new service starts without a model (no seeded preset that
 // would be saved next to the user's own pick), the chips and the typed text are the only
@@ -17,7 +17,7 @@ vi.mock('@/services/store', () => ({
   getSetting: storeMocks.getSetting,
   setSetting: storeMocks.setSetting,
 }))
-vi.mock('../aiProfileStore', () => ({
+vi.mock('@/services/settings/aiProfileStore', () => ({
   loadAiProfiles: profileStoreMocks.loadAiProfiles,
   saveAiProfiles: profileStoreMocks.saveAiProfiles,
 }))

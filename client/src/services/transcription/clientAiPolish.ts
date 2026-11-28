@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { addRuntimeEvent } from '../debugLog'
 import { loadRuntimeAiConfig } from '../aiRuntimeConfig'
-import { assessAiConfig, buildAiProviderConfig } from '@/features/settings/aiProviderCatalog'
+import { assessAiConfig, buildAiProviderConfig } from '@/services/settings/aiProviderCatalog'
 import { errorProtocolCode } from '@/lib/errorMessages'
 import {
   logAiOutcome,

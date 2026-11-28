@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadAiProfiles, saveAiProfiles } from '../aiProfileStore'
+import { loadAiProfiles, saveAiProfiles } from '@/services/settings/aiProfileStore'
 import * as bridge from '@/services/bridge'
-import type { AiProfile } from '../aiProviderCatalog'
+import type { AiProfile } from '@/services/settings/aiProviderCatalog'
 
 const storedSettings = vi.hoisted(() => new Map<string, unknown>())
 const writeLog = vi.hoisted(() => [] as string[])

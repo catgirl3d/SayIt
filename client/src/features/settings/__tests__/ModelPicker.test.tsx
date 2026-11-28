@@ -4,7 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import { ModelPicker, RecommendedModels, formatUsd, priceLabel } from '../ModelPicker'
-import type { RemoteModel } from '../aiProviderCatalog'
+import type { RemoteModel } from '@/services/settings/aiProviderCatalog'
 
 interface PickerOptions {
   /** Tag mode: the chips present at the start. */

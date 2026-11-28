@@ -4,7 +4,7 @@
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
 import { concatByteChunks } from '@/lib/bytes'
-import { assessAiConfig } from '@/features/settings/aiProviderCatalog'
+import { assessAiConfig } from '@/services/settings/aiProviderCatalog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
 import { resolveAiPolishRoute, type AiPolishRoute } from './aiPolicy'

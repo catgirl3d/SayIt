@@ -10,7 +10,7 @@ vi.mock('@/services/store', () => ({
   getSetting: storeMocks.getSetting,
   setSetting: storeMocks.setSetting,
 }))
-vi.mock('../aiProfileStore', () => ({
+vi.mock('@/services/settings/aiProfileStore', () => ({
   loadAiProfiles: profileStoreMocks.loadAiProfiles,
 }))
 vi.mock('@/services/transcription/selectionAi', () => ({

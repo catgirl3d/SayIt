@@ -31,7 +31,7 @@ import {
   getDiagnosticsPreview,
   saveSupportBundle,
 } from '../diagnostics'
-import { AI_PROVIDERS } from '@/features/settings/aiProviderCatalog'
+import { AI_PROVIDERS } from '@/services/settings/aiProviderCatalog'
 import { ASR_PROVIDERS } from '@/services/settings/asrProviderCatalog'
 
 describe('public diagnostics', () => {
