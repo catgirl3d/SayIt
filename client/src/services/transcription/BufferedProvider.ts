@@ -4,6 +4,7 @@
  * 子类只需实现 onConnect() 和 processAudio()。
  */
 
+import { concatByteChunks } from '@/lib/bytes'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { addRuntimeEvent } from '../debugLog'
 import type {
@@ -115,12 +116,7 @@ export abstract class BufferedProvider implements TranscriptionProvider {
         return
       }
 
-      const merged = new Uint8Array(totalBytes)
-      let offset = 0
-      for (const buf of this.pcmBuffers) {
-        merged.set(new Uint8Array(buf), offset)
-        offset += buf.byteLength
-      }
+      const merged = concatByteChunks(this.pcmBuffers)
       this.pcmBuffers = []
 
       const durationSec = (totalBytes / 2) / 16000

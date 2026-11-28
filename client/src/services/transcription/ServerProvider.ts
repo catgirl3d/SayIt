@@ -3,6 +3,7 @@
 
 import { getSetting } from '../store'
 import { addRuntimeEvent } from '../debugLog'
+import { concatByteChunks } from '@/lib/bytes'
 import { assessAiConfig } from '@/features/settings/aiProviderCatalog'
 import * as ws from '../websocket'
 import { polishWithClientAi } from './clientAiPolish'
@@ -244,18 +245,12 @@ export class ServerProvider implements TranscriptionProvider {
   private flushAudio(): void {
     if (this.pendingAudioBytes === 0) return
     const chunks = this.pendingAudio
-    const totalBytes = this.pendingAudioBytes
     this.dropPendingAudio()
     if (chunks.length === 1) {
       ws.sendAudio(chunks[0])
       return
     }
-    const merged = new Uint8Array(totalBytes)
-    let offset = 0
-    for (const chunk of chunks) {
-      merged.set(new Uint8Array(chunk), offset)
-      offset += chunk.byteLength
-    }
+    const merged = concatByteChunks(chunks)
     ws.sendAudio(merged.buffer)
   }
 

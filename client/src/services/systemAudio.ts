@@ -27,6 +27,7 @@ import { buildSubtitlePrompt, RecentSpeech, SUBTITLE_CONTEXT_SOURCE, subtitleLan
 import { SubtitleTranscriptJournal } from './subtitleTranscript'
 import { addRuntimeEvent } from './debugLog'
 import { describeProviderError } from '@/lib/errorMessages'
+import { base64ToUint8Array } from '@/lib/encoding'
 import {
   DEEPGRAM_KEYTERM_LIMIT,
   type AsrWarningCode,
@@ -797,7 +798,7 @@ export class SystemAudioSession {
       || !['starting', 'listening'].includes(this.snapshot.state)) return
     let audio: Uint8Array
     try {
-      audio = Uint8Array.from(atob(frame.audioB64), (char) => char.charCodeAt(0))
+      audio = base64ToUint8Array(frame.audioB64)
       if (audio.byteLength !== FRAME_BYTES || !Number.isFinite(frame.speechProbability)) throw new Error('Invalid system-audio frame')
     } catch (error) { this.fail(t('systemAudio.captureFailed'), String(error)); return }
 

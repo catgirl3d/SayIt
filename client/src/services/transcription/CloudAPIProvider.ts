@@ -3,6 +3,7 @@
 // Other ASR, or a stream that failed to open: the recording is sent after it ends (buffered, as in BufferedProvider)
 
 import { isLiveRecognitionProvider, isQwenOmniProvider, isStreamingDisplayReady } from '@/lib/asrModels'
+import { concatByteChunks } from '@/lib/bytes'
 import {
   buildAsrProviderConfig,
   CUSTOM_ASR_PROVIDER,
@@ -741,12 +742,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       if (operation.offset === operation.buffer.byteLength) owner.operations.shift()
     }
 
-    const merged = new Uint8Array(totalBytes)
-    let offset = 0
-    for (const part of parts) {
-      merged.set(part, offset)
-      offset += part.byteLength
-    }
+    const merged = concatByteChunks(parts)
     return merged.buffer
   }
 
@@ -977,13 +973,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       const chunks = this.pendingChunks
       this.pendingChunks = []
 
-      const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0)
-      const merged = new Uint8Array(totalLen)
-      let offset = 0
-      for (const chunk of chunks) {
-        merged.set(new Uint8Array(chunk), offset)
-        offset += chunk.byteLength
-      }
+      const merged = concatByteChunks(chunks)
 
       const b64 = uint8ArrayToBase64(merged)
       try {
@@ -1126,12 +1116,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       if (!streamedOk) {
         // No ready stream (a non-streaming provider, or a stream that failed to open), or a Doubao/Qwen stream
         // finish failed: send the recording after it ends
-        const merged = new Uint8Array(totalBytes)
-        let offset = 0
-        for (const buf of this.pcmBuffers) {
-          merged.set(new Uint8Array(buf), offset)
-          offset += buf.byteLength
-        }
+        const merged = concatByteChunks(this.pcmBuffers)
         // Context words are dropped only by Deepgram. Every other engine gets the plain piece, byte for byte as before.
         const leadingContextMs = startOpts.leadingContextMs ?? 0
         const usesLeadingContext = leadingContextMs > 0 && asrProvider === 'deepgram'

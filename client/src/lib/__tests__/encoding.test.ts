@@ -1,5 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { uint8ArrayToBase64 } from '../encoding'
+import { base64ToUint8Array, uint8ArrayToBase64 } from '../encoding'
+
+describe('base64ToUint8Array', () => {
+  it('decodes an empty string to an empty array', () => {
+    expect(base64ToUint8Array('')).toEqual(new Uint8Array(0))
+  })
+
+  it('decodes a known vector', () => {
+    expect(base64ToUint8Array('aGVsbG8=')).toEqual(new Uint8Array([104, 101, 108, 108, 111]))
+  })
+
+  it('round-trips with uint8ArrayToBase64', () => {
+    const bytes = createDeterministicBytes(1_000, 0xdec0_de)
+    expect(base64ToUint8Array(uint8ArrayToBase64(bytes))).toEqual(bytes)
+  })
+
+  it('decodes whitespace-separated and unpadded input like atob', () => {
+    const hello = new Uint8Array([104, 101, 108, 108, 111])
+
+    expect(base64ToUint8Array('aGVs\n\tbG8=')).toEqual(hello)
+    expect(base64ToUint8Array('aGVsbG8')).toEqual(hello)
+  })
+
+  it('round-trips about two megabytes', () => {
+    const bytes = createDeterministicBytes(2_000_000, 0x1234_5678)
+    expectSameBytes(base64ToUint8Array(uint8ArrayToBase64(bytes)), bytes)
+  })
+
+  it('throws on invalid base64 input', () => {
+    expect(() => base64ToUint8Array('not base64!')).toThrow()
+  })
+})
 
 interface NodeBuffer {
   toString(encoding: 'base64'): string
@@ -29,6 +60,13 @@ function expectBase64Encoding(bytes: Uint8Array): void {
 
   expect(result).toBe(Buffer.from(bytes).toString('base64'))
   expect(Buffer.from(result, 'base64').equals(Buffer.from(bytes))).toBe(true)
+}
+
+function expectSameBytes(actual: Uint8Array, expected: Uint8Array): void {
+  expect(actual.length).toBe(expected.length)
+  for (let i = 0; i < expected.length; i++) {
+    if (actual[i] !== expected[i]) throw new Error(`byte ${i} differs: ${actual[i]} !== ${expected[i]}`)
+  }
 }
 
 // The runtime may or may not ship Uint8Array.prototype.toBase64, so each suite pins it explicitly.

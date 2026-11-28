@@ -5,7 +5,16 @@ vi.mock('../bridge', () => ({
 }))
 
 import { appendDebugLog } from '../bridge'
-import { addRuntimeEvent, clearRuntimeEvents, getRuntimeEvents } from '../debugLog'
+import {
+  addAudioChunk,
+  addRuntimeEvent,
+  clearRuntimeEvents,
+  clearSessions,
+  getRuntimeEvents,
+  getSessionAudioBlob,
+  getSessions,
+  startSession,
+} from '../debugLog'
 
 describe('runtime event allowlist', () => {
   beforeEach(() => {
@@ -40,5 +49,39 @@ describe('runtime event allowlist', () => {
     addRuntimeEvent('warn', 'server', 'Anything went wrong')
 
     expect(getRuntimeEvents()).toHaveLength(1)
+  })
+})
+
+describe('session audio blob', () => {
+  beforeEach(() => {
+    clearSessions()
+    vi.mocked(appendDebugLog).mockClear()
+  })
+
+  it('returns null when the session has no audio or only a zero-length chunk', () => {
+    startSession()
+
+    expect(getSessionAudioBlob(getSessions()[0])).toBeNull()
+
+    addAudioChunk(new ArrayBuffer(0))
+    expect(getSessionAudioBlob(getSessions()[0])).toBeNull()
+  })
+
+  it('writes chunks into a WAV blob in order after the 44-byte header', async () => {
+    startSession()
+    addAudioChunk(new Uint8Array([1, 2, 3, 4]).buffer)
+    addAudioChunk(new Uint8Array([5, 6]).buffer)
+
+    const blob = getSessionAudioBlob(getSessions()[0])
+
+    expect(blob).not.toBeNull()
+    expect(blob!.size).toBe(44 + 6)
+    const bytes = new Uint8Array(await blob!.arrayBuffer())
+    const view = new DataView(bytes.buffer)
+    expect(String.fromCharCode(...bytes.slice(0, 4))).toBe('RIFF')
+    expect(String.fromCharCode(...bytes.slice(8, 12))).toBe('WAVE')
+    expect(String.fromCharCode(...bytes.slice(36, 40))).toBe('data')
+    expect(view.getUint32(40, true)).toBe(6)
+    expect(Array.from(bytes.slice(44))).toEqual([1, 2, 3, 4, 5, 6])
   })
 })

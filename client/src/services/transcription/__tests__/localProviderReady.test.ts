@@ -11,6 +11,7 @@ vi.mock('../../debugLog', () => ({ addRuntimeEvent: (...args: unknown[]) => runt
 
 import { LocalProvider } from '../LocalProvider'
 import { DEFAULT_LOCAL_MODEL_ID } from '../../localModelStatus'
+import { uint8ArrayToBase64 } from '@/lib/encoding'
 
 /** 让 getSetting 返回选中的模型 id，其余键给默认值 */
 function settings(modelId: string) {
@@ -137,12 +138,20 @@ describe('LocalProvider 的就绪判定', () => {
     await provider.connect({})
     expect(provider.isReady()).toBe(true)
     provider.start({ runId: 1 })
-    provider.sendAudio(new ArrayBuffer(16_000))
+    const first = new Uint8Array(8_000)
+    const second = new Uint8Array(8_000)
+    for (let i = 0; i < first.length; i++) first[i] = i & 0xff
+    for (let i = 0; i < second.length; i++) second[i] = (i + 0x80) & 0xff
+    const audio = new Uint8Array(first.length + second.length)
+    audio.set(first, 0)
+    audio.set(second, first.length)
+    provider.sendAudio(first.buffer)
+    provider.sendAudio(second.buffer)
     provider.stop()
 
     await vi.waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('local_transcribe', {
-        audioB64: expect.any(String),
+        audioB64: uint8ArrayToBase64(audio),
         modelId: DEFAULT_LOCAL_MODEL_ID,
         language: 'auto',
         accelerator: 'auto',
