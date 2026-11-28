@@ -18,6 +18,8 @@ interface AiResult {
   elapsed_ms: number
 }
 
+// The dictation UI gives up after 8s. A reasoning response that outlives this falls back
+// to raw ASR regardless of the native output-token cap, so wall time is the effective ceiling.
 const CLIENT_AI_TIMEOUT_MS = 8_000
 let streamSequence = 0
 

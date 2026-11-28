@@ -127,7 +127,7 @@ export const DEFAULTS: Record<string, unknown> = {
   'cloudAi.apiUrl': '',
   'cloudAi.apiKey': '',
   'cloudAi.model': '',
-  // OpenAI-only request tuning mirrored from the active profile. Empty means "send nothing";
+  // Request tuning mirrored from the active profile when the selected provider accepts it. Empty means "send nothing";
   // allowed values live in REASONING_EFFORT_OPTIONS / SERVICE_TIER_OPTIONS in aiProviderCatalog.ts.
   'cloudAi.reasoningEffort': '',
   'cloudAi.serviceTier': '',

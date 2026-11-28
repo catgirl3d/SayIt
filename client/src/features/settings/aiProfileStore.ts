@@ -2,7 +2,7 @@
 //
 // Two sets of keys with strictly separate responsibilities:
 //   1. The list itself — `cloudAi.profiles` + `cloudAi.activeProfileId`; only this page reads them.
-//   2. The runtime copy — `cloudAi.provider / apiUrl / apiKey / model` plus the OpenAI-only
+//   2. The runtime copy — `cloudAi.provider / apiUrl / apiKey / model` plus the request
 //      `cloudAi.reasoningEffort / serviceTier` tuning. It is consumed by the recording pipeline
 //      (CloudAPIProvider, LocalProvider), history re-runs, the diagnostics page, and feedback
 //      reporting. Those consumers read only these flat keys; **the contract must not change shape**.
@@ -147,8 +147,8 @@ export function loadAiProfiles(): Promise<AiProfileState> {
 
 /**
  * Commit the list, selection and runtime mirror together. No profile clears the runtime
- * keys so downstream code skips AI. Tuning is mirrored only when the selected endpoint
- * accepts it, preventing a provider switch from leaking fields the new endpoint rejects.
+ * keys so downstream code skips AI. Tuning is mirrored only when the selected provider
+ * exposes it, preventing a provider switch from leaking fields the new endpoint rejects.
  */
 async function saveAiProfilesUnlocked(state: AiProfileState): Promise<void> {
   const active = resolveActiveProfile(state.profiles, state.activeId)

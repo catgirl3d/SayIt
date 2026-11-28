@@ -10,6 +10,9 @@ Ukrainian translation: [CHANGELOG.uk.md](CHANGELOG.uk.md).
 #### Desktop Client
 - The About page now lets you browse the release notes of earlier versions, including offline.
 
+#### AI Providers
+- Reasoning effort is now selectable for the generic OpenAI-compatible preset, OpenRouter, Groq, DeepSeek, and Qwen, in addition to OpenAI and OpenCode Go. No reasoning effort is sent until a level is chosen, so an untouched generic preset behaves as before; DeepSeek and Qwen enable thinking for a selected level and keep it off when "none" is chosen.
+
 ### Fixed
 #### Desktop Client
 - The "Interface animations" switch now also turns off the fade-in of the overlay and the import-complete notice.

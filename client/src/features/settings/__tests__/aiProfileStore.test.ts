@@ -63,8 +63,17 @@ describe('runtime tuning mirror', () => {
     expect(storedSettings.get('cloudAi.serviceTier')).toBe('')
   })
 
+  it('mirrors reasoning effort but not service tier for openai_compat', async () => {
+    const active = profile('openai_compat', { reasoningEffort: 'minimal', serviceTier: 'priority' })
+
+    await saveAiProfiles({ profiles: [active], activeId: active.id })
+
+    expect(storedSettings.get('cloudAi.reasoningEffort')).toBe('minimal')
+    expect(storedSettings.get('cloudAi.serviceTier')).toBe('')
+  })
+
   it('clears tuning keys when the active profile provider does not accept them', async () => {
-    const stale = profile('deepseek', { reasoningEffort: 'high', serviceTier: 'priority' })
+    const stale = profile('doubao', { reasoningEffort: 'high', serviceTier: 'priority' })
 
     await saveAiProfiles({ profiles: [stale], activeId: stale.id })
 

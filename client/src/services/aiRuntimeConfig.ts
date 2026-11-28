@@ -13,8 +13,8 @@ export interface RuntimeAiConfig {
   apiKey: string
   model: string
   /**
-   * OpenAI-only request tuning values. The request builder omits them for other
-   * providers and when no value is set.
+   * Request tuning values. The request builder omits them for providers that do not
+   * accept the field and when no value is set.
    */
   reasoningEffort: string
   serviceTier: string

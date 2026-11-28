@@ -68,7 +68,7 @@ import {
   profileSubtitle,
   profileTitle,
   providerLabel,
-  REASONING_EFFORT_OPTIONS,
+  reasoningEffortOptions,
   resolveActiveProfile,
   SERVICE_TIER_OPTIONS,
   supportsReasoningEffort,
@@ -324,6 +324,8 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
   })
 
   const draftProvider = findProvider(draft?.provider ?? '')
+  const draftSupportsReasoning = supportsReasoningEffort(draft?.provider ?? '')
+  const draftSupportsServiceTier = supportsServiceTier(draft?.provider ?? '')
   const draftNeedsKey = !draftProvider.keyless
   const draftUrlError = draft ? checkApiUrl(draft.apiUrl) : ''
   const draftKeyHint = draft && draftNeedsKey ? checkAiKeyFormat(draft.provider, draft.apiKey) : ''
@@ -566,7 +568,14 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
     if (draftIsNew) setDraftModels(next.models)
     else setModelInput(next.models[0] ?? '')
     setAvailableModels([])
-    setDraft({ ...draft, provider: next.provider, apiUrl: next.apiUrl, apiKey: next.apiKey, check: undefined })
+    setDraft({
+      ...draft,
+      provider: next.provider,
+      apiUrl: next.apiUrl,
+      apiKey: next.apiKey,
+      reasoningEffort: next.reasoningEffort,
+      check: undefined,
+    })
     setNotice(null)
   }
 
@@ -1138,12 +1147,13 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
                 {draftIsNew && <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ai.multiModelHint')}</p>}
               </div>
 
-              {/* Request tuning, per capability. Hidden for providers whose endpoints would
-                  reject the field — generic OpenAI-compatible endpoints may reject unknown
-                  body fields, and OpenCode Zen/Go has no service tiers. */}
-              {(supportsReasoningEffort(draft.provider) || supportsServiceTier(draft.provider)) && (
-                <div className="grid grid-cols-2 gap-3">
-                  {supportsReasoningEffort(draft.provider) && (
+              {/* Request tuning, per capability. Hidden for providers without a verified
+                  reasoning control; a generic OpenAI-compatible endpoint gets the field only
+                  after a level is chosen, so an untouched profile keeps its old request body.
+                  OpenCode Zen/Go has no service tiers. */}
+              {(draftSupportsReasoning || draftSupportsServiceTier) && (
+                <div className={cn('grid gap-3', draftSupportsReasoning && draftSupportsServiceTier && 'grid-cols-2')}>
+                  {draftSupportsReasoning && (
                     <div>
                       <span id="ai-reasoning-effort-label" className="mb-1 block text-sm text-muted-foreground">
                         {t('ai.reasoningEffort')}
@@ -1154,13 +1164,13 @@ export default function AIProviderSection({ renderHeader = defaultHeader }: AIPr
                         labelledBy="ai-reasoning-effort-label"
                         options={[
                           { value: '', label: t('ai.tuningUnset') },
-                          ...REASONING_EFFORT_OPTIONS.map((value) => ({ value, label: value })),
+                          ...reasoningEffortOptions(draft.provider).map((value) => ({ value, label: value })),
                         ]}
                       />
                       <p className="mt-1 text-[11px] text-muted-foreground">{t('ai.reasoningEffortHint')}</p>
                     </div>
                   )}
-                  {supportsServiceTier(draft.provider) && (
+                  {draftSupportsServiceTier && (
                     <div>
                       <span id="ai-service-tier-label" className="mb-1 block text-sm text-muted-foreground">
                         {t('ai.serviceTier')}

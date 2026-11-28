@@ -262,9 +262,10 @@ export interface AiProfile {
   apiKey: string
   model: string
   /**
-   * OpenAI-only request tuning. Only the openai preset renders and sends these:
-   * generic OpenAI-compatible endpoints may reject unknown body fields, so they never
-   * leave for any other provider. Undefined = the provider decides.
+   * Request tuning. Rendered for providers with a reasoning control; a generic
+   * OpenAI-compatible endpoint receives `reasoning_effort` only after the user selects a
+   * level, so an untouched profile keeps its previous request body. Undefined = the
+   * provider decides (some presets disable reasoning for dictation speed).
    */
   reasoningEffort?: string
   serviceTier?: string
@@ -273,7 +274,7 @@ export interface AiProfile {
 }
 
 /**
- * Reasoning effort values offered by the openai and opencode_go presets; API literals, not UI copy.
+ * Reasoning effort values offered by providers with a level control; API literals, not UI copy.
  *
  * The set is model-dependent (verified against developers.openai.com, 2026-10): a model may
  * accept only a subset, and rejects the rest with HTTP 400 listing its valid levels — GPT-6
@@ -294,15 +295,66 @@ export const REASONING_EFFORT_OPTIONS = ['none', 'minimal', 'low', 'medium', 'hi
 export const SERVICE_TIER_OPTIONS = ['auto', 'default', 'priority', 'fast'] as const
 
 /**
- * Whether a provider's endpoint accepts the `reasoning_effort` request field.
- * opencode_go is verified live against https://opencode.ai/zen/go (2026-10-07): its
- * chat/completions gateway accepts the field for GLM, DeepSeek, and Kimi models.
+ * Whether the editor exposes a `reasoning_effort` control and the runtime may send it.
+ *
+ * Verified per endpoint: OpenAI and OpenCode Zen/Go (live probe, 2026-10-07); OpenRouter
+ * (`reasoning_effort` is documented alongside its nested `reasoning` object); Groq
+ * (`reasoning_effort` for Qwen/GPT-OSS/Muse models); DeepSeek (`reasoning_effort` maps its
+ * levels; thinking is enabled only when an effort is selected); QwenCloud (`reasoning_effort`
+ * with `enable_thinking`). The generic OpenAI-compatible preset is opt-in: the field is sent
+ * only when the user selects a level, so existing profiles keep their unchanged body.
+ *
+ * Keep the provider list in sync with `REASONING_EFFORT_PROVIDERS` in
+ * `client/src-tauri/src/providers/ai_openai_compat.rs`: the editor and the native wire
+ * guard are separate layers, and both must reject endpoints that do not accept the field.
  */
 export function supportsReasoningEffort(provider: string): boolean {
-  return provider === 'openai' || provider === 'opencode_go'
+  return [
+    'openai',
+    'opencode_go',
+    'openai_compat',
+    'openrouter',
+    'groq',
+    'deepseek',
+    'qwen',
+  ].includes(provider)
 }
 
-/** Whether a provider's endpoint accepts the `service_tier` request field. OpenCode Zen/Go has no tiers. */
+/**
+ * Levels the editor offers for one provider.
+ *
+ * The shared set is the OpenAI-documented list. Groq's documented enum omits `minimal` and
+ * `max`; `default` is represented by "not set" (no field sent), so the filter below offers
+ * none/low/medium/high/xhigh as the union of Groq's model-specific sets. Filtering here keeps
+ * the editor from offering a value that rejects regardless of the model; model-specific
+ * subsets remain the provider's authority.
+ */
+export function reasoningEffortOptions(provider: string): readonly string[] {
+  if (provider === 'groq') {
+    return REASONING_EFFORT_OPTIONS.filter((value) => value !== 'minimal' && value !== 'max')
+  }
+  return REASONING_EFFORT_OPTIONS
+}
+
+/**
+ * Normalize a stored or selected effort for one provider.
+ *
+ * Returns undefined for a value outside the provider's offered enum. Unsupported providers
+ * keep any globally valid value so switching away and back does not lose the user's choice;
+ * it is simply never sent.
+ */
+export function normalizeReasoningEffort(provider: string, value: string | undefined): string | undefined {
+  const effort = value?.trim() ?? ''
+  if (!(REASONING_EFFORT_OPTIONS as readonly string[]).includes(effort)) return undefined
+  if (supportsReasoningEffort(provider) && !reasoningEffortOptions(provider).includes(effort)) return undefined
+  return effort
+}
+
+/**
+ * Whether a provider's endpoint accepts the `service_tier` request field. OpenCode Zen/Go has no
+ * tiers. Keep in sync with `SERVICE_TIER_PROVIDERS` in
+ * `client/src-tauri/src/providers/ai_openai_compat.rs`.
+ */
 export function supportsServiceTier(provider: string): boolean {
   return provider === 'openai'
 }
@@ -311,7 +363,9 @@ export function supportsServiceTier(provider: string): boolean {
  * Build the `ai_config.extra` wire payload for one profile.
  *
  * Returns undefined when the provider supports neither knob or nothing is set, so profiles
- * that never touched tuning keep sending the exact request body they always did.
+ * that never touched tuning keep sending the exact request body they always did. The native
+ * request builder decides the wire shape per provider (DeepSeek/Qwen also toggle thinking,
+ * and they treat `none` as "thinking off" instead of sending an effort).
  */
 function buildAiExtra(
   provider: string,
@@ -319,7 +373,9 @@ function buildAiExtra(
   serviceTier?: string,
 ): Record<string, string> | undefined {
   const extra: Record<string, string> = {}
-  const effort = supportsReasoningEffort(provider) ? reasoningEffort?.trim() : ''
+  const effort = supportsReasoningEffort(provider)
+    ? normalizeReasoningEffort(provider, reasoningEffort) ?? ''
+    : ''
   const tier = supportsServiceTier(provider) ? serviceTier?.trim() : ''
   if (effort) extra.reasoning_effort = effort
   if (tier) extra.service_tier = tier
@@ -507,21 +563,22 @@ export function parseProfiles(raw: unknown): AiProfile[] {
     while (used.has(id)) id = `${id}-${index}`
     used.add(id)
 
-    // Tuning values are validated against the catalog's offered set: a value that is no
-    // longer offered (a removed tier) or was hand-edited would stay invisible in the editor
-    // and keep failing the request, so it is dropped here instead of lingering.
-    const reasoningEffort = text(source.reasoningEffort).trim()
+    // Tuning values are validated against the provider's offered set: a value that is no
+    // longer offered (a removed tier, or a level this provider's enum rejects) would stay
+    // invisible in the editor and keep failing the request, so it is dropped or normalized
+    // here instead of lingering.
+    const provider = text(source.provider) || AI_PROVIDERS[0].value
+    const reasoningEffort = normalizeReasoningEffort(provider, text(source.reasoningEffort))
     const serviceTier = text(source.serviceTier).trim()
-    const keepReasoningEffort = (REASONING_EFFORT_OPTIONS as readonly string[]).includes(reasoningEffort)
     const keepServiceTier = (SERVICE_TIER_OPTIONS as readonly string[]).includes(serviceTier)
 
     out.push({
       id,
-      provider: text(source.provider) || AI_PROVIDERS[0].value,
+      provider,
       apiUrl: text(source.apiUrl),
       apiKey: text(source.apiKey),
       model: text(source.model),
-      ...(keepReasoningEffort ? { reasoningEffort } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(keepServiceTier ? { serviceTier } : {}),
       check: parseCheck(source.check, source.latencyMs, finite),
     })
@@ -624,6 +681,8 @@ export interface ProviderSwitchResult {
   apiUrl: string
   apiKey: string
   models: string[]
+  /** The current level normalized to the target provider's offered set, or undefined when it rejects it. */
+  reasoningEffort?: string
 }
 
 /**
@@ -637,6 +696,9 @@ export interface ProviderSwitchResult {
  * Model names left over from the provider's own preset (its examples and its recommendations) are
  * dropped, not swapped for the target's preset: a model id of one provider is meaningless on another,
  * and no preset is seeded any more.
+ *
+ * The selected reasoning level follows the target provider's offered set: a value it rejects is
+ * dropped, so the switch cannot leave an invisible invalid level behind.
  */
 export function applyProviderSwitch(
   draft: AiProfile,
@@ -659,6 +721,7 @@ export function applyProviderSwitch(
     apiUrl: urlBoilerplate ? previous?.apiUrl || to.defaultUrl : draft.apiUrl,
     apiKey: draft.apiKey.trim() === '' || keySeeded ? previous?.apiKey ?? '' : draft.apiKey,
     models: modelsBoilerplate ? [] : models,
+    reasoningEffort: normalizeReasoningEffort(nextProvider, draft.reasoningEffort),
   }
 }
 
