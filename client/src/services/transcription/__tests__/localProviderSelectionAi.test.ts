@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getDefault } from '../../defaults'
 
 const invokeMock = vi.fn()
 const getSettingMock = vi.fn()
@@ -15,7 +16,7 @@ describe('LocalProvider selection-edit service', () => {
     invokeMock.mockReset()
     getSettingMock.mockReset()
     getSettingMock.mockImplementation((key: string, fallback: unknown) =>
-      Promise.resolve(key === 'localAsr.modelId' ? 'sensevoice-small-gguf' : fallback))
+      Promise.resolve(key === 'localAsr.modelId' ? 'sensevoice-small-gguf' : getDefault(key, fallback)))
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === 'list_downloaded_models') return Promise.resolve([{ id: 'sensevoice-small-gguf', complete: true }])
       if (cmd === 'local_transcribe') return Promise.resolve({ text: 'make this shorter', elapsed_ms: 12 })
@@ -27,6 +28,10 @@ describe('LocalProvider selection-edit service', () => {
   it('sends the frozen selection-edit service with the polish request', async () => {
     const provider = new LocalProvider()
     await provider.connect({})
+    expect(invokeMock).toHaveBeenCalledWith('preload_local_model', {
+      modelId: 'sensevoice-small-gguf',
+      accelerator: 'auto',
+    })
     provider.start({
       runId: 5,
       selectionAiConfig: {
@@ -57,7 +62,7 @@ describe('LocalProvider empty recognition', () => {
     getSettingMock.mockReset()
     runtimeEvents.addRuntimeEvent.mockReset()
     getSettingMock.mockImplementation((key: string, fallback: unknown) =>
-      Promise.resolve(key === 'localAsr.modelId' ? 'sensevoice-small-gguf' : fallback))
+      Promise.resolve(key === 'localAsr.modelId' ? 'sensevoice-small-gguf' : getDefault(key, fallback)))
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === 'list_downloaded_models') return Promise.resolve([{ id: 'sensevoice-small-gguf', complete: true }])
       if (cmd === 'local_transcribe') return Promise.resolve({ text: '  ', elapsed_ms: 12 })

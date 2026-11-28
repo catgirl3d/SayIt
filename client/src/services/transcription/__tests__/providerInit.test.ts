@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getDefault } from '../../defaults'
 
 const getSetting = vi.hoisted(() => vi.fn())
 const addRuntimeEvent = vi.hoisted(() => vi.fn())
@@ -15,7 +16,7 @@ describe('provider initialization', () => {
   })
 
   it('defaults to local when workMode is not saved', async () => {
-    getSetting.mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    getSetting.mockImplementation(async (key: string, fallback: unknown) => getDefault(key, fallback))
 
     await initProviderFromStore()
 

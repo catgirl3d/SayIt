@@ -56,10 +56,10 @@ export class ServerProvider implements TranscriptionProvider {
     this.callbacks = callbacks
     const [storedSource, customProvider, customUrl, customKey, customModel] = await Promise.all([
       loadServerAiSource(),
-      getSetting('cloudAi.provider', '') as Promise<string>,
-      getSetting('cloudAi.apiUrl', '') as Promise<string>,
-      getSetting('cloudAi.apiKey', '') as Promise<string>,
-      getSetting('cloudAi.model', '') as Promise<string>,
+      getSetting<string>('cloudAi.provider'),
+      getSetting<string>('cloudAi.apiUrl'),
+      getSetting<string>('cloudAi.apiKey'),
+      getSetting<string>('cloudAi.model'),
     ])
     this.sourceRoute = this.routeForSource(storedSource)
     this.customAiReady = assessAiConfig({

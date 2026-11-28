@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TranscriptionCallbacks, FinalResult, StartOptions, StopOptions } from '../types'
+import { getDefault } from '../../defaults'
 
 type ServerAiSource = 'managed' | 'custom'
 
@@ -35,7 +36,7 @@ vi.mock('../../websocket', () => ({
 }))
 vi.mock('../serverAiSource', () => ({
   getRuntimeServerAiSource: () => mocks.runtimeSource,
-  loadServerAiSource: async () => mocks.getSetting('server.aiSource', 'managed'),
+  loadServerAiSource: async () => mocks.getSetting('server.aiSource'),
 }))
 vi.mock('../clientAiPolish', () => ({
   polishWithClientAi: (...args: unknown[]) => mocks.polishWithClientAi(...args),
@@ -70,7 +71,7 @@ describe('ServerProvider AI route snapshots', () => {
       if (key === 'cloudAi.apiUrl') return 'http://127.0.0.1:11434'
       if (key === 'cloudAi.apiKey') return ''
       if (key === 'cloudAi.model') return 'fixture-model'
-      return fallback
+      return getDefault(key, fallback)
     })
     mocks.connect.mockReset().mockImplementation(async (callbacks: TranscriptionCallbacks) => {
       wireCallbacks = callbacks
@@ -250,7 +251,7 @@ describe('ServerProvider AI route snapshots', () => {
       if (key === 'cloudAi.apiUrl') return 'https://api.openai.com/v1'
       if (key === 'cloudAi.apiKey') return ''
       if (key === 'cloudAi.model') return ''
-      return fallback
+      return getDefault(key, fallback)
     })
     mocks.polishWithClientAi.mockResolvedValue({
       llmText: 'Edited',
@@ -291,7 +292,7 @@ describe('ServerProvider AI route snapshots', () => {
       if (key === 'cloudAi.apiUrl') return 'http://127.0.0.1:11434'
       if (key === 'cloudAi.apiKey') return ''
       if (key === 'cloudAi.model') return ''
-      return fallback
+      return getDefault(key, fallback)
     })
     const onReady = vi.fn()
     const provider = new ServerProvider()
@@ -310,7 +311,7 @@ describe('ServerProvider AI route snapshots', () => {
       if (key === 'cloudAi.apiUrl') return 'https://api.openai.com'
       if (key === 'cloudAi.apiKey') return 'sk-key'
       if (key === 'cloudAi.model') return ''
-      return fallback
+      return getDefault(key, fallback)
     })
     const onReady = vi.fn()
     const provider = new ServerProvider()
