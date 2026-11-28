@@ -72,7 +72,7 @@ export function onWebDavBackupChange(cb: (state: WebDavBackupState) => void) {
 
 /** 从设置读回上次结果（Rust 侧在每次备份后写入）。 */
 export async function refreshLastResult(): Promise<WebDavLastResult | null> {
-  const value = await getSetting<WebDavLastResult | null>('webdav.lastResult', null).catch(() => null)
+  const value = await getSetting<WebDavLastResult | null>('webdav.lastResult').catch(() => null)
   const lastResult = value && typeof value === 'object' ? value : null
   setState({ lastResult })
   return lastResult
@@ -124,25 +124,25 @@ export async function runBackupNow(trigger: 'manual' | 'schedule'): Promise<WebD
 
 /** 到点了吗。读设置而不是缓存，用户改了间隔立刻生效。 */
 async function shouldBackupNow(): Promise<boolean> {
-  const enabled = await getSetting('webdav.enabled', false).catch(() => false)
+  const enabled = await getSetting<boolean>('webdav.enabled').catch(() => false)
   if (!enabled) return false
 
   // 地址或凭证没配完就别去打包：打完才发现传不上去纯属白烧一次 CPU 和磁盘。
   const [url, username, password] = await Promise.all([
-    getSetting('webdav.url', '').catch(() => ''),
-    getSetting('webdav.username', '').catch(() => ''),
-    getSetting('webdav.password', '').catch(() => ''),
+    getSetting<string>('webdav.url').catch(() => ''),
+    getSetting<string>('webdav.username').catch(() => ''),
+    getSetting<string>('webdav.password').catch(() => ''),
   ])
   if (!url.trim() || !username.trim() || !password) return false
 
   const now = Date.now()
-  const lastAttemptAt = await getSetting(KEY_LAST_ATTEMPT_AT, 0).catch(() => 0)
-  const lastBackupAt = await getSetting(KEY_LAST_BACKUP_AT, 0).catch(() => 0)
+  const lastAttemptAt = await getSetting<number>(KEY_LAST_ATTEMPT_AT).catch(() => 0)
+  const lastBackupAt = await getSetting<number>(KEY_LAST_BACKUP_AT).catch(() => 0)
 
   // 上次尝试失败（尝试比成功新）→ 走退避，别每 15 分钟撞一次限流。
   if (lastAttemptAt > lastBackupAt && now - lastAttemptAt < FAILURE_BACKOFF_MS) return false
 
-  const intervalHours = await getSetting('webdav.intervalHours', 24).catch(() => 24)
+  const intervalHours = await getSetting<number>('webdav.intervalHours').catch(() => 24)
   const intervalMs = Math.max(1, intervalHours) * 60 * 60 * 1000
   // lastBackupAt 为 0 = 从没成功备份过，开启后第一次检查就该跑。
   return now - lastBackupAt >= intervalMs
@@ -171,14 +171,14 @@ export async function startWebDavBackupService(): Promise<void> {
   // 静默吞掉，表现成「自动备份从来没跑过」且不留痕迹。
   try {
     await refreshLastResult()
-    const enabled = await getSetting('webdav.enabled', false).catch(() => false)
+    const enabled = await getSetting<boolean>('webdav.enabled').catch(() => false)
     // 无条件记一条：排查时先看这行在不在，不在就说明服务压根没启动。
     addRuntimeEvent('info', 'webdav', 'backup service starting', {
       enabled,
-      intervalHours: await getSetting('webdav.intervalHours', 24).catch(() => 24),
-      includeHistory: await getSetting('webdav.includeHistory', false).catch(() => false),
-      includeAudio: await getSetting('webdav.includeAudio', false).catch(() => false),
-      lastBackupAt: await getSetting(KEY_LAST_BACKUP_AT, 0).catch(() => 0),
+      intervalHours: await getSetting<number>('webdav.intervalHours').catch(() => 24),
+      includeHistory: await getSetting<boolean>('webdav.includeHistory').catch(() => false),
+      includeAudio: await getSetting<boolean>('webdav.includeAudio').catch(() => false),
+      lastBackupAt: await getSetting<number>(KEY_LAST_BACKUP_AT).catch(() => 0),
     })
 
     if (firstCheckTimer === null) {
