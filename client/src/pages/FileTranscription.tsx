@@ -72,6 +72,39 @@ function VoiceEngineLink({ label, className }: { label: string; className?: stri
   )
 }
 
+function ErrorRetry({
+  message,
+  onRetry,
+  disabled,
+  linkLabel,
+}: {
+  message: string
+  onRetry: () => void
+  disabled: boolean
+  linkLabel?: string
+}) {
+  const t = useT()
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2 text-sm text-destructive">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span className="flex-1">{message}</span>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-8"
+        onClick={onRetry}
+        disabled={disabled}
+      >
+        {t('common.retry')}
+      </Button>
+      {linkLabel !== undefined && <VoiceEngineLink label={linkLabel} />}
+    </div>
+  )
+}
+
 function parentDirectory(path: string): string {
   const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   if (separator === 2 && path[1] === ':') return path.slice(0, 3)
@@ -601,41 +634,17 @@ export default function FileTranscription() {
                     {t('files.settingsLoading')}
                   </div>
                 ) : settingsError ? (
-                  <div className="space-y-2">
-                    <div className="flex items-start gap-2 text-sm text-destructive">
-                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span className="flex-1">{settingsError}</span>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8"
-                      onClick={() => void retryJobOptions()}
-                      disabled={retryingJobOptions}
-                    >
-                      {t('common.retry')}
-                    </Button>
-                  </div>
+                  <ErrorRetry
+                    message={settingsError}
+                    onRetry={() => void retryJobOptions()}
+                    disabled={retryingJobOptions}
+                  />
                 ) : jobOptions?.modelsError ? (
-                  <div className="space-y-2">
-                    <div className="flex items-start gap-2 text-sm text-destructive">
-                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span className="flex-1">
-                        {t('files.settingsFailed')}: {jobOptions.modelsError}
-                      </span>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8"
-                      onClick={() => void retryJobOptions()}
-                      disabled={retryingJobOptions}
-                    >
-                      {t('common.retry')}
-                    </Button>
-                  </div>
+                  <ErrorRetry
+                    message={`${t('files.settingsFailed')}: ${jobOptions.modelsError}`}
+                    onRetry={() => void retryJobOptions()}
+                    disabled={retryingJobOptions}
+                  />
                 ) : models.length === 0 ? (
                   <Feedback
                     tone="warning"
@@ -669,42 +678,18 @@ export default function FileTranscription() {
                   {t('files.cloudProfilesLoading')}
                 </div>
               ) : settingsError ? (
-                <div className="space-y-2">
-                  <div className="flex items-start gap-2 text-sm text-destructive">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span className="flex-1">{settingsError}</span>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8"
-                    onClick={() => void retryJobOptions()}
-                    disabled={retryingJobOptions}
-                  >
-                    {t('common.retry')}
-                  </Button>
-                </div>
+                <ErrorRetry
+                  message={settingsError}
+                  onRetry={() => void retryJobOptions()}
+                  disabled={retryingJobOptions}
+                />
               ) : jobOptions?.cloudProfilesError ? (
-                <div className="space-y-2">
-                  <div className="flex items-start gap-2 text-sm text-destructive">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span className="flex-1">
-                      {t('files.cloudProfilesFailed')}: {jobOptions.cloudProfilesError}
-                    </span>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8"
-                    onClick={() => void retryJobOptions()}
-                    disabled={retryingJobOptions}
-                  >
-                    {t('common.retry')}
-                  </Button>
-                  <VoiceEngineLink label={t('files.openCloudSettings')} />
-                </div>
+                <ErrorRetry
+                  message={`${t('files.cloudProfilesFailed')}: ${jobOptions.cloudProfilesError}`}
+                  onRetry={() => void retryJobOptions()}
+                  disabled={retryingJobOptions}
+                  linkLabel={t('files.openCloudSettings')}
+                />
               ) : cloudProfiles.length === 0 ? (
                 <Feedback
                   tone="warning"
