@@ -30,7 +30,7 @@ export async function loadSelectionAiConfig(
 ): Promise<SelectionAiConfig | null> {
   if (!textContext?.selectedText || textContext.selectionTruncated) return null
   try {
-    const profileId = await getSetting(CONTEXT_SELECTION_AI_PROFILE_KEY, '')
+    const profileId = await getSetting<string>(CONTEXT_SELECTION_AI_PROFILE_KEY)
     if (!profileId) return null
     const { profiles } = await loadAiProfiles()
     const profile = profiles.find((item) => item.id === profileId)

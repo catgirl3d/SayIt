@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { getDefault } from '../../defaults'
 
 // 这些依赖都会走 Tauri IPC，测试里替换掉
 const invokeMock = vi.fn()
@@ -13,10 +14,10 @@ import { LocalProvider } from '../LocalProvider'
 import { DEFAULT_LOCAL_MODEL_ID } from '../../localModelStatus'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 
-/** 让 getSetting 返回选中的模型 id，其余键给默认值 */
+/** Make getSetting return the selected model id; every other key resolves to its default. */
 function settings(modelId: string) {
   getSettingMock.mockImplementation((key: string, fallback: unknown) =>
-    Promise.resolve(key === 'localAsr.modelId' ? modelId : fallback),
+    Promise.resolve(key === 'localAsr.modelId' ? modelId : getDefault(key, fallback)),
   )
 }
 

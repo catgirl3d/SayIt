@@ -851,7 +851,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
       // Whether to enable live streaming display for this session: read the setting directly (single source
       // of truth, so a stale recorder cache cannot decide), fall back to this start's snapshot, and require the
       // current provider to be actually ready under its current configuration (qwen_realtime needs a WorkspaceId).
-      const settingOn = Boolean(await getSetting('streamingDisplayEnabled', false))
+      const settingOn = Boolean(await getSetting<boolean>('streamingDisplayEnabled'))
       if (!this.isRunCurrent(runId)) return
       const realtime = (settingOn || Boolean(startOpts.streamingDisplay)) && isStreamingDisplayReady(asrProvider, qwenWorkspaceId)
       addRuntimeEvent('info', 'cloud_api', 'Streaming display decision', { asrProvider, settingOn, startOpt: Boolean(startOpts.streamingDisplay), hasWorkspace: Boolean(qwenWorkspaceId), realtime, runId })

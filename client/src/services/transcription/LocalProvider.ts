@@ -51,7 +51,7 @@ export class LocalProvider extends BufferedProvider {
     // does not mean the model is unusable — the real failure will surface at
     // recognition with a concrete reason, so treat the provider as ready.
     try {
-      const accelerator = (await getSetting('localAsr.accelerator', 'auto')) as string
+      const accelerator = await getSetting<string>('localAsr.accelerator')
       await invoke<string>('preload_local_model', { modelId, accelerator })
     } catch (err) {
       addRuntimeEvent('warn', 'local', 'Local model preload failed; provider remains marked ready', {
@@ -77,7 +77,7 @@ export class LocalProvider extends BufferedProvider {
       const modelId = await getSelectedLocalModelId()
       if (!this.isRunCurrent(runId)) return
       const language = startOpts?.language || 'auto'
-      const accelerator = await getSetting('localAsr.accelerator', 'auto')
+      const accelerator = await getSetting<string>('localAsr.accelerator')
       if (!this.isRunCurrent(runId)) return
 
       const result = await invoke<{ text: string; elapsed_ms: number }>('local_transcribe', {

@@ -11,7 +11,7 @@ function normalizeServerAiSource(value: unknown): ServerAiSource {
 
 /** Reads the persisted source without touching the runtime value, for callers that only need to know it. */
 export async function readStoredServerAiSource(): Promise<ServerAiSource> {
-  return normalizeServerAiSource(await getSetting(SERVER_AI_SOURCE_KEY, 'managed'))
+  return normalizeServerAiSource(await getSetting(SERVER_AI_SOURCE_KEY))
 }
 
 /**

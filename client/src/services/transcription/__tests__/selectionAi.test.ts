@@ -68,7 +68,7 @@ describe('loadSelectionAiConfig', () => {
     store.getSetting.mockResolvedValue('')
     expect(await loadSelectionAiConfig(selectionContext())).toBeNull()
     expect(store.getSetting).toHaveBeenCalledTimes(1)
-    expect(store.getSetting).toHaveBeenCalledWith(CONTEXT_SELECTION_AI_PROFILE_KEY, '')
+    expect(store.getSetting).toHaveBeenCalledWith(CONTEXT_SELECTION_AI_PROFILE_KEY)
     expect(profileStore.loadAiProfiles).not.toHaveBeenCalled()
   })
 

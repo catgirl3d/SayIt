@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TranscriptionCallbacks } from '../types'
+import { getDefault } from '../../defaults'
 
 const mocks = vi.hoisted(() => ({
   getSetting: vi.fn(),
@@ -83,7 +84,7 @@ describe('ServerProvider audio batching', () => {
     packets = []
     packetBuffers = []
     wireCallbacks = undefined
-    mocks.getSetting.mockReset().mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    mocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => getDefault(key, fallback))
     mocks.connect.mockReset().mockImplementation(async (callbacks: TranscriptionCallbacks) => {
       wireCallbacks = callbacks
     })

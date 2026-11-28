@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getDefault } from '../../defaults'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -56,7 +57,7 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
       if (key === 'cloudAsr.provider') return 'openai_transcribe'
       if (key === 'cloudAsr.apiKey') return 'stale-runtime-key'
       if (key === 'cloudAsr.appId') return ''
-      return fallback
+      return getDefault(key, fallback)
     })
     mocks.invoke.mockImplementation(async (command: string) => (
       command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
@@ -178,7 +179,9 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
   })
 
   it('uses a recovered live connection warning without a second buffered recognition', async () => {
-    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => key === 'streamingDisplayEnabled' ? true : fallback)
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'streamingDisplayEnabled' ? true : getDefault(key, fallback)
+    ))
     mocks.loadActiveAsrProfile.mockResolvedValue({ id: 'dg', provider: 'deepgram', model: 'nova-3', apiKey: 'key', deepgramKeytermsEnabled: true })
     mocks.invoke.mockImplementation(async (command: string) => {
       if (command === 'deepgram_stream_open') return 'deepgram_keyterm_limit'
@@ -210,7 +213,9 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
   })
 
   it('does not launch a third attempt when a live keyterm-limit retry fails before stop', async () => {
-    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => key === 'streamingDisplayEnabled' ? true : fallback)
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'streamingDisplayEnabled' ? true : getDefault(key, fallback)
+    ))
     mocks.loadActiveAsrProfile.mockResolvedValue({ id: 'dg', provider: 'deepgram', model: 'nova-3', apiKey: 'key', deepgramKeytermsEnabled: true })
     let rejectOpen!: (value: unknown) => void
     mocks.invoke.mockImplementation(async (command: string) => {
@@ -699,7 +704,7 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
 
   it('streams Deepgram through its own transport and stamps the catalog model', async () => {
     mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'streamingDisplayEnabled' ? true : fallback
+      key === 'streamingDisplayEnabled' ? true : getDefault(key, fallback)
     ))
     mocks.loadActiveAsrProfile.mockResolvedValue({
       id: 'deepgram-account',
@@ -750,6 +755,9 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
   })
 
   it('transcribes a completed Deepgram segment without opening a live socket when captions are off', async () => {
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
+      key === 'streamingDisplayEnabled' ? false : getDefault(key, fallback)
+    ))
     mocks.loadActiveAsrProfile.mockResolvedValue({
       id: 'deepgram-account', provider: 'deepgram', apiKey: 'deepgram-key',
       appId: '', model: 'nova-3', omniPrompt: '',
@@ -762,6 +770,11 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
 
     expect(provider.start({ runId: 14, language: 'en', disableAi: true })).toBe(true)
     provider.sendAudio(new ArrayBuffer(16000))
+    await vi.waitFor(() => {
+      expect(mocks.addRuntimeEvent.mock.calls.some((call) => call[2] === 'Streaming display decision')).toBe(true)
+    })
+    const decisionCall = mocks.addRuntimeEvent.mock.calls.find((call) => call[2] === 'Streaming display decision')
+    expect(decisionCall?.[3]).toEqual(expect.objectContaining({ settingOn: false, startOpt: false, realtime: false }))
     expect(provider.stop()).toBe(true)
     await done
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -781,7 +794,7 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
 
   it('keeps subtitle segment runs on the HTTP path even when live captions are enabled', async () => {
     mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'streamingDisplayEnabled' ? true : fallback
+      key === 'streamingDisplayEnabled' ? true : getDefault(key, fallback)
     ))
     mocks.loadActiveAsrProfile.mockResolvedValue({
       id: 'deepgram-account', provider: 'deepgram', apiKey: 'deepgram-key',
@@ -809,7 +822,7 @@ describe('CloudAPIProvider selected-profile snapshots', () => {
 
   it('falls back to the buffered HTTP path when a Deepgram stream send fails', async () => {
     mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'streamingDisplayEnabled' ? true : fallback
+      key === 'streamingDisplayEnabled' ? true : getDefault(key, fallback)
     ))
     mocks.loadActiveAsrProfile.mockResolvedValue({
       id: 'deepgram-account', provider: 'deepgram', apiKey: 'deepgram-key',
@@ -1896,7 +1909,7 @@ describe('CloudAPIProvider leading context', () => {
     mocks.invoke.mockReset()
     mocks.loadActiveAsrProfile.mockReset()
     mocks.getSetting.mockReset()
-    mocks.getSetting.mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => getDefault(key, fallback))
     mocks.invoke.mockImplementation(async (command: string) => (
       command === 'cloud_transcribe' ? { text: 'recognized', elapsed_ms: 24 } : undefined
     ))
@@ -1965,7 +1978,7 @@ describe('CloudAPIProvider leading context', () => {
       provider = new CloudAPIProvider(),
     ) {
       mocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
-        key === 'streamingDisplayEnabled' ? true : fallback
+        key === 'streamingDisplayEnabled' ? true : getDefault(key, fallback)
       ))
       mocks.invoke.mockImplementation(async (command: string) => {
         if (command === 'cloud_transcribe') return { text: 'recognized', elapsed_ms: 24 }

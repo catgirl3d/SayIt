@@ -90,10 +90,10 @@ export async function switchProvider(mode: WorkMode): Promise<TranscriptionProvi
   return currentProvider
 }
 
-/** 从 store 读取保存的 workMode 并初始化 */
+/** Read the saved workMode from the store and initialize the provider. */
 export async function initProviderFromStore(): Promise<void> {
   const fallbackMode = getDefault<WorkMode>('workMode')
-  const stored = await getSetting('workMode', fallbackMode)
+  const stored = await getSetting('workMode')
   const mode = (stored === 'server' || stored === 'cloud_api' || stored === 'local') ? stored : fallbackMode
   currentMode = mode
   currentProvider = createProvider(currentMode)
