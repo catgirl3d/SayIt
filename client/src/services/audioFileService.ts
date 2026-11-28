@@ -5,6 +5,7 @@
 import * as bridge from './bridge'
 import { concatByteChunks } from '@/lib/bytes'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
+import { PCM_BYTES_PER_SAMPLE, PCM_SAMPLE_RATE } from './pcmFormat'
 
 /**
  * Save PCM chunks (Int16 LE) as WAV file.
@@ -14,13 +15,13 @@ import { uint8ArrayToBase64 } from '@/lib/encoding'
 export async function saveRecordingAudio(
   id: string,
   chunks: ArrayBuffer[],
-  sampleRate = 16000,
+  sampleRate = PCM_SAMPLE_RATE,
 ): Promise<string | null> {
   const totalLen = chunks.reduce((sum, c) => sum + c.byteLength, 0)
   if (totalLen <= 0) return null
 
-  // 安全检查：PCM 数据量是否合理（16kHz 16bit mono = 32000 bytes/sec）
-  const expectedBytesPerSec = sampleRate * 2
+  // Safety check: is the PCM amount plausible (16 kHz 16-bit mono = 32000 bytes/sec)
+  const expectedBytesPerSec = sampleRate * PCM_BYTES_PER_SAMPLE
   const durationSec = totalLen / expectedBytesPerSec
   if (durationSec > 600) {
     console.warn('[audio] saveRecordingAudio: unusually long audio', {

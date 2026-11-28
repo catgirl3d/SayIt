@@ -26,7 +26,6 @@ export interface RuntimeEvent {
 const MAX_SESSIONS = 80
 const MAX_RUNTIME_EVENTS = 120
 const MAX_MESSAGES_PER_SESSION = 40
-const DEFAULT_PCM_SAMPLE_RATE = 16000
 const MAX_AUDIO_BYTES_PER_SESSION = 256 * 1024
 const MAX_AUDIO_BYTES_TOTAL = 2 * 1024 * 1024
 const ENABLE_INFO_CONSOLE = false
@@ -98,6 +97,7 @@ let runtimeEvents: RuntimeEvent[] = []
 
 import { appendDebugLog } from './bridge'
 import { concatByteChunks } from '@/lib/bytes'
+import { PCM_SAMPLE_RATE } from './pcmFormat'
 
 function mirrorToMainLog(payload: unknown) {
   if (!shouldMirrorPayload(payload)) return
@@ -186,7 +186,7 @@ export function startSession(opts?: { systemPrompt?: string }) {
     id: sessionId,
     startTime: Date.now(),
     systemPrompt: opts?.systemPrompt,
-    sampleRate: DEFAULT_PCM_SAMPLE_RATE,
+    sampleRate: PCM_SAMPLE_RATE,
     messages: [],
     audioChunks: [],
   }
@@ -273,10 +273,10 @@ export function getSessionAudioBlob(session: DebugSession): Blob | null {
   const pcm = concatByteChunks(session.audioChunks)
   if (pcm.byteLength === 0) return null
 
-  const sessionRate = Number(session.sampleRate || DEFAULT_PCM_SAMPLE_RATE)
+  const sessionRate = Number(session.sampleRate || PCM_SAMPLE_RATE)
   const sampleRate = Number.isFinite(sessionRate) && sessionRate >= 8000
     ? Math.round(sessionRate)
-    : DEFAULT_PCM_SAMPLE_RATE
+    : PCM_SAMPLE_RATE
 
   return createWavBlob(pcm, sampleRate, 16, 1)
 }

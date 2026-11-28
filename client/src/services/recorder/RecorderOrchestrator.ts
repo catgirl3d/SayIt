@@ -25,6 +25,7 @@ import {
 } from '../store'
 import { setActivePresetKnown } from '../../stores/activePreset'
 import { addRuntimeEvent } from '../debugLog'
+import { PCM_BYTES_PER_SAMPLE, PCM_SAMPLE_RATE } from '../pcmFormat'
 import { saveRecordingAudio } from '../audioFileService'
 import { loadActiveHotwords } from '../hotwords/settings'
 import { invoke } from '@tauri-apps/api/core'
@@ -1016,7 +1017,7 @@ export class RecorderOrchestrator {
   }
 
   private getAudioDurationSec() {
-    return this.audioSentSamples > 0 ? this.audioSentSamples / 16000 : 0
+    return this.audioSentSamples > 0 ? this.audioSentSamples / PCM_SAMPLE_RATE : 0
   }
 
   private resetToIdle(options?: ResetToIdleOptions) {
@@ -2104,7 +2105,7 @@ export class RecorderOrchestrator {
           if (this.audioSentSamples === 0) {
             console.log('[ptt-diag] first onData buffer', {
               byteLength: buffer.byteLength,
-              samples: buffer.byteLength / 2,
+              samples: buffer.byteLength / PCM_BYTES_PER_SAMPLE,
             })
           }
           this.recordedChunks.push(buffer.slice(0))

@@ -7,6 +7,7 @@ import { PCMResampler } from '../../../server/web/pcm-processor.js'
 import pcmProcessorSource from '../../../server/web/pcm-processor.js?raw'
 import { addRuntimeEvent } from './debugLog'
 import { DEFAULT_MIC_BOOST, resolveMicBoost } from './defaults'
+import { PCM_BYTES_PER_SECOND, PCM_SAMPLE_RATE } from './pcmFormat'
 import { getSetting } from './store'
 
 let audioCtx: AudioContext | null = null
@@ -18,13 +19,11 @@ let gainNode: GainNode | null = null
 let onAudioData: ((buffer: ArrayBuffer) => void) | null = null
 let onVolumeChange: ((volume: number) => void) | null = null
 let onPCMFrame: ((pcm: Int16Array) => void) | null = null
-let actualSampleRate = 16000
+let actualSampleRate = PCM_SAMPLE_RATE
 let firstPCMFrameLogged = false
 let firstRmsLogged = false
 let usingFallback = false
 let captureGeneration = 0
-
-const TARGET_SAMPLE_RATE = 16000
 
 /** The microphone endpoint that getUserMedia actually opened. */
 export interface ActiveMicrophoneInfo {
@@ -111,8 +110,8 @@ function createAudioContext() {
   // Not every WebView2/browser accepts the sampleRate option; otherwise fall back
   // to the original context creation path.
   for (const opts of [
-    { latencyHint: 'interactive', sampleRate: TARGET_SAMPLE_RATE, sinkId: { type: 'none' } },
-    { latencyHint: 'interactive', sampleRate: TARGET_SAMPLE_RATE },
+    { latencyHint: 'interactive', sampleRate: PCM_SAMPLE_RATE, sinkId: { type: 'none' } },
+    { latencyHint: 'interactive', sampleRate: PCM_SAMPLE_RATE },
     { latencyHint: 'interactive', sinkId: { type: 'none' } },
     { latencyHint: 'interactive' },
   ] as unknown as AudioContextOptions[]) {
@@ -157,14 +156,14 @@ async function teardownCapture() {
     await audioCtx.close().catch(() => { })
   }
   audioCtx = null
-  actualSampleRate = TARGET_SAMPLE_RATE
+  actualSampleRate = PCM_SAMPLE_RATE
 }
 
 /** Wire up ScriptProcessorNode as fallback when AudioWorklet fails */
 function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode, generation: number) {
   usingFallback = true
-  const resampler = new PCMResampler(ctx.sampleRate, TARGET_SAMPLE_RATE)
-  actualSampleRate = TARGET_SAMPLE_RATE
+  const resampler = new PCMResampler(ctx.sampleRate, PCM_SAMPLE_RATE)
+  actualSampleRate = PCM_SAMPLE_RATE
 
   // Disconnect worklet if it was connected
   if (workletNode) {
@@ -191,7 +190,7 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode, generat
       firstRmsLogged = true
       addRuntimeEvent('info', 'audio', 'First RMS received (ScriptProcessor)', {
         rms: Number(rms.toFixed(6)),
-        sampleRate: TARGET_SAMPLE_RATE,
+        sampleRate: PCM_SAMPLE_RATE,
       })
     }
     onVolumeChange?.(rms)
@@ -213,19 +212,19 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode, generat
           samples: pcm.length,
           peak,
           byteLength: pcmBuffer.byteLength,
-          sampleRate: TARGET_SAMPLE_RATE,
+          sampleRate: PCM_SAMPLE_RATE,
         })
         console.log('[audio-diag] first PCM frame (ScriptProcessor)', {
           samples: pcm.length,
           byteLength: pcmBuffer.byteLength,
           contextSampleRate: ctx.sampleRate,
-          targetSampleRate: TARGET_SAMPLE_RATE,
+          targetSampleRate: PCM_SAMPLE_RATE,
         })
       }
 
       if (totalPCMFrames % 100 === 0) {
         const elapsedSec = (performance.now() - captureStartTime) / 1000
-        const pcmDurationSec = (totalPCMBytes / 2) / 16000
+        const pcmDurationSec = totalPCMBytes / PCM_BYTES_PER_SECOND
         console.log('[audio-diag] PCM total (ScriptProcessor)', {
           frames: totalPCMFrames,
           totalBytes: totalPCMBytes,
@@ -246,7 +245,7 @@ function setupScriptProcessorFallback(ctx: AudioContext, src: AudioNode, generat
   addRuntimeEvent('info', 'audio', 'ScriptProcessorNode fallback activated', {
     bufferSize: 4096,
     inputSampleRate: ctx.sampleRate,
-    targetSampleRate: TARGET_SAMPLE_RATE,
+    targetSampleRate: PCM_SAMPLE_RATE,
   })
 }
 
@@ -290,7 +289,7 @@ function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode, generation: nu
     numberOfInputs: 1,
     numberOfOutputs: 0,
     processorOptions: {
-      targetRate: TARGET_SAMPLE_RATE,
+      targetRate: PCM_SAMPLE_RATE,
       inputRate: ctx.sampleRate,
     },
   })
@@ -298,8 +297,8 @@ function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode, generation: nu
     addRuntimeEvent('info', 'audio', 'AudioContext ready', {
     contextState: ctx.state,
     inputSampleRate: ctx.sampleRate,
-    targetSampleRate: TARGET_SAMPLE_RATE,
-    ratio: (ctx.sampleRate / TARGET_SAMPLE_RATE).toFixed(4),
+    targetSampleRate: PCM_SAMPLE_RATE,
+    ratio: (ctx.sampleRate / PCM_SAMPLE_RATE).toFixed(4),
   })
 
   let totalPCMBytes = 0
@@ -349,13 +348,13 @@ function setupAudioWorkletNode(ctx: AudioContext, src: AudioNode, generation: nu
           samples: pcmFrame.length,
           byteLength: pcmBuffer.byteLength,
           contextSampleRate: audioCtx?.sampleRate,
-          targetSampleRate: TARGET_SAMPLE_RATE,
+          targetSampleRate: PCM_SAMPLE_RATE,
           actualSampleRate,
         })
       }
       if (totalPCMFrames % 5000 === 0) {
         const elapsedSec = (performance.now() - captureStartTime) / 1000
-        const pcmDurationSec = (totalPCMBytes / 2) / 16000
+        const pcmDurationSec = totalPCMBytes / PCM_BYTES_PER_SECOND
         console.log('[audio-diag] PCM total', {
           frames: totalPCMFrames,
           totalBytes: totalPCMBytes,
@@ -418,7 +417,7 @@ export async function startCapture(
   onPCMFrame = onFrame ?? null
   firstPCMFrameLogged = false
   firstRmsLogged = false
-  actualSampleRate = TARGET_SAMPLE_RATE
+  actualSampleRate = PCM_SAMPLE_RATE
   usingFallback = false
 
   const constraints: MediaStreamConstraints = {
@@ -470,8 +469,8 @@ export async function startCapture(
     const ctx = createAudioContext()
     ensureCurrent()
     audioCtx = ctx
-    actualSampleRate = ctx.sampleRate || TARGET_SAMPLE_RATE
-    const nativeSixteenK = ctx.sampleRate === TARGET_SAMPLE_RATE
+    actualSampleRate = ctx.sampleRate || PCM_SAMPLE_RATE
+    const nativeSixteenK = ctx.sampleRate === PCM_SAMPLE_RATE
     console.log('[audio-diag] AudioContext created', {
       state: ctx.state,
       sampleRate: ctx.sampleRate,
@@ -481,7 +480,7 @@ export async function startCapture(
     // path was selected; check it first when diagnosing recognition accuracy.
     addRuntimeEvent('info', 'audio', nativeSixteenK ? 'AudioContext is natively 16 kHz; resampling skipped' : 'AudioContext is not 16 kHz; using linear resampling', {
       contextSampleRate: audioCtx.sampleRate,
-      targetSampleRate: TARGET_SAMPLE_RATE,
+      targetSampleRate: PCM_SAMPLE_RATE,
     })
 
     sourceNode = ctx.createMediaStreamSource(openedStream)
@@ -567,13 +566,13 @@ export async function stopCapture() {
   console.log('[audio-diag] stopCapture final summary', {
     contextSampleRate: finalCtxRate,
     actualSampleRate,
-    targetSampleRate: TARGET_SAMPLE_RATE,
+    targetSampleRate: PCM_SAMPLE_RATE,
     usingFallback,
   })
   addRuntimeEvent('info', 'audio', 'Capture stop summary', {
     contextSampleRate: finalCtxRate,
     actualSampleRate,
-    targetSampleRate: TARGET_SAMPLE_RATE,
+    targetSampleRate: PCM_SAMPLE_RATE,
     usingFallback,
   })
 

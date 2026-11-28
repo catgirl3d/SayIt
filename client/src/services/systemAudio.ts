@@ -26,6 +26,7 @@ import {
 import { buildSubtitlePrompt, RecentSpeech, SUBTITLE_CONTEXT_SOURCE, subtitleLanguageName } from './subtitleTranslation'
 import { SubtitleTranscriptJournal } from './subtitleTranscript'
 import { addRuntimeEvent } from './debugLog'
+import { PCM_BYTES_PER_SECOND } from './pcmFormat'
 import { describeProviderError } from '@/lib/errorMessages'
 import { base64ToUint8Array } from '@/lib/encoding'
 import {
@@ -182,7 +183,7 @@ interface PipelineFinishDetails {
 // After 5 seconds, annotate an unconfirmed stop so the UI explains the delay while cleanup continues.
 const LIVE_STOP_WATCHDOG_MS = 5_000
 // Bound queued PCM at 12 seconds (16,000 samples/s x 2 bytes x 12); drop the oldest speech when processing lags.
-const MAX_PENDING_BYTES = 16_000 * 2 * 12
+const MAX_PENDING_BYTES = PCM_BYTES_PER_SECOND * 12
 // Close the current speech segment after this receive inactivity interval.
 // This is 512 ms, or 16 frame periods at FRAME_MS = 32 ms.
 const FRAME_RECEIVE_GAP_MS = 512
