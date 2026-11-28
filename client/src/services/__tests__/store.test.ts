@@ -17,6 +17,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }))
 vi.mock('../bridge', () => bridge)
 
 import { clearStats, countHistory, EMPTY_USAGE_SUMMARY, estimateTypingTimeSec, getSetting, getStats, listHistory, recordUsage, setSetting } from '../store'
+import { getDefault } from '../defaults'
 
 describe('native app settings batch', () => {
   it('uses the registered transaction command and propagates a failed commit', async () => {
@@ -323,6 +324,22 @@ describe('WebDAV setting defaults', () => {
     await expect(getSetting<number>('webdav.intervalHours')).resolves.toBe(24)
     await expect(getSetting<number>('webdav.keepCount')).resolves.toBe(5)
     await expect(getSetting<boolean>('webdav.includeHistory')).resolves.toBe(false)
+  })
+})
+
+describe('local ASR model default', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('resolves a missing local model to the DEFAULTS value regardless of an inline fallback', async () => {
+    bridge.storeGet.mockResolvedValue(null)
+
+    const expected = getDefault<string>('localAsr.modelId')
+
+    expect(expected).not.toBe('')
+    await expect(getSetting<string>('localAsr.modelId')).resolves.toBe(expected)
+    await expect(getSetting<string>('localAsr.modelId', '')).resolves.toBe(expected)
   })
 })
 

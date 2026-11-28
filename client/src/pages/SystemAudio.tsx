@@ -148,16 +148,16 @@ export default function SystemAudio() {
     let disposed = false
     void Promise.all([
       listSystemAudioDevices(),
-      getSetting<string>('systemAudio.deviceId', ''),
+      getSetting<string>('systemAudio.deviceId'),
       getSystemAudioSourceLanguage(),
       getSetting<SubtitleTargetLanguage>('systemAudio.targetLanguage', ''),
       getPromptPresets(),
-      getSetting<boolean>('systemAudio.debugPipeline', false),
-      getSetting<boolean>('systemAudio.asrOnlyTest', false),
-      getSetting<boolean>('systemAudio.deepgramLeadingContext', false),
+      getSetting<boolean>('systemAudio.debugPipeline'),
+      getSetting<boolean>('systemAudio.asrOnlyTest'),
+      getSetting<boolean>('systemAudio.deepgramLeadingContext'),
       getSystemAudioMaxSegmentSeconds(),
       getSystemAudioDualSubtitles(),
-      getSetting<boolean>('systemAudio.liveRecognitionEnabled', false).then((savedLiveRecognitionEnabled) => {
+      getSetting<boolean>('systemAudio.liveRecognitionEnabled').then((savedLiveRecognitionEnabled) => {
         if (!disposed) {
           setLiveRecognitionEnabled(savedLiveRecognitionEnabled)
           setLiveRecognitionReady(true)

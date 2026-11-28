@@ -216,15 +216,15 @@ const MAX_TRANSLATION_BACKLOG_MS = 12_000
 let sequence = Date.now()
 
 export async function getSystemAudioSourceLanguage(): Promise<SpeechInputLanguage> {
-  return normalizeSpeechInputLanguage(await getSetting('systemAudio.sourceLanguage', 'auto'))
+  return normalizeSpeechInputLanguage(await getSetting<SpeechInputLanguage>('systemAudio.sourceLanguage'))
 }
 
 export async function getSystemAudioDualSubtitles(): Promise<boolean> {
-  return (await getSetting('systemAudio.dualSubtitles', false)) === true
+  return (await getSetting<boolean>('systemAudio.dualSubtitles')) === true
 }
 
 export async function getSystemAudioMaxSegmentSeconds(): Promise<number> {
-  return normalizeSegmentSeconds(await getSetting('systemAudio.maxSegmentSec', DEFAULT_SEGMENT_SECONDS))
+  return normalizeSegmentSeconds(await getSetting<number>('systemAudio.maxSegmentSec'))
 }
 
 export function listSystemAudioDevices() {
@@ -576,8 +576,8 @@ export class SystemAudioSession {
           loadActiveHotwords(),
           getSystemAudioMaxSegmentSeconds(),
           getSystemAudioDualSubtitles(),
-          getSetting('systemAudio.liveRecognitionEnabled', false),
-          getSetting('systemAudio.deepgramLeadingContext', false),
+          getSetting<boolean>('systemAudio.liveRecognitionEnabled'),
+          getSetting<boolean>('systemAudio.deepgramLeadingContext'),
           getSetting<boolean>('systemAudio.transcriptEnabled'),
           getSetting<string>('systemAudio.transcriptDir'),
         ])
@@ -606,7 +606,7 @@ export class SystemAudioSession {
           this.startOptions = { systemPrompt: buildSubtitlePrompt(subtitleLanguageName(targetLanguage)), language, hotwords: [...hotwords], disableAi: false, aiMinDurationSec: 0, requireTranslation: true, disableStreaming: true, aiOutcomeLog: false }
         }
         this.provider = this.dependencies.getProvider()
-        this.localModelId = this.provider.mode === 'local' ? await getSetting('localAsr.modelId', '') : ''
+        this.localModelId = this.provider.mode === 'local' ? await getSetting<string>('localAsr.modelId') : ''
         this.liveRequested = liveRecognitionEnabled === true && typeof this.provider.openLive === 'function'
         this.liveSelected = false
         this.snapshot = { ...this.snapshot, liveRecognition: false }
