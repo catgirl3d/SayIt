@@ -749,8 +749,9 @@ describe('settings rows and dialogs', () => {
     const { loaded } = await renderRows()
 
     expect(loaded).not.toMatch(/<p role="alert"/)
-    expect(pageMocks.getSetting).not.toHaveBeenCalledWith('systemAudio.transcriptEnabled', expect.anything())
-    expect(pageMocks.getSetting).not.toHaveBeenCalledWith('systemAudio.transcriptDir', expect.anything())
+    const settingCalls = pageMocks.getSetting.mock.calls
+    expect(settingCalls.some(([key]) => key === 'systemAudio.transcriptEnabled')).toBe(false)
+    expect(settingCalls.some(([key]) => key === 'systemAudio.transcriptDir')).toBe(false)
   })
 
   it('renders the idle session bar with the mode badge inside the header', async () => {

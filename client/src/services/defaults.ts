@@ -99,6 +99,8 @@ export const DEFAULTS: Record<string, unknown> = {
   'systemAudio.debugPipeline': false,
   'systemAudio.asrOnlyTest': false,
   'systemAudio.deepgramLeadingContext': false, // Experimental: Deepgram batch pieces also carry the last second of the previous piece
+  'systemAudio.transcriptEnabled': false,
+  'systemAudio.transcriptDir': '', // Empty = the default Documents/SayIt/Subtitles folder, resolved by the backend
   // systemAudio.targetLanguage intentionally has no static default: it follows the interface locale (see SystemAudio.tsx).
 
   // ── Text insertion ──

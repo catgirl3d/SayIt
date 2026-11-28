@@ -577,8 +577,8 @@ export class SystemAudioSession {
           getSystemAudioDualSubtitles(),
           getSetting('systemAudio.liveRecognitionEnabled', false),
           getSetting('systemAudio.deepgramLeadingContext', false),
-          getSetting('systemAudio.transcriptEnabled', false),
-          getSetting<string>('systemAudio.transcriptDir', ''),
+          getSetting<boolean>('systemAudio.transcriptEnabled'),
+          getSetting<string>('systemAudio.transcriptDir'),
         ])
         if (generation !== this.generation) return
         this.plan = segmentPlan(maxSegmentSeconds)

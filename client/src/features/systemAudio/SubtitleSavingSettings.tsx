@@ -38,8 +38,8 @@ export default function SubtitleSavingSettings({ active, pending, onPendingChang
     // Both values load before the controls unlock: a missing folder would make "Open folder" open the
     // default folder instead of the configured one.
     void Promise.all([
-      getSetting<boolean>('systemAudio.transcriptEnabled', false),
-      getSetting<string>('systemAudio.transcriptDir', ''),
+      getSetting<boolean>('systemAudio.transcriptEnabled'),
+      getSetting<string>('systemAudio.transcriptDir'),
     ]).then(async ([savedEnabled, savedDir]) => {
       if (disposed) return
       setEnabled(savedEnabled)

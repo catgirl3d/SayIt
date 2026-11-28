@@ -1,6 +1,7 @@
 import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getDefault } from '@/services/defaults'
 import SubtitleSavingSettings from '../SubtitleSavingSettings'
 
 const mocks = vi.hoisted(() => ({
@@ -121,8 +122,8 @@ function resetHarness(settings: Record<string, unknown> = {}) {
   mocks.buttonProps.length = 0
   mocks.stateValues.length = 0
   mocks.stateCursor = 0
-  mocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
-    key in settings ? settings[key] : fallback
+  mocks.getSetting.mockReset().mockImplementation(async (key: string, fallback?: unknown) => (
+    key in settings ? settings[key] : getDefault(key, fallback)
   ))
   mocks.setSetting.mockReset().mockResolvedValue(undefined)
 }
@@ -238,8 +239,8 @@ describe('saving dialog', () => {
     let resolveTranscriptLoad!: (value: boolean) => void
     const pendingLoad = new Promise<boolean>((resolve) => { resolveTranscriptLoad = resolve })
     resetHarness()
-    mocks.getSetting.mockReset().mockImplementation((key: string, fallback: unknown) => (
-      key === 'systemAudio.transcriptEnabled' ? pendingLoad : Promise.resolve(fallback)
+    mocks.getSetting.mockReset().mockImplementation((key: string, fallback?: unknown) => (
+      key === 'systemAudio.transcriptEnabled' ? pendingLoad : Promise.resolve(getDefault(key, fallback))
     ))
 
     render()
