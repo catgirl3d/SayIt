@@ -22,6 +22,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getSetting } from '../store'
 import { restoreHotwordSpacing } from '../textPostProcess'
 import { addRuntimeEvent } from '../debugLog'
+import { PCM_BYTES_PER_SECOND, PCM_SAMPLE_RATE } from '../pcmFormat'
 import { resolveAiPolishRoute } from './aiPolicy'
 import { polishWithClientAi, skipPolish } from './clientAiPolish'
 import { logAiOutcome, outcomeToResultFields, resolveAiOutcome } from './aiOutcome'
@@ -500,7 +501,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
 
       const openOperation = this.invokeLiveNative(owner, 'deepgram_stream_open', {
         config: buildAsrProviderConfig(profile, normalizeSpeechInputLanguage(startOptions.language)),
-        sampleRate: 16000,
+        sampleRate: PCM_SAMPLE_RATE,
         hotwords: startOptions.hotwords ?? [],
         sessionId: owner.sessionId,
       }, LIVE_OPEN_STALL_MS, () => {
@@ -869,7 +870,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         addRuntimeEvent('info', 'cloud_api', 'Doubao streaming: connecting', { realtime })
         const open = await this.invokeNativeOpen(runId, 'doubao_stream_open', {
           config: { provider: 'doubao_v2', api_key: credentials.apiKey, app_id: credentials.appId },
-          sampleRate: 16000,
+          sampleRate: PCM_SAMPLE_RATE,
           hotwords: startOpts.hotwords ?? [],
           realtime,
         })
@@ -891,7 +892,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
           // The stream honors the same language payload as the buffered path, so an
           // explicit Russian/English choice is not lost when live captions are on.
           config: buildAsrProviderConfig(profile, normalizeSpeechInputLanguage(startOpts.language)),
-          sampleRate: 16000,
+          sampleRate: PCM_SAMPLE_RATE,
           hotwords: startOpts.hotwords ?? [],
         })
         if (!open.opened || !this.isRunCurrent(runId)) return
@@ -1016,7 +1017,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
         return
       }
 
-      const durationSec = (totalBytes / 2) / 16000
+      const durationSec = totalBytes / PCM_BYTES_PER_SECOND
       if (durationSec < 0.3) {
         addRuntimeEvent('info', 'cloud_api', 'Audio too short; skipped processing', { durationSec })
         this.teardownPartials()
@@ -1134,7 +1135,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
           ? await transcribeCustomAsr({
             profile,
             audioB64,
-            sampleRate: 16000,
+            sampleRate: PCM_SAMPLE_RATE,
             language: normalizeSpeechInputLanguage(startOpts.language),
             hotwords: startOpts.hotwords ?? [],
             isCurrent: () => this.isRunCurrent(runId),
@@ -1142,7 +1143,7 @@ export class CloudAPIProvider implements TranscriptionProvider {
           : await invoke<AsrResult>('cloud_transcribe', {
             request: {
               audio_b64: audioB64,
-              sample_rate: 16000,
+              sample_rate: PCM_SAMPLE_RATE,
               asr_config: asrConfig,
               hotwords: startOpts.hotwords ?? [],
               ...(usesLeadingContext ? { leading_context_ms: leadingContextMs } : {}),

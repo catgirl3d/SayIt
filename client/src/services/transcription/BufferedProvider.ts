@@ -7,6 +7,7 @@
 import { concatByteChunks } from '@/lib/bytes'
 import { uint8ArrayToBase64 } from '@/lib/encoding'
 import { addRuntimeEvent } from '../debugLog'
+import { PCM_BYTES_PER_SECOND } from '../pcmFormat'
 import type {
   TranscriptionProvider,
   TranscriptionCallbacks,
@@ -119,7 +120,7 @@ export abstract class BufferedProvider implements TranscriptionProvider {
       const merged = concatByteChunks(this.pcmBuffers)
       this.pcmBuffers = []
 
-      const durationSec = (totalBytes / 2) / 16000
+      const durationSec = totalBytes / PCM_BYTES_PER_SECOND
       if (durationSec < 0.3) {
       addRuntimeEvent('info', this.mode, 'Audio too short; skipped processing', { durationSec })
         if (this.isRunCurrent(runId)) {
