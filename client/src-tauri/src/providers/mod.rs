@@ -27,3 +27,14 @@ pub mod reasoning;
 pub mod registry;
 pub mod types;
 pub mod wav;
+
+/// A model response cut off by the output token limit. It stays distinct from an empty
+/// completion in diagnostics, but both preserve the raw recognition text on the client.
+pub(crate) fn truncated_completion_error(scope: &str) -> String {
+    diag::fail_code(
+        scope,
+        "truncated_completion",
+        "truncated_completion",
+        "AI response was truncated by the output token limit".to_string(),
+    )
+}

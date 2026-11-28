@@ -18,6 +18,8 @@ pub struct LineStep {
     pub delta: Option<String>,
     /// The protocol signalled end-of-stream on this line.
     pub done: bool,
+    /// Why the model stopped (`stop`, `length`, ...), when the line reports it.
+    pub finish_reason: Option<String>,
 }
 
 /// Incremental parser scaffolding shared by SSE and NDJSON chat streams.
@@ -31,6 +33,8 @@ pub struct LineTextStream<P> {
     pub text: String,
     /// Set once the protocol end marker has been seen.
     pub done: bool,
+    /// Last non-null stop reason reported by the protocol.
+    pub finish_reason: Option<String>,
     parse_line: P,
 }
 
@@ -40,6 +44,7 @@ impl<P: FnMut(&str) -> LineStep> LineTextStream<P> {
             buffer: Vec::new(),
             text: String::new(),
             done: false,
+            finish_reason: None,
             parse_line,
         }
     }
@@ -81,6 +86,9 @@ impl<P: FnMut(&str) -> LineStep> LineTextStream<P> {
         if step.done {
             self.done = true;
         }
+        if let Some(reason) = step.finish_reason {
+            self.finish_reason = Some(reason);
+        }
         match step.delta {
             Some(delta) if !delta.is_empty() => {
                 self.text.push_str(&delta);
@@ -91,6 +99,13 @@ impl<P: FnMut(&str) -> LineStep> LineTextStream<P> {
     }
 }
 
+/// Text and terminal state produced by one drained response stream.
+pub struct StreamedText {
+    pub text: String,
+    /// Why the model stopped, when the stream reported it (`length` means truncated).
+    pub finish_reason: Option<String>,
+}
+
 /// Drain a streamed HTTP response through a [`LineTextStream`], forwarding only
 /// the user-visible text (reasoning blocks stay hidden) to `on_delta`.
 pub async fn drain_text_stream<P>(
@@ -98,7 +113,7 @@ pub async fn drain_text_stream<P>(
     scope: &str,
     parse_line: P,
     mut on_delta: impl FnMut(&str),
-) -> Result<String, String>
+) -> Result<StreamedText, String>
 where
     P: FnMut(&str) -> LineStep,
 {
@@ -127,7 +142,10 @@ where
         }
     }
     stream.finish(&mut on_visible);
-    Ok(stream.text)
+    Ok(StreamedText {
+        text: stream.text,
+        finish_reason: stream.finish_reason,
+    })
 }
 
 #[cfg(test)]
@@ -141,11 +159,13 @@ mod tests {
             return LineStep {
                 delta: None,
                 done: true,
+                ..LineStep::default()
             };
         }
         LineStep {
             delta: Some(line.to_string()),
             done: false,
+            ..LineStep::default()
         }
     }
 
@@ -161,6 +181,19 @@ mod tests {
         assert_eq!(stream.text, "onetwo");
         assert_eq!(snapshots, vec!["one".to_string(), "onetwo".to_string()]);
         assert!(stream.done);
+    }
+
+    #[test]
+    fn keeps_the_last_finish_reason_reported_by_the_stream() {
+        let mut stream = LineTextStream::new(|line: &str| LineStep {
+            delta: None,
+            done: false,
+            finish_reason: Some(line.to_string()),
+        });
+
+        stream.push(b"stop\nlength\n", &mut |_| {});
+
+        assert_eq!(stream.finish_reason.as_deref(), Some("length"));
     }
 
     #[test]

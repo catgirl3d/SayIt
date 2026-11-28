@@ -1,5 +1,5 @@
-// Ollama AI 供应商
-// 调用本地 Ollama 的 /api/generate 接口
+// Ollama AI provider.
+// Calls the local Ollama /api/generate endpoint.
 
 use super::diag;
 use super::line_stream::LineStep;
@@ -10,7 +10,7 @@ use std::time::Instant;
 
 const SCOPE: &str = "ai/ollama";
 
-/// 调用 Ollama 进行文本校对
+/// Call Ollama to proofread text.
 pub async fn polish(
     text: &str,
     config: &AiProviderConfig,
@@ -97,6 +97,10 @@ pub async fn polish(
             ),
         )
     })?;
+
+    if data.get("done_reason").and_then(|v| v.as_str()) == Some("length") {
+        return Err(super::truncated_completion_error(SCOPE));
+    }
 
     let raw_text = data.get("response").and_then(|v| v.as_str()).unwrap_or("");
     let result_text = strip_thinking(raw_text);
@@ -202,7 +206,12 @@ pub async fn polish_stream(
         .unwrap_or(false);
 
     let raw_text = if ndjson_stream {
-        super::line_stream::drain_text_stream(resp, SCOPE, ndjson_line_step, on_delta).await?
+        let streamed =
+            super::line_stream::drain_text_stream(resp, SCOPE, ndjson_line_step, on_delta).await?;
+        if streamed.finish_reason.as_deref() == Some("length") {
+            return Err(super::truncated_completion_error(SCOPE));
+        }
+        streamed.text
     } else {
         // A proxy may answer with one plain JSON object instead of an NDJSON stream.
         let body_text = resp.text().await.map_err(|e| {
@@ -223,6 +232,9 @@ pub async fn polish_stream(
                 ),
             )
         })?;
+        if data.get("done_reason").and_then(|v| v.as_str()) == Some("length") {
+            return Err(super::truncated_completion_error(SCOPE));
+        }
         data.get("response")
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -456,6 +468,10 @@ fn ndjson_line_step(line: &str) -> LineStep {
             .get("response")
             .and_then(|value| value.as_str())
             .map(str::to_string),
+        finish_reason: data
+            .get("done_reason")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -467,6 +483,7 @@ mod tests {
     const RESPONSE_MARKER: &str = "completion-payload-marker";
     const SAFE_COMPLETION_ERROR: &str =
         "sayit_error:empty_completion:AI returned no usable completion text";
+    const TRUNCATED_ERROR_PREFIX: &str = "sayit_error:truncated_completion:";
 
     /// Ollama streams one JSON object per line; the parser must assemble text across arbitrary
     /// chunk boundaries and stop at the `done` marker.
@@ -588,6 +605,66 @@ mod tests {
 
         assert_eq!(result.text, RESPONSE_MARKER);
         assert_eq!(delta_count, 0);
+        server.join().expect("loopback server completed");
+    }
+
+    /// Ollama reports a length stop in `done_reason`; a cut completion must fail instead of
+    /// returning partial text as the polished result.
+    #[tokio::test]
+    async fn length_stop_in_non_streaming_polish_is_a_safe_failure() {
+        let response_body = format!(
+            r#"{{"response":"{}","done":true,"done_reason":"length"}}"#,
+            RESPONSE_MARKER
+        );
+        let error = polish_response(&response_body, TEST_INPUT)
+            .await
+            .unwrap_err();
+
+        assert!(error.starts_with(TRUNCATED_ERROR_PREFIX), "{error}");
+        assert!(!error.contains(RESPONSE_MARKER), "{error}");
+    }
+
+    /// The same length stop arrives in the streamed NDJSON terminal line.
+    #[tokio::test]
+    async fn length_stop_in_streamed_ndjson_is_a_safe_failure() {
+        let ndjson_body = format!(
+            "{{\"response\":\"{}\",\"done\":false}}\n\
+             {{\"response\":\"\",\"done\":true,\"done_reason\":\"length\"}}\n",
+            RESPONSE_MARKER
+        );
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server_with_content_type(
+                200,
+                "application/x-ndjson",
+                ndjson_body,
+            );
+
+        let error = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(error.starts_with(TRUNCATED_ERROR_PREFIX), "{error}");
+        assert!(!error.contains(RESPONSE_MARKER), "{error}");
+        server.join().expect("loopback server completed");
+    }
+
+    /// A proxy may answer the streamed request with one plain JSON object; its `done_reason`
+    /// must go through the same truncation check.
+    #[tokio::test]
+    async fn length_stop_in_the_plain_json_fallback_is_a_safe_failure() {
+        let response_body = format!(
+            r#"{{"response":"{}","done":true,"done_reason":"length"}}"#,
+            RESPONSE_MARKER
+        );
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server(200, response_body);
+
+        let error = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(error.starts_with(TRUNCATED_ERROR_PREFIX), "{error}");
+        assert!(!error.contains(RESPONSE_MARKER), "{error}");
         server.join().expect("loopback server completed");
     }
 

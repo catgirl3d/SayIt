@@ -124,10 +124,13 @@ describe('client AI polish completion handling', () => {
     })
   })
 
-  it('classifies the backend empty-completion failure as an empty result', async () => {
+  it.each([
+    ['empty', 'sayit_error:empty_completion:AI returned no usable completion text', 'empty_result'],
+    ['truncated', 'sayit_error:truncated_completion:AI response was truncated by the output token limit', 'provider_error'],
+  ])('classifies a backend %s completion', async (_label, error, reason) => {
     boundaries.invoke.mockImplementation(async (command: string) => {
       if (command === 'cloud_polish') {
-        throw 'sayit_error:empty_completion:AI returned no usable completion text'
+        throw error
       }
       return undefined
     })
@@ -143,7 +146,7 @@ describe('client AI polish completion handling', () => {
       llmText: ASR_COMMAND,
       aiSource: 'custom',
       aiStatus: 'failed',
-      aiFailureReason: 'empty_result',
+      aiFailureReason: reason,
     })
   })
 

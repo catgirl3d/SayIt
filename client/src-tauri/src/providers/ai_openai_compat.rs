@@ -202,7 +202,20 @@ fn configure_request_tuning(body: &mut serde_json::Value, config: &AiProviderCon
     }
 }
 
-/// 调用 OpenAI 兼容接口进行文本校对
+/// A response that hit the output cap without a clean stop is incomplete even when the
+/// provider omits `finish_reason` — some gateways return null on a length stop. The cap is
+/// the budget this request actually sent, not a global constant.
+fn is_truncated_completion(
+    finish_reason: Option<&str>,
+    completion_tokens: Option<u64>,
+    max_tokens: u64,
+) -> bool {
+    finish_reason == Some("length")
+        || (finish_reason != Some("stop")
+            && completion_tokens.is_some_and(|used| used >= max_tokens))
+}
+
+/// Call an OpenAI-compatible endpoint to proofread text.
 pub async fn polish(
     text: &str,
     config: &AiProviderConfig,
@@ -286,6 +299,16 @@ pub async fn polish(
     }
 
     let (_, data) = super::connection::read_json_body(resp, SCOPE, &http_summary).await?;
+
+    let finish_reason = data
+        .pointer("/choices/0/finish_reason")
+        .and_then(serde_json::Value::as_str);
+    let completion_tokens = data
+        .pointer("/usage/completion_tokens")
+        .and_then(serde_json::Value::as_u64);
+    if is_truncated_completion(finish_reason, completion_tokens, max_tokens) {
+        return Err(super::truncated_completion_error(SCOPE));
+    }
 
     // Missing content is a silent failure: returning ASR text makes users think
     // proofreading succeeded even though the AI step never ran. Report the failure
@@ -406,13 +429,35 @@ pub async fn polish_stream(
         .map(|value| value.to_ascii_lowercase().contains("text/event-stream"))
         .unwrap_or(false);
 
-    let result_text = if event_stream {
-        super::line_stream::drain_text_stream(resp, SCOPE, sse_line_step, on_delta).await?
+    let (result_text, finish_reason, completion_tokens) = if event_stream {
+        let streamed =
+            super::line_stream::drain_text_stream(resp, SCOPE, sse_line_step, on_delta).await?;
+        (streamed.text, streamed.finish_reason, None)
     } else {
         // Some gateways ignore `stream` and answer with one plain completion; keep the final result.
         let (_, data) = super::connection::read_json_body(resp, SCOPE, &http_summary).await?;
-        extract_chat_completion_text(&data).unwrap_or_default()
+        (
+            extract_chat_completion_text(&data).unwrap_or_default(),
+            data.pointer("/choices/0/finish_reason")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            data.pointer("/usage/completion_tokens")
+                .and_then(serde_json::Value::as_u64),
+        )
     };
+
+    // A partial caption is worse than a failed translation: reject a length stop instead of
+    // streaming and settling cut text. SSE usage is not requested (no `stream_options`), so
+    // streamed truncation relies on the provider-reported finish_reason; the plain-JSON
+    // fallback still carries token usage and checks it against the request budget.
+    let truncated = if event_stream {
+        finish_reason.as_deref() == Some("length")
+    } else {
+        is_truncated_completion(finish_reason.as_deref(), completion_tokens, max_tokens)
+    };
+    if truncated {
+        return Err(super::truncated_completion_error(SCOPE));
+    }
 
     // Remove  thinking...</think> reasoning blocks emitted by models such as Qwen3.
     let cleaned = strip_thinking(&result_text);
@@ -841,23 +886,34 @@ fn sse_line_step(line: &str) -> LineStep {
         return LineStep {
             delta: None,
             done: true,
+            finish_reason: None,
         };
     }
+    let (delta, finish_reason) = extract_stream_event(payload);
     LineStep {
-        delta: Some(extract_stream_delta(payload).unwrap_or_default()),
+        delta,
         done: false,
+        finish_reason,
     }
 }
 
-/// Incremental text of one OpenAI-compatible stream event: `choices[0].delta.content`.
-fn extract_stream_delta(payload: &str) -> Option<String> {
-    let data: serde_json::Value = serde_json::from_str(payload).ok()?;
-    data.get("choices")?
-        .get(0)?
-        .get("delta")?
-        .get("content")?
-        .as_str()
-        .map(str::to_string)
+/// One OpenAI-compatible stream event: visible `choices[0].delta.content` and the
+/// terminal `choices[0].finish_reason`, when the event carries either.
+fn extract_stream_event(payload: &str) -> (Option<String>, Option<String>) {
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return (None, None);
+    };
+    let choice = data.get("choices").and_then(|choices| choices.get(0));
+    let delta = choice
+        .and_then(|choice| choice.get("delta"))
+        .and_then(|delta| delta.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let finish_reason = choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    (delta, finish_reason)
 }
 
 #[cfg(test)]
@@ -922,6 +978,17 @@ mod tests {
         assert_eq!(stream.text, "tail");
     }
 
+    /// One event may carry the last visible delta and the terminal finish reason together.
+    #[test]
+    fn extract_stream_event_reads_content_and_finish_reason_from_one_event() {
+        let (delta, finish_reason) = extract_stream_event(
+            r#"{"choices":[{"delta":{"content":"final"},"finish_reason":"stop"}]}"#,
+        );
+
+        assert_eq!(delta.as_deref(), Some("final"));
+        assert_eq!(finish_reason.as_deref(), Some("stop"));
+    }
+
     #[tokio::test]
     async fn streamed_polish_emits_partials_and_returns_the_final_text() {
         let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n\
@@ -949,6 +1016,31 @@ mod tests {
         let request =
             String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
         assert!(request.contains(r#""stream":true"#));
+    }
+
+    /// A streamed `length` stop must fail instead of letting live subtitles settle cut text.
+    #[tokio::test]
+    async fn streamed_length_stop_is_a_safe_failure() {
+        let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n\
+                        data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n\
+                        data: [DONE]\n\n";
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server_with_content_type(
+                200,
+                "text/event-stream",
+                sse_body.to_string(),
+            );
+
+        let error = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.starts_with("sayit_error:truncated_completion:"),
+            "{error}"
+        );
+        assert!(error.contains("truncated"), "{error}");
+        server.join().expect("loopback server completed");
     }
 
     /// Live subtitles must never receive reasoning: while the model is inside a `<think>` block the
@@ -1013,6 +1105,43 @@ mod tests {
         assert_eq!(result.text, RESPONSE_MARKER);
         assert_eq!(delta_count, 0);
         server.join().expect("loopback server completed");
+    }
+
+    /// A gateway that ignores `stream` answers with one plain JSON body; the fallback must use
+    /// the same truncation rules: a provider-reported length stop fails, and so does a null stop
+    /// that used the whole default output budget.
+    #[tokio::test]
+    async fn streamed_fallback_rejects_truncated_json_completions() {
+        for (label, finish_reason, completion_tokens) in [
+            ("length", Some("length"), None),
+            ("null at cap", None, Some(POLISH_DEFAULT_MAX_TOKENS)),
+        ] {
+            let mut response = serde_json::json!({
+                "choices": [{
+                    "message": { "content": RESPONSE_MARKER },
+                    "finish_reason": finish_reason
+                        .map_or(serde_json::Value::Null, |reason| serde_json::json!(reason)),
+                }],
+            });
+            if let Some(tokens) = completion_tokens {
+                response["usage"] = serde_json::json!({ "completion_tokens": tokens });
+            }
+            let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+                200,
+                response.to_string(),
+            );
+
+            let error = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {})
+                .await
+                .unwrap_err();
+
+            assert!(
+                error.starts_with("sayit_error:truncated_completion:"),
+                "{label}: {error}"
+            );
+            assert!(!error.contains(RESPONSE_MARKER), "{label}: {error}");
+            server.join().expect("loopback server completed");
+        }
     }
 
     fn polish_config(api_url: &str) -> AiProviderConfig {
@@ -1400,6 +1529,59 @@ mod tests {
         .unwrap_err();
 
         assert_safe_completion_error(&error);
+    }
+
+    /// A length stop, or a response that used the whole output budget without a clean
+    /// stop, must not be inserted as cleaned text. Some gateways leave `finish_reason`
+    /// null on a length stop, so the usage cap is the second signal.
+    #[tokio::test]
+    async fn truncated_completions_are_safe_failures() {
+        for (label, finish_reason, completion_tokens) in [
+            ("length", serde_json::json!("length"), 512),
+            (
+                "null at cap",
+                serde_json::json!(null),
+                POLISH_DEFAULT_MAX_TOKENS,
+            ),
+        ] {
+            let response_body = serde_json::json!({
+                "choices": [{
+                    "message": { "content": RESPONSE_MARKER },
+                    "finish_reason": finish_reason,
+                }],
+                "usage": { "completion_tokens": completion_tokens },
+            })
+            .to_string();
+
+            let error = polish_response(&response_body, TEST_INPUT)
+                .await
+                .unwrap_err();
+            assert!(
+                error.starts_with("sayit_error:truncated_completion:"),
+                "{label}: {error}"
+            );
+            assert!(error.contains("truncated"), "{label}: {error}");
+        }
+    }
+
+    /// Reaching the cap with an explicit clean stop is still a complete response; only a
+    /// missing or non-clean stop at the cap signals truncation.
+    #[tokio::test]
+    async fn clean_stop_at_the_cap_is_not_truncation() {
+        let response_body = serde_json::json!({
+            "choices": [{
+                "message": { "content": RESPONSE_MARKER },
+                "finish_reason": "stop",
+            }],
+            "usage": { "completion_tokens": POLISH_DEFAULT_MAX_TOKENS },
+        })
+        .to_string();
+
+        let result = polish_response(&response_body, TEST_INPUT)
+            .await
+            .expect("a clean stop at the cap is complete");
+
+        assert_eq!(result.text, RESPONSE_MARKER);
     }
 
     #[tokio::test]

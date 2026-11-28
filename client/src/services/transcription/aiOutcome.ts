@@ -68,9 +68,10 @@ export interface AiOutcome {
 }
 
 /**
- * Map one rejected custom-AI request to the reason the user sees. The Rust adapters reject an
- * empty completion with the stable `empty_completion` code instead of resolving with empty text,
- * so that case is classified here, not in the success path.
+ * Map one rejected custom-AI request to the reason the user sees. An empty completion uses the
+ * stable `empty_completion` code and gets the empty-result message; a truncated completion
+ * (`truncated_completion`) stays a provider error so the empty-result toast does not misreport
+ * it. Both preserve the raw recognition text on the client.
  */
 function classifyClientFailure(timedOut: boolean, emptyCompletion: boolean): AiFailureReason {
   if (timedOut) return 'timeout'
