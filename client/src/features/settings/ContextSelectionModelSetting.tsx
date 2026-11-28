@@ -6,8 +6,8 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { useT } from '@/i18n/useT'
 import { getSetting, setSetting } from '@/services/store'
 import { CONTEXT_SELECTION_AI_PROFILE_KEY } from '@/services/transcription/selectionAi'
-import { loadAiProfiles } from './aiProfileStore'
-import { isProfileComplete, profileSubtitle, profileTitle, type AiProfile } from './aiProviderCatalog'
+import { loadAiProfiles } from '@/services/settings/aiProfileStore'
+import { isProfileComplete, profileSubtitle, profileTitle, type AiProfile } from '@/services/settings/aiProviderCatalog'
 
 const helpIconClass = 'h-3.5 w-3.5 shrink-0 cursor-help text-muted-foreground/50'
 

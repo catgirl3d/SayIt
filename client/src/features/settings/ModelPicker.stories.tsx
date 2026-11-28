@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
 import { Button } from '@/components/ui/button'
 import { ModelPicker, RecommendedModels, type ModelPickerProps } from './ModelPicker'
-import type { RemoteModel } from './aiProviderCatalog'
+import type { RemoteModel } from '@/services/settings/aiProviderCatalog'
 
 const models = [
   { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', input_price_per_million: 3, output_price_per_million: 15 },

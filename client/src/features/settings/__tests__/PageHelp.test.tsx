@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { t } from '@/i18n'
 import { PageHelp } from '../PageHelp'
 import { AiServiceHelpContent, VoiceEngineHelpContent } from '../HelpContents'
-import { AI_PROVIDERS } from '../aiProviderCatalog'
+import { AI_PROVIDERS } from '@/services/settings/aiProviderCatalog'
 import { ASR_PLATFORMS } from '@/services/settings/asrProviderCatalog'
 
 const shellMocks = vi.hoisted(() => ({ open: vi.fn() }))

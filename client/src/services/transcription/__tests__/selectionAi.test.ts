@@ -16,7 +16,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('../../store', () => ({
   getSetting: (...args: unknown[]) => store.getSetting(...args),
 }))
-vi.mock('@/features/settings/aiProfileStore', () => ({
+vi.mock('@/services/settings/aiProfileStore', () => ({
   loadAiProfiles: (...args: unknown[]) => profileStore.loadAiProfiles(...args),
 }))
 vi.mock('../../debugLog', () => ({

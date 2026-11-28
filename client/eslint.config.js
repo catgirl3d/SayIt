@@ -30,5 +30,21 @@ export default [
       'prefer-const': ['error', { ignoreReadBeforeAssign: true }],
     },
   },
+  {
+    files: ['src/services/**/*.{ts,tsx}'],
+    ignores: [
+      'src/services/**/__tests__/**',
+      'src/services/**/*.test.{ts,tsx}',
+      'src/services/**/*.stories.tsx',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['@/features/**', '**/features/**'],
+          message: 'Services must not import from the features layer; move shared code into services or lib.',
+        }],
+      }],
+    },
+  },
   eslintConfigPrettier,
 ];

@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 import { setAiEnabled } from '@/stores/aiEnabled'
 import AIProviderSection from './AIProviderSection'
-import type { AiProfile } from './aiProviderCatalog'
+import type { AiProfile } from '@/services/settings/aiProviderCatalog'
 
 const profiles = [
   {

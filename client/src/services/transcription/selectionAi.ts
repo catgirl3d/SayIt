@@ -6,8 +6,8 @@
 // never be persisted to history, diagnostics or logs. The list is read through the queued
 // profile store, so this module can never observe a half-written service list.
 
-import type { AiProfile } from '@/features/settings/aiProviderCatalog'
-import { loadAiProfiles } from '@/features/settings/aiProfileStore'
+import type { AiProfile } from '@/services/settings/aiProviderCatalog'
+import { loadAiProfiles } from '@/services/settings/aiProfileStore'
 import type { TextContext } from '@/types/appContext'
 import { addRuntimeEvent } from '../debugLog'
 import { getSetting } from '../store'

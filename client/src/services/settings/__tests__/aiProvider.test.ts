@@ -35,7 +35,7 @@ import {
   supportsServiceTier,
   type AiProfile,
   type LegacyProviderData,
-} from '../aiProviderCatalog'
+} from '@/services/settings/aiProviderCatalog'
 import { setLocale } from '@/i18n'
 
 /**

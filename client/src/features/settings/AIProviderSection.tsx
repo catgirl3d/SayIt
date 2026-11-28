@@ -76,8 +76,8 @@ import {
   type AiProfile,
   type AiProfileCheck,
   type RemoteModel,
-} from './aiProviderCatalog'
-import { loadAiProfiles, saveAiProfiles } from './aiProfileStore'
+} from '@/services/settings/aiProviderCatalog'
+import { loadAiProfiles, saveAiProfiles } from '@/services/settings/aiProfileStore'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { helpIconClass, inputClass, linkClass } from './formStyles'
 import { ModelPicker, RecommendedModels } from './ModelPicker'

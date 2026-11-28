@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, within } from 'storybook/test'
 import AIServicePage from './AIServicePage'
-import type { AiProfile } from './aiProviderCatalog'
+import type { AiProfile } from '@/services/settings/aiProviderCatalog'
 
 const openAiProfile = {
   id: 'ai-storybook-openai',

@@ -123,7 +123,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // Service" page writes them as one whole block on enable/save — never change one of them
   // individually elsewhere (a historical bug: the model was switched but the URL and key
   // still belonged to the previous provider).
-  'cloudAi.provider': 'openai_compat', // Allowed values come from AI_PROVIDERS in features/settings/aiProviderCatalog.ts.
+  'cloudAi.provider': 'openai_compat', // Allowed values come from AI_PROVIDERS in services/settings/aiProviderCatalog.ts.
   'cloudAi.apiUrl': '',
   'cloudAi.apiKey': '',
   'cloudAi.model': '',
