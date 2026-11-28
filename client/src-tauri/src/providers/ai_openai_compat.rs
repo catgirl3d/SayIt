@@ -10,6 +10,23 @@ use std::time::Instant;
 
 const SCOPE: &str = "ai/openai-compat";
 
+/// Output budget for one cleanup request when the profile does not select a reasoning level.
+/// This is the historical budget, so untouched profiles keep the same request.
+const POLISH_DEFAULT_MAX_TOKENS: u64 = 1024;
+
+/// Output budget when the profile selects a reasoning level. Reasoning tokens share this
+/// budget on most providers, so 8K leaves room for a high-effort thought plus the short
+/// cleaned text; a response that reaches it without a clean stop is still treated as truncated.
+const POLISH_REASONING_MAX_TOKENS: u64 = 8192;
+
+/// Connection-test budget for profiles without a selected reasoning level: large enough for
+/// gateways that enforce a minimum and for the short "OK" answer.
+const TEST_MAX_TOKENS: u64 = 64;
+
+/// Connection-test budget with reasoning enabled. Thinking tokens share the output budget, so
+/// the visible reply needs room beyond the small probe.
+const TEST_REASONING_MAX_TOKENS: u64 = 2048;
+
 /// 共享客户端（带 User-Agent，缺了会被 nginx/WAF 网关拦成 403，见 `http_client`）
 fn http() -> &'static reqwest::Client {
     super::http_client::shared()
@@ -55,29 +72,58 @@ fn apply_provider_headers(
     req
 }
 
-/// 按供应商关闭校对场景不需要的思考模式。
+/// The reasoning effort selected for this profile, if any.
+fn requested_reasoning_effort(config: &AiProviderConfig) -> Option<&str> {
+    config
+        .extra
+        .get("reasoning_effort")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether the request should ask the model to reason. `none` is the explicit off switch;
+/// DeepSeek and Qwen disable their native thinking toggle instead of receiving a flat effort
+/// (see [`configure_request_tuning`]).
+fn reasoning_requested(config: &AiProviderConfig) -> bool {
+    requested_reasoning_effort(config).is_some_and(|effort| !effort.eq_ignore_ascii_case("none"))
+}
+
+/// Output budget for a cleanup request: the larger budget is used only when the profile asks
+/// the model to reason, so profiles without a selected level keep the historical request.
+fn polish_max_tokens(config: &AiProviderConfig) -> u64 {
+    if reasoning_requested(config) {
+        POLISH_REASONING_MAX_TOKENS
+    } else {
+        POLISH_DEFAULT_MAX_TOKENS
+    }
+}
+
+/// Keep proofreading fast by turning provider-specific thinking off unless the profile
+/// selects an effort level.
 fn configure_thinking(body: &mut serde_json::Value, config: &AiProviderConfig) {
     let Some(object) = body.as_object_mut() else {
         return;
     };
+    let reasoning = reasoning_requested(config);
 
-    // 通义千问 Qwen3 使用独立的开关。
+    // Qwen3 uses a dedicated toggle instead of the OpenAI effort field.
     if config.provider == "qwen" {
         object.insert(
             "enable_thinking".to_string(),
-            serde_json::Value::Bool(false),
+            serde_json::Value::Bool(reasoning),
         );
     }
 
-    // DeepSeek、小米 MiMo 和智谱 GLM 使用 thinking.type=disabled。
-    // 智谱通过官方域名识别，避免给其他 OpenAI 兼容服务注入未知字段。
+    // DeepSeek, Xiaomi MiMo, and Zhipu GLM use thinking.type. Zhipu is recognized by its
+    // official host so no other OpenAI-compatible endpoint receives an unknown field.
     if config.provider == "deepseek"
         || config.provider == "mimo"
         || is_zhipu_api_url(&config.api_url)
     {
         object.insert(
             "thinking".to_string(),
-            serde_json::json!({"type": "disabled"}),
+            serde_json::json!({"type": if reasoning { "enabled" } else { "disabled" }}),
         );
     }
 }
@@ -93,20 +139,37 @@ fn is_zhipu_api_url(api_url: &str) -> bool {
 }
 
 /// Providers whose endpoints accept the `reasoning_effort` request field.
-/// opencode_go is verified live against https://opencode.ai/zen/go (2026-10-07): its
-/// chat/completions gateway accepts the field for GLM, DeepSeek, and Kimi models.
-const REASONING_EFFORT_PROVIDERS: &[&str] = &["openai", "opencode_go"];
+///
+/// OpenAI and OpenCode Zen/Go were probed live (2026-10-07); OpenRouter, Groq, DeepSeek,
+/// and QwenCloud document the field. The generic OpenAI-compatible preset is opt-in: it
+/// receives the field only when a profile actually carries a value.
+///
+/// Keep in sync with `supportsReasoningEffort` in
+/// `client/src/features/settings/aiProviderCatalog.ts`. The frontend gates the editor and
+/// `extra`; this list is the native wire guard for direct and test callers.
+const REASONING_EFFORT_PROVIDERS: &[&str] = &[
+    "openai",
+    "opencode_go",
+    "openai_compat",
+    "openrouter",
+    "groq",
+    "deepseek",
+    "qwen",
+];
 
-/// Providers whose endpoints accept the `service_tier` request field. OpenCode Zen/Go has no tiers.
+/// Providers whose endpoints accept the `service_tier` request field. OpenCode Zen/Go has no
+/// tiers. Keep in sync with `supportsServiceTier` in
+/// `client/src/features/settings/aiProviderCatalog.ts`.
 const SERVICE_TIER_PROVIDERS: &[&str] = &["openai"];
 
 /// Apply the request tuning (reasoning effort, service tier) per provider capability.
 ///
-/// Values come from the profile's `extra` map and are sent verbatim: the valid set depends
-/// on the model and deployment (local Codex-style proxies use `service_tier: "fast"`,
-/// which is not part of the official tier list). Each field is added only for providers
-/// whose endpoint accepts it — generic OpenAI-compatible endpoints may reject unknown
-/// body fields.
+/// Values come from the profile's `extra` map and are sent as-is for the providers that
+/// accept them: the valid set depends on the model and deployment (local Codex-style proxies
+/// use `service_tier: "fast"`, which is not part of the official tier list). Each field is
+/// added only for providers that expose it. The generic OpenAI-compatible preset is opt-in:
+/// it receives reasoning effort only when a profile carries a value, so untouched profiles
+/// keep their old body.
 fn configure_request_tuning(body: &mut serde_json::Value, config: &AiProviderConfig) {
     let Some(object) = body.as_object_mut() else {
         return;
@@ -119,17 +182,40 @@ fn configure_request_tuning(body: &mut serde_json::Value, config: &AiProviderCon
             continue;
         }
         if let Some(value) = config.extra.get(key).and_then(|value| value.as_str()) {
-            if !value.trim().is_empty() {
-                object.insert(
-                    key.to_string(),
-                    serde_json::Value::String(value.to_string()),
-                );
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
             }
+            // DeepSeek and Qwen express reasoning-off through their native thinking toggle
+            // (configured above), so no flat effort literal is sent for `none`.
+            if key == "reasoning_effort"
+                && value.eq_ignore_ascii_case("none")
+                && matches!(config.provider.as_str(), "deepseek" | "qwen")
+            {
+                continue;
+            }
+            object.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
         }
     }
 }
 
-/// 调用 OpenAI 兼容接口进行文本校对
+/// A response that hit the output cap without a clean stop is incomplete even when the
+/// provider omits `finish_reason` — some gateways return null on a length stop. The cap is
+/// the budget this request actually sent, not a global constant.
+fn is_truncated_completion(
+    finish_reason: Option<&str>,
+    completion_tokens: Option<u64>,
+    max_tokens: u64,
+) -> bool {
+    finish_reason == Some("length")
+        || (finish_reason != Some("stop")
+            && completion_tokens.is_some_and(|used| used >= max_tokens))
+}
+
+/// Call an OpenAI-compatible endpoint to proofread text.
 pub async fn polish(
     text: &str,
     config: &AiProviderConfig,
@@ -147,11 +233,12 @@ pub async fn polish(
 
     let sys_prompt = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let user_content = wrap_user_text(text, text_context);
+    let max_tokens = polish_max_tokens(config);
 
     let mut body = serde_json::json!({
         "model": config.model,
         "temperature": 0.2,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "messages": [
             { "role": "system", "content": sys_prompt },
             { "role": "user", "content": user_content },
@@ -162,7 +249,7 @@ pub async fn polish(
 
     let start = Instant::now();
 
-    // 只记长度和模型，不记待校对的文本本身
+    // Log only the length and model; never the text being proofread.
     diag::log(
         SCOPE,
         "start",
@@ -213,6 +300,16 @@ pub async fn polish(
 
     let (_, data) = super::connection::read_json_body(resp, SCOPE, &http_summary).await?;
 
+    let finish_reason = data
+        .pointer("/choices/0/finish_reason")
+        .and_then(serde_json::Value::as_str);
+    let completion_tokens = data
+        .pointer("/usage/completion_tokens")
+        .and_then(serde_json::Value::as_u64);
+    if is_truncated_completion(finish_reason, completion_tokens, max_tokens) {
+        return Err(super::truncated_completion_error(SCOPE));
+    }
+
     // Missing content is a silent failure: returning ASR text makes users think
     // proofreading succeeded even though the AI step never ran. Report the failure
     // through diagnostics so it remains visible during investigation.
@@ -261,11 +358,12 @@ pub async fn polish_stream(
     let url = chat_completion_url(&config.api_url);
     let sys_prompt = system_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
     let user_content = wrap_user_text(text, text_context);
+    let max_tokens = polish_max_tokens(config);
 
     let mut body = serde_json::json!({
         "model": config.model,
         "temperature": 0.2,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "stream": true,
         "messages": [
             { "role": "system", "content": sys_prompt },
@@ -331,13 +429,35 @@ pub async fn polish_stream(
         .map(|value| value.to_ascii_lowercase().contains("text/event-stream"))
         .unwrap_or(false);
 
-    let result_text = if event_stream {
-        super::line_stream::drain_text_stream(resp, SCOPE, sse_line_step, on_delta).await?
+    let (result_text, finish_reason, completion_tokens) = if event_stream {
+        let streamed =
+            super::line_stream::drain_text_stream(resp, SCOPE, sse_line_step, on_delta).await?;
+        (streamed.text, streamed.finish_reason, None)
     } else {
         // Some gateways ignore `stream` and answer with one plain completion; keep the final result.
         let (_, data) = super::connection::read_json_body(resp, SCOPE, &http_summary).await?;
-        extract_chat_completion_text(&data).unwrap_or_default()
+        (
+            extract_chat_completion_text(&data).unwrap_or_default(),
+            data.pointer("/choices/0/finish_reason")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            data.pointer("/usage/completion_tokens")
+                .and_then(serde_json::Value::as_u64),
+        )
     };
+
+    // A partial caption is worse than a failed translation: reject a length stop instead of
+    // streaming and settling cut text. SSE usage is not requested (no `stream_options`), so
+    // streamed truncation relies on the provider-reported finish_reason; the plain-JSON
+    // fallback still carries token usage and checks it against the request budget.
+    let truncated = if event_stream {
+        finish_reason.as_deref() == Some("length")
+    } else {
+        is_truncated_completion(finish_reason.as_deref(), completion_tokens, max_tokens)
+    };
+    if truncated {
+        return Err(super::truncated_completion_error(SCOPE));
+    }
 
     // Remove  thinking...</think> reasoning blocks emitted by models such as Qwen3.
     let cleaned = strip_thinking(&result_text);
@@ -363,24 +483,32 @@ pub async fn polish_stream(
     })
 }
 
-/// 测试 AI 连接 — 发送一个简短的聊天请求，验证地址、Key、模型是否都可用
+/// Test the AI connection: send a short chat request to verify the URL, key, and model.
 pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
     let url = chat_completion_url(&config.api_url);
 
     let system_prompt = "Reply with OK only. Do not output anything else.";
     let user_prompt = "Connection test";
 
-    // max_tokens 不能贴着 "OK" 两个字省：
-    //   1) 有网关直接规定下限 —— 实测某内网 LiteLLM 网关上的 gpt-5 系模型给 10 会返回
-    //      HTTP 500 `integer_below_min_value ... Expected a value >= 16`，看起来像服务坏了，
-    //      其实是我们把上限压得太低；
-    //   2) 推理型模型会先花掉一部分 output token 想事情，额度太小时 content 是空的，
-    //      测试就会显示「连接成功，回复：(空)」，等于白测。
-    // 64 足够覆盖这两种情况，代价可以忽略。
+    // Do not shave max_tokens down to the bare "OK":
+    //   1) Some gateways enforce a hard minimum — a gpt-5 model behind an internal LiteLLM
+    //      gateway returned HTTP 500 `integer_below_min_value ... Expected a value >= 16`
+    //      for a value of 10, which looks like a broken service but is actually our cap
+    //      being too low;
+    //   2) Reasoning models spend part of the output budget thinking first, so a tiny cap
+    //      leaves content empty and the test shows "connection successful, reply: (empty)",
+    //      which tests nothing.
+    // 64 covers both cases at a negligible cost; a profile with a reasoning level gets a
+    // larger budget so the visible answer is not lost to thinking tokens.
+    let max_tokens = if reasoning_requested(config) {
+        TEST_REASONING_MAX_TOKENS
+    } else {
+        TEST_MAX_TOKENS
+    };
     let mut body = serde_json::json!({
         "model": config.model,
         "temperature": 0,
-        "max_tokens": 64,
+        "max_tokens": max_tokens,
         "messages": [
             { "role": "system", "content": system_prompt },
             { "role": "user", "content": user_prompt }
@@ -407,9 +535,8 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
     match result {
         Ok(resp) if resp.status().is_success() => {
             let data: serde_json::Value = resp.json().await.unwrap_or_default();
-            let raw_reply = data
-                .get("choices")
-                .and_then(|c| c.get(0))
+            let choice = data.get("choices").and_then(|c| c.get(0));
+            let raw_reply = choice
                 .and_then(|c| c.get("message"))
                 .and_then(|m| m.get("content"))
                 .and_then(|c| c.as_str())
@@ -417,6 +544,9 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
                 .trim()
                 .to_string();
             let reply = strip_thinking(&raw_reply);
+            let finish_reason = choice
+                .and_then(|c| c.get("finish_reason"))
+                .and_then(|v| v.as_str());
             let detail = format!(
                 "Elapsed: {}ms\nModel: {}\nSent: system=\"{}\" user=\"{}\"\nReply: {}",
                 elapsed_ms,
@@ -425,6 +555,32 @@ pub async fn test_connection(config: &AiProviderConfig) -> TestResult {
                 user_prompt,
                 if reply.is_empty() { "(empty)" } else { &reply }
             );
+            if finish_reason == Some("length") {
+                return TestResult {
+                    ok: false,
+                    message: diag::fail_code(
+                        "ai/openai-compat-test",
+                        "truncated_reply",
+                        "truncated_completion",
+                        "Connection works, but the model was cut off by the output token limit before finishing its answer".to_string(),
+                    ),
+                    elapsed_ms,
+                    detail,
+                };
+            }
+            if reply.is_empty() {
+                return TestResult {
+                    ok: false,
+                    message: diag::fail_code(
+                        "ai/openai-compat-test",
+                        "empty_reply",
+                        "empty_completion",
+                        "Connection works, but the model returned no visible answer".to_string(),
+                    ),
+                    elapsed_ms,
+                    detail,
+                };
+            }
             super::connection::success_result(elapsed_ms, detail)
         }
         Ok(resp) => {
@@ -730,23 +886,34 @@ fn sse_line_step(line: &str) -> LineStep {
         return LineStep {
             delta: None,
             done: true,
+            finish_reason: None,
         };
     }
+    let (delta, finish_reason) = extract_stream_event(payload);
     LineStep {
-        delta: Some(extract_stream_delta(payload).unwrap_or_default()),
+        delta,
         done: false,
+        finish_reason,
     }
 }
 
-/// Incremental text of one OpenAI-compatible stream event: `choices[0].delta.content`.
-fn extract_stream_delta(payload: &str) -> Option<String> {
-    let data: serde_json::Value = serde_json::from_str(payload).ok()?;
-    data.get("choices")?
-        .get(0)?
-        .get("delta")?
-        .get("content")?
-        .as_str()
-        .map(str::to_string)
+/// One OpenAI-compatible stream event: visible `choices[0].delta.content` and the
+/// terminal `choices[0].finish_reason`, when the event carries either.
+fn extract_stream_event(payload: &str) -> (Option<String>, Option<String>) {
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return (None, None);
+    };
+    let choice = data.get("choices").and_then(|choices| choices.get(0));
+    let delta = choice
+        .and_then(|choice| choice.get("delta"))
+        .and_then(|delta| delta.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let finish_reason = choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    (delta, finish_reason)
 }
 
 #[cfg(test)]
@@ -811,6 +978,17 @@ mod tests {
         assert_eq!(stream.text, "tail");
     }
 
+    /// One event may carry the last visible delta and the terminal finish reason together.
+    #[test]
+    fn extract_stream_event_reads_content_and_finish_reason_from_one_event() {
+        let (delta, finish_reason) = extract_stream_event(
+            r#"{"choices":[{"delta":{"content":"final"},"finish_reason":"stop"}]}"#,
+        );
+
+        assert_eq!(delta.as_deref(), Some("final"));
+        assert_eq!(finish_reason.as_deref(), Some("stop"));
+    }
+
     #[tokio::test]
     async fn streamed_polish_emits_partials_and_returns_the_final_text() {
         let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n\
@@ -838,6 +1016,31 @@ mod tests {
         let request =
             String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
         assert!(request.contains(r#""stream":true"#));
+    }
+
+    /// A streamed `length` stop must fail instead of letting live subtitles settle cut text.
+    #[tokio::test]
+    async fn streamed_length_stop_is_a_safe_failure() {
+        let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n\
+                        data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n\
+                        data: [DONE]\n\n";
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server_with_content_type(
+                200,
+                "text/event-stream",
+                sse_body.to_string(),
+            );
+
+        let error = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.starts_with("sayit_error:truncated_completion:"),
+            "{error}"
+        );
+        assert!(error.contains("truncated"), "{error}");
+        server.join().expect("loopback server completed");
     }
 
     /// Live subtitles must never receive reasoning: while the model is inside a `<think>` block the
@@ -904,6 +1107,43 @@ mod tests {
         server.join().expect("loopback server completed");
     }
 
+    /// A gateway that ignores `stream` answers with one plain JSON body; the fallback must use
+    /// the same truncation rules: a provider-reported length stop fails, and so does a null stop
+    /// that used the whole default output budget.
+    #[tokio::test]
+    async fn streamed_fallback_rejects_truncated_json_completions() {
+        for (label, finish_reason, completion_tokens) in [
+            ("length", Some("length"), None),
+            ("null at cap", None, Some(POLISH_DEFAULT_MAX_TOKENS)),
+        ] {
+            let mut response = serde_json::json!({
+                "choices": [{
+                    "message": { "content": RESPONSE_MARKER },
+                    "finish_reason": finish_reason
+                        .map_or(serde_json::Value::Null, |reason| serde_json::json!(reason)),
+                }],
+            });
+            if let Some(tokens) = completion_tokens {
+                response["usage"] = serde_json::json!({ "completion_tokens": tokens });
+            }
+            let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+                200,
+                response.to_string(),
+            );
+
+            let error = polish_stream(TEST_INPUT, &polish_config(&api_url), None, None, |_| {})
+                .await
+                .unwrap_err();
+
+            assert!(
+                error.starts_with("sayit_error:truncated_completion:"),
+                "{label}: {error}"
+            );
+            assert!(!error.contains(RESPONSE_MARKER), "{label}: {error}");
+            server.join().expect("loopback server completed");
+        }
+    }
+
     fn polish_config(api_url: &str) -> AiProviderConfig {
         AiProviderConfig {
             provider: "openai_compat".to_string(),
@@ -925,8 +1165,10 @@ mod tests {
     }
 
     /// Tuning fields may reach the wire only through providers whose endpoints accept them:
-    /// openai gets both knobs, opencode_go gets reasoning effort only (Zen/Go has no tiers),
-    /// and generic compatible endpoints get nothing — they can reject unknown body fields.
+    /// openai gets both knobs, every other supported preset gets reasoning effort only
+    /// (none of them exposes service tiers), and providers without a verified field get
+    /// neither. DeepSeek and Qwen also enable their provider-native thinking flag when a
+    /// level is selected; the generic compatible preset is opt-in.
     #[tokio::test]
     async fn polish_sends_tuning_only_for_the_providers_that_accept_it() {
         let response_body = format!(
@@ -936,7 +1178,12 @@ mod tests {
         for (provider, expect_reasoning, expect_tier) in [
             ("openai", true, true),
             ("opencode_go", true, false),
-            ("openai_compat", false, false),
+            ("openai_compat", true, false),
+            ("openrouter", true, false),
+            ("groq", true, false),
+            ("deepseek", true, false),
+            ("qwen", true, false),
+            ("doubao", false, false),
         ] {
             let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
                 200,
@@ -959,6 +1206,191 @@ mod tests {
                 request.contains(r#""service_tier":"fast""#),
                 expect_tier,
                 "{provider} service tier mismatch: {request}"
+            );
+            if provider == "deepseek" {
+                assert!(
+                    request.contains(r#""thinking":{"type":"enabled"}"#),
+                    "deepseek thinking was not enabled: {request}"
+                );
+            } else if provider == "qwen" {
+                assert!(
+                    request.contains(r#""enable_thinking":true"#),
+                    "qwen thinking was not enabled: {request}"
+                );
+            }
+        }
+    }
+
+    /// `none` disables reasoning on DeepSeek and Qwen through their own native thinking
+    /// toggles instead of sending a flat effort literal; OpenAI-style providers receive the
+    /// documented `none` value.
+    #[tokio::test]
+    async fn reasoning_none_uses_the_provider_native_off_switch() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        for (provider, expect_effort) in [
+            ("deepseek", false),
+            ("qwen", false),
+            ("openai", true),
+            ("openai_compat", true),
+            ("openrouter", true),
+        ] {
+            let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+                200,
+                response_body.clone(),
+            );
+            let mut config = tuning_config(&api_url, provider);
+            config.extra = serde_json::json!({ "reasoning_effort": "none" });
+            let result = polish(TEST_INPUT, &config, None, None)
+                .await
+                .expect("a usable completion succeeds");
+            assert_eq!(result.text, RESPONSE_MARKER);
+
+            let request =
+                String::from_utf8_lossy(&server.join().expect("loopback server completed"))
+                    .to_string();
+            assert_eq!(
+                request.contains(r#""reasoning_effort":"none""#),
+                expect_effort,
+                "{provider} reasoning effort mismatch: {request}"
+            );
+            if provider == "deepseek" {
+                assert!(
+                    request.contains(r#""thinking":{"type":"disabled"}"#),
+                    "deepseek thinking was not disabled: {request}"
+                );
+            } else if provider == "qwen" {
+                assert!(
+                    request.contains(r#""enable_thinking":false"#),
+                    "qwen thinking was not disabled: {request}"
+                );
+            }
+        }
+    }
+
+    /// Without a selected level every reasoning-capable provider keeps the historical 1024
+    /// budget. DeepSeek and Qwen disable their native thinking toggle; the other providers
+    /// receive no thinking field at all.
+    #[tokio::test]
+    async fn no_reasoning_level_keeps_the_default_budget_and_disables_thinking() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        for provider in [
+            "openai",
+            "opencode_go",
+            "openai_compat",
+            "openrouter",
+            "groq",
+            "deepseek",
+            "qwen",
+        ] {
+            let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+                200,
+                response_body.clone(),
+            );
+            let mut config = polish_config(&api_url);
+            config.provider = provider.to_string();
+
+            let result = polish(TEST_INPUT, &config, None, None)
+                .await
+                .expect("a usable completion succeeds");
+            assert_eq!(result.text, RESPONSE_MARKER);
+
+            let request =
+                String::from_utf8_lossy(&server.join().expect("loopback server completed"))
+                    .to_string();
+            assert!(
+                request.contains(r#""max_tokens":1024"#),
+                "{provider} default budget mismatch: {request}"
+            );
+            assert!(
+                !request.contains(r#""reasoning_effort""#),
+                "{provider} sent reasoning effort without a selected level: {request}"
+            );
+            match provider {
+                "deepseek" => assert!(
+                    request.contains(r#""thinking":{"type":"disabled"}"#),
+                    "deepseek thinking was not disabled: {request}"
+                ),
+                "qwen" => assert!(
+                    request.contains(r#""enable_thinking":false"#),
+                    "qwen thinking was not disabled: {request}"
+                ),
+                _ => {
+                    assert!(
+                        !request.contains(r#""thinking":"#),
+                        "{provider} received an unexpected thinking field: {request}"
+                    );
+                    assert!(
+                        !request.contains(r#""enable_thinking":"#),
+                        "{provider} received an unexpected thinking toggle: {request}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A selected level opts into the larger budget shared with reasoning tokens.
+    #[tokio::test]
+    async fn selected_reasoning_level_uses_the_larger_budget() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server(200, response_body);
+
+        let result = polish(TEST_INPUT, &tuning_config(&api_url, "openai"), None, None)
+            .await
+            .expect("a usable completion succeeds");
+        assert_eq!(result.text, RESPONSE_MARKER);
+
+        let request =
+            String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
+        assert!(
+            request.contains(r#""max_tokens":8192"#),
+            "reasoning budget missing: {request}"
+        );
+    }
+
+    /// The generic OpenAI-compatible preset is opt-in: no value sends no field, and a chosen
+    /// level is sent.
+    #[tokio::test]
+    async fn generic_openai_compat_reasoning_effort_is_opt_in() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}}}}]}}"#,
+            RESPONSE_MARKER
+        );
+        for (label, extra, expect_field) in [
+            ("unset", serde_json::Value::Null, false),
+            (
+                "selected",
+                serde_json::json!({ "reasoning_effort": "low" }),
+                true,
+            ),
+        ] {
+            let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+                200,
+                response_body.clone(),
+            );
+            let mut config = polish_config(&api_url);
+            config.extra = extra;
+
+            polish(TEST_INPUT, &config, None, None)
+                .await
+                .expect("a usable completion succeeds");
+
+            let request =
+                String::from_utf8_lossy(&server.join().expect("loopback server completed"))
+                    .to_string();
+            assert_eq!(
+                request.contains(r#""reasoning_effort":"low""#),
+                expect_field,
+                "{label} reasoning effort mismatch: {request}"
             );
         }
     }
@@ -983,6 +1415,87 @@ mod tests {
         assert!(
             request.contains(r#""reasoning_effort":"low""#),
             "reasoning effort missing: {request}"
+        );
+    }
+
+    /// A non-reasoning probe keeps the small 64-token budget and still succeeds on a visible
+    /// reply.
+    #[tokio::test]
+    async fn connection_test_without_reasoning_uses_the_small_budget() {
+        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            r#"{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#.to_string(),
+        );
+
+        let result = test_connection(&polish_config(&api_url)).await;
+        assert!(result.ok, "connection test failed: {}", result.message);
+
+        let request =
+            String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
+        assert!(
+            request.contains(r#""max_tokens":64"#),
+            "default probe budget missing: {request}"
+        );
+    }
+
+    /// An empty visible reply is not a successful connection test.
+    #[tokio::test]
+    async fn connection_test_rejects_an_empty_visible_reply() {
+        let (api_url, server) = super::super::http_client::test_support::spawn_response_server(
+            200,
+            r#"{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}"#.to_string(),
+        );
+
+        let result = test_connection(&polish_config(&api_url)).await;
+
+        assert!(!result.ok);
+        assert!(
+            result.message.starts_with("sayit_error:empty_completion:"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains("returned no visible answer"),
+            "{}",
+            result.message
+        );
+        server.join().expect("loopback server completed");
+    }
+
+    /// A reasoning profile gets the larger probe budget, and a reported length stop is a
+    /// failure even when the body contains text.
+    #[tokio::test]
+    async fn connection_test_with_reasoning_rejects_a_length_stop_and_uses_the_larger_budget() {
+        let response_body = format!(
+            r#"{{"choices":[{{"message":{{"content":"{}"}},"finish_reason":"length"}}]}}"#,
+            RESPONSE_MARKER
+        );
+        let (api_url, server) =
+            super::super::http_client::test_support::spawn_response_server(200, response_body);
+
+        let mut config = polish_config(&api_url);
+        config.extra = serde_json::json!({ "reasoning_effort": "low" });
+        let result = test_connection(&config).await;
+
+        assert!(!result.ok);
+        assert!(
+            result
+                .message
+                .starts_with("sayit_error:truncated_completion:"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains("cut off by the output token limit"),
+            "{}",
+            result.message
+        );
+
+        let request =
+            String::from_utf8_lossy(&server.join().expect("loopback server completed")).to_string();
+        assert!(
+            request.contains(r#""max_tokens":2048"#),
+            "reasoning probe budget missing: {request}"
         );
     }
 
@@ -1016,6 +1529,59 @@ mod tests {
         .unwrap_err();
 
         assert_safe_completion_error(&error);
+    }
+
+    /// A length stop, or a response that used the whole output budget without a clean
+    /// stop, must not be inserted as cleaned text. Some gateways leave `finish_reason`
+    /// null on a length stop, so the usage cap is the second signal.
+    #[tokio::test]
+    async fn truncated_completions_are_safe_failures() {
+        for (label, finish_reason, completion_tokens) in [
+            ("length", serde_json::json!("length"), 512),
+            (
+                "null at cap",
+                serde_json::json!(null),
+                POLISH_DEFAULT_MAX_TOKENS,
+            ),
+        ] {
+            let response_body = serde_json::json!({
+                "choices": [{
+                    "message": { "content": RESPONSE_MARKER },
+                    "finish_reason": finish_reason,
+                }],
+                "usage": { "completion_tokens": completion_tokens },
+            })
+            .to_string();
+
+            let error = polish_response(&response_body, TEST_INPUT)
+                .await
+                .unwrap_err();
+            assert!(
+                error.starts_with("sayit_error:truncated_completion:"),
+                "{label}: {error}"
+            );
+            assert!(error.contains("truncated"), "{label}: {error}");
+        }
+    }
+
+    /// Reaching the cap with an explicit clean stop is still a complete response; only a
+    /// missing or non-clean stop at the cap signals truncation.
+    #[tokio::test]
+    async fn clean_stop_at_the_cap_is_not_truncation() {
+        let response_body = serde_json::json!({
+            "choices": [{
+                "message": { "content": RESPONSE_MARKER },
+                "finish_reason": "stop",
+            }],
+            "usage": { "completion_tokens": POLISH_DEFAULT_MAX_TOKENS },
+        })
+        .to_string();
+
+        let result = polish_response(&response_body, TEST_INPUT)
+            .await
+            .expect("a clean stop at the cap is complete");
+
+        assert_eq!(result.text, RESPONSE_MARKER);
     }
 
     #[tokio::test]

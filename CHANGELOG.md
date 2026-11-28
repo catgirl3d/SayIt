@@ -10,10 +10,16 @@ Ukrainian translation: [CHANGELOG.uk.md](CHANGELOG.uk.md).
 #### Desktop Client
 - The About page now lets you browse the release notes of earlier versions, including offline.
 
+#### AI Providers
+- Reasoning effort is now selectable for the generic OpenAI-compatible preset, OpenRouter, Groq, DeepSeek, and Qwen, in addition to OpenAI and OpenCode Go. No reasoning effort is sent until a level is chosen, so an untouched generic preset behaves as before; DeepSeek and Qwen enable thinking for a selected level and keep it off when "none" is chosen.
+
 ### Fixed
 #### Desktop Client
 - In the model picker, the sort bar now appears only when the loaded provider reports output token prices. For providers without prices the list stays in name order instead of offering price buttons that changed nothing.
 - The "Interface animations" switch now also turns off the fade-in of the overlay and the import-complete notice.
+
+#### AI Providers
+- Custom AI cleanup and live subtitle translation now reject a response that the provider reports was cut off by the output token limit, instead of inserting or settling partial text. Reasoning tokens can consume the same output budget on providers that count them against it, so a truncated cleanup no longer replaces the raw recognition text: the truncation is reported and the original text is kept. Streamed live translation relies on the provider reporting the stop reason.
 
 #### Security
 - After an in-app update from an earlier version, SayIt no longer stops on its first start with an error about `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` and `ignore-certificate-errors`. Earlier versions passed that switch on to the updated app; SayIt now recognizes this leftover and starts with certificate checks on. Any other value with that switch still stops SayIt with the error.

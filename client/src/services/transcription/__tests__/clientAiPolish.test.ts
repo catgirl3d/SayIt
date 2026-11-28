@@ -124,10 +124,13 @@ describe('client AI polish completion handling', () => {
     })
   })
 
-  it('classifies the backend empty-completion failure as an empty result', async () => {
+  it.each([
+    ['empty', 'sayit_error:empty_completion:AI returned no usable completion text', 'empty_result'],
+    ['truncated', 'sayit_error:truncated_completion:AI response was truncated by the output token limit', 'provider_error'],
+  ])('classifies a backend %s completion', async (_label, error, reason) => {
     boundaries.invoke.mockImplementation(async (command: string) => {
       if (command === 'cloud_polish') {
-        throw 'sayit_error:empty_completion:AI returned no usable completion text'
+        throw error
       }
       return undefined
     })
@@ -143,7 +146,7 @@ describe('client AI polish completion handling', () => {
       llmText: ASR_COMMAND,
       aiSource: 'custom',
       aiStatus: 'failed',
-      aiFailureReason: 'empty_result',
+      aiFailureReason: reason,
     })
   })
 
@@ -332,7 +335,7 @@ describe('client AI polish completion handling', () => {
     })
   })
 
-  it('keeps generic compatible providers free of OpenAI tuning fields', async () => {
+  it('sends reasoning effort without service tier for the deepseek provider', async () => {
     boundaries.invoke.mockImplementation(async (command: string) => {
       if (command === 'cloud_polish') return { text: 'polished', elapsed_ms: 12 }
       return undefined
@@ -357,8 +360,42 @@ describe('client AI polish completion handling', () => {
     })
 
     const call = boundaries.invoke.mock.calls.find(([command]) => command === 'cloud_polish')
-    const aiConfig = (call?.[1] as { request: { ai_config: Record<string, unknown> } }).request.ai_config
-    expect(aiConfig.extra).toBeUndefined()
+    expect(call?.[1]).toMatchObject({
+      request: {
+        ai_config: {
+          provider: 'deepseek',
+        },
+      },
+    })
+    expect(call?.[1].request.ai_config.extra).toEqual({ reasoning_effort: 'low' })
+  })
+
+  it('keeps providers without a reasoning control free of tuning fields', async () => {
+    boundaries.invoke.mockImplementation(async (command: string) => {
+      if (command === 'cloud_polish') return { text: 'polished', elapsed_ms: 12 }
+      return undefined
+    })
+    boundaries.getSetting.mockImplementation(async (key: string, fallback: unknown) => {
+      const settings: Record<string, string> = {
+        'cloudAi.provider': 'doubao',
+        'cloudAi.apiUrl': 'https://ark.cn-beijing.volces.com/api/v3',
+        'cloudAi.apiKey': 'sk-test',
+        'cloudAi.model': 'doubao-seed-2-0-lite-260215',
+        'cloudAi.reasoningEffort': 'low',
+        'cloudAi.serviceTier': 'fast',
+      }
+      return settings[key] ?? fallback
+    })
+
+    await polishWithClientAi({
+      asrText: ASR_COMMAND,
+      durationSec: 2,
+      startOptions: { runId: 7 },
+      logSource: 'test',
+    })
+
+    const call = boundaries.invoke.mock.calls.find(([command]) => command === 'cloud_polish')
+    expect(call?.[1]).not.toHaveProperty('request.ai_config.extra')
   })
 })
 

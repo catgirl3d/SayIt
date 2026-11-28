@@ -27,6 +27,7 @@ import {
   profileSubtitle,
   profileTitle,
   preferredAiProviderValue,
+  reasoningEffortOptions,
   REASONING_EFFORT_OPTIONS,
   resolveActiveProfile,
   SERVICE_TIER_OPTIONS,
@@ -531,6 +532,14 @@ describe('applyProviderSwitch', () => {
     expect(back.apiKey).toBe('sk-or-test')
     expect(back.models).toEqual([])
   })
+
+  it('normalizes the selected reasoning level to the target provider', () => {
+    const max = { ...blankProfile('openai'), reasoningEffort: 'max' }
+    expect(applyProviderSwitch(max, [], 'openrouter', []).reasoningEffort).toBe('max')
+
+    const minimal = { ...blankProfile('openai'), reasoningEffort: 'minimal' }
+    expect(applyProviderSwitch(minimal, [], 'groq', []).reasoningEffort).toBeUndefined()
+  })
 })
 
 describe('一行的标题与副标题', () => {
@@ -758,15 +767,16 @@ describe('OpenAI provider preset', () => {
 
 describe('OpenAI request tuning', () => {
   /**
-   * Capability matrix: the openai preset gets both knobs; opencode_go gets reasoning effort
-   * only (OpenCode Zen/Go has no service tiers); every other provider gets neither.
+   * Capability matrix: openai gets both knobs; every provider with a documented
+   * `reasoning_effort` field gets effort only (no service tiers). Providers whose
+   * endpoints were not verified, and local Ollama, get neither.
    */
-  it('offers reasoning effort for openai and opencode_go, service tier for openai only', () => {
-    expect(supportsReasoningEffort('openai')).toBe(true)
-    expect(supportsReasoningEffort('opencode_go')).toBe(true)
-    expect(supportsServiceTier('openai')).toBe(true)
-    expect(supportsServiceTier('opencode_go')).toBe(false)
-    for (const value of ['openai_compat', 'deepseek', 'qwen', 'doubao', 'mimo', 'groq', 'ollama']) {
+  it('offers reasoning effort to providers with a documented field, service tier for openai only', () => {
+    for (const value of ['openai', 'opencode_go', 'openai_compat', 'openrouter', 'groq', 'deepseek', 'qwen']) {
+      expect(supportsReasoningEffort(value), value).toBe(true)
+      expect(supportsServiceTier(value), value).toBe(value === 'openai')
+    }
+    for (const value of ['doubao', 'mimo', 'ollama']) {
       expect(supportsReasoningEffort(value), value).toBe(false)
       expect(supportsServiceTier(value), value).toBe(false)
     }
@@ -794,7 +804,20 @@ describe('OpenAI request tuning', () => {
     expect([...SERVICE_TIER_OPTIONS]).toEqual(['auto', 'default', 'priority', 'fast'])
   })
 
-  it('builds the native request config with OpenAI tuning only for the openai provider', () => {
+  /**
+   * Provider enum contracts: OpenRouter's flat `reasoning_effort` is equivalent to
+   * `reasoning.effort` and accepts the full set. Groq's documented enum omits `minimal` and
+   * `max`; `default` is represented by "not set" (no field sent), so the editor offers the
+   * union of Groq's model-specific sets: none/low/medium/high/xhigh.
+   */
+  it('filters levels the provider-wide enum rejects', () => {
+    expect(reasoningEffortOptions('openai')).toEqual([...REASONING_EFFORT_OPTIONS])
+    expect(reasoningEffortOptions('openai_compat')).toEqual([...REASONING_EFFORT_OPTIONS])
+    expect(reasoningEffortOptions('openrouter')).toEqual([...REASONING_EFFORT_OPTIONS])
+    expect(reasoningEffortOptions('groq')).toEqual(['none', 'low', 'medium', 'high', 'xhigh'])
+  })
+
+  it('builds the native request config with tuning only for providers that accept it', () => {
     expect(buildAiProviderConfig({
       provider: 'openai',
       apiUrl: 'https://relay.example/v1',
@@ -810,6 +833,7 @@ describe('OpenAI request tuning', () => {
       extra: { reasoning_effort: 'low', service_tier: 'fast' },
     })
 
+    // DeepSeek accepts reasoning effort but has no service tiers, so the tier is dropped.
     expect(buildAiProviderConfig({
       provider: 'deepseek',
       apiUrl: 'https://api.deepseek.com',
@@ -822,6 +846,66 @@ describe('OpenAI request tuning', () => {
       api_url: 'https://api.deepseek.com',
       api_key: 'sk-test',
       model: 'deepseek-v4-flash',
+      extra: { reasoning_effort: 'low' },
+    })
+
+    // The generic compatible preset is opt-in: an untouched profile sends no extra field.
+    expect(buildAiProviderConfig({
+      provider: 'openai_compat',
+      apiUrl: 'https://gateway.example/v1',
+      apiKey: 'sk-test',
+      model: 'glm-5.3-flash',
+      reasoningEffort: 'minimal',
+      serviceTier: 'fast',
+    })).toEqual({
+      provider: 'openai_compat',
+      api_url: 'https://gateway.example/v1',
+      api_key: 'sk-test',
+      model: 'glm-5.3-flash',
+      extra: { reasoning_effort: 'minimal' },
+    })
+
+    expect(buildAiProviderConfig({
+      provider: 'openai_compat',
+      apiUrl: 'https://gateway.example/v1',
+      apiKey: 'sk-test',
+      model: 'glm-5.3-flash',
+    })).toEqual({
+      provider: 'openai_compat',
+      api_url: 'https://gateway.example/v1',
+      api_key: 'sk-test',
+      model: 'glm-5.3-flash',
+    })
+
+    expect(buildAiProviderConfig({
+      provider: 'openrouter',
+      apiUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-or-test',
+      model: 'deepseek/deepseek-v4.1-flash',
+      reasoningEffort: ' medium ',
+      serviceTier: 'fast',
+    })).toEqual({
+      provider: 'openrouter',
+      api_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-or-test',
+      model: 'deepseek/deepseek-v4.1-flash',
+      extra: { reasoning_effort: 'medium' },
+    })
+
+    // OpenRouter's flat `reasoning_effort` is equivalent to `reasoning.effort` and accepts
+    // `max`, so the saved level is sent unchanged.
+    expect(buildAiProviderConfig({
+      provider: 'openrouter',
+      apiUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-or-test',
+      model: 'deepseek/deepseek-v4.1-flash',
+      reasoningEffort: 'max',
+    })).toEqual({
+      provider: 'openrouter',
+      api_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-or-test',
+      model: 'deepseek/deepseek-v4.1-flash',
+      extra: { reasoning_effort: 'max' },
     })
 
     // opencode_go sends reasoning effort but must never send a service tier.
@@ -888,6 +972,17 @@ describe('OpenAI request tuning', () => {
     ])[0]
     expect(unknown.reasoningEffort).toBeUndefined()
     expect(unknown.serviceTier).toBeUndefined()
+
+    // Provider-wide enums also apply on load: OpenRouter accepts `max`, while Groq rejects
+    // `minimal` entirely.
+    const openrouterMax = parseProfiles([
+      profile({ provider: 'openrouter', reasoningEffort: 'max' }),
+    ])[0]
+    expect(openrouterMax.reasoningEffort).toBe('max')
+    const groqMinimal = parseProfiles([
+      profile({ provider: 'groq', reasoningEffort: 'minimal' }),
+    ])[0]
+    expect(groqMinimal.reasoningEffort).toBeUndefined()
 
     const blank = parseProfiles([profile({ provider: 'openai' })])[0]
     expect(blank.reasoningEffort).toBeUndefined()

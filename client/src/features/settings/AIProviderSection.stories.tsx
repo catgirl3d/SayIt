@@ -40,6 +40,10 @@ const profiles = [
   },
 ] satisfies AiProfile[]
 
+/** Explicit name for the generic OpenAI-compatible card used by the stories below. */
+const compatibleProfile = profiles.find((profile) => profile.provider === 'openai_compat')
+if (!compatibleProfile) throw new Error('The openai_compat story fixture is missing')
+
 const openRouterProfile = {
   id: 'ai-storybook-openrouter',
   provider: 'openrouter',
@@ -115,7 +119,7 @@ export const ConfiguredProfiles: Story = {
 export const ServerModeCustomAI: Story = {
   parameters: {
     tauri: {
-      settings: settingsFor(profiles, profiles[2].id, 'server', 'custom'),
+      settings: settingsFor(profiles, compatibleProfile.id, 'server', 'custom'),
     },
   },
 }
@@ -276,6 +280,30 @@ export const EditServiceDialog: Story = {
     // Picking replaces the text and closes the list.
     await expect(field).toHaveValue('gpt-5-nano')
     await waitFor(() => expect(body.queryByRole('listbox')).toBeNull())
+  },
+}
+
+export const CompatibleServiceReasoning: Story = {
+  parameters: {
+    tauri: {
+      settings: settingsFor(profiles, compatibleProfile.id, 'cloud_api', 'managed'),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const body = bodyOf(canvasElement)
+    const editButton = await within(canvasElement).findByRole('button', { name: `Edit ${compatibleProfile.model}` })
+    editButton.focus()
+    await userEvent.click(editButton)
+    const dialog = within(await body.findByRole('dialog', { name: /edit ai service/i }))
+
+    // A generic compatible endpoint is opt-in: the level is available, but unset sends no field.
+    const effort = dialog.getByRole('button', { name: 'Reasoning effort' })
+    await expect(effort).toHaveTextContent('Not set')
+    await expect(dialog.queryByRole('button', { name: 'Service tier' })).toBeNull()
+
+    await userEvent.click(effort)
+    await userEvent.click(await body.findByRole('button', { name: 'minimal' }))
+    await expect(effort).toHaveTextContent('minimal')
   },
 }
 
