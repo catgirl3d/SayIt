@@ -5,7 +5,7 @@
  * Changing a default means editing this one file — no global search-and-replace.
  *
  * Prompt-related configuration (kept separately because it is long):
- *   - Built-in polish presets → BUILTIN_PRESETS in src/services/store.ts
+ *   - Built-in polish presets → BUILTIN_PRESETS in src/services/store/prompts.ts
  *   - App prompt rules → BUILTIN_APP_RULES in src/services/personalization/defaults.ts
  */
 
