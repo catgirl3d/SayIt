@@ -3,6 +3,8 @@
  *
  * Every getSetting() default is defined here.
  * Changing a default means editing this one file — no global search-and-replace.
+ * Values mirrored in Rust (src-tauri/src/defaults.rs) must be updated there too;
+ * `rust_defaults_match_frontend_defaults` fails when the two sides drift.
  *
  * Prompt-related configuration (kept separately because it is long):
  *   - Built-in polish presets → BUILTIN_PRESETS in src/services/store/prompts.ts
@@ -176,8 +178,8 @@ export const DEFAULTS: Record<string, unknown> = {
   // | 'funasr-nano-2512-gguf' | 'qwen3-asr-0.6b-gguf'
   // | 'qwen3-asr-1.7b-q4-gguf' | 'qwen3-asr-1.7b-gguf' (most accurate)
   // | 'whisper-small-gguf' | 'whisper-large-v3-turbo-gguf'
-  // ⚠️ Changing the default must be mirrored in src-tauri/src/main.rs, which falls back
-  // to the default model for its startup warm-up when no explicit selection was saved.
+  // ⚠️ Changing the default must be mirrored in src-tauri/src/defaults.rs, the Rust mirror
+  // for the startup warm-up; `rust_defaults_match_frontend_defaults` fails on any drift.
   'localAsr.modelId': 'nemotron-asr-streaming-0.6b-gguf',
   // GGUF weights are published on HuggingFace. The value must match a catalog source.
   'localAsr.downloadSource': 'HuggingFace', // optional: 'HuggingFace'

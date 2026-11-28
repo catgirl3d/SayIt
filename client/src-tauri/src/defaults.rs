@@ -1,9 +1,10 @@
-//! Default values shared by the push-to-talk and hands-free shortcuts and by WebDAV backup
-//! settings.
+//! Default values shared by the push-to-talk and hands-free shortcuts, WebDAV backup settings,
+//! the local ASR startup fallbacks, and the audio/log retention cleanup.
 //!
-//! These constants mirror `src/services/defaults.ts`, the frontend copy of the same defaults.
-//! Rust keeps exactly one copy here. The tests at the bottom of this file reconcile both
-//! files, and the storage seed in `storage/mod.rs`, against these constants.
+//! `src/services/defaults.ts` is the frontend source of truth, and `defaults.rs` is its
+//! verified Rust mirror: the tests at the bottom of this file check these constants against
+//! `defaults.ts`. The storage seed in `storage/mod.rs` is checked separately: its keys are
+//! reconciled with `defaults.ts`, and the seeded shortcut constants have explicit assertions.
 
 /// Push-to-talk key. It is also the fallback when the saved setting is missing or unusable.
 ///
@@ -42,6 +43,25 @@ pub const WEBDAV_INCLUDE_AUDIO: bool = false;
 /// unset or below 1.
 pub const WEBDAV_KEEP_COUNT: u64 = 5;
 
+/// Default local ASR model used by the startup warm-up, mirroring `localAsr.modelId` in
+/// `src/services/defaults.ts`.
+pub const LOCAL_ASR_MODEL_ID: &str = "nemotron-asr-streaming-0.6b-gguf";
+
+/// Default compute backend for the local ASR model, mirroring `localAsr.accelerator` in
+/// `src/services/defaults.ts`. `auto` uses the GPU when one is available, otherwise the CPU.
+pub const LOCAL_ASR_ACCELERATOR: &str = "auto";
+
+/// Default idle timeout before the local model is unloaded, in minutes, mirroring
+/// `localAsr.unloadIdleMinutes` in `src/services/defaults.ts`. 0 keeps the model resident.
+pub const LOCAL_ASR_UNLOAD_IDLE_MINUTES: u64 = 0;
+
+/// Default recording retention in days, mirroring `audioRetentionDays` in
+/// `src/services/defaults.ts`.
+pub const AUDIO_RETENTION_DAYS: i64 = -1; // -1 = keep forever
+
+/// Default log retention in days, mirroring `logRetentionDays` in `src/services/defaults.ts`.
+pub const LOG_RETENTION_DAYS: i64 = 30;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,10 +94,14 @@ mod tests {
     }
 
     /// Parses the value of one `defaults.ts` entry with a strict grammar: a single-quoted string
-    /// without escapes, `true`, `false`, or an unsigned integer. The value may be followed by an
-    /// optional `,` and an optional `// comment`. Any other text panics with the key and the raw
-    /// line. The comment is not split off by searching for `//`, so a `//` inside a quoted string
-    /// is read as part of the string.
+    /// without escapes, `true`, `false`, or an integer. A negative integer requires a leading
+    /// `-` directly followed by ASCII digits; `- 1`, `-`, and `-1.5` are invalid. A negative
+    /// literal is parsed as `i64` together with its minus sign, never as a magnitude followed by
+    /// negation (that would break `i64::MIN`). Non-negative literals stay `u64`, so the full
+    /// unsigned range up to `u64::MAX` is preserved. The value may be followed by an optional
+    /// `,` and an optional `// comment`. Any other text panics with the key and the raw line.
+    /// The comment is not split off by searching for `//`, so a `//` inside a quoted string is
+    /// read as part of the string.
     fn parse_ts_value(key: &str, line: &str) -> Value {
         let body = match line
             .strip_prefix(format!("'{key}':").as_str())
@@ -102,13 +126,22 @@ mod tests {
             (Value::Bool(true), rest)
         } else if let Some(rest) = body.strip_prefix("false") {
             (Value::Bool(false), rest)
+        } else if let Some(digits_body) = body.strip_prefix('-') {
+            let digits = digits_body.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 {
+                panic!("defaults.ts value for `{key}` is not a supported literal: {line}");
+            }
+            let number: i64 = body[..digits + 1].parse().unwrap_or_else(|error| {
+                panic!("defaults.ts value for `{key}` is not an integer ({error}): {line}")
+            });
+            (json!(number), &body[digits + 1..])
         } else {
             let digits = body.bytes().take_while(u8::is_ascii_digit).count();
             if digits == 0 {
                 panic!("defaults.ts value for `{key}` is not a supported literal: {line}");
             }
             let number: u64 = body[..digits].parse().unwrap_or_else(|error| {
-                panic!("defaults.ts value for `{key}` is not an unsigned integer ({error}): {line}")
+                panic!("defaults.ts value for `{key}` is not an integer ({error}): {line}")
             });
             (json!(number), &body[digits..])
         };
@@ -157,7 +190,68 @@ mod tests {
             ts_default("webdav.includeAudio")
         );
         assert_eq!(json!(WEBDAV_KEEP_COUNT), ts_default("webdav.keepCount"));
+        assert_eq!(json!(LOCAL_ASR_MODEL_ID), ts_default("localAsr.modelId"));
+        assert_eq!(
+            json!(LOCAL_ASR_ACCELERATOR),
+            ts_default("localAsr.accelerator")
+        );
+        assert_eq!(
+            json!(LOCAL_ASR_UNLOAD_IDLE_MINUTES),
+            ts_default("localAsr.unloadIdleMinutes")
+        );
+        assert_eq!(
+            json!(AUDIO_RETENTION_DAYS),
+            ts_default("audioRetentionDays")
+        );
+        assert_eq!(json!(LOG_RETENTION_DAYS), ts_default("logRetentionDays"));
         assert!(!SHORTCUT_PTT.contains("Shift"));
+    }
+
+    #[test]
+    fn parses_negative_integer_with_trailing_comment() {
+        assert_eq!(
+            parse_ts_value("audioRetentionDays", "audioRetentionDays: -1, // forever"),
+            json!(-1)
+        );
+    }
+
+    #[test]
+    fn parses_u64_max_without_narrowing_to_i64() {
+        let line = format!("bigNumber: {},", u64::MAX);
+        let value = parse_ts_value("bigNumber", &line);
+        assert!(value.is_u64(), "u64::MAX must stay an unsigned value");
+        assert!(!value.is_i64(), "u64::MAX must not be narrowed to i64");
+        assert_eq!(value, json!(u64::MAX));
+    }
+
+    #[test]
+    fn parses_i64_min_without_overflow() {
+        let line = format!("bigNegative: {},", i64::MIN);
+        assert_eq!(parse_ts_value("bigNegative", &line), json!(i64::MIN));
+    }
+
+    #[test]
+    #[should_panic(expected = "not a supported literal")]
+    fn rejects_minus_without_digits() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: -");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a supported literal")]
+    fn rejects_minus_separated_from_digits() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: - 1");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a supported literal")]
+    fn rejects_double_minus() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: --1");
+    }
+
+    #[test]
+    #[should_panic(expected = "followed by text other than")]
+    fn rejects_negative_fraction() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: -1.5");
     }
 
     #[test]

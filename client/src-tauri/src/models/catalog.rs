@@ -642,6 +642,20 @@ mod tests {
         );
     }
 
+    /// The startup warm-up fallback must exist in the catalog, otherwise a fresh install
+    /// preloads a model id that can never be downloaded. The catalog entry keeps its own id
+    /// literal on purpose, so this test cannot become circular; `recommended` is a separate
+    /// product rule and is intentionally not involved.
+    #[test]
+    fn default_local_model_exists_in_catalog() {
+        let models = get_available_models();
+        let default_id = crate::defaults::LOCAL_ASR_MODEL_ID;
+        assert!(
+            models.iter().any(|model| model.id == default_id),
+            "default local model `{default_id}` is missing from the catalog"
+        );
+    }
+
     /// Frontend source selector uses models[0].sources. All models must provide the same sources.
     #[test]
     fn every_model_offers_the_same_download_sources() {

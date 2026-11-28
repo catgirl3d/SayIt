@@ -64,11 +64,19 @@ fn show_unsafe_browser_args_dialog(_error: &str) {}
 
 /// Clean up expired audio files based on retention setting.
 fn cleanup_expired_audio(storage: &Storage) {
-    // 默认必须和前端 defaults.ts 的 audioRetentionDays 一致（-1 = 永久保留）。
-    // 曾经这里写死 30：用户从没动过这个设置时，界面显示"永久"，实际 30 天就被删掉了 ——
-    // 不报错、没有提示，只是录音悄悄消失（"纠正识别"入口大面积置灰就是这么来的）。
-    let retention_val = storage.get("audioRetentionDays", Some(&serde_json::json!(-1)));
-    let retention_days = retention_val.as_i64().unwrap_or(-1);
+    // The value lives in crate::defaults::AUDIO_RETENTION_DAYS; the
+    // rust_defaults_match_frontend_defaults test fails when it drifts from `audioRetentionDays`
+    // in the frontend defaults.ts (-1 = keep forever).
+    // This used to be hardcoded to 30: when the user had never touched this setting, the UI
+    // showed "forever" but recordings were silently deleted after 30 days, with no error and
+    // no warning (that is largely why the "correct recognition" entries were disabled).
+    let retention_val = storage.get(
+        "audioRetentionDays",
+        Some(&serde_json::json!(crate::defaults::AUDIO_RETENTION_DAYS)),
+    );
+    let retention_days = retention_val
+        .as_i64()
+        .unwrap_or(crate::defaults::AUDIO_RETENTION_DAYS);
     if retention_days < 0 {
         return; // -1 = keep forever
     }
@@ -113,8 +121,13 @@ fn cleanup_expired_audio(storage: &Storage) {
 
 /// Clean up expired log files based on retention setting.
 fn cleanup_expired_logs(storage: &Storage) {
-    let retention_val = storage.get("logRetentionDays", Some(&serde_json::json!(30)));
-    let retention_days = retention_val.as_i64().unwrap_or(30);
+    let retention_val = storage.get(
+        "logRetentionDays",
+        Some(&serde_json::json!(crate::defaults::LOG_RETENTION_DAYS)),
+    );
+    let retention_days = retention_val
+        .as_i64()
+        .unwrap_or(crate::defaults::LOG_RETENTION_DAYS);
     if retention_days <= 0 {
         return;
     }
@@ -384,21 +397,22 @@ fn main() {
     let preload_local =
         should_preload_local_model(&work_mode, &migration_done, &onboarding_version);
     if preload_local {
-        // Fallback mirrors the JS-side default (DEFAULTS['localAsr.modelId'] in
-        // services/defaults.ts): an absent or blank stored value means "the default
-        // model", exactly like getSelectedLocalModelId() on the JS side. Keep the
-        // two sides in sync when the default changes.
+        // Fallback lives in crate::defaults::LOCAL_ASR_MODEL_ID; the
+        // rust_defaults_match_frontend_defaults test fails when it drifts from
+        // DEFAULTS['localAsr.modelId'] in services/defaults.ts. An absent or blank stored
+        // value means "the default model", exactly like getSelectedLocalModelId() on the
+        // JS side.
         let model_id = storage
             .get("localAsr.modelId", None)
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or("nemotron-asr-streaming-0.6b-gguf")
+            .unwrap_or(crate::defaults::LOCAL_ASR_MODEL_ID)
             .to_string();
         let accelerator = storage
             .get("localAsr.accelerator", None)
             .as_str()
-            .unwrap_or("auto")
+            .unwrap_or(crate::defaults::LOCAL_ASR_ACCELERATOR)
             .to_string();
         std::thread::spawn(move || {
             match models::gguf_asr::preload(&model_id, &accelerator) {
@@ -409,12 +423,13 @@ fn main() {
         });
     }
 
-    // 空闲超时卸载：默认让本地模型常驻，用户可在设置里选择 10 / 30 / 60 分钟。
-    // 守护线程始终只启动一个，0 表示仅监听动态配置、不执行卸载。
+    // Idle-timeout unload: by default the local model stays resident, and the user can pick
+    // 10 / 30 / 60 minutes in settings. Exactly one guard thread is always started; 0 means
+    // it only watches dynamic configuration and never unloads.
     let idle_minutes = storage
         .get("localAsr.unloadIdleMinutes", None)
         .as_u64()
-        .unwrap_or(0);
+        .unwrap_or(crate::defaults::LOCAL_ASR_UNLOAD_IDLE_MINUTES);
     models::gguf_asr::spawn_idle_unloader(idle_minutes);
 
     let window_state = WindowState::new();
