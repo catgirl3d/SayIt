@@ -74,10 +74,14 @@ mod tests {
     }
 
     /// Parses the value of one `defaults.ts` entry with a strict grammar: a single-quoted string
-    /// without escapes, `true`, `false`, or an unsigned integer. The value may be followed by an
-    /// optional `,` and an optional `// comment`. Any other text panics with the key and the raw
-    /// line. The comment is not split off by searching for `//`, so a `//` inside a quoted string
-    /// is read as part of the string.
+    /// without escapes, `true`, `false`, or an integer. A negative integer requires a leading
+    /// `-` directly followed by ASCII digits; `- 1`, `-`, and `-1.5` are invalid. A negative
+    /// literal is parsed as `i64` together with its minus sign, never as a magnitude followed by
+    /// negation (that would break `i64::MIN`). Non-negative literals stay `u64`, so the full
+    /// unsigned range up to `u64::MAX` is preserved. The value may be followed by an optional
+    /// `,` and an optional `// comment`. Any other text panics with the key and the raw line.
+    /// The comment is not split off by searching for `//`, so a `//` inside a quoted string is
+    /// read as part of the string.
     fn parse_ts_value(key: &str, line: &str) -> Value {
         let body = match line
             .strip_prefix(format!("'{key}':").as_str())
@@ -102,13 +106,22 @@ mod tests {
             (Value::Bool(true), rest)
         } else if let Some(rest) = body.strip_prefix("false") {
             (Value::Bool(false), rest)
+        } else if let Some(digits_body) = body.strip_prefix('-') {
+            let digits = digits_body.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 {
+                panic!("defaults.ts value for `{key}` is not a supported literal: {line}");
+            }
+            let number: i64 = body[..digits + 1].parse().unwrap_or_else(|error| {
+                panic!("defaults.ts value for `{key}` is not an integer ({error}): {line}")
+            });
+            (json!(number), &body[digits + 1..])
         } else {
             let digits = body.bytes().take_while(u8::is_ascii_digit).count();
             if digits == 0 {
                 panic!("defaults.ts value for `{key}` is not a supported literal: {line}");
             }
             let number: u64 = body[..digits].parse().unwrap_or_else(|error| {
-                panic!("defaults.ts value for `{key}` is not an unsigned integer ({error}): {line}")
+                panic!("defaults.ts value for `{key}` is not an integer ({error}): {line}")
             });
             (json!(number), &body[digits..])
         };
@@ -158,6 +171,53 @@ mod tests {
         );
         assert_eq!(json!(WEBDAV_KEEP_COUNT), ts_default("webdav.keepCount"));
         assert!(!SHORTCUT_PTT.contains("Shift"));
+    }
+
+    #[test]
+    fn parses_negative_integer_with_trailing_comment() {
+        assert_eq!(
+            parse_ts_value("audioRetentionDays", "audioRetentionDays: -1, // forever"),
+            json!(-1)
+        );
+    }
+
+    #[test]
+    fn parses_u64_max_without_narrowing_to_i64() {
+        let line = format!("bigNumber: {},", u64::MAX);
+        let value = parse_ts_value("bigNumber", &line);
+        assert!(value.is_u64(), "u64::MAX must stay an unsigned value");
+        assert!(!value.is_i64(), "u64::MAX must not be narrowed to i64");
+        assert_eq!(value, json!(u64::MAX));
+    }
+
+    #[test]
+    fn parses_i64_min_without_overflow() {
+        let line = format!("bigNegative: {},", i64::MIN);
+        assert_eq!(parse_ts_value("bigNegative", &line), json!(i64::MIN));
+    }
+
+    #[test]
+    #[should_panic(expected = "not a supported literal")]
+    fn rejects_minus_without_digits() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: -");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a supported literal")]
+    fn rejects_minus_separated_from_digits() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: - 1");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a supported literal")]
+    fn rejects_double_minus() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: --1");
+    }
+
+    #[test]
+    #[should_panic(expected = "followed by text other than")]
+    fn rejects_negative_fraction() {
+        parse_ts_value("audioRetentionDays", "audioRetentionDays: -1.5");
     }
 
     #[test]
