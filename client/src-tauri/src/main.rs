@@ -822,7 +822,7 @@ fn main() {
         // calls shell (open) and dialog (open/save), granted in
         // capabilities/main.json; global-shortcut, autostart and single-instance
         // are used from Rust. App updates go through our own update commands in
-        // commands/system.rs, not the Tauri updater plugin.
+        // commands/updater.rs, not the Tauri updater plugin.
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -870,10 +870,10 @@ fn main() {
             commands::system::get_system_ui_language,
             commands::system::get_auto_launch,
             commands::system::set_auto_launch,
-            commands::system::install_downloaded_update,
-            commands::system::download_update,
-            commands::system::check_update_manifest,
-            commands::system::clear_legacy_update_artifacts,
+            commands::updater::install_downloaded_update,
+            commands::updater::download_update,
+            commands::updater::check_update_manifest,
+            commands::updater::clear_legacy_update_artifacts,
             commands::system::append_debug_log,
             commands::system::reveal_file_in_folder,
             commands::system::open_folder,

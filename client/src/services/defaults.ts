@@ -250,7 +250,7 @@ export const DEFAULTS: Record<string, unknown> = {
   // install — it only decides whether the app notices new releases on its own.
   autoCheckUpdate: true, // Whether to check for updates. Options: true | false
   // pendingUpdate existed for the pre-fork install-on-exit flow; that flow is gone
-  // (see commands/system.rs clear_legacy_update_artifacts, which deletes any value
+  // (see commands/updater.rs clear_legacy_update_artifacts, which deletes any value
   // left behind by older versions). Do not add a default for it back.
   historyEnabled: true, // Save history (text + audio). When off, no new entries are stored — useful on shared computers. Options: true | false
   suppressLateFinalInsertion: false, // Save late processing results to History without automatic insertion. Options: true | false
