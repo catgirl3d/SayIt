@@ -223,7 +223,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.stateValues.length = 0
     pageMocks.stateCursor = 0
     pageMocks.effects.length = 0
-    pageMocks.getSetting.mockReset().mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => getDefault(key, fallback))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
     const initialMarkup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
@@ -249,7 +249,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.switchProps.length = 0
     pageMocks.stateValues.length = 0
     pageMocks.stateCursor = 0
-    pageMocks.getSetting.mockReset().mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => getDefault(key, fallback))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
@@ -298,7 +298,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.stateCursor = 0
     pageMocks.getSetting.mockClear()
     pageMocks.getSetting.mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'systemAudio.liveRecognitionEnabled' ? true : fallback
+      key === 'systemAudio.liveRecognitionEnabled' ? true : getDefault(key, fallback)
     ))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockClear()
@@ -309,7 +309,7 @@ describe('live system-audio recognition setting', () => {
     await Promise.resolve()
     openSettingsDialog(CONFIGURE_CAPTIONS)
 
-    expect(pageMocks.getSetting).toHaveBeenCalledWith('systemAudio.liveRecognitionEnabled', false)
+    expect(pageMocks.getSetting).toHaveBeenCalledWith('systemAudio.liveRecognitionEnabled')
     pageMocks.switchProps.length = 0
     pageMocks.stateCursor = 0
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SystemAudio)))
@@ -327,7 +327,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.stateValues.length = 0
     pageMocks.stateCursor = 0
     pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'systemAudio.liveRecognitionEnabled' ? true : fallback
+      key === 'systemAudio.liveRecognitionEnabled' ? true : getDefault(key, fallback)
     ))
     pageMocks.getPromptPresets.mockResolvedValue([])
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
@@ -377,7 +377,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.stateValues.length = 0
     pageMocks.stateCursor = 0
     pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'systemAudio.liveRecognitionEnabled' ? true : fallback
+      key === 'systemAudio.liveRecognitionEnabled' ? true : getDefault(key, fallback)
     ))
     pageMocks.getPromptPresets.mockResolvedValue([])
     vi.mocked(listSystemAudioDevices).mockRejectedValue(new Error('device list failed'))
@@ -430,7 +430,7 @@ describe('live system-audio recognition setting', () => {
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
     pageMocks.getSetting.mockReset()
     pageMocks.getSetting.mockImplementation((key: string, fallback: unknown) => (
-      key === 'systemAudio.liveRecognitionEnabled' ? savedLiveRecognitionLoad : Promise.resolve(fallback)
+      key === 'systemAudio.liveRecognitionEnabled' ? savedLiveRecognitionLoad : Promise.resolve(getDefault(key, fallback))
     ))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset()
@@ -479,7 +479,7 @@ describe('live system-audio recognition setting', () => {
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
     pageMocks.getSetting.mockReset()
     pageMocks.getSetting.mockImplementation((key: string, fallback: unknown) => (
-      key === 'systemAudio.liveRecognitionEnabled' ? savedLiveRecognitionLoad : Promise.resolve(fallback)
+      key === 'systemAudio.liveRecognitionEnabled' ? savedLiveRecognitionLoad : Promise.resolve(getDefault(key, fallback))
     ))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
@@ -518,7 +518,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.switchProps.length = 0
     pageMocks.stateValues.length = 0
     pageMocks.stateCursor = 0
-    pageMocks.getSetting.mockReset().mockImplementation(async (_key: string, fallback: unknown) => fallback)
+    pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => getDefault(key, fallback))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset().mockReturnValue(write)
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
@@ -561,7 +561,7 @@ describe('live system-audio recognition setting', () => {
     pageMocks.stateCursor = 0
     vi.mocked(listSystemAudioDevices).mockResolvedValue([])
     pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
-      key === 'systemAudio.liveRecognitionEnabled' ? false : fallback
+      key === 'systemAudio.liveRecognitionEnabled' ? false : getDefault(key, fallback)
     ))
     pageMocks.getPromptPresets.mockResolvedValue([])
     pageMocks.setSetting.mockReset()
@@ -637,7 +637,7 @@ describe('settings rows and dialogs', () => {
     pageMocks.stateValues.length = 0
     pageMocks.stateCursor = 0
     pageMocks.getSetting.mockReset().mockImplementation(async (key: string, fallback: unknown) => (
-      key in settings ? settings[key] : fallback
+      key in settings ? settings[key] : getDefault(key, fallback)
     ))
     pageMocks.getPromptPresets.mockResolvedValue(presets)
     pageMocks.setSetting.mockReset().mockResolvedValue(undefined)
@@ -919,7 +919,7 @@ describe('settings rows and dialogs', () => {
     it('shows a saved "on" in the summary and in the dialog, which stays closed until opened', async () => {
       const { loaded, opened } = await renderWithDiagnosticsOpen({ [SETTING]: true })
 
-      expect(pageMocks.getSetting).toHaveBeenCalledWith(SETTING, false)
+      expect(pageMocks.getSetting).toHaveBeenCalledWith(SETTING)
       expect(loaded).not.toContain('role="dialog"')
       expect(diagnosticsRow(loaded)).toContain('>Deepgram overlap<')
       expect(opened).toContain('role="dialog" aria-label="Diagnostics"')
