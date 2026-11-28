@@ -30,7 +30,7 @@ export const UPDATE_MANIFEST_FILENAME = 'latest-win32-x64.json'
 
 // Exact numeric major.minor.patch, same rule as the client and the Rust downloader.
 const NUMERIC_VERSION = /^\d+\.\d+\.\d+$/
-// The native fetcher (src-tauri/src/commands/system.rs) rejects manifests over 64 KiB;
+// The native fetcher (src-tauri/src/commands/updater.rs) rejects manifests over 64 KiB;
 // the notes make the manifest tens of kilobytes, so the bound is enforced here at
 // generation time. Publishing an oversized manifest would silently break update checks
 // for every client.

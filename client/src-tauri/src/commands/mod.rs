@@ -11,5 +11,6 @@ pub mod subtitle_transcript;
 pub mod system;
 pub mod system_audio;
 pub mod tray;
+pub mod updater;
 pub mod webdav;
 pub mod window;
