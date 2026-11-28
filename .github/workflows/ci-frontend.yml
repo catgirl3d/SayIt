@@ -12,7 +12,6 @@ on:
       # Inputs read by the frontend bundle or tests.
       - 'server/web/pcm-processor.js'
       - 'server/web/pcm-worklet.js'
-      - 'client/src-tauri/src/main.rs'
       - 'client/src-tauri/capabilities/**'
       - '.github/workflows/ci-frontend.yml'
   pull_request:
@@ -23,7 +22,6 @@ on:
       # Inputs read by the frontend bundle or tests.
       - 'server/web/pcm-processor.js'
       - 'server/web/pcm-worklet.js'
-      - 'client/src-tauri/src/main.rs'
       - 'client/src-tauri/capabilities/**'
       - '.github/workflows/ci-frontend.yml'
   workflow_dispatch: {}

@@ -1,9 +1,10 @@
-//! Default values shared by the push-to-talk and hands-free shortcuts and by WebDAV backup
-//! settings.
+//! Default values shared by the push-to-talk and hands-free shortcuts, WebDAV backup settings,
+//! the local ASR startup fallbacks, and the audio/log retention cleanup.
 //!
-//! These constants mirror `src/services/defaults.ts`, the frontend copy of the same defaults.
-//! Rust keeps exactly one copy here. The tests at the bottom of this file reconcile both
-//! files, and the storage seed in `storage/mod.rs`, against these constants.
+//! `src/services/defaults.ts` is the frontend source of truth, and `defaults.rs` is its
+//! verified Rust mirror: the tests at the bottom of this file check these constants against
+//! `defaults.ts`. The storage seed in `storage/mod.rs` is checked separately: its keys are
+//! reconciled with `defaults.ts`, and the seeded shortcut constants have explicit assertions.
 
 /// Push-to-talk key. It is also the fallback when the saved setting is missing or unusable.
 ///
@@ -41,6 +42,25 @@ pub const WEBDAV_INCLUDE_AUDIO: bool = false;
 /// Number of backup copies kept on the server. Also the fallback when `webdav.keepCount` is
 /// unset or below 1.
 pub const WEBDAV_KEEP_COUNT: u64 = 5;
+
+/// Default local ASR model used by the startup warm-up, mirroring `localAsr.modelId` in
+/// `src/services/defaults.ts`.
+pub const LOCAL_ASR_MODEL_ID: &str = "nemotron-asr-streaming-0.6b-gguf";
+
+/// Default compute backend for the local ASR model, mirroring `localAsr.accelerator` in
+/// `src/services/defaults.ts`. `auto` uses the GPU when one is available, otherwise the CPU.
+pub const LOCAL_ASR_ACCELERATOR: &str = "auto";
+
+/// Default idle timeout before the local model is unloaded, in minutes, mirroring
+/// `localAsr.unloadIdleMinutes` in `src/services/defaults.ts`. 0 keeps the model resident.
+pub const LOCAL_ASR_UNLOAD_IDLE_MINUTES: u64 = 0;
+
+/// Default recording retention in days, mirroring `audioRetentionDays` in
+/// `src/services/defaults.ts`.
+pub const AUDIO_RETENTION_DAYS: i64 = -1; // -1 = keep forever
+
+/// Default log retention in days, mirroring `logRetentionDays` in `src/services/defaults.ts`.
+pub const LOG_RETENTION_DAYS: i64 = 30;
 
 #[cfg(test)]
 mod tests {
@@ -170,6 +190,20 @@ mod tests {
             ts_default("webdav.includeAudio")
         );
         assert_eq!(json!(WEBDAV_KEEP_COUNT), ts_default("webdav.keepCount"));
+        assert_eq!(json!(LOCAL_ASR_MODEL_ID), ts_default("localAsr.modelId"));
+        assert_eq!(
+            json!(LOCAL_ASR_ACCELERATOR),
+            ts_default("localAsr.accelerator")
+        );
+        assert_eq!(
+            json!(LOCAL_ASR_UNLOAD_IDLE_MINUTES),
+            ts_default("localAsr.unloadIdleMinutes")
+        );
+        assert_eq!(
+            json!(AUDIO_RETENTION_DAYS),
+            ts_default("audioRetentionDays")
+        );
+        assert_eq!(json!(LOG_RETENTION_DAYS), ts_default("logRetentionDays"));
         assert!(!SHORTCUT_PTT.contains("Shift"));
     }
 

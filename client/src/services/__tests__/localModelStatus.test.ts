@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import mainRsSource from '../../../src-tauri/src/main.rs?raw'
 
 const getSettingMock = vi.fn()
 
@@ -62,17 +61,6 @@ describe('selected local model id', () => {
     getSettingMock.mockRejectedValue(new Error('store offline'))
 
     await expect(getSelectedLocalModelId()).rejects.toThrow('store offline')
-  })
-})
-
-describe('startup warm-up parity', () => {
-  // The Rust side cannot read the JS registry, so its fallback literal is a
-  // deliberate mirror of DEFAULTS['localAsr.modelId']; this test turns a
-  // forgotten sync into a failure instead of a silently stale warm-up model.
-  it('keeps the Rust fallback in sync with the registered default', () => {
-    const fallback = mainRsSource.match(/localAsr\.modelId[\s\S]{0,400}?unwrap_or\("([^"]+)"\)/)
-
-    expect(fallback?.[1]).toBe(DEFAULT_LOCAL_MODEL_ID)
   })
 })
 
