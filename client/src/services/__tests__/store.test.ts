@@ -310,6 +310,22 @@ describe('system-audio live recognition setting storage', () => {
   })
 })
 
+describe('WebDAV setting defaults', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('resolves missing WebDAV settings to the DEFAULTS values', async () => {
+    bridge.storeGet.mockResolvedValue(null)
+
+    await expect(getSetting<boolean>('webdav.enabled')).resolves.toBe(false)
+    await expect(getSetting<string>('webdav.url')).resolves.toBe('')
+    await expect(getSetting<number>('webdav.intervalHours')).resolves.toBe(24)
+    await expect(getSetting<number>('webdav.keepCount')).resolves.toBe(5)
+    await expect(getSetting<boolean>('webdav.includeHistory')).resolves.toBe(false)
+  })
+})
+
 describe('estimateTypingTimeSec', () => {
   it('estimates equivalent typing duration at 50 words per minute', () => {
     expect(estimateTypingTimeSec(370)).toBe(89)

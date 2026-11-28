@@ -164,14 +164,14 @@ export default function WebDavSection() {
     let cancelled = false
     void (async () => {
       const [en, u, name, pass, hist, audio, interval, keep] = await Promise.all([
-        getSetting('webdav.enabled', false).catch(() => false),
-        getSetting('webdav.url', '').catch(() => ''),
-        getSetting('webdav.username', '').catch(() => ''),
-        getSetting('webdav.password', '').catch(() => ''),
-        getSetting('webdav.includeHistory', false).catch(() => false),
-        getSetting('webdav.includeAudio', false).catch(() => false),
-        getSetting('webdav.intervalHours', 24).catch(() => 24),
-        getSetting('webdav.keepCount', 5).catch(() => 5),
+        getSetting<boolean>('webdav.enabled').catch(() => false),
+        getSetting<string>('webdav.url').catch(() => ''),
+        getSetting<string>('webdav.username').catch(() => ''),
+        getSetting<string>('webdav.password').catch(() => ''),
+        getSetting<boolean>('webdav.includeHistory').catch(() => false),
+        getSetting<boolean>('webdav.includeAudio').catch(() => false),
+        getSetting<number>('webdav.intervalHours').catch(() => 24),
+        getSetting<number>('webdav.keepCount').catch(() => 5),
       ])
       if (cancelled) return
       setEnabled(en)
