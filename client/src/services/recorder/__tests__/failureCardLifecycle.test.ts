@@ -602,6 +602,50 @@ describe('recorder failure cards', () => {
     expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
   })
 
+  it('characterizes current behavior: Esc during capture stop does not send provider.stop and shows no failure card', async () => {
+    const runId = 125
+    const provider = await switchProvider('cloud_api')
+    vi.spyOn(provider, 'isReady').mockReturnValue(true)
+    vi.spyOn(provider, 'connect').mockResolvedValue(undefined)
+    const recorder = new RecorderOrchestrator()
+    await recorder.init()
+    prepareRun(recorder, runId, 1, 'recording')
+    recorder.testSeam().recordStartPerf = performance.now() - 1_000
+
+    const stop = vi.spyOn(provider, 'stop')
+    const cancel = vi.spyOn(provider, 'cancel')
+
+    const firstStopCapture = deferred<void>()
+    let stopCaptureCalls = 0
+    harness.stopCapture.mockImplementation(() => {
+      stopCaptureCalls += 1
+      return stopCaptureCalls === 1 ? firstStopCapture.promise : Promise.resolve()
+    })
+
+    const stopping = recorder.testSeam().stopRecording()
+    await vi.waitFor(() => expect(harness.stopCapture).toHaveBeenCalledTimes(1))
+
+    pressEscapeWhileRecording(runId)
+    await vi.waitFor(() => {
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(recorder.getState()).toBe('idle')
+    })
+    firstStopCapture.resolve()
+    await stopping
+    await flushMicrotasks()
+
+    expect(stop).not.toHaveBeenCalled()
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(recorder.getState()).toBe('idle')
+    expect(recorder.testSeam().activeRunId).toBe(0)
+    expect(harness.addHistory).not.toHaveBeenCalled()
+    expect(harness.recordUsage).not.toHaveBeenCalled()
+    expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+    expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+    expect(overlayPayloads('update_overlay_state').some((payload) => payload.state === 'failure')).toBe(false)
+    recorder.cleanup()
+  })
+
   it('keeps short recordings and mic-muted auto-cancel out of the failure-card path', async () => {
     const shortRecorder = new RecorderOrchestrator()
     prepareRun(shortRecorder, 120, 0.4, 'recording')
@@ -2010,6 +2054,12 @@ function pressEscapeDuringProcessing(token: number) {
   listener?.({ payload: { mode: 'cancel_processing', token } })
 }
 
+function pressEscapeWhileRecording(token: number) {
+  const listener = harness.listeners.get('escape-action')
+  expect(listener).toBeTypeOf('function')
+  listener?.({ payload: { mode: 'cancel_recording', token } })
+}
+
 describe('History writes', () => {
   const initializedRecorders: RecorderOrchestrator[] = []
 
@@ -2364,6 +2414,51 @@ describe('History writes', () => {
       expect(storage.audioFiles.size).toBe(0)
       expect(storage.records.size).toBe(0)
       expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+    })
+  })
+
+  describe('final result canceled with Esc after the History write and usage dispatch', () => {
+    it('characterizes current behavior: Esc after the History write deletes the record, keeps one usage write, and never pastes', async () => {
+      const runId = 350
+      const storage = installHistoryStorage()
+      const recorder = await createInitializedRecorder()
+      await enterProcessing(recorder, runId)
+      recorder.testSeam().cachedProbeResult = null
+
+      const probeGate = deferred<void>()
+      const probePayload = { ...harness.recordingContext.probe }
+      const invokeWithoutProbeGate = harness.invoke.getMockImplementation()
+      harness.invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'get_probe_result') {
+          await probeGate.promise
+          return probePayload
+        }
+        return invokeWithoutProbeGate?.(command, args)
+      })
+
+      callbacksFor(recorder).onFinal?.(makeFinal())
+
+      await vi.waitFor(() => {
+        expect(harness.addHistory).toHaveBeenCalledTimes(1)
+        expect(harness.recordUsage).toHaveBeenCalledTimes(1)
+        expect(harness.invoke.mock.calls.some(([command]) => command === 'get_probe_result')).toBe(true)
+      })
+      expect(recorder.getState()).toBe('processing')
+      expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+      const recordId = (harness.addHistory.mock.calls[0]?.[0] as { id: string }).id
+
+      pressEscapeDuringProcessing(runId)
+      expect(recorder.getState()).toBe('idle')
+
+      probeGate.resolve()
+      await settleHistoryWrites()
+
+      expect(harness.deleteHistory).toHaveBeenCalledWith(recordId)
+      expect(storage.records.size).toBe(0)
+      expect(harness.recordUsage).toHaveBeenCalledTimes(1)
+      expect(harness.invoke.mock.calls.some(([command]) => command === 'paste_text')).toBe(false)
+      expect(overlayPayloads('present_overlay').some((payload) => payload.state === 'failure')).toBe(false)
+      expect(overlayPayloads('update_overlay_state').some((payload) => payload.state === 'failure')).toBe(false)
     })
   })
 })
